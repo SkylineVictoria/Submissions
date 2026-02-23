@@ -1,6 +1,7 @@
 import React from 'react';
 import type { FormQuestionWithOptionsAndRows } from '../../lib/formEngine';
 import { Input } from '../ui/Input';
+import { DatePicker } from '../ui/DatePicker';
 import { Textarea } from '../ui/Textarea';
 import { RadioGroup } from '../ui/RadioGroup';
 import { Checkbox } from '../ui/Checkbox';
@@ -86,7 +87,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
         onChange={(e) => onChange(e.target.value)}
         disabled={disabled}
         error={error}
-        required={question.required}
+        required={question.required && !disabled}
         helperText={question.help_text || undefined}
       />
     );
@@ -100,23 +101,24 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
         onChange={(e) => onChange(e.target.value)}
         disabled={disabled}
         error={error}
-        required={question.required}
+        required={question.required && !disabled}
         helperText={question.help_text || undefined}
         rows={8}
+        maxChars={250}
       />
     );
   }
 
   if (question.type === 'date') {
     return (
-      <Input
+      <DatePicker
         label={question.label}
-        type="date"
         value={(value as string) || ''}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(v) => onChange(v)}
         disabled={disabled}
         error={error}
-        required={question.required}
+        required={question.required && !disabled}
+        placement="above"
       />
     );
   }

@@ -86,9 +86,9 @@ export const SignatureBlock: React.FC<SignatureBlockProps> = ({ section }) => {
       const date = new Date().toISOString().split('T')[0];
 
       if (isStudentSig) {
-        setStudentSignature({ imageDataUrl: dataUrl, signedAtDate: date });
+        setStudentSignature({ imageDataUrl: dataUrl, typedText: null, signedAtDate: date });
       } else if (isTrainerSig) {
-        setTrainerSignature({ imageDataUrl: dataUrl, signedAtDate: date });
+        setTrainerSignature({ imageDataUrl: dataUrl, typedText: null, signedAtDate: date });
       }
       setIsModalOpen(false);
     }
@@ -96,9 +96,9 @@ export const SignatureBlock: React.FC<SignatureBlockProps> = ({ section }) => {
 
   const handleClearSignature = () => {
     if (isStudentSig) {
-      setStudentSignature({ imageDataUrl: null, signedAtDate: null });
+      setStudentSignature({ imageDataUrl: null, typedText: null, signedAtDate: null });
     } else if (isTrainerSig) {
-      setTrainerSignature({ imageDataUrl: null, signedAtDate: null });
+      setTrainerSignature({ imageDataUrl: null, typedText: null, signedAtDate: null });
     }
   };
 

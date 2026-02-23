@@ -80,6 +80,14 @@ interface FormQuestionOption {
   sort_order: number;
 }
 
+/** Renders signature value: image (data:...) as img, plain text as red italic span */
+function renderSignatureHtml(val: string | null | undefined): string {
+  if (!val) return '';
+  if (val.startsWith('data:')) return '<img src="' + val.replace(/"/g, '&quot;') + '" alt="Signature" style="max-height:36px;max-width:140px" />';
+  const escaped = String(val).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return '<span style="color:#dc2626;font-style:italic;font-family:serif">' + escaped + '</span>';
+}
+
 async function getTemplateForInstance(instanceId: number) {
   const { data: instance } = await supabase
     .from('skyline_form_instances')
@@ -258,6 +266,7 @@ function buildHtml(data: {
     .section-table { width: 100%; border-collapse: collapse; font-size: 11pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; margin: 0 0 12px 0; border: 1px solid #000; border-left: 1px solid #000 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .section-table th, .section-table td { border: 1px solid #000; padding: 10px 12px; vertical-align: middle; line-height: 1.35; overflow: visible; }
     .section-table td:first-child, .section-table th:first-child { border-left: 1px solid #000 !important; }
+    .section-table tbody tr { page-break-inside: avoid; break-inside: avoid; }
     .sub-section-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 10pt;font-family:'Calibri','Calibri Light',Arial,sans-serif; padding: 10px 12px; vertical-align: middle; }
     .label-cell { width: 35%; background: #F0F4FA; font-weight: 600; color: #374151; }
     .value-cell { width: 65%; color: #000000; background: #F0F4FA; }
@@ -266,7 +275,7 @@ function buildHtml(data: {
     .row-alt .label-cell { color: #000000; background: #F0F4FA; }
     .row-alt .value-cell { color: #000000; background: #F0F4FA; }
     .row-normal .label-cell, .row-normal .value-cell { background: #F0F4FA; }
-    .question { margin: 12px 0; overflow: visible; }
+    .question { margin: 12px 0; overflow: visible; page-break-inside: avoid; break-inside: avoid; }
     .question-label { font-weight: bold; margin-bottom: 4px; overflow: visible; line-height: 1.4; }
     .decl-heading-bar { font-size: 10pt; font-weight: bold; margin: 12px 0 6px 0; color: #000000; border-left: 4px solid #9ca3af; padding-left: 8px; }
     .declarations-section { border: 1px solid #000; border-left: 1px solid #000 !important; padding: 12px; background: #fff; margin-bottom: 12px; }
@@ -354,6 +363,7 @@ function buildHtml(data: {
     .assessment-summary-table { width: 100%; border-collapse: collapse; font-size: 8pt; margin: 0 0 8px 0; border: 1px solid #000; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .assessment-summary-table th, .assessment-summary-table td { border: 1px solid #000; padding: 5px 8px; vertical-align: top; line-height: 1.25; }
     .assessment-summary-table .summary-label { width: 25%; background: #595959 !important; color: #fff !important; font-weight: 600; }
+    .assessment-summary-table tbody tr { page-break-inside: avoid; break-inside: avoid; }
     .assessment-summary-table .summary-value { background: #fff !important; color: #000000; }
     .assessment-summary-table .summary-attempt-value { background: #f3f4f6 !important; color: #000000; }
     .assessment-summary-table .summary-result-header { background: #595959 !important; color: #fff !important; font-weight: bold; text-align: center; }
@@ -410,7 +420,7 @@ function buildHtml(data: {
     .grid-table-no-border tbody tr { background: transparent !important; }
     .grid-table-no-border .label-cell, .grid-table-no-border .value-cell { background: transparent !important; }
     .grid-table-no-border .sub-section-header { background: transparent !important; color: #000000 !important; border: 1px solid #000 !important; }
-    .task-q-question-box { border: 1px solid #595959; margin-bottom: 20px; }
+    .task-q-question-box { border: 1px solid #595959; margin-bottom: 20px; page-break-inside: avoid; break-inside: avoid; }
     .task-q-question-box:last-child { margin-bottom: 0; }
     .task-q-question-box .task-questions-table th,
     .task-q-question-box .task-questions-table td,
@@ -432,6 +442,7 @@ function buildHtml(data: {
     .task-questions-table .task-q-inner-table .label-cell, .task-questions-table .task-q-inner-table .value-cell { background: #fff !important; border: 1px solid #595959 !important; }
     .task-questions-table .label-cell, .task-questions-table .value-cell, .task-questions-table td { background: #fff !important; }
     .step-page { page-break-after: always; }
+    .task-q-question-box.page-break-after { page-break-after: always; }
     .section-table, .likert-table, .assessment-tasks-table { page-break-inside: auto; }
     .decl-table, .result-sheet-table, .assessment-summary-table { page-break-inside: avoid; }
     .step-page:first-child { padding-top: 20px; }
@@ -805,7 +816,7 @@ function buildHtml(data: {
         const commentsQ = questions.find(q => q.question.type === 'long_text' && q.question.code?.includes('Comments'));
         if (commentsQ) {
           const commentsVal = String(answers.get(`q-${commentsQ.question.id}`) ?? '');
-          html += `<div style="margin-top:8px;font-family:'Calibri','Calibri Light',Arial,sans-serif;font-size:11pt"><div style="font-weight:600;margin-bottom:4px">${commentsQ.question.label}</div>`;
+          html += `<div class="question" style="margin-top:8px;font-family:'Calibri','Calibri Light',Arial,sans-serif;font-size:11pt"><div class="question-label" style="font-weight:600;margin-bottom:4px">${commentsQ.question.label}</div>`;
           html += `<div class="answer-box answer-box-large" style="min-height:50px;font-size:11pt">${commentsVal}</div></div>`;
         }
         html += '</div>'; // close likert-table-with-comments
@@ -938,17 +949,22 @@ function buildHtml(data: {
         html += `<div class="task-questions-header">${taskHeaderTitle}</div>`;
         html += `<div class="task-questions-subheader">Provide your response to each question in the box below.</div>`;
         headerNum++;
-        const normalQs = questions.filter((q) => q.question.type !== 'instruction_block' && q.question.type !== 'page_break');
-        for (let qIdx = 0; qIdx < normalQs.length; qIdx++) {
-          const { question, rows } = normalQs[qIdx];
+        const renderableQs = questions.filter((q) => q.question.type !== 'instruction_block');
+        let qNum = 0;
+        for (let i = 0; i < renderableQs.length; i++) {
+          const { question, rows } = renderableQs[i];
+          if (question.type === 'page_break') continue;
+          const nextIsPageBreak = renderableQs[i + 1]?.question.type === 'page_break';
+          qNum++;
           const sat = trainerAssessments.get(question.id);
           const satYes = sat === 'yes';
           const satNo = sat === 'no';
           const isGridTable = question.type === 'grid_table' && rows.length > 0;
-          html += '<div class="task-q-question-box">';
+          const boxClass = 'task-q-question-box' + (nextIsPageBreak ? ' page-break-after' : '');
+          html += `<div class="${boxClass}">`;
           html += '<table class="section-table task-questions-table"><tbody>';
           html += '<tr class="task-q-question-row">';
-          html += `<td class="task-q-num-cell">Q${qIdx + 1}:</td>`;
+          html += `<td class="task-q-num-cell">Q${qNum}:</td>`;
           html += '<td class="task-q-question-cell">';
           html += `<div class="task-q-question-label">${question.label}</div>`;
           if (isGridTable) {
@@ -1023,14 +1039,14 @@ function buildHtml(data: {
         html += '<div>Outcome (make sure to tick the correct checkbox):</div>';
         html += '<div style="margin: 6px 0;"><span class="result-radio"><span class="radio-circle' + (f1s ? ' filled' : '') + '"></span><span class="question-label">Satisfactory (S)</span></span><span class="result-radio"><span class="radio-circle' + (f1n ? ' filled' : '') + '"></span><span class="question-label">Not Satisfactory (NS)</span></span></div>';
         html += '<div style="margin: 8px 0;"><span class="question-label">Date:</span> <span class="answer-line-inline" style="min-width:120px;">' + (rd?.first_attempt_date ?? '') + '</span></div>';
-        html += '<div style="margin: 8px 0;"><span class="question-label">Feedback:</span><div class="answer-box answer-box-large">' + (rd?.first_attempt_feedback ?? '') + '</div></div>';
+        html += '<div class="question" style="margin: 8px 0;"><span class="question-label">Feedback:</span><div class="answer-box answer-box-large">' + (rd?.first_attempt_feedback ?? '') + '</div></div>';
         html += '</td></tr>';
         html += '<tr><td class="result-value">';
         html += '<div class="task-results-outcome-title">Second attempt:</div>';
         html += '<div>Outcome (make sure to tick the correct checkbox):</div>';
         html += '<div style="margin: 6px 0;"><span class="result-radio"><span class="radio-circle' + (f2s ? ' filled' : '') + '"></span><span class="question-label">Satisfactory (S)</span></span><span class="result-radio"><span class="radio-circle' + (f2n ? ' filled' : '') + '"></span><span class="question-label">Not Satisfactory (NS)</span></span></div>';
         html += '<div style="margin: 8px 0;"><span class="question-label">Date:</span> <span class="answer-line-inline" style="min-width:120px;">' + (rd?.second_attempt_date ?? '') + '</span></div>';
-        html += '<div style="margin: 8px 0;"><span class="question-label">Feedback:</span><div class="answer-box answer-box-large">' + (rd?.second_attempt_feedback ?? '') + '</div></div>';
+        html += '<div class="question" style="margin: 8px 0;"><span class="question-label">Feedback:</span><div class="answer-box answer-box-large">' + (rd?.second_attempt_feedback ?? '') + '</div></div>';
         html += '</td></tr>';
         html += '<tr><td class="result-label">Student Declaration</td><td class="result-value">';
         html += '<ul style="margin: 8px 0; padding-left: 20px;"><li>I declare that the answers I have provided are my own work.</li><li>I have kept a copy of all relevant notes and reference material.</li><li>I have provided references for all sources where the information is not my own.</li>';
@@ -1040,9 +1056,11 @@ function buildHtml(data: {
         html += '</td></tr>';
         html += '</tbody></table>';
         html += '<table class="result-sheet-table"><tbody>';
-        html += '<tr><td class="result-label">Trainer/Assessor Name</td><td class="result-value">' + (rd?.trainer_name ?? '') + '</div></td></tr>';
-        html += '<tr><td class="result-label">Trainer/Assessor Signature</td><td class="result-value">' + (rd?.trainer_signature ?? '') + '</div></td></tr>';
-        html += '<tr><td class="result-label">Date</td><td class="result-value">' + (rd?.trainer_date ?? '') + '</div></td></tr>';
+        html += '<tr><td class="result-label">Student Name</td><td class="result-value">' + (rd?.student_name ?? '') + '</td></tr>';
+        html += '<tr><td class="result-label">Student Signature</td><td class="result-value">' + renderSignatureHtml(rd?.student_signature ?? '') + '</td></tr>';
+        html += '<tr><td class="result-label">Trainer/Assessor Name</td><td class="result-value">' + (rd?.trainer_name ?? '') + '</td></tr>';
+        html += '<tr><td class="result-label">Trainer/Assessor Signature</td><td class="result-value">' + renderSignatureHtml(rd?.trainer_signature ?? '') + '</td></tr>';
+        html += '<tr><td class="result-label">Date</td><td class="result-value">' + (rd?.trainer_date ?? '') + '</td></tr>';
         const officeEntry = resultsOffice.get(section.id);
         const officeDate = officeEntry?.entered_date ?? '';
         const officeName = officeEntry?.entered_by ?? '';
@@ -1114,13 +1132,13 @@ function buildHtml(data: {
         html += '<td class="summary-attempt-value summary-attempt-col"><div style="margin:2px 0;display:flex;align-items:center;gap:6px"><span class="summary-cb' + (fc2 ? ' checked' : '') + '">' + (fc2 ? '✓' : '') + '</span> Competent</div><div style="margin:2px 0;display:flex;align-items:center;gap:6px"><span class="summary-cb' + (fnc2 ? ' checked' : '') + '">' + (fnc2 ? '✓' : '') + '</span> Not Yet Competent</div></td>';
         html += '<td class="summary-attempt-value summary-attempt-col"><div style="margin:2px 0;display:flex;align-items:center;gap:6px"><span class="summary-cb' + (fc3 ? ' checked' : '') + '">' + (fc3 ? '✓' : '') + '</span> Competent</div><div style="margin:2px 0;display:flex;align-items:center;gap:6px"><span class="summary-cb' + (fnc3 ? ' checked' : '') + '">' + (fnc3 ? '✓' : '') + '</span> Not Yet Competent</div></td></tr>';
         html += '<tr><td class="summary-label" style="vertical-align:top"><span style="font-weight:600">Trainer/Assessor Signature</span><div style="font-size:8pt;font-style:italic;margin-top:6px;line-height:1.3">I declare that I have conducted a fair, valid, reliable, and flexible assessment with this student, and I have provided appropriate feedback</div></td><td colspan="3" class="summary-value">';
-        html += '<table style="width:100%;border:none;font-size:9pt"><tr><td style="width:33%;border:none;padding:4px 8px 4px 0;vertical-align:top"><div><span style="font-weight:600">Signature:</span></div><div><span class="summary-date-line" style="min-width:100%;display:block">' + (sum.trainer_sig_1 ?? '') + '</span></div><div style="margin-top:4px"><span style="font-weight:600">Date:</span> <span class="summary-date-line">' + (sum.trainer_date_1 ?? '') + '</span></div></td>';
-        html += '<td style="width:33%;border:none;padding:4px 8px;vertical-align:top"><div><span style="font-weight:600">Signature:</span></div><div><span class="summary-date-line" style="min-width:100%;display:block">' + (sum.trainer_sig_2 ?? '') + '</span></div><div style="margin-top:4px"><span style="font-weight:600">Date:</span> <span class="summary-date-line">' + (sum.trainer_date_2 ?? '') + '</span></div></td>';
-        html += '<td style="width:33%;border:none;padding:4px 0 4px 8px;vertical-align:top"><div><span style="font-weight:600">Signature:</span></div><div><span class="summary-date-line" style="min-width:100%;display:block">' + (sum.trainer_sig_3 ?? '') + '</span></div><div style="margin-top:4px"><span style="font-weight:600">Date:</span> <span class="summary-date-line">' + (sum.trainer_date_3 ?? '') + '</span></div></td></tr></table></td></tr>';
+        html += '<table style="width:100%;border:none;font-size:9pt"><tr><td style="width:33%;border:none;padding:4px 8px 4px 0;vertical-align:top"><div><span style="font-weight:600">Signature:</span></div><div class="summary-date-line" style="min-width:100%;display:block">' + renderSignatureHtml(sum.trainer_sig_1 ?? '') + '</div><div style="margin-top:4px"><span style="font-weight:600">Date:</span> <span class="summary-date-line">' + (sum.trainer_date_1 ?? '') + '</span></div></td>';
+        html += '<td style="width:33%;border:none;padding:4px 8px;vertical-align:top"><div><span style="font-weight:600">Signature:</span></div><div class="summary-date-line" style="min-width:100%;display:block">' + renderSignatureHtml(sum.trainer_sig_2 ?? '') + '</div><div style="margin-top:4px"><span style="font-weight:600">Date:</span> <span class="summary-date-line">' + (sum.trainer_date_2 ?? '') + '</span></div></td>';
+        html += '<td style="width:33%;border:none;padding:4px 0 4px 8px;vertical-align:top"><div><span style="font-weight:600">Signature:</span></div><div class="summary-date-line" style="min-width:100%;display:block">' + renderSignatureHtml(sum.trainer_sig_3 ?? '') + '</div><div style="margin-top:4px"><span style="font-weight:600">Date:</span> <span class="summary-date-line">' + (sum.trainer_date_3 ?? '') + '</span></div></td></tr></table></td></tr>';
         html += '<tr><td class="summary-label" style="vertical-align:top"><span style="font-weight:600">Student:</span><div style="font-size:8pt;font-style:italic;margin-top:6px;line-height:1.3">I declare that I have been assessed in this unit, and I have been advised of my result. I also am aware of my appeal rights.</div></td><td colspan="3" class="summary-value">';
-        html += '<table style="width:100%;border:none;font-size:9pt"><tr><td style="width:33%;border:none;padding:4px 8px 4px 0;vertical-align:top"><div><span style="font-weight:600">Signature:</span></div><div><span class="summary-date-line" style="min-width:100%;display:block">' + (sum.student_sig_1 ?? '') + '</span></div><div style="margin-top:4px"><span style="font-weight:600">Date:</span> <span class="summary-date-line">' + (sum.student_date_1 ?? '') + '</span></div></td>';
-        html += '<td style="width:33%;border:none;padding:4px 8px;vertical-align:top"><div><span style="font-weight:600">Signature:</span></div><div><span class="summary-date-line" style="min-width:100%;display:block">' + (sum.student_sig_2 ?? '') + '</span></div><div style="margin-top:4px"><span style="font-weight:600">Date:</span> <span class="summary-date-line">' + (sum.student_date_2 ?? '') + '</span></div></td>';
-        html += '<td style="width:33%;border:none;padding:4px 0 4px 8px;vertical-align:top"><div><span style="font-weight:600">Signature:</span></div><div><span class="summary-date-line" style="min-width:100%;display:block">' + (sum.student_sig_3 ?? '') + '</span></div><div style="margin-top:4px"><span style="font-weight:600">Date:</span> <span class="summary-date-line">' + (sum.student_date_3 ?? '') + '</span></div></td></tr></table></td></tr>';
+        html += '<table style="width:100%;border:none;font-size:9pt"><tr><td style="width:33%;border:none;padding:4px 8px 4px 0;vertical-align:top"><div><span style="font-weight:600">Signature:</span></div><div class="summary-date-line" style="min-width:100%;display:block">' + renderSignatureHtml(sum.student_sig_1 ?? '') + '</div><div style="margin-top:4px"><span style="font-weight:600">Date:</span> <span class="summary-date-line">' + (sum.student_date_1 ?? '') + '</span></div></td>';
+        html += '<td style="width:33%;border:none;padding:4px 8px;vertical-align:top"><div><span style="font-weight:600">Signature:</span></div><div class="summary-date-line" style="min-width:100%;display:block">' + renderSignatureHtml(sum.student_sig_2 ?? '') + '</div><div style="margin-top:4px"><span style="font-weight:600">Date:</span> <span class="summary-date-line">' + (sum.student_date_2 ?? '') + '</span></div></td>';
+        html += '<td style="width:33%;border:none;padding:4px 0 4px 8px;vertical-align:top"><div><span style="font-weight:600">Signature:</span></div><div class="summary-date-line" style="min-width:100%;display:block">' + renderSignatureHtml(sum.student_sig_3 ?? '') + '</div><div style="margin-top:4px"><span style="font-weight:600">Date:</span> <span class="summary-date-line">' + (sum.student_date_3 ?? '') + '</span></div></td></tr></table></td></tr>';
         html += '<tr><td class="summary-label">Student overall Feedback:</td><td colspan="3" class="summary-value"><div class="answer-box answer-box-large" style="min-height:80px;background:#fff">' + (sum.student_overall_feedback ?? '') + '</div></td></tr>';
         html += '<tr><td class="summary-label summary-office" colspan="2">Administrative use only - Entered onto Student Management Database</td><td class="summary-label summary-office">Initials</td><td class="summary-value summary-office"><span class="summary-date-line" style="min-width:60px">' + (sum.admin_initials ?? '') + '</span></td></tr>';
         html += '</tbody></table></div>';
@@ -1439,7 +1457,7 @@ app.get('/pdf/:instanceId', async (req, res) => {
     try {
       const { data: resultsRows } = await supabase
         .from('skyline_form_results_data')
-        .select('section_id, first_attempt_satisfactory, first_attempt_date, first_attempt_feedback, second_attempt_satisfactory, second_attempt_date, second_attempt_feedback, trainer_name, trainer_signature, trainer_date')
+        .select('section_id, first_attempt_satisfactory, first_attempt_date, first_attempt_feedback, second_attempt_satisfactory, second_attempt_date, second_attempt_feedback, student_name, student_signature, trainer_name, trainer_signature, trainer_date')
         .eq('instance_id', instanceId);
       for (const r of (resultsRows as Record<string, unknown>[]) || []) {
         const sid = r.section_id as number;
@@ -1450,6 +1468,8 @@ app.get('/pdf/:instanceId', async (req, res) => {
           second_attempt_satisfactory: (r.second_attempt_satisfactory as string) ?? null,
           second_attempt_date: (r.second_attempt_date as string) ?? null,
           second_attempt_feedback: (r.second_attempt_feedback as string) ?? null,
+          student_name: (r.student_name as string) ?? null,
+          student_signature: (r.student_signature as string) ?? null,
           trainer_name: (r.trainer_name as string) ?? null,
           trainer_signature: (r.trainer_signature as string) ?? null,
           trainer_date: (r.trainer_date as string) ?? null,

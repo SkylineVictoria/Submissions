@@ -51,6 +51,7 @@ export const Input: React.FC<InputProps> = ({
             : 'border-[var(--border)] hover:border-gray-300 bg-white',
           'disabled:bg-gray-50 disabled:cursor-not-allowed disabled:text-gray-500',
           'text-[var(--text)] placeholder:text-gray-400',
+          props.type === 'date' && 'input-date-styled cursor-pointer',
           className
         )}
         required={required}

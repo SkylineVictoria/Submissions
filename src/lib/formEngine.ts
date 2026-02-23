@@ -275,6 +275,8 @@ export interface ResultsDataEntry {
   second_attempt_satisfactory: string | null;
   second_attempt_date: string | null;
   second_attempt_feedback: string | null;
+  student_name: string | null;
+  student_signature: string | null;
   trainer_name: string | null;
   trainer_signature: string | null;
   trainer_date: string | null;
@@ -283,7 +285,7 @@ export interface ResultsDataEntry {
 export async function fetchResultsData(instanceId: number): Promise<Record<number, ResultsDataEntry>> {
   const { data, error } = await supabase
     .from('skyline_form_results_data')
-    .select('section_id, first_attempt_satisfactory, first_attempt_date, first_attempt_feedback, second_attempt_satisfactory, second_attempt_date, second_attempt_feedback, trainer_name, trainer_signature, trainer_date')
+    .select('section_id, first_attempt_satisfactory, first_attempt_date, first_attempt_feedback, second_attempt_satisfactory, second_attempt_date, second_attempt_feedback, student_name, student_signature, trainer_name, trainer_signature, trainer_date')
     .eq('instance_id', instanceId);
   if (error) {
     console.error('fetchResultsData error', error);
@@ -300,6 +302,8 @@ export async function fetchResultsData(instanceId: number): Promise<Record<numbe
       second_attempt_satisfactory: (row.second_attempt_satisfactory as string) ?? null,
       second_attempt_date: (row.second_attempt_date as string) ?? null,
       second_attempt_feedback: (row.second_attempt_feedback as string) ?? null,
+      student_name: (row.student_name as string) ?? null,
+      student_signature: (row.student_signature as string) ?? null,
       trainer_name: (row.trainer_name as string) ?? null,
       trainer_signature: (row.trainer_signature as string) ?? null,
       trainer_date: (row.trainer_date as string) ?? null,
@@ -550,6 +554,8 @@ const DEFAULT_ROLES = { student: true, trainer: true, office: true };
 const READ_ONLY_VISIBLE = { student: true, trainer: true, office: true };
 const READ_ONLY_EDIT = { student: false, trainer: false, office: false };
 const TRAINER_ONLY_EDIT = { student: false, trainer: true, office: false };
+const TRAINER_OFFICE_EDIT = { student: false, trainer: true, office: true };
+const STUDENT_TRAINER_EDIT = { student: true, trainer: true, office: false };
 
 interface AssessmentTaskInput {
   task1_label: string;
@@ -585,7 +591,7 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
       { section_id: s.id, type: 'short_text', code: 'student.fullName', label: 'Student Full Name', required: true, sort_order: 0, role_visibility: DEFAULT_ROLES, role_editability: DEFAULT_ROLES },
       { section_id: s.id, type: 'short_text', code: 'student.id', label: 'Student ID', required: true, sort_order: 1, role_visibility: DEFAULT_ROLES, role_editability: DEFAULT_ROLES },
       { section_id: s.id, type: 'short_text', code: 'student.email', label: 'Student Email', required: true, sort_order: 2, role_visibility: DEFAULT_ROLES, role_editability: DEFAULT_ROLES },
-      { section_id: s.id, type: 'short_text', code: 'trainer.fullName', label: 'Trainer Full Name', required: true, sort_order: 3, role_visibility: DEFAULT_ROLES, role_editability: DEFAULT_ROLES },
+      { section_id: s.id, type: 'short_text', code: 'trainer.fullName', label: 'Trainer Full Name', required: true, sort_order: 3, role_visibility: DEFAULT_ROLES, role_editability: TRAINER_OFFICE_EDIT },
     ]);
   }
 
@@ -659,7 +665,7 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
     const s = sec2c as { id: number };
     const { data: qSub } = await supabase
       .from('skyline_form_questions')
-      .insert({ section_id: s.id, type: 'multi_choice', code: 'assessment.submission', label: 'Assessment Submission Method', sort_order: 0, role_visibility: READ_ONLY_VISIBLE, role_editability: TRAINER_ONLY_EDIT })
+      .insert({ section_id: s.id, type: 'multi_choice', code: 'assessment.submission', label: 'Assessment Submission Method', sort_order: 0, role_visibility: READ_ONLY_VISIBLE, role_editability: STUDENT_TRAINER_EDIT })
       .select('id')
       .single();
     if (qSub) {
@@ -671,7 +677,7 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
         { question_id: qid, value: 'other', label: 'Any other method', sort_order: 3 },
       ]);
     }
-    await supabase.from('skyline_form_questions').insert({ section_id: s.id, type: 'short_text', code: 'assessment.otherDesc', label: 'Please describe other method', sort_order: 1, role_visibility: READ_ONLY_VISIBLE, role_editability: TRAINER_ONLY_EDIT });
+    await supabase.from('skyline_form_questions').insert({ section_id: s.id, type: 'short_text', code: 'assessment.otherDesc', label: 'Please describe other method', sort_order: 1, role_visibility: READ_ONLY_VISIBLE, role_editability: STUDENT_TRAINER_EDIT });
   }
 
   await createDefaultSectionsToStep(stepId, 4);

@@ -120,7 +120,8 @@ async function seed() {
 
   const defaultRoles = { student: true, trainer: true, office: true };
   const readOnlyRoles = { student: true, trainer: true, office: true }; // visible to all, editable by none
-  const trainerOnlyEdit = { student: false, trainer: true, office: false }; // assessment submission: trainer only
+  const trainerOnlyEdit = { student: false, trainer: true, office: false };
+  const studentTrainerEdit = { student: true, trainer: true, office: false }; // assessment submission: student & trainer
   const studentOnly = { student: true, trainer: false, office: true };
   const trainerOnly = { student: false, trainer: true, office: true };
   const officeOnly = { student: false, trainer: false, office: true };
@@ -151,12 +152,12 @@ async function seed() {
   await createRow(qAssessment, 'Assessment task 2', 'Practical Task 2.1\nPractical Task 2.2\nPractical Task 2.3', null, 1);
 
   const sec2Submission = await createSection(stepComp, 'Assessment Submission Method', null, 'assessment_submission', 3);
-  const qSub = await createQuestion(sec2Submission, 'multi_choice', 'assessment.submission', 'Assessment Submission Method', null, false, 0, readOnlyRoles, trainerOnlyEdit, {});
+  const qSub = await createQuestion(sec2Submission, 'multi_choice', 'assessment.submission', 'Assessment Submission Method', null, false, 0, readOnlyRoles, studentTrainerEdit, {});
   await createOption(qSub, 'hand', 'By hand to trainer/assessor', 0);
   await createOption(qSub, 'email', 'By email to trainer/assessor', 1);
   await createOption(qSub, 'lms', 'Online submission via Learning Management System (LMS)', 2);
   await createOption(qSub, 'other', 'Any other method', 3);
-  await createQuestion(sec2Submission, 'short_text', 'assessment.otherDesc', 'Please describe other method', null, false, 1, readOnlyRoles, trainerOnlyEdit, {});
+  await createQuestion(sec2Submission, 'short_text', 'assessment.otherDesc', 'Please describe other method', null, false, 1, readOnlyRoles, studentTrainerEdit, {});
 
   // Step 2: Logistics & Support (likert_table)
   const step3 = await createStep(formId, 'Logistics & Support', 'Evaluate logistics and support services', 1);
@@ -269,12 +270,12 @@ async function seed() {
   await createRow(q2Assessment, 'Assessment task 1', 'Written Assessment (WA)', null, 0);
   await createRow(q2Assessment, 'Assessment task 2', 'Practical Task 2.1\nPractical Task 2.2\nPractical Task 2.3', null, 1);
   const sec2_2c = await createSection(step2Comp, 'Assessment Submission Method', null, 'assessment_submission', 3);
-  const q2Sub = await createQuestion(sec2_2c, 'multi_choice', 'assessment.submission', 'Assessment Submission Method', null, false, 0, readOnlyRoles, trainerOnlyEdit, {});
+  const q2Sub = await createQuestion(sec2_2c, 'multi_choice', 'assessment.submission', 'Assessment Submission Method', null, false, 0, readOnlyRoles, studentTrainerEdit, {});
   await createOption(q2Sub, 'hand', 'By hand to trainer/assessor', 0);
   await createOption(q2Sub, 'email', 'By email to trainer/assessor', 1);
   await createOption(q2Sub, 'lms', 'Online submission via Learning Management System (LMS)', 2);
   await createOption(q2Sub, 'other', 'Any other method', 3);
-  await createQuestion(sec2_2c, 'short_text', 'assessment.otherDesc', 'Please describe other method', null, false, 1, readOnlyRoles, trainerOnlyEdit, {});
+  await createQuestion(sec2_2c, 'short_text', 'assessment.otherDesc', 'Please describe other method', null, false, 1, readOnlyRoles, studentTrainerEdit, {});
 
   await createDefaultSectionsToStep(step2Comp, 4, supabase);
 

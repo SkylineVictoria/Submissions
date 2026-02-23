@@ -14,6 +14,7 @@ interface FormStore extends FormState {
 
 const initialSignature: SignatureData = {
   imageDataUrl: null,
+  typedText: null,
   signedAtDate: null,
 };
 

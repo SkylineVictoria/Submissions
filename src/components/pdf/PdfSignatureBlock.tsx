@@ -99,6 +99,8 @@ export const PdfSignatureBlock: React.FC<PdfSignatureBlockProps> = ({
           <View style={[styles.cell, styles.valueCell]}>
             {signature?.imageDataUrl ? (
               <Image src={signature.imageDataUrl} style={styles.signatureImage} />
+            ) : signature?.typedText ? (
+              <Text style={{ fontSize: 10, color: '#dc2626', fontStyle: 'italic', fontFamily: 'Helvetica' }}>{signature.typedText}</Text>
             ) : nameValue ? (
               <Text style={{ fontSize: 10, color: '#2563eb', fontStyle: 'italic', fontFamily: 'Helvetica' }}>{nameValue}</Text>
             ) : (

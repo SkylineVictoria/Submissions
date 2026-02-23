@@ -1019,65 +1019,77 @@ export const AdminFormBuilderPage: React.FC = () => {
                 <Card>
                   <h3 className="font-bold mb-4">Edit Question</h3>
                   <div className="space-y-4">
-                    <Input
-                      label="Label"
-                      value={q.label}
-                      onChange={(e) => updateQuestion(q.id, { label: e.target.value })}
-                      onBlur={() => { questionBlurSavePromise.current = flushQuestionSave(q.id); }}
-                    />
-                    <Textarea
-                      label="Help Text"
-                      value={q.help_text || ''}
-                      onChange={(e) => updateQuestion(q.id, { help_text: e.target.value })}
-                      onBlur={() => { questionBlurSavePromise.current = flushQuestionSave(q.id); }}
-                    />
-                    <div className="flex items-center gap-2">
-                      <Checkbox
-                        label="Required"
-                        checked={q.required}
-                        onChange={(v) => updateQuestion(q.id, { required: v })}
-                      />
-                    </div>
+                    {q.type === 'page_break' ? (
+                      <p className="text-sm text-gray-500 italic">
+                        Page Break inserts a new page in the PDF. Label and help text are not displayed. Use the question list order to place it between questions.
+                      </p>
+                    ) : (
+                      <>
+                        <Input
+                          label="Label"
+                          value={q.label}
+                          onChange={(e) => updateQuestion(q.id, { label: e.target.value })}
+                          onBlur={() => { questionBlurSavePromise.current = flushQuestionSave(q.id); }}
+                        />
+                        <Textarea
+                          label="Help Text"
+                          value={q.help_text || ''}
+                          onChange={(e) => updateQuestion(q.id, { help_text: e.target.value })}
+                          onBlur={() => { questionBlurSavePromise.current = flushQuestionSave(q.id); }}
+                        />
+                        <div className="flex items-center gap-2">
+                          <Checkbox
+                            label="Required"
+                            checked={q.required}
+                            onChange={(v) => updateQuestion(q.id, { required: v })}
+                          />
+                        </div>
+                      </>
+                    )}
                     <Select
                       label="Type"
                       value={q.type}
                       onChange={(v) => updateQuestion(q.id, { type: v })}
                       options={QUESTION_TYPES}
                     />
-                    <div>
-                      <div className="text-sm font-semibold mb-2">Role Visibility</div>
-                      <div className="flex gap-4">
-                        {ROLES.map((r) => (
-                          <Checkbox
-                            key={r.value}
-                            label={r.label}
-                            checked={rv[r.value] !== false}
-                            onChange={(v) =>
-                              updateQuestion(q.id, {
-                                role_visibility: { ...rv, [r.value]: v },
-                              })
-                            }
-                          />
-                        ))}
+                    {q.type !== 'page_break' && (
+                    <>
+                      <div>
+                        <div className="text-sm font-semibold mb-2">Role Visibility</div>
+                        <div className="flex gap-4">
+                          {ROLES.map((r) => (
+                            <Checkbox
+                              key={r.value}
+                              label={r.label}
+                              checked={rv[r.value] !== false}
+                              onChange={(v) =>
+                                updateQuestion(q.id, {
+                                  role_visibility: { ...rv, [r.value]: v },
+                                })
+                              }
+                            />
+                          ))}
+                        </div>
                       </div>
-                    </div>
-                    <div>
-                      <div className="text-sm font-semibold mb-2">Role Editability</div>
-                      <div className="flex gap-4">
-                        {ROLES.map((r) => (
-                          <Checkbox
-                            key={r.value}
-                            label={r.label}
-                            checked={re[r.value] !== false}
-                            onChange={(v) =>
-                              updateQuestion(q.id, {
-                                role_editability: { ...re, [r.value]: v },
-                              })
-                            }
-                          />
-                        ))}
+                      <div>
+                        <div className="text-sm font-semibold mb-2">Role Editability</div>
+                        <div className="flex gap-4">
+                          {ROLES.map((r) => (
+                            <Checkbox
+                              key={r.value}
+                              label={r.label}
+                              checked={re[r.value] !== false}
+                              onChange={(v) =>
+                                updateQuestion(q.id, {
+                                  role_editability: { ...re, [r.value]: v },
+                                })
+                              }
+                            />
+                          ))}
+                        </div>
                       </div>
-                    </div>
+                    </>
+                    )}
                     {(q.type === 'single_choice' || q.type === 'multi_choice' || q.type === 'yes_no') && (
                       <QuestionOptionsEditor questionId={q.id} />
                     )}

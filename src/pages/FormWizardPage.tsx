@@ -197,7 +197,7 @@ export const FormWizardPage: React.FC = () => {
             totalFields++;
             const sig = section.fieldId === 'student.signature' ? 'studentSignature' : 'trainerSignature';
             const signature = useFormStore.getState()[sig];
-            if (signature?.imageDataUrl) {
+            if (signature?.imageDataUrl || signature?.typedText) {
               filledFields++;
             }
           }
