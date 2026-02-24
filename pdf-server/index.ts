@@ -286,6 +286,8 @@ function buildHtml(data: {
     .declaration-checkbox { display: inline-flex; align-items: flex-start; gap: 10px; }
     .declaration-checkbox .cb { width: 18px; height: 18px; border: 1px solid #d1d5db; border-radius: 3px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; color: #000000; background: #fff; }
     .declaration-checkbox .cb.checked { color: #000000; }
+    /* Assessment Submission Method (point 4): label + content on own page via .assessment-submission-page wrapper */
+    .assessment-submission-page { page-break-before: always; page-break-inside: avoid; }
     .assessment-submission-section { border: 1px solid #000; padding: 12px; background: #fff; margin-bottom: 12px; }
     .assessment-submission-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 24px; }
     .assessment-submission-item { display: inline-flex; align-items: center; gap: 8px; }
@@ -735,7 +737,13 @@ function buildHtml(data: {
         learnerEvalIntroShown = true;
       }
       /* Only increment headerNum when we output a visible numbered section. Reasonable Adjustment (Appendix A) has no number; inline Reasonable Adjustment handles its own increment below. */
-      if (section.pdf_render_mode !== 'declarations' && section.pdf_render_mode !== 'reasonable_adjustment' && section.pdf_render_mode !== 'task_instructions' && section.pdf_render_mode !== 'task_results' && section.pdf_render_mode !== 'task_questions' && section.pdf_render_mode !== 'assessment_summary' && section.title !== 'Assessment Summary Sheet' && !isLearnerEvaluation) {
+      /* assessment_submission: wrap label + content so both move to new page together */
+      if (section.pdf_render_mode === 'assessment_submission') {
+        html += `<div class="assessment-submission-page">`;
+        html += `<h3>${headerNum}. ${section.title}</h3>`;
+        headerNum++;
+        if (section.description) html += `<p>${section.description}</p>`;
+      } else if (section.pdf_render_mode !== 'declarations' && section.pdf_render_mode !== 'reasonable_adjustment' && section.pdf_render_mode !== 'task_instructions' && section.pdf_render_mode !== 'task_results' && section.pdf_render_mode !== 'task_questions' && section.pdf_render_mode !== 'assessment_summary' && section.title !== 'Assessment Summary Sheet' && !isLearnerEvaluation) {
         html += `<h3>${headerNum}. ${section.title}</h3>`;
         headerNum++;
         if (section.description) html += `<p>${section.description}</p>`;
@@ -913,6 +921,7 @@ function buildHtml(data: {
         html += '</div>';
         html += '</div>';
         html += '</div>';
+        html += '</div>'; /* close assessment-submission-page */
       } else if (section.pdf_render_mode === 'task_instructions') {
         const rowId = section.assessment_task_row_id;
         const row = rowId ? taskRowsMap.get(rowId) : null;

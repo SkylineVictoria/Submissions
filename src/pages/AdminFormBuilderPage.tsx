@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Eye, GripVertical, Trash2, ImagePlus } from 'lucide-react';
+import { Eye, GripVertical, Trash2, ImagePlus, Copy, MoreVertical } from 'lucide-react';
 import {
   DndContext,
   closestCenter,
@@ -19,7 +19,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { supabase } from '../lib/supabase';
-import { fetchForm, fetchFormSteps, createFormInstance, updateForm, ensureTaskSectionsForForm } from '../lib/formEngine';
+import { fetchForm, fetchFormSteps, createFormInstance, updateForm, ensureTaskSectionsForForm, formNameExists } from '../lib/formEngine';
 import { uploadFormCoverImage, uploadRowImage } from '../lib/storage';
 import type { Form, FormStep, FormSection, FormQuestion } from '../types/database';
 import { Card } from '../components/ui/Card';
@@ -98,12 +98,20 @@ function SortableStepItem({
   onSelect,
   onUpdate,
   onRemove,
+  onDuplicate,
+  menuOpen,
+  onMenuToggle,
+  menuRef,
 }: {
   step: StepWithSections;
   isSelected: boolean;
   onSelect: () => void;
   onUpdate: (title: string) => void;
   onRemove: () => void;
+  onDuplicate: () => void;
+  menuOpen: boolean;
+  onMenuToggle: () => void;
+  menuRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(step.title);
@@ -158,9 +166,43 @@ function SortableStepItem({
           </div>
         )}
       </div>
+      <div ref={menuOpen ? menuRef : undefined} className="relative flex shrink-0 items-center">
+        <button
+          type="button"
+          data-step-menu-trigger
+          className="inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded hover:bg-gray-100 text-gray-600 opacity-0 group-hover:opacity-100 transition-opacity"
+          onClick={(e) => {
+            e.stopPropagation();
+            onMenuToggle();
+          }}
+          aria-label="More options"
+        >
+          <MoreVertical className="w-4 h-4" />
+        </button>
+        {menuOpen && (
+          <div
+            className="absolute right-0 top-full mt-0.5 z-20 min-w-[120px] rounded-md border border-[var(--border)] bg-white py-1 shadow-lg"
+            role="menu"
+          >
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--text)] hover:bg-gray-100"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDuplicate();
+                onMenuToggle();
+              }}
+              role="menuitem"
+            >
+              <Copy className="w-4 h-4" />
+              Duplicate
+            </button>
+          </div>
+        )}
+      </div>
       <button
         type="button"
-        className="p-0.5 rounded hover:bg-red-100 text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
+        className="inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded hover:bg-red-100 text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
         onClick={(e) => {
           e.stopPropagation();
           onRemove();
@@ -200,6 +242,10 @@ function SortableSectionItem({
   onPdfModeChange,
   onAssessmentTaskRowChange,
   onRemove,
+  onDuplicate,
+  menuOpen,
+  onMenuToggle,
+  menuRef,
   canDelete = true,
   assessmentTaskRows = [],
 }: {
@@ -210,6 +256,10 @@ function SortableSectionItem({
   onPdfModeChange: (mode: string) => void;
   onAssessmentTaskRowChange?: (rowId: number | null) => void;
   onRemove: () => void;
+  onDuplicate: () => void;
+  menuOpen: boolean;
+  onMenuToggle: () => void;
+  menuRef: React.RefObject<HTMLDivElement | null>;
   canDelete?: boolean;
   assessmentTaskRows?: AssessmentTaskRow[];
 }) {
@@ -283,10 +333,44 @@ function SortableSectionItem({
           </div>
         )}
       </div>
+      <div ref={menuOpen ? menuRef : undefined} className="relative flex shrink-0 items-center">
+        <button
+          type="button"
+          data-section-menu-trigger
+          className="inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded hover:bg-gray-100 text-gray-600 opacity-0 group-hover:opacity-100 transition-opacity"
+          onClick={(e) => {
+            e.stopPropagation();
+            onMenuToggle();
+          }}
+          aria-label="More options"
+        >
+          <MoreVertical className="w-4 h-4" />
+        </button>
+        {menuOpen && (
+          <div
+            className="absolute right-0 top-full mt-0.5 z-20 min-w-[120px] rounded-md border border-[var(--border)] bg-white py-1 shadow-lg"
+            role="menu"
+          >
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--text)] hover:bg-gray-100"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDuplicate();
+                onMenuToggle();
+              }}
+              role="menuitem"
+            >
+              <Copy className="w-4 h-4" />
+              Duplicate
+            </button>
+          </div>
+        )}
+      </div>
       {canDelete && (
         <button
           type="button"
-          className="p-0.5 rounded hover:bg-red-100 text-red-600 opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+          className="inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded hover:bg-red-100 text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
           onClick={(e) => {
             e.stopPropagation();
             onRemove();
@@ -373,8 +457,13 @@ export const AdminFormBuilderPage: React.FC = () => {
   const [coverUploading, setCoverUploading] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState<{ type: 'step' | 'section' | 'question'; id: number } | null>(null);
   const [assessmentTaskRows, setAssessmentTaskRows] = useState<AssessmentTaskRow[]>([]);
+  const [openStepMenuId, setOpenStepMenuId] = useState<number | null>(null);
+  const [openSectionMenuId, setOpenSectionMenuId] = useState<number | null>(null);
+  const stepMenuRef = useRef<HTMLDivElement | null>(null);
+  const sectionMenuRef = useRef<HTMLDivElement | null>(null);
   const navigate = useNavigate();
   const coverInputRef = React.useRef<HTMLInputElement>(null);
+  const lastSavedFormNameRef = useRef<string>('');
   const questionPendingUpdates = useRef<Record<number, Partial<FormQuestion>>>({});
   const questionSaveTimers = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
   const questionBlurSavePromise = useRef<Promise<void> | null>(null);
@@ -406,6 +495,30 @@ export const AdminFormBuilderPage: React.FC = () => {
       });
     return () => { cancelled = true; };
   }, [assessmentTasksGridQuestionId]);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.closest('[data-step-menu-trigger]')) return;
+      if (openStepMenuId !== null && stepMenuRef.current && !stepMenuRef.current.contains(target)) {
+        setOpenStepMenuId(null);
+      }
+    };
+    document.addEventListener('click', handler);
+    return () => document.removeEventListener('click', handler);
+  }, [openStepMenuId]);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.closest('[data-section-menu-trigger]')) return;
+      if (openSectionMenuId !== null && sectionMenuRef.current && !sectionMenuRef.current.contains(target)) {
+        setOpenSectionMenuId(null);
+      }
+    };
+    document.addEventListener('click', handler);
+    return () => document.removeEventListener('click', handler);
+  }, [openSectionMenuId]);
 
   const handleCoverUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -444,6 +557,7 @@ export const AdminFormBuilderPage: React.FC = () => {
     await ensureTaskSectionsForForm(Number(formId));
     const f = await fetchForm(Number(formId));
     setForm(f || null);
+    if (f) lastSavedFormNameRef.current = f.name || '';
     const stepList = await fetchFormSteps(Number(formId));
     const stepsWithSections: StepWithSections[] = [];
     for (const s of stepList) {
@@ -586,6 +700,174 @@ export const AdminFormBuilderPage: React.FC = () => {
       const remaining = (step?.sections ?? []).filter((s) => s.id !== sectionId);
       setSelectedSectionId(remaining[0]?.id ?? null);
     }
+  };
+
+  const duplicateStep = async (stepId: number) => {
+    if (!formId) return;
+    const step = steps.find((s) => s.id === stepId);
+    if (!step) return;
+    const stepIndex = steps.findIndex((s) => s.id === stepId);
+    const newSortOrder = step.sort_order + 1;
+    const { data: newStep } = await supabase
+      .from('skyline_form_steps')
+      .insert({ form_id: Number(formId), title: `${step.title} (Copy)`, subtitle: step.subtitle, sort_order: newSortOrder })
+      .select('*')
+      .single();
+    if (!newStep) return;
+    for (const s of steps) {
+      if (s.sort_order >= newSortOrder && s.id !== stepId) {
+        await supabase.from('skyline_form_steps').update({ sort_order: s.sort_order + 1 }).eq('id', s.id);
+      }
+    }
+    const newStepWithSections = { ...newStep, sections: [] as (FormSection & { questions: FormQuestion[] })[] };
+    for (const sec of step.sections) {
+      const secWithRow = sec as FormSection & { assessment_task_row_id?: number | null };
+      const { data: newSec } = await supabase
+        .from('skyline_form_sections')
+        .insert({
+          step_id: (newStep as FormStep).id,
+          title: `${sec.title} (Copy)`,
+          description: sec.description,
+          pdf_render_mode: sec.pdf_render_mode,
+          sort_order: sec.sort_order,
+          assessment_task_row_id: secWithRow.assessment_task_row_id ?? null,
+        })
+        .select('*')
+        .single();
+      if (!newSec) continue;
+      const newSecWithQs = { ...newSec, questions: [] as FormQuestion[] };
+      const { data: questions } = await supabase.from('skyline_form_questions').select('*').eq('section_id', sec.id).order('sort_order');
+      for (const q of (questions as FormQuestion[]) || []) {
+        const { data: newQ } = await supabase
+          .from('skyline_form_questions')
+          .insert({
+            section_id: (newSec as FormSection).id,
+            type: q.type,
+            code: q.code,
+            label: q.label,
+            help_text: q.help_text,
+            required: q.required ?? false,
+            sort_order: q.sort_order,
+            role_visibility: q.role_visibility ?? {},
+            role_editability: q.role_editability ?? {},
+            pdf_meta: q.pdf_meta ?? {},
+          })
+          .select('*')
+          .single();
+        if (!newQ) continue;
+        const { data: opts } = await supabase.from('skyline_form_question_options').select('*').eq('question_id', q.id).order('sort_order');
+        if ((opts as { value: string; label: string; sort_order: number }[])?.length) {
+          await supabase.from('skyline_form_question_options').insert(
+            (opts as { value: string; label: string; sort_order: number }[]).map((o) => ({
+              question_id: (newQ as FormQuestion).id,
+              value: o.value,
+              label: o.label,
+              sort_order: o.sort_order,
+            }))
+          );
+        }
+        const { data: rows } = await supabase.from('skyline_form_question_rows').select('*').eq('question_id', q.id).order('sort_order');
+        for (const r of (rows as { row_label: string; row_help: string | null; row_image_url: string | null; row_meta: unknown; sort_order: number }[]) || []) {
+          await supabase.from('skyline_form_question_rows').insert({
+            question_id: (newQ as FormQuestion).id,
+            row_label: r.row_label,
+            row_help: r.row_help,
+            row_image_url: r.row_image_url,
+            row_meta: r.row_meta,
+            sort_order: r.sort_order,
+          });
+        }
+        newSecWithQs.questions.push(newQ as FormQuestion);
+      }
+      newStepWithSections.sections.push(newSecWithQs);
+    }
+    const reordered = [...steps];
+    reordered.splice(stepIndex + 1, 0, newStepWithSections);
+    setSteps(reordered);
+    setSelectedStepId((newStep as FormStep).id);
+    setSelectedSectionId(newStepWithSections.sections[0]?.id ?? null);
+  };
+
+  const duplicateSection = async (sectionId: number) => {
+    if (!selectedStepId) return;
+    const step = steps.find((s) => s.id === selectedStepId);
+    if (!step) return;
+    const section = step.sections.find((s) => s.id === sectionId);
+    if (!section) return;
+    const secIndex = step.sections.findIndex((s) => s.id === sectionId);
+    const secWithRow = section as FormSection & { assessment_task_row_id?: number | null };
+    const { data: newSec } = await supabase
+      .from('skyline_form_sections')
+      .insert({
+        step_id: selectedStepId,
+        title: `${section.title} (Copy)`,
+        description: section.description,
+        pdf_render_mode: section.pdf_render_mode,
+        sort_order: section.sort_order + 1,
+        assessment_task_row_id: secWithRow.assessment_task_row_id ?? null,
+      })
+      .select('*')
+      .single();
+    if (!newSec) return;
+    for (const s of step.sections) {
+      if (s.sort_order > section.sort_order) {
+        await supabase.from('skyline_form_sections').update({ sort_order: s.sort_order + 1 }).eq('id', s.id);
+      }
+    }
+    const { data: questions } = await supabase.from('skyline_form_questions').select('*').eq('section_id', section.id).order('sort_order');
+    const newQuestions: FormQuestion[] = [];
+    for (const q of (questions as FormQuestion[]) || []) {
+      const { data: newQ } = await supabase
+        .from('skyline_form_questions')
+        .insert({
+          section_id: (newSec as FormSection).id,
+          type: q.type,
+          code: q.code,
+          label: q.label,
+          help_text: q.help_text,
+          required: q.required ?? false,
+          sort_order: q.sort_order,
+          role_visibility: q.role_visibility ?? {},
+          role_editability: q.role_editability ?? {},
+          pdf_meta: q.pdf_meta ?? {},
+        })
+        .select('*')
+        .single();
+      if (!newQ) continue;
+      const { data: opts } = await supabase.from('skyline_form_question_options').select('*').eq('question_id', q.id).order('sort_order');
+      if ((opts as { value: string; label: string; sort_order: number }[])?.length) {
+        await supabase.from('skyline_form_question_options').insert(
+          (opts as { value: string; label: string; sort_order: number }[]).map((o) => ({
+            question_id: (newQ as FormQuestion).id,
+            value: o.value,
+            label: o.label,
+            sort_order: o.sort_order,
+          }))
+        );
+      }
+      const { data: rows } = await supabase.from('skyline_form_question_rows').select('*').eq('question_id', q.id).order('sort_order');
+      for (const r of (rows as { row_label: string; row_help: string | null; row_image_url: string | null; row_meta: unknown; sort_order: number }[]) || []) {
+        await supabase.from('skyline_form_question_rows').insert({
+          question_id: (newQ as FormQuestion).id,
+          row_label: r.row_label,
+          row_help: r.row_help,
+          row_image_url: r.row_image_url,
+          row_meta: r.row_meta,
+          sort_order: r.sort_order,
+        });
+      }
+      newQuestions.push(newQ as FormQuestion);
+    }
+    setSteps((prev) =>
+      prev.map((s) => {
+        if (s.id !== selectedStepId) return s;
+        const reordered = [...s.sections];
+        const newSecWithQs = { ...newSec, questions: newQuestions };
+        reordered.splice(secIndex + 1, 0, newSecWithQs);
+        return { ...s, sections: reordered };
+      })
+    );
+    setSelectedSectionId((newSec as FormSection).id);
   };
 
   const handleStepsDragEnd = async (event: DragEndEvent) => {
@@ -813,7 +1095,52 @@ export const AdminFormBuilderPage: React.FC = () => {
             >
               ← Back
             </button>
-            <h1 className="text-xl font-bold text-[var(--text)]">{form.name}</h1>
+            <div>
+              <input
+                type="text"
+                value={form.name}
+                onChange={(e) => setForm((prev) => (prev ? { ...prev, name: e.target.value } : null))}
+                onBlur={async (e) => {
+                  const newName = (e.target.value || '').trim();
+                  if (!newName) {
+                    setForm((prev) => (prev ? { ...prev, name: lastSavedFormNameRef.current } : null));
+                    return;
+                  }
+                  if (newName === lastSavedFormNameRef.current) return;
+                  const exists = await formNameExists(newName, Number(formId));
+                  if (exists) {
+                    alert('A form with this name already exists. Please choose a different name.');
+                    setForm((prev) => (prev ? { ...prev, name: lastSavedFormNameRef.current } : null));
+                    return;
+                  }
+                  const { error } = await updateForm(Number(formId), { name: newName });
+                  if (error) {
+                    alert(`Failed to save name: ${error.message}`);
+                    setForm((prev) => (prev ? { ...prev, name: lastSavedFormNameRef.current } : null));
+                    return;
+                  }
+                  lastSavedFormNameRef.current = newName;
+                  setForm((prev) => (prev ? { ...prev, name: newName } : null));
+                }}
+                className="text-xl font-bold text-[var(--text)] bg-transparent border-b-2 border-transparent hover:border-[var(--border)] focus:outline-none focus:border-[var(--brand)] py-0.5 px-0 w-full max-w-md"
+                placeholder="Form name"
+              />
+              <div className="flex items-center gap-2 mt-1">
+                <span className="text-xs font-medium text-gray-500">Version:</span>
+                <input
+                  type="text"
+                  value={form.version ?? '1.0.0'}
+                  onChange={(e) => setForm((prev) => (prev ? { ...prev, version: e.target.value } : null))}
+                  onBlur={async (e) => {
+                    const v = (e.target.value || '1.0.0').trim() || '1.0.0';
+                    await updateForm(Number(formId), { version: v });
+                    setForm((prev) => (prev ? { ...prev, version: v } : null));
+                  }}
+                  className="text-sm border border-[var(--border)] rounded px-2 py-0.5 w-20 focus:outline-none focus:ring-1 focus:ring-[var(--brand)] focus:border-[var(--brand)]"
+                  placeholder="1.0.0"
+                />
+              </div>
+            </div>
           </div>
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-2">
@@ -895,6 +1222,13 @@ export const AdminFormBuilderPage: React.FC = () => {
                     }}
                     onUpdate={(title) => updateStep(step.id, { title })}
                     onRemove={() => removeStep(step.id)}
+                    onDuplicate={() => {
+                      setOpenStepMenuId(null);
+                      duplicateStep(step.id);
+                    }}
+                    menuOpen={openStepMenuId === step.id}
+                    onMenuToggle={() => setOpenStepMenuId(openStepMenuId === step.id ? null : step.id)}
+                    menuRef={stepMenuRef}
                   />
                 ))}
               </div>
@@ -930,6 +1264,13 @@ export const AdminFormBuilderPage: React.FC = () => {
                       onAssessmentTaskRowChange={(rowId) => updateSection(sec.id, { assessment_task_row_id: rowId })}
                       assessmentTaskRows={assessmentTaskRows}
                       onRemove={() => removeSection(sec.id)}
+                      onDuplicate={() => {
+                        setOpenSectionMenuId(null);
+                        duplicateSection(sec.id);
+                      }}
+                      menuOpen={openSectionMenuId === sec.id}
+                      onMenuToggle={() => setOpenSectionMenuId(openSectionMenuId === sec.id ? null : sec.id)}
+                      menuRef={sectionMenuRef}
                       canDelete={!isPrebuiltSection(sec.title)}
                     />
                   ))}

@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Plus, FileText, Edit, Eye, Trash2 } from 'lucide-react';
-import { listForms, createForm, createFormInstance } from '../lib/formEngine';
+import { Plus, FileText, Edit, Eye, Trash2, MoreVertical, Copy } from 'lucide-react';
+import { listForms, createForm, createFormInstance, duplicateForm } from '../lib/formEngine';
 import type { Form } from '../types/database';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -20,6 +20,7 @@ export const AdminFormsListPage: React.FC = () => {
   const [forms, setForms] = useState<Form[]>([]);
   const [loading, setLoading] = useState(true);
   const [newName, setNewName] = useState('');
+  const [newVersion, setNewVersion] = useState('1.0.0');
   const [qualificationCode, setQualificationCode] = useState('');
   const [qualificationName, setQualificationName] = useState('');
   const [unitCode, setUnitCode] = useState('');
@@ -29,6 +30,9 @@ export const AdminFormsListPage: React.FC = () => {
   ]);
   const [creating, setCreating] = useState(false);
   const [previewing, setPreviewing] = useState<number | null>(null);
+  const [duplicating, setDuplicating] = useState<number | null>(null);
+  const [openMenuId, setOpenMenuId] = useState<number | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     listForms().then((data) => {
@@ -51,6 +55,7 @@ export const AdminFormsListPage: React.FC = () => {
     setCreating(true);
     const created = await createForm({
       name: newName.trim(),
+      version: newVersion.trim() || '1.0.0',
       qualification_code: qualificationCode.trim(),
       qualification_name: qualificationName.trim(),
       unit_code: unitCode.trim(),
@@ -63,6 +68,7 @@ export const AdminFormsListPage: React.FC = () => {
     if (created) {
       setForms((prev) => [created, ...prev]);
       setNewName('');
+      setNewVersion('1.0.0');
       setQualificationCode('');
       setQualificationName('');
       setUnitCode('');
@@ -97,6 +103,28 @@ export const AdminFormsListPage: React.FC = () => {
       navigate(`/instances/${instance.id}`);
     }
   };
+
+  const handleDuplicate = async (formId: number) => {
+    setOpenMenuId(null);
+    setDuplicating(formId);
+    const duplicated = await duplicateForm(formId);
+    setDuplicating(null);
+    if (duplicated) {
+      setForms((prev) => [duplicated, ...prev]);
+    }
+  };
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.closest('[data-menu-trigger]')) return;
+      if (menuRef.current && !menuRef.current.contains(target)) {
+        setOpenMenuId(null);
+      }
+    };
+    document.addEventListener('click', handler);
+    return () => document.removeEventListener('click', handler);
+  }, []);
 
   return (
     <div className="min-h-screen bg-[var(--bg)]">
@@ -133,6 +161,14 @@ export const AdminFormsListPage: React.FC = () => {
               placeholder="Form name"
               required
             />
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Version (default: 1.0.0)</label>
+              <Input
+                value={newVersion}
+                onChange={(e) => setNewVersion(e.target.value)}
+                placeholder="1.0.0"
+              />
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Input
                 value={qualificationCode}
@@ -245,26 +281,63 @@ export const AdminFormsListPage: React.FC = () => {
                       </div>
                     </div>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex items-center gap-2">
                     <Button
                       variant="outline"
                       size="sm"
+                      className="inline-flex min-w-[100px] items-center justify-center gap-2"
                       onClick={() => handlePreview(form.id)}
                       disabled={previewing !== null}
                     >
                       {previewing === form.id ? (
-                        <Loader variant="dots" size="sm" inline className="mr-1" />
+                        <Loader variant="dots" size="sm" inline />
                       ) : (
-                        <Eye className="w-4 h-4 mr-1" />
+                        <Eye className="w-4 h-4 shrink-0" />
                       )}
                       {previewing === form.id ? 'Loading...' : 'Preview'}
                     </Button>
                     <Link to={`/admin/forms/${form.id}/builder`}>
-                      <Button variant="outline" size="sm">
-                        <Edit className="w-4 h-4 mr-1" />
+                      <Button variant="outline" size="sm" className="inline-flex min-w-[100px] items-center justify-center gap-2">
+                        <Edit className="w-4 h-4 shrink-0" />
                         Edit
                       </Button>
                     </Link>
+                    <div
+                      ref={openMenuId === form.id ? menuRef : undefined}
+                      className="relative"
+                    >
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="inline-flex w-10 shrink-0 items-center justify-center !px-0"
+                        data-menu-trigger
+                        onClick={() => setOpenMenuId(openMenuId === form.id ? null : form.id)}
+                        disabled={duplicating !== null}
+                        aria-label="More options"
+                      >
+                        {duplicating === form.id ? (
+                          <Loader variant="dots" size="sm" />
+                        ) : (
+                          <MoreVertical className="w-4 h-4" />
+                        )}
+                      </Button>
+                      {openMenuId === form.id && (
+                        <div
+                          className="absolute right-0 top-full mt-1 z-10 min-w-[140px] rounded-md border border-[var(--border)] bg-white py-1 shadow-lg"
+                          role="menu"
+                        >
+                          <button
+                            type="button"
+                            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--text)] hover:bg-gray-100"
+                            onClick={() => handleDuplicate(form.id)}
+                            role="menuitem"
+                          >
+                            <Copy className="w-4 h-4" />
+                            Duplicate
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </li>
               ))}

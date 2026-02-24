@@ -555,7 +555,6 @@ const READ_ONLY_VISIBLE = { student: true, trainer: true, office: true };
 const READ_ONLY_EDIT = { student: false, trainer: false, office: false };
 const TRAINER_ONLY_EDIT = { student: false, trainer: true, office: false };
 const TRAINER_OFFICE_EDIT = { student: false, trainer: true, office: true };
-const STUDENT_TRAINER_EDIT = { student: true, trainer: true, office: false };
 
 interface AssessmentTaskInput {
   task1_label: string;
@@ -665,7 +664,7 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
     const s = sec2c as { id: number };
     const { data: qSub } = await supabase
       .from('skyline_form_questions')
-      .insert({ section_id: s.id, type: 'multi_choice', code: 'assessment.submission', label: 'Assessment Submission Method', sort_order: 0, role_visibility: READ_ONLY_VISIBLE, role_editability: STUDENT_TRAINER_EDIT })
+      .insert({ section_id: s.id, type: 'multi_choice', code: 'assessment.submission', label: 'Assessment Submission Method', sort_order: 0, role_visibility: READ_ONLY_VISIBLE, role_editability: DEFAULT_ROLES })
       .select('id')
       .single();
     if (qSub) {
@@ -677,7 +676,7 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
         { question_id: qid, value: 'other', label: 'Any other method', sort_order: 3 },
       ]);
     }
-    await supabase.from('skyline_form_questions').insert({ section_id: s.id, type: 'short_text', code: 'assessment.otherDesc', label: 'Please describe other method', sort_order: 1, role_visibility: READ_ONLY_VISIBLE, role_editability: STUDENT_TRAINER_EDIT });
+    await supabase.from('skyline_form_questions').insert({ section_id: s.id, type: 'short_text', code: 'assessment.otherDesc', label: 'Please describe other method', sort_order: 1, role_visibility: READ_ONLY_VISIBLE, role_editability: DEFAULT_ROLES });
   }
 
   await createDefaultSectionsToStep(stepId, 4);
@@ -854,6 +853,7 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
 
 export interface CreateFormInput {
   name: string;
+  version?: string;
   qualification_code: string;
   qualification_name: string;
   unit_code: string;
@@ -867,10 +867,10 @@ export interface CreateFormInput {
 }
 
 export async function createForm(input: CreateFormInput): Promise<Form | null> {
-  const { name, qualification_code, qualification_name, unit_code, unit_name, assessment_tasks, assessment_task_1_label, assessment_task_1_method, assessment_task_2_label, assessment_task_2_method } = input;
+  const { name, version, qualification_code, qualification_name, unit_code, unit_name, assessment_tasks, assessment_task_1_label, assessment_task_1_method, assessment_task_2_label, assessment_task_2_method } = input;
   const { data, error } = await supabase
     .from('skyline_forms')
-    .insert({ name, qualification_code, qualification_name, unit_code, unit_name })
+    .insert({ name, qualification_code, qualification_name, unit_code, unit_name, version: (version || '1.0.0').trim() || '1.0.0' })
     .select('*')
     .single();
   if (error) {
@@ -906,6 +906,174 @@ export async function listForms(status?: string): Promise<Form[]> {
     return [];
   }
   return (data as Form[]) || [];
+}
+
+/** Returns true if another form (excluding excludeFormId) already has this name (case-insensitive trim). */
+export async function formNameExists(name: string, excludeFormId?: number): Promise<boolean> {
+  const trimmed = name.trim();
+  if (!trimmed) return false;
+  const forms = await listForms();
+  return forms.some((f) => f.id !== excludeFormId && f.name.trim().toLowerCase() === trimmed.toLowerCase());
+}
+
+function nextVersion(version: string | null): string {
+  if (!version || typeof version !== 'string') return '1.1.0';
+  const parts = version.trim().split('.').map((s) => parseInt(s, 10) || 0);
+  const [major = 1, minor = 0] = parts;
+  return `${major}.${minor + 1}.0`;
+}
+
+export async function duplicateForm(formId: number): Promise<Form | null> {
+  const form = await fetchForm(formId);
+  if (!form) return null;
+
+  const newVersion = nextVersion(form.version);
+  const newName = `${form.name} (Copy)`;
+
+  const { data: newFormData, error: formErr } = await supabase
+    .from('skyline_forms')
+    .insert({
+      name: newName,
+      version: newVersion,
+      status: form.status ?? 'draft',
+      unit_code: form.unit_code,
+      unit_name: form.unit_name,
+      qualification_code: form.qualification_code,
+      qualification_name: form.qualification_name,
+      header_asset_url: form.header_asset_url,
+      cover_asset_url: form.cover_asset_url,
+    })
+    .select('*')
+    .single();
+  if (formErr || !newFormData) {
+    console.error('duplicateForm: failed to insert form', formErr);
+    return null;
+  }
+  const newForm = newFormData as Form;
+  const newFormId = newForm.id;
+
+  const steps = await fetchFormSteps(formId);
+  const rowIdMap = new Map<number, number>();
+
+  for (const step of steps) {
+    const { data: newStepData, error: stepErr } = await supabase
+      .from('skyline_form_steps')
+      .insert({
+        form_id: newFormId,
+        title: step.title,
+        subtitle: step.subtitle,
+        sort_order: step.sort_order,
+      })
+      .select('id')
+      .single();
+    if (stepErr || !newStepData) {
+      console.error('duplicateForm: failed to insert step', stepErr);
+      continue;
+    }
+    const newStepId = (newStepData as { id: number }).id;
+
+    const { data: sections } = await supabase
+      .from('skyline_form_sections')
+      .select('*')
+      .eq('step_id', step.id)
+      .order('sort_order', { ascending: true });
+    const sectionsList = (sections as (FormSection & { assessment_task_row_id?: number | null })[]) || [];
+
+    for (const section of sectionsList) {
+      const mappedRowId = section.assessment_task_row_id != null ? rowIdMap.get(section.assessment_task_row_id) ?? null : null;
+      const { data: newSectionData, error: sectionErr } = await supabase
+        .from('skyline_form_sections')
+        .insert({
+          step_id: newStepId,
+          title: section.title,
+          description: section.description ?? null,
+          pdf_render_mode: section.pdf_render_mode,
+          sort_order: section.sort_order,
+          assessment_task_row_id: mappedRowId,
+        })
+        .select('id')
+        .single();
+      if (sectionErr || !newSectionData) {
+        console.error('duplicateForm: failed to insert section', sectionErr);
+        continue;
+      }
+      const newSectionId = (newSectionData as { id: number }).id;
+
+      const { data: questions } = await supabase
+        .from('skyline_form_questions')
+        .select('*')
+        .eq('section_id', section.id)
+        .order('sort_order', { ascending: true });
+      const questionsList = (questions as FormQuestion[]) || [];
+
+      for (const q of questionsList) {
+        const { data: newQData, error: qErr } = await supabase
+          .from('skyline_form_questions')
+          .insert({
+            section_id: newSectionId,
+            type: q.type,
+            code: q.code,
+            label: q.label,
+            help_text: q.help_text ?? null,
+            required: q.required ?? false,
+            sort_order: q.sort_order,
+            role_visibility: q.role_visibility ?? {},
+            role_editability: q.role_editability ?? {},
+            pdf_meta: q.pdf_meta ?? {},
+          })
+          .select('id')
+          .single();
+        if (qErr || !newQData) {
+          console.error('duplicateForm: failed to insert question', qErr);
+          continue;
+        }
+        const newQuestionId = (newQData as { id: number }).id;
+
+        const { data: options } = await supabase
+          .from('skyline_form_question_options')
+          .select('*')
+          .eq('question_id', q.id)
+          .order('sort_order', { ascending: true });
+        const optionsList = (options as FormQuestionOption[]) || [];
+        if (optionsList.length > 0) {
+          await supabase.from('skyline_form_question_options').insert(
+            optionsList.map((o) => ({
+              question_id: newQuestionId,
+              value: o.value,
+              label: o.label,
+              sort_order: o.sort_order,
+            }))
+          );
+        }
+
+        const { data: rows } = await supabase
+          .from('skyline_form_question_rows')
+          .select('*')
+          .eq('question_id', q.id)
+          .order('sort_order', { ascending: true });
+        const rowsList = (rows as FormQuestionRow[]) || [];
+        for (const row of rowsList) {
+          const { data: newRowData, error: rowErr } = await supabase
+            .from('skyline_form_question_rows')
+            .insert({
+              question_id: newQuestionId,
+              row_label: row.row_label,
+              row_help: row.row_help ?? null,
+              row_image_url: row.row_image_url ?? null,
+              row_meta: row.row_meta ?? null,
+              sort_order: row.sort_order,
+            })
+            .select('id')
+            .single();
+          if (!rowErr && newRowData) {
+            rowIdMap.set(row.id, (newRowData as { id: number }).id);
+          }
+        }
+      }
+    }
+  }
+
+  return newForm;
 }
 
 export async function updateInstanceRole(instanceId: number, roleContext: string): Promise<void> {

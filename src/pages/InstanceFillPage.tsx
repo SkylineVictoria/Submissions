@@ -36,10 +36,10 @@ function getAnswerKey(questionId: number, rowId: number | null): string {
   return `q-${questionId}-${rowId}`;
 }
 
-function parseAnswerValue(a: FormAnswer): string | number | boolean | Record<string, unknown> | null {
+function parseAnswerValue(a: FormAnswer): string | number | boolean | Record<string, unknown> | string[] | null {
   if (a.value_text) return a.value_text;
   if (a.value_number != null) return a.value_number;
-  if (a.value_json) return a.value_json as Record<string, unknown>;
+  if (a.value_json != null) return a.value_json as Record<string, unknown> | string[];
   return null;
 }
 
@@ -79,10 +79,10 @@ export const InstanceFillPage: React.FC = () => {
     setTemplate(tpl || null);
     const roleCtx = (inst?.role_context as FormRole) || 'student';
     setRole(roleCtx);
-    const ansMap: Record<string, string | number | boolean | Record<string, unknown>> = {};
+    const ansMap: Record<string, string | number | boolean | Record<string, unknown> | string[]> = {};
     for (const a of ans) {
       const key = getAnswerKey(a.question_id, a.row_id);
-      ansMap[key] = parseAnswerValue(a) as string | number | boolean | Record<string, unknown>;
+      ansMap[key] = parseAnswerValue(a) as string | number | boolean | Record<string, unknown> | string[];
     }
     setAnswers(ansMap);
     setTrainerAssessments(assessments || {});
@@ -609,31 +609,32 @@ export const InstanceFillPage: React.FC = () => {
                                       const isLms = /lms|learning management/i.test(opt.label);
                                       const isOther = opt.value === 'other';
                                       const spanFull = isLms || isOther;
-                                      const selected = (answers[getAnswerKey(q.id, null)] as string[] | undefined)?.includes(opt.value) ?? false;
+                                      const rawVal = answers[getAnswerKey(q.id, null)];
+                                      const currentArr = Array.isArray(rawVal) ? rawVal : (typeof rawVal === 'string' ? rawVal.split(',').map((s) => s.trim()).filter(Boolean) : []);
+                                      const selected = currentArr.includes(opt.value);
+                                      const submissionEditable = section.pdf_render_mode === 'assessment_submission' || isRoleEditable((q.role_editability as Record<string, boolean>) || {}, role);
                                       return (
-                                        <div
+                                        <label
                                           key={opt.id}
-                                          className={`flex items-center gap-2 ${spanFull ? 'col-span-2' : ''}`}
+                                          className={`flex items-center gap-2 cursor-pointer ${spanFull ? 'col-span-2' : ''} ${!submissionEditable ? 'opacity-60 cursor-not-allowed' : ''}`}
                                         >
-                                          <button
-                                            type="button"
-                                            onClick={() => {
-                                              const current = (answers[getAnswerKey(q.id, null)] as string[] | undefined) ?? [];
-                                              const next = current.includes(opt.value)
-                                                ? current.filter((v) => v !== opt.value)
-                                                : [...current, opt.value];
+                                          <input
+                                            type="checkbox"
+                                            checked={selected}
+                                            onChange={() => {
+                                              const next = selected
+                                                ? currentArr.filter((v) => v !== opt.value)
+                                                : [...currentArr, opt.value];
                                               handleAnswerChange(q.id, null, next);
                                             }}
-                                            disabled={!isRoleEditable((q.role_editability as Record<string, boolean>) || {}, role)}
-                                            className={`w-[18px] h-[18px] border border-black rounded-none flex items-center justify-center flex-shrink-0 bg-white ${selected ? 'bg-gray-800 text-white' : ''}`}
-                                          >
-                                            {selected ? '✓' : ''}
-                                          </button>
+                                            disabled={!submissionEditable}
+                                            className="w-[18px] h-[18px] flex-shrink-0 cursor-pointer accent-gray-800"
+                                          />
                                           <span className="text-gray-700">{opt.label}</span>
                                           {isOther && (
                                             <span className="flex-1 border-b border-gray-600 min-w-[120px] min-h-[18px]" />
                                           )}
-                                        </div>
+                                        </label>
                                       );
                                     })}
                                   </React.Fragment>
@@ -643,7 +644,7 @@ export const InstanceFillPage: React.FC = () => {
                                       type="text"
                                       value={(answers[getAnswerKey(q.id, null)] as string) ?? ''}
                                       onChange={(e) => handleAnswerChange(q.id, null, e.target.value)}
-                                      disabled={!isRoleEditable((q.role_editability as Record<string, boolean>) || {}, role)}
+                                      disabled={!(section.pdf_render_mode === 'assessment_submission' || isRoleEditable((q.role_editability as Record<string, boolean>) || {}, role))}
                                       className="w-full max-w-[300px] mx-auto border-0 border-b border-gray-600 bg-transparent px-2 py-1 text-center focus:outline-none focus:ring-0"
                                       placeholder=""
                                     />
