@@ -91,7 +91,7 @@ If missing, a minimal text fallback is used. The deploy copies from `public/` in
 
 ### Deploy PDF Server (required for PDF preview/download in production)
 
-#### Option A: Railway
+#### Option A: Railway (free tier: $1/month credit + $5 trial)
 
 1. Create a [Railway](https://railway.app/) account and connect your GitHub repo.
 2. Add a **new service** → **Deploy from GitHub repo** → Select SignFlow.
@@ -107,6 +107,8 @@ If missing, a minimal text fallback is used. The deploy copies from `public/` in
    - `SUPABASE_SERVICE_ROLE_KEY` – Supabase service role key
 
 5. Deploy. Railway will assign a URL like `https://signflow-pdf-production.up.railway.app`.
+
+**Free tier note:** Railway’s free plan includes $1/month credit (plus $5 one-time trial). On the free tier, services can sleep after inactivity; pinging `GET /health` every 5–14 minutes (e.g. with [UptimeRobot](https://uptimerobot.com)) helps keep the PDF server awake. On the Hobby plan ($5/month) you can disable Serverless so the service stays on.
 
 #### Option B: Render
 
@@ -125,6 +127,12 @@ If missing, a minimal text fallback is used. The deploy copies from `public/` in
    - `SUPABASE_SERVICE_ROLE_KEY` – Supabase service role key
 
 5. Deploy. Render will assign a URL like `https://signflow-pdf.onrender.com`.
+
+**Avoid slow “service waking up” on Render (free tier):**  
+Free-tier web services spin down after ~15 minutes of inactivity. The first request after that can take 30–60+ seconds. To reduce this:
+
+- **Health endpoint:** The PDF server exposes `GET /health`. Use a free uptime monitor (e.g. [UptimeRobot](https://uptimerobot.com)) to hit `https://your-pdf-service.onrender.com/health` every 5–14 minutes. That keeps the service from sleeping so PDF requests stay fast.
+- **Paid tier:** On a paid Render plan, the instance stays on and does not spin down.
 
 ### Configure Frontend (Vercel)
 

@@ -121,16 +121,20 @@ export const InstanceFillPage: React.FC = () => {
     const trainerNameQ = template.steps?.flatMap((st) => st.sections).flatMap((s) => s.questions).find((q) => q.code === 'trainer.fullName');
     const studentName = studentNameQ ? String(answers[getAnswerKey(studentNameQ.id, null)] ?? '').trim() : '';
     const trainerName = trainerNameQ ? String(answers[getAnswerKey(trainerNameQ.id, null)] ?? '').trim() : '';
-    if (!studentName && !trainerName) return;
     const taskResultSections = template.steps?.flatMap((st) => st.sections).filter((s) => s.pdf_render_mode === 'task_results') ?? [];
     const updates: { sectionId: number; field: 'student_name' | 'trainer_name'; value: string }[] = [];
     for (const sec of taskResultSections) {
       const rd = resultsData[sec.id];
-      if (studentName && (!rd?.student_name || !String(rd.student_name).trim())) {
-        updates.push({ sectionId: sec.id, field: 'student_name', value: studentName });
+      const currentStudentName = (rd?.student_name ?? '').trim();
+      const currentTrainerName = (rd?.trainer_name ?? '').trim();
+      const sigIsTypedText = (s: string | null | undefined) => s && typeof s === 'string' && !s.startsWith('data:') && s.length > 1;
+      if (currentStudentName.length <= 1) {
+        const better = studentName || (sigIsTypedText(rd?.student_signature) ? rd!.student_signature! : '');
+        if (better) updates.push({ sectionId: sec.id, field: 'student_name', value: better });
       }
-      if (trainerName && (!rd?.trainer_name || !String(rd.trainer_name).trim())) {
-        updates.push({ sectionId: sec.id, field: 'trainer_name', value: trainerName });
+      if (currentTrainerName.length <= 1) {
+        const better = trainerName || (sigIsTypedText(rd?.trainer_signature) ? rd!.trainer_signature! : '');
+        if (better) updates.push({ sectionId: sec.id, field: 'trainer_name', value: better });
       }
     }
     if (updates.length === 0) return;
@@ -158,11 +162,11 @@ export const InstanceFillPage: React.FC = () => {
     const updates: { questionId: number; value: string }[] = [];
     if (evalStudentNameQ && studentName) {
       const current = String(answers[getAnswerKey(evalStudentNameQ.id, null)] ?? '').trim();
-      if (!current) updates.push({ questionId: evalStudentNameQ.id, value: studentName });
+      if (!current || current.length <= 1) updates.push({ questionId: evalStudentNameQ.id, value: studentName });
     }
     if (evalTrainerNameQ && trainerName) {
       const current = String(answers[getAnswerKey(evalTrainerNameQ.id, null)] ?? '').trim();
-      if (!current) updates.push({ questionId: evalTrainerNameQ.id, value: trainerName });
+      if (!current || current.length <= 1) updates.push({ questionId: evalTrainerNameQ.id, value: trainerName });
     }
     if (updates.length === 0) return;
     setAnswers((prev) => {

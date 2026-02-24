@@ -30,6 +30,11 @@ app.use((_req, res, next) => {
   next();
 });
 
+// Lightweight health check for Render: ping this every 5–14 min to avoid cold starts (e.g. UptimeRobot)
+app.get('/health', (_req, res) => {
+  res.status(200).send('ok');
+});
+
 interface FormAnswer {
   question_id: number;
   row_id: number | null;
@@ -754,11 +759,15 @@ function buildHtml(data: {
         const participantQs = questions.filter(q => q.question.type === 'short_text').sort((a, b) => a.question.sort_order - b.question.sort_order);
         const leftQs = participantQs.slice(0, 3);
         const rightQs = participantQs.slice(3, 6);
+        const studentFullName = String(codeToValue.get('student.fullName') ?? '');
+        const trainerFullName = String(codeToValue.get('trainer.fullName') ?? '');
         for (let i = 0; i < 3; i++) {
           const leftQ = leftQs[i];
           const rightQ = rightQs[i];
-          const leftVal = leftQ ? String(answers.get(`q-${leftQ.question.id}`) ?? '') : '';
-          const rightVal = rightQ ? String(answers.get(`q-${rightQ.question.id}`) ?? '') : '';
+          let leftVal = leftQ ? String(answers.get(`q-${leftQ.question.id}`) ?? '') : '';
+          let rightVal = rightQ ? String(answers.get(`q-${rightQ.question.id}`) ?? '') : '';
+          if (leftQ?.question.code === 'evaluation.studentName' && leftVal.length <= 1 && studentFullName) leftVal = studentFullName;
+          if (leftQ?.question.code === 'evaluation.trainerName' && leftVal.length <= 1 && trainerFullName) leftVal = trainerFullName;
           html += '<tr>';
           html += `<td class="label-cell" style="width:25%;background:#595959 !important;color:#fff !important;font-weight:600;border:1px solid #000">${leftQ?.question.label || ''}</td>`;
           html += `<td class="value-cell" style="width:25%;background:#fff;border:1px solid #000">${leftVal}</td>`;
@@ -1065,9 +1074,23 @@ function buildHtml(data: {
         html += '</td></tr>';
         html += '</tbody></table>';
         html += '<table class="result-sheet-table"><tbody>';
-        html += '<tr><td class="result-label">Student Name</td><td class="result-value">' + (rd?.student_name ?? '') + '</td></tr>';
+        const studentNameDisplay = (() => {
+          const rn = (rd?.student_name ?? '').trim();
+          if (rn.length > 1) return rn;
+          const sig = rd?.student_signature;
+          if (sig && typeof sig === 'string' && !sig.startsWith('data:')) return sig;
+          return String(codeToValue.get('student.fullName') ?? '');
+        })();
+        const trainerNameDisplay = (() => {
+          const rn = (rd?.trainer_name ?? '').trim();
+          if (rn.length > 1) return rn;
+          const sig = rd?.trainer_signature;
+          if (sig && typeof sig === 'string' && !sig.startsWith('data:')) return sig;
+          return String(codeToValue.get('trainer.fullName') ?? '');
+        })();
+        html += '<tr><td class="result-label">Student Name</td><td class="result-value">' + studentNameDisplay + '</td></tr>';
         html += '<tr><td class="result-label">Student Signature</td><td class="result-value">' + renderSignatureHtml(rd?.student_signature ?? '') + '</td></tr>';
-        html += '<tr><td class="result-label">Trainer/Assessor Name</td><td class="result-value">' + (rd?.trainer_name ?? '') + '</td></tr>';
+        html += '<tr><td class="result-label">Trainer/Assessor Name</td><td class="result-value">' + trainerNameDisplay + '</td></tr>';
         html += '<tr><td class="result-label">Trainer/Assessor Signature</td><td class="result-value">' + renderSignatureHtml(rd?.trainer_signature ?? '') + '</td></tr>';
         html += '<tr><td class="result-label">Date</td><td class="result-value">' + (rd?.trainer_date ?? '') + '</td></tr>';
         const officeEntry = resultsOffice.get(section.id);
