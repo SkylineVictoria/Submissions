@@ -679,7 +679,23 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
     await supabase.from('skyline_form_questions').insert({ section_id: s.id, type: 'short_text', code: 'assessment.otherDesc', label: 'Please describe other method', sort_order: 1, role_visibility: READ_ONLY_VISIBLE, role_editability: DEFAULT_ROLES });
   }
 
-  await createDefaultSectionsToStep(stepId, 4);
+  // Introductory Reasonable Adjustment (short form: yes/no, task, description, signature)
+  const { data: secRA } = await supabase
+    .from('skyline_form_sections')
+    .insert({ step_id: stepId, title: 'Reasonable Adjustment', description: 'Students with carer responsibilities, cultural or religious obligations, English as an additional language, disability etc., can request reasonable adjustments. Academic standards will not be lowered; flexibility in delivery or assessment is required.', pdf_render_mode: 'reasonable_adjustment', sort_order: 4 })
+    .select('id')
+    .single();
+  if (secRA) {
+    const raSecId = (secRA as { id: number }).id;
+    await supabase.from('skyline_form_questions').insert([
+      { section_id: raSecId, type: 'yes_no', code: 'reasonable_adjustment.applied', label: 'Was reasonable adjustment applied to any of these assessment tasks?', sort_order: 0, role_visibility: READ_ONLY_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
+      { section_id: raSecId, type: 'short_text', code: 'reasonable_adjustment.task', label: 'Write (task name and number) where reasonable adjustments have been applied', sort_order: 1, role_visibility: READ_ONLY_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
+      { section_id: raSecId, type: 'long_text', code: 'reasonable_adjustment.description', label: 'Provide a description of the adjustment applied and explain reasons.', sort_order: 2, role_visibility: READ_ONLY_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
+      { section_id: raSecId, type: 'signature', code: 'trainer.reasonableAdjustmentSignature', label: 'Trainer/Assessor Signature', sort_order: 3, role_visibility: READ_ONLY_VISIBLE, role_editability: TRAINER_ONLY_EDIT, pdf_meta: { showNameField: true, showDateField: true } },
+    ]);
+  }
+
+  await createDefaultSectionsToStep(stepId, 5);
 
   const { data: taskRows } = taskRowIds.length > 0
     ? await supabase.from('skyline_form_question_rows').select('id, row_label').in('id', taskRowIds).order('sort_order')
@@ -714,7 +730,7 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
       .insert({ step_id: (summaryStep as { id: number }).id, title: 'Assessment Summary Sheet', pdf_render_mode: 'assessment_summary', sort_order: 0 });
   }
 
-  // Appendix A - Reasonable Adjustments (after Assessment Summary, required on every form)
+  // Appendix A - Reasonable Adjustments (full: policy, matrix, explanation, declaration, signature)
   const { data: reasonableStep } = await supabase
     .from('skyline_form_steps')
     .insert({ form_id: formId, title: 'Appendix A - Reasonable Adjustments', subtitle: 'Reasonable adjustment strategies and declaration', sort_order: taskStepOrder++ })
@@ -724,16 +740,15 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
     const raStepId = (reasonableStep as { id: number }).id;
     const { data: raSection } = await supabase
       .from('skyline_form_sections')
-      .insert({ step_id: raStepId, title: 'Reasonable Adjustment', description: 'Students with carer responsibilities, cultural or religious obligations, English as an additional language, disability etc., can request reasonable adjustments. Academic standards will not be lowered; flexibility in delivery or assessment is required.', pdf_render_mode: 'reasonable_adjustment', sort_order: 0 })
+      .insert({ step_id: raStepId, title: 'Appendix A – Reasonable Adjustments', description: null, pdf_render_mode: 'reasonable_adjustment', sort_order: 0 })
       .select('id')
       .single();
     if (raSection) {
       const raSecId = (raSection as { id: number }).id;
       await supabase.from('skyline_form_questions').insert([
-        { section_id: raSecId, type: 'yes_no', code: 'reasonable_adjustment.applied', label: 'Was reasonable adjustment applied to any of these assessment tasks?', sort_order: 0, role_visibility: READ_ONLY_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
-        { section_id: raSecId, type: 'short_text', code: 'reasonable_adjustment.task', label: 'Write (task name and number) where reasonable adjustments have been applied', sort_order: 1, role_visibility: READ_ONLY_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
-        { section_id: raSecId, type: 'long_text', code: 'reasonable_adjustment.description', label: 'Provide a description of the adjustment applied and explain reasons.', sort_order: 2, role_visibility: READ_ONLY_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
-        { section_id: raSecId, type: 'signature', code: 'trainer.reasonableAdjustmentSignature', label: 'Trainer/Assessor Signature', sort_order: 3, role_visibility: READ_ONLY_VISIBLE, role_editability: TRAINER_ONLY_EDIT, pdf_meta: { showNameField: true, showDateField: true } },
+        { section_id: raSecId, type: 'short_text', code: 'reasonable_adjustment_appendix.task', label: 'Write (task name and number) where reasonable adjustments have been applied', sort_order: 0, role_visibility: READ_ONLY_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
+        { section_id: raSecId, type: 'long_text', code: 'reasonable_adjustment_appendix.explanation', label: 'Explanation of reasonable adjustments strategy used', sort_order: 1, role_visibility: READ_ONLY_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
+        { section_id: raSecId, type: 'signature', code: 'trainer.reasonableAdjustmentAppendixSignature', label: 'Trainer/Assessor Signature', sort_order: 2, role_visibility: READ_ONLY_VISIBLE, role_editability: TRAINER_ONLY_EDIT, pdf_meta: { showNameField: true, showDateField: true } },
       ]);
     }
   }

@@ -351,6 +351,8 @@ export async function createDefaultSectionsToStep(
   const db = client ?? supabase;
   let sectionSortOrder = startSortOrder;
   for (const stepDef of DEFAULT_STEPS_5_TO_20) {
+    // Skip Reasonable Adjustment - it's already added by createCompulsoryFormStructure in Introductory Details
+    if (stepDef.title === 'Reasonable Adjustment') continue;
     for (const secDef of stepDef.sections) {
       const { data: sec } = await db
         .from('skyline_form_sections')

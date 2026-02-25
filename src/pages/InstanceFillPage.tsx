@@ -472,6 +472,7 @@ export const InstanceFillPage: React.FC = () => {
                     <div className={section.pdf_render_mode === 'declarations' || section.pdf_render_mode === 'assessment_submission' ? 'border border-gray-200 rounded-lg p-4 bg-white space-y-4' : 'space-y-4'}>
                       {section.pdf_render_mode === 'reasonable_adjustment' ? (
                         (() => {
+                          const isAppendixA = currentStepData && /Appendix\s*A/i.test((currentStepData.title || '').trim());
                           const taskResultSectionIds = (template?.steps ?? []).flatMap((st) => st.sections).filter((s) => s.pdf_render_mode === 'task_results').map((s) => s.id);
                           const firstTaskSectionId = taskResultSectionIds[0];
                           const firstTaskRdForRA = firstTaskSectionId ? resultsData[firstTaskSectionId] : null;
@@ -482,7 +483,7 @@ export const InstanceFillPage: React.FC = () => {
                         <div className="border border-gray-300 rounded-lg overflow-hidden bg-white">
                           <div className="bg-[#5E5E5E] text-white font-bold px-4 py-3 flex items-center gap-2">
                             <span className="text-sm">&#9654;</span>
-                            <span>Reasonable Adjustment</span>
+                            <span>{isAppendixA ? section.title : 'Reasonable Adjustment'}</span>
                           </div>
                           <div className="p-4 space-y-4">
                             {section.questions
@@ -492,40 +493,50 @@ export const InstanceFillPage: React.FC = () => {
                                 const editable = isRoleEditable(re, role);
                                 const key = getAnswerKey(q.id, null);
                                 const val = answers[key];
+                                if (isAppendixA) {
+                                  if (q.code === 'reasonable_adjustment_appendix.task') {
+                                    return (
+                                      <QuestionRenderer key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!editable} error={errors[`q-${q.id}`]} />
+                                    );
+                                  }
+                                  if (q.code === 'reasonable_adjustment_appendix.explanation') {
+                                    return (
+                                      <QuestionRenderer key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!editable} error={errors[`q-${q.id}`]} />
+                                    );
+                                  }
+                                  if (q.type === 'signature') {
+                                    const sigVal = val;
+                                    const sigObj = sigVal && typeof sigVal === 'object' && !Array.isArray(sigVal) ? (sigVal as Record<string, unknown>) : null;
+                                    const dateVal = sigObj ? String(sigObj.date ?? sigObj.signedAtDate ?? '') : '';
+                                    const imgVal = sigObj?.signature ?? sigObj?.imageDataUrl ?? (typeof sigVal === 'string' ? sigVal : null);
+                                    return (
+                                      <div key={q.id} className="flex items-center gap-4 flex-wrap pt-2">
+                                        <div className="flex-1 min-w-[200px]">
+                                          <div className="text-sm font-semibold text-gray-700 mb-1">{q.label}</div>
+                                          <SignatureField value={(imgVal as string | null) ?? null} onChange={(v) => { const img = typeof v === 'string' ? v : null; const base = (sigObj && typeof sigObj === 'object' ? { ...sigObj } : {}) as Record<string, unknown>; handleAnswerChange(q.id, null, (img != null ? { ...base, signature: img } : { ...base, signature: null }) as string | number | boolean | Record<string, unknown> | string[]); }} disabled={!editable} suggestionFrom={raSigSuggestion} onSuggestionClick={raSigSuggestion && editable ? () => { const base = (sigObj && typeof sigObj === 'object' ? { ...sigObj } : {}) as Record<string, unknown>; handleAnswerChange(q.id, null, { ...base, signature: raSigSuggestion, date: raDateSuggestion } as string | number | boolean | Record<string, unknown> | string[]); } : undefined} />
+                                        </div>
+                                        <div className="flex items-center gap-2 min-w-[140px]">
+                                          <span className="text-sm font-semibold text-gray-700 shrink-0">Date:</span>
+                                          <DatePicker value={dateVal} onChange={(newDate) => { const base = sigObj || (typeof sigVal === 'string' ? { signature: sigVal } : {}); handleAnswerChange(q.id, null, { ...base, date: newDate } as string | number | boolean | Record<string, unknown> | string[]); }} disabled={!editable} compact placement="above" className="flex-1 min-w-0" />
+                                        </div>
+                                      </div>
+                                    );
+                                  }
+                                  return null;
+                                }
                                 if (q.type === 'yes_no') {
                                   return (
-                                    <QuestionRenderer
-                                      key={q.id}
-                                      question={q}
-                                      value={(val as string | number | boolean) ?? null}
-                                      onChange={(v) => handleAnswerChange(q.id, null, v as string | number | boolean)}
-                                      disabled={!editable}
-                                      error={errors[`q-${q.id}`]}
-                                    />
+                                    <QuestionRenderer key={q.id} question={q} value={(val as string | number | boolean) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string | number | boolean)} disabled={!editable} error={errors[`q-${q.id}`]} />
                                   );
                                 }
                                 if (q.code === 'reasonable_adjustment.task') {
                                   return (
-                                    <QuestionRenderer
-                                      key={q.id}
-                                      question={q}
-                                      value={(val as string) ?? null}
-                                      onChange={(v) => handleAnswerChange(q.id, null, v as string)}
-                                      disabled={!editable}
-                                      error={errors[`q-${q.id}`]}
-                                    />
+                                    <QuestionRenderer key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!editable} error={errors[`q-${q.id}`]} />
                                   );
                                 }
                                 if (q.type === 'long_text') {
                                   return (
-                                    <QuestionRenderer
-                                      key={q.id}
-                                      question={q}
-                                      value={(val as string) ?? null}
-                                      onChange={(v) => handleAnswerChange(q.id, null, v as string)}
-                                      disabled={!editable}
-                                      error={errors[`q-${q.id}`]}
-                                    />
+                                    <QuestionRenderer key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!editable} error={errors[`q-${q.id}`]} />
                                   );
                                 }
                                 if (q.type === 'signature') {
@@ -1511,7 +1522,7 @@ export const InstanceFillPage: React.FC = () => {
                     size="sm"
                     className="w-full"
                     onClick={() => {
-                      window.open(`${PDF_BASE}/pdf/${id}?t=${pdfCacheBust}`, '_blank', 'width=800,height=600');
+                      window.open(`${PDF_BASE}/pdf/${id}?t=${pdfCacheBust}#toolbar=0`, '_blank', 'width=800,height=600');
                     }}
                   >
                     Preview PDF
@@ -1547,7 +1558,7 @@ export const InstanceFillPage: React.FC = () => {
                   )}
                   <iframe
                     key={pdfCacheBust}
-                    src={`${PDF_BASE}/pdf/${id}?t=${pdfCacheBust}`}
+                    src={`${PDF_BASE}/pdf/${id}?t=${pdfCacheBust}#toolbar=0`}
                     title="PDF Preview"
                     className="w-full h-96 border-0 rounded-lg"
                     onLoad={() => setPdfLoading(false)}

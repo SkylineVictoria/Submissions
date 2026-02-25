@@ -1177,9 +1177,10 @@ function buildHtml(data: {
       } else if (section.pdf_render_mode === 'reasonable_adjustment') {
         const stepTitle = (step?.title || '').trim();
         const isAppendixA = /Appendix\s*A/i.test(stepTitle);
-        const taskQ = questions.find((q) => q.question.code === 'reasonable_adjustment.task');
-        const descQ = questions.find((q) => q.question.code === 'reasonable_adjustment.description');
-        const sigQ = questions.find((q) => q.question.type === 'signature');
+        const taskQ = isAppendixA ? questions.find((q) => q.question.code === 'reasonable_adjustment_appendix.task') : questions.find((q) => q.question.code === 'reasonable_adjustment.task');
+        const descQ = isAppendixA ? questions.find((q) => q.question.code === 'reasonable_adjustment_appendix.explanation') : questions.find((q) => q.question.code === 'reasonable_adjustment.description');
+        let sigQ = isAppendixA ? questions.find((q) => q.question.code === 'trainer.reasonableAdjustmentAppendixSignature') : questions.find((q) => q.question.type === 'signature');
+        if (isAppendixA && !sigQ) sigQ = questions.find((q) => q.question.type === 'signature');
         const yesNoQ = questions.find((q) => q.question.type === 'yes_no');
         const taskVal = taskQ ? String(answers.get(`q-${taskQ.question.id}`) ?? '') : '';
         const descVal = descQ ? String(answers.get(`q-${descQ.question.id}`) ?? '') : '';
@@ -1631,13 +1632,37 @@ app.get('/pdf/:instanceId', async (req, res) => {
 
     pdf = Buffer.from(await mergedPdf.save());
 
+    let pdfFilename = `form-${instanceId}.pdf`;
+    if (download) {
+      let studentId = '';
+      let studentName = '';
+      for (const g of template.steps) {
+        for (const { questions } of g.sections) {
+          for (const { question } of questions) {
+            if (question.code === 'student.id') {
+              const v = answerMap.get(`q-${question.id}`);
+              if (v != null) studentId = String(v).trim();
+            }
+            if (question.code === 'student.fullName') {
+              const v = answerMap.get(`q-${question.id}`);
+              if (v != null) studentName = String(v).trim();
+            }
+          }
+        }
+      }
+      if (studentId || studentName) {
+        const sanitize = (s: string) => s.replace(/[/\\:*?"<>|]/g, '_').replace(/\s+/g, ' ').trim();
+        const idPart = sanitize(studentId);
+        const namePart = sanitize(studentName);
+        pdfFilename = [idPart, namePart].filter(Boolean).join('_') + '.pdf';
+      }
+      res.setHeader('Content-Disposition', `attachment; filename="${pdfFilename}"`);
+    }
+
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
-    if (download) {
-      res.setHeader('Content-Disposition', `attachment; filename="form-${instanceId}.pdf"`);
-    }
     res.send(pdf);
   } catch (err) {
     console.error('PDF generation error:', err);
