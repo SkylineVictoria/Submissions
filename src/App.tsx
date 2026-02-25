@@ -5,7 +5,7 @@ import { toastManager } from './utils/toast';
 import { Loader } from './components/ui/Loader';
 import type { Toast } from './components/ui/Toast';
 
-// Lazy load pages for code splitting
+// Lazy  pages for code splitting
 const AdminFormsListPage = lazy(() => import('./pages/AdminFormsListPage').then(m => ({ default: m.AdminFormsListPage })));
 const AdminFormBuilderPage = lazy(() => import('./pages/AdminFormBuilderPage').then(m => ({ default: m.AdminFormBuilderPage })));
 const AdminStudentsPage = lazy(() => import('./pages/AdminStudentsPage').then(m => ({ default: m.AdminStudentsPage })));
