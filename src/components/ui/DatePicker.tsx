@@ -23,6 +23,12 @@ interface DatePickerProps {
   compact?: boolean;
   /** Popover placement: above or below input */
   placement?: 'above' | 'below';
+  /** Lower year bound for year picker */
+  fromYear?: number;
+  /** Upper year bound for year picker */
+  toYear?: number;
+  /** Disable selecting future dates */
+  disableFuture?: boolean;
 }
 
 export const DatePicker: React.FC<DatePickerProps> = ({
@@ -37,9 +43,13 @@ export const DatePicker: React.FC<DatePickerProps> = ({
   id,
   compact = false,
   placement = 'above',
+  fromYear = 1900,
+  toYear = new Date().getFullYear() + 10,
+  disableFuture = false,
 }) => {
   const [open, setOpen] = useState(false);
   const [inputValue, setInputValue] = useState('');
+  const [view, setView] = useState<'day' | 'month' | 'year'>('day');
   const containerRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -47,15 +57,27 @@ export const DatePicker: React.FC<DatePickerProps> = ({
 
   const parsedDate = value ? parse(value, ISO_FORMAT, new Date()) : undefined;
   const isValidDate = parsedDate && isValid(parsedDate);
+  const [activeMonth, setActiveMonth] = useState<Date>(() =>
+    isValidDate ? (parsedDate as Date) : new Date()
+  );
+  const today = new Date();
+  const maxAllowedDate = disableFuture ? today : new Date(toYear, 11, 31);
 
   useEffect(() => {
     if (value && isValid(parse(value, ISO_FORMAT, new Date()))) {
       const d = parse(value, ISO_FORMAT, new Date());
       setInputValue(format(d, DISPLAY_FORMAT));
+      setActiveMonth(d);
     } else {
       setInputValue('');
     }
   }, [value]);
+
+  useEffect(() => {
+    const y = activeMonth.getFullYear();
+    if (y < fromYear) setActiveMonth(new Date(fromYear, 0, 1));
+    if (y > toYear) setActiveMonth(new Date(toYear, 11, 1));
+  }, [activeMonth, fromYear, toYear]);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -67,14 +89,6 @@ export const DatePicker: React.FC<DatePickerProps> = ({
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, []);
-
-  // Close popover when user scrolls (it uses position:fixed so would stay put otherwise)
-  useEffect(() => {
-    if (!open) return;
-    const onScroll = () => setOpen(false);
-    document.addEventListener('scroll', onScroll, true);
-    return () => document.removeEventListener('scroll', onScroll, true);
-  }, [open]);
 
   // Position popover relative to input (for portal - avoids overflow clipping)
   useLayoutEffect(() => {
@@ -104,6 +118,7 @@ export const DatePicker: React.FC<DatePickerProps> = ({
     onChange(iso);
     setInputValue(format(date, DISPLAY_FORMAT));
     setOpen(false);
+    setView('day');
   };
 
   const handleInputChange = (_e: React.ChangeEvent<HTMLInputElement>) => {
@@ -138,7 +153,11 @@ export const DatePicker: React.FC<DatePickerProps> = ({
           type="text"
           value={inputValue}
           onChange={handleInputChange}
-          onFocus={() => !disabled && setOpen(true)}
+          onFocus={() => {
+            if (disabled) return;
+            setView('day');
+            setOpen(true);
+          }}
           readOnly
           onKeyDown={(e) => {
             if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
@@ -154,7 +173,11 @@ export const DatePicker: React.FC<DatePickerProps> = ({
         />
         <button
           type="button"
-          onClick={() => !disabled && setOpen(!open)}
+          onClick={() => {
+            if (disabled) return;
+            setView('day');
+            setOpen(!open);
+          }}
           disabled={disabled}
           className={cn(
             'flex-shrink-0 p-1.5 rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors',
@@ -165,18 +188,100 @@ export const DatePicker: React.FC<DatePickerProps> = ({
           <Calendar className="w-5 h-5" strokeWidth={2} />
         </button>
       </div>
-      {open && !disabled && typeof document !== 'undefined' && createPortal(
+      {open && !disabled && typeof document !== 'undefined' &&
+        createPortal(
         <div
           ref={popoverRef}
           className="p-3 bg-white rounded-xl shadow-lg border border-gray-200 rdp-datepicker-modern"
           style={{ ...popoverStyle, minWidth: '280px' }}
         >
-          <DayPicker
-            mode="single"
-            selected={isValidDate ? parsedDate : undefined}
-            onSelect={(date) => { if (date) handleSelect(date); }}
-            defaultMonth={isValidDate ? parsedDate : new Date()}
-          />
+          {/* Header: \"February 2026\" – cycles day → month → year views on click */}
+          <div className="flex items-center justify-center mb-2">
+            <button
+              type="button"
+              className="text-sm font-semibold text-gray-800 hover:text-[var(--brand)]"
+              onClick={() => {
+                if (view === 'day') setView('year');
+                else if (view === 'year') setView('month');
+                else setView('day');
+              }}
+            >
+              {format(activeMonth, 'MMMM yyyy')}
+            </button>
+          </div>
+
+          {view === 'day' && (
+            <DayPicker
+              mode="single"
+              month={activeMonth}
+              onMonthChange={setActiveMonth}
+              selected={isValidDate ? parsedDate : undefined}
+              onSelect={(date) => { if (date) handleSelect(date); }}
+              disabled={disableFuture ? { after: today } : undefined}
+              styles={{
+                caption: { display: 'none' },
+                nav: { display: 'none' },
+              }}
+            />
+          )}
+
+          {view === 'month' && (
+            <div className="grid grid-cols-3 gap-2 py-1">
+              {['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].map((m, idx) => {
+                const candidate = new Date(activeMonth.getFullYear(), idx, 1);
+                const monthDisabled = (disableFuture && candidate > new Date(today.getFullYear(), today.getMonth(), 1)) || activeMonth.getFullYear() < fromYear || activeMonth.getFullYear() > toYear;
+                return (
+                <button
+                  key={m}
+                  type="button"
+                  className={cn(
+                    'py-1.5 text-sm rounded-md hover:bg-gray-100',
+                    monthDisabled && 'opacity-40 cursor-not-allowed hover:bg-transparent',
+                    activeMonth.getMonth() === idx && 'bg-gray-800 text-white'
+                  )}
+                  disabled={monthDisabled}
+                  onClick={() => {
+                    const d = new Date(activeMonth);
+                    d.setMonth(idx);
+                    setActiveMonth(d);
+                    setView('day');
+                  }}
+                >
+                  {m}
+                </button>
+              )})}
+            </div>
+          )}
+
+          {view === 'year' && (
+            <div className="grid grid-cols-3 gap-2 py-1 max-h-52 overflow-y-auto">
+              {Array.from({ length: Math.max(0, toYear - fromYear + 1) }).map((_, i) => {
+                const year = fromYear + i;
+                const yearDisabled = disableFuture && year > today.getFullYear();
+                return (
+                  <button
+                    key={year}
+                    type="button"
+                    className={cn(
+                      'py-1.5 text-sm rounded-md hover:bg-gray-100',
+                      yearDisabled && 'opacity-40 cursor-not-allowed hover:bg-transparent',
+                      activeMonth.getFullYear() === year && 'bg-gray-200 text-[var(--brand)] font-semibold'
+                    )}
+                    disabled={yearDisabled}
+                    onClick={() => {
+                      const d = new Date(activeMonth);
+                      d.setFullYear(year);
+                      setActiveMonth(d);
+                      setView('month');
+                    }}
+                  >
+                    {year}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
           <div className="flex justify-between mt-2 pt-2 border-t border-gray-100">
             <button
               type="button"

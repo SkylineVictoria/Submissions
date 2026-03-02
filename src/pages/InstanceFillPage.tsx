@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import {
   fetchTemplateForInstance,
   fetchAnswersForInstance,
@@ -14,6 +14,8 @@ import {
   fetchAssessmentSummaryData,
   saveAssessmentSummaryData,
   updateInstanceRole,
+  updateInstanceWorkflowStatus,
+  validateInstanceAccessToken,
 } from '../lib/formEngine';
 import type { FormTemplate } from '../lib/formEngine';
 import type { FormAnswer } from '../types/database';
@@ -22,13 +24,14 @@ import { isRoleVisible, isRoleEditable } from '../utils/roleGuard';
 import { Card } from '../components/ui/Card';
 import { Loader } from '../components/ui/Loader';
 import { Button } from '../components/ui/Button';
-import { Select } from '../components/ui/Select';
 import { Stepper } from '../components/ui/Stepper';
+import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import { QuestionRenderer } from '../components/form-fill/QuestionRenderer';
 import { SectionLikertTable } from '../components/form-fill/SectionLikertTable';
 import { SignatureField } from '../components/form-fill/SignatureField';
 import { AppendixAMatrixForm } from '../components/form-fill/AppendixAMatrixForm';
 import { DatePicker } from '../components/ui/DatePicker';
+import { toast } from '../utils/toast';
 
 const PDF_BASE = import.meta.env.VITE_PDF_API_URL ?? '';
 
@@ -46,6 +49,7 @@ function parseAnswerValue(a: FormAnswer): string | number | boolean | Record<str
 
 export const InstanceFillPage: React.FC = () => {
   const { instanceId } = useParams<{ instanceId: string }>();
+  const [searchParams] = useSearchParams();
   const [template, setTemplate] = useState<FormTemplate | null>(null);
   const [answers, setAnswers] = useState<Record<string, string | number | boolean | Record<string, unknown> | string[]>>({});
   const [trainerAssessments, setTrainerAssessments] = useState<Record<number, string>>({});
@@ -53,12 +57,21 @@ export const InstanceFillPage: React.FC = () => {
   const [resultsData, setResultsData] = useState<Record<number, import('../lib/formEngine').ResultsDataEntry>>({});
   const [assessmentSummary, setAssessmentSummary] = useState<import('../lib/formEngine').AssessmentSummaryDataEntry | null>(null);
   const [role, setRole] = useState<FormRole>('student');
+  const [workflowStatus, setWorkflowStatus] = useState<'draft' | 'waiting_trainer' | 'waiting_office' | 'completed'>('draft');
+  const [confirmConfig, setConfirmConfig] = useState<{
+    title: string;
+    message: string;
+    confirmLabel: string;
+  } | null>(null);
+  const [workflowSubmitting, setWorkflowSubmitting] = useState(false);
   const [currentStep, setCurrentStep] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [accessDenied, setAccessDenied] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const id = instanceId ? Number(instanceId) : 0;
+  const accessToken = searchParams.get('token')?.trim() || '';
   const [pdfRefresh, setPdfRefresh] = useState(0);
   const [pdfLoading, setPdfLoading] = useState(true);
   const pdfCacheBust = useMemo(() => Date.now(), [id, pdfRefresh]);
@@ -68,6 +81,21 @@ export const InstanceFillPage: React.FC = () => {
 
   const loadData = useCallback(async () => {
     if (!id) return;
+    setAccessDenied(null);
+    setLoading(true);
+    if (!accessToken) {
+      setAccessDenied('Secure access token is missing. Please use the link shared by admin.');
+      setLoading(false);
+      return;
+    }
+    const access = await validateInstanceAccessToken(id, accessToken);
+    if (!access.valid || !access.role_context) {
+      setAccessDenied(access.reason || 'Invalid secure access link.');
+      setLoading(false);
+      return;
+    }
+    const tokenRole = access.role_context as FormRole;
+    setRole(tokenRole);
     const [tpl, ans, inst, assessments, officeData, resultsDataRes, summaryData] = await Promise.all([
       fetchTemplateForInstance(id),
       fetchAnswersForInstance(id),
@@ -77,9 +105,25 @@ export const InstanceFillPage: React.FC = () => {
       fetchResultsData(id).catch(() => ({})),
       fetchAssessmentSummaryData(id).catch(() => null),
     ]);
+    if (!tpl || !inst) {
+      setAccessDenied('Instance not found or unavailable.');
+      setLoading(false);
+      return;
+    }
     setTemplate(tpl || null);
     const roleCtx = (inst?.role_context as FormRole) || 'student';
-    setRole(roleCtx);
+    const rawWorkflow = (inst as unknown as { workflow_status?: string } | null)?.workflow_status;
+    const legacyStatus = (inst as unknown as { status?: string } | null)?.status;
+    const normalizedWorkflow = (
+      rawWorkflow
+        ? rawWorkflow
+        : legacyStatus === 'locked'
+          ? 'completed'
+          : legacyStatus === 'submitted'
+            ? (roleCtx === 'office' ? 'waiting_office' : 'waiting_trainer')
+            : 'draft'
+    ) as 'draft' | 'waiting_trainer' | 'waiting_office' | 'completed';
+    setWorkflowStatus(normalizedWorkflow);
     const ansMap: Record<string, string | number | boolean | Record<string, unknown> | string[]> = {};
     for (const a of ans) {
       const key = getAnswerKey(a.question_id, a.row_id);
@@ -96,7 +140,7 @@ export const InstanceFillPage: React.FC = () => {
     setResultsData(resultsDataRes || {});
     setAssessmentSummary(summaryData || null);
     setLoading(false);
-  }, [id]);
+  }, [id, accessToken]);
 
   useEffect(() => {
     loadData();
@@ -363,13 +407,72 @@ export const InstanceFillPage: React.FC = () => {
     [id]
   );
 
-  const handleRoleChange = useCallback(
-    (newRole: FormRole) => {
-      setRole(newRole);
-      updateInstanceRole(id, newRole);
-    },
-    [id]
-  );
+  const canRoleEditCurrentWorkflow = useMemo(() => {
+    if (workflowStatus === 'completed') return false;
+    if (role === 'student') return workflowStatus === 'draft';
+    if (role === 'trainer') return workflowStatus === 'waiting_trainer';
+    if (role === 'office') return workflowStatus === 'waiting_office';
+    return false;
+  }, [role, workflowStatus]);
+
+  const workflowLabel = useMemo(() => {
+    if (workflowStatus === 'draft') return 'Draft';
+    if (workflowStatus === 'waiting_trainer') return 'Waiting for trainer check';
+    if (workflowStatus === 'waiting_office') return 'Waiting for office check';
+    return 'Completed';
+  }, [workflowStatus]);
+
+  const runFinalSubmitByRole = useCallback(async () => {
+    if (!id) return;
+    setWorkflowSubmitting(true);
+    if (role === 'student' && workflowStatus === 'draft') {
+      await updateInstanceWorkflowStatus(id, 'waiting_trainer');
+      setWorkflowStatus('waiting_trainer');
+      toast.success('Submitted successfully. Waiting for trainer checking.');
+      setWorkflowSubmitting(false);
+      return;
+    }
+    if (role === 'trainer' && workflowStatus === 'waiting_trainer') {
+      await updateInstanceWorkflowStatus(id, 'waiting_office');
+      setWorkflowStatus('waiting_office');
+      await updateInstanceRole(id, 'office');
+      toast.success('Submitted successfully. Waiting for office checking.');
+      setWorkflowSubmitting(false);
+      return;
+    }
+    if (role === 'office' && workflowStatus === 'waiting_office') {
+      await updateInstanceWorkflowStatus(id, 'completed');
+      setWorkflowStatus('completed');
+      toast.success('Office check complete. Form is now completed.');
+    }
+    setWorkflowSubmitting(false);
+  }, [id, role, workflowStatus]);
+
+  const handleFinalSubmitByRole = useCallback(() => {
+    if (role === 'student' && workflowStatus === 'draft') {
+      setConfirmConfig({
+        title: 'Final Submit',
+        message: 'After submitting, you will not be able to edit this form again. Please verify all answers before continuing.',
+        confirmLabel: 'Submit',
+      });
+      return;
+    }
+    if (role === 'trainer' && workflowStatus === 'waiting_trainer') {
+      setConfirmConfig({
+        title: 'Final Submit',
+        message: 'After submitting, you will not be able to edit this form again. Please verify all answers before continuing.',
+        confirmLabel: 'Submit',
+      });
+      return;
+    }
+    if (role === 'office' && workflowStatus === 'waiting_office') {
+      setConfirmConfig({
+        title: 'Office Check',
+        message: 'Finalize office checking? This will complete and lock the form.',
+        confirmLabel: 'Finalize',
+      });
+    }
+  }, [role, workflowStatus]);
 
   const validateStep = useCallback(
     (stepNumber: number): boolean => {
@@ -381,7 +484,7 @@ export const InstanceFillPage: React.FC = () => {
         for (const q of section.questions) {
           if (q.type === 'instruction_block' || q.type === 'page_break') continue;
           if (!isRoleVisible((q.role_visibility as Record<string, boolean>) || {}, role)) continue;
-          const editable = isRoleEditable((q.role_editability as Record<string, boolean>) || {}, role);
+          const editable = isRoleEditable((q.role_editability as Record<string, boolean>) || {}, role) && canRoleEditCurrentWorkflow;
           if (!q.required || !editable) continue;
           const key = getAnswerKey(q.id, null);
           const val = answers[key];
@@ -394,11 +497,80 @@ export const InstanceFillPage: React.FC = () => {
       setErrors(stepErrors);
       return Object.keys(stepErrors).length === 0;
     },
-    [template, role, answers]
+    [template, role, answers, canRoleEditCurrentWorkflow]
   );
 
-  if (loading || !template) {
+  if (loading) {
     return <Loader fullPage variant="dots" size="lg" message="Loading..." />;
+  }
+  if (accessDenied) {
+    return (
+      <div className="min-h-screen bg-[var(--bg)] flex items-center justify-center px-4">
+        <Card className="max-w-xl w-full">
+          <h2 className="text-xl font-bold text-[var(--text)] mb-2">Access denied</h2>
+          <p className="text-sm text-gray-600">{accessDenied}</p>
+        </Card>
+      </div>
+    );
+  }
+  if (!template) {
+    return (
+      <div className="min-h-screen bg-[var(--bg)] flex items-center justify-center px-4">
+        <Card className="max-w-xl w-full">
+          <h2 className="text-xl font-bold text-[var(--text)] mb-2">Instance unavailable</h2>
+          <p className="text-sm text-gray-600">This assessment instance could not be loaded.</p>
+        </Card>
+      </div>
+    );
+  }
+
+  const showSubmittedPage =
+    (role === 'student' && workflowStatus !== 'draft') ||
+    (role === 'trainer' && (workflowStatus === 'waiting_office' || workflowStatus === 'completed'));
+
+  const submittedTitle = role === 'student' ? 'Assessment Already Submitted' : 'Trainer Check Already Submitted';
+  const submittedMessage =
+    role === 'student'
+      ? 'You have already submitted this assessment. Editing is now locked for student access.'
+      : 'You have already submitted trainer checking for this assessment. Editing is now locked for trainer access.';
+
+  if (showSubmittedPage) {
+    return (
+      <div className="min-h-screen bg-[var(--bg)]">
+        <header className="bg-white border-b border-[var(--border)] shadow-sm sticky top-0 z-20">
+          <div className="w-full px-4 md:px-6 py-4">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <h1 className="text-xl font-bold text-[var(--text)]">{template.form.name}</h1>
+              <div className="flex items-center gap-2 flex-wrap justify-end">
+                <span className="text-xs px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200">{workflowLabel}</span>
+                <span className="text-sm font-semibold text-gray-700 capitalize">{role}</span>
+              </div>
+            </div>
+          </div>
+        </header>
+        <div className="w-full px-4 md:px-6 py-8">
+          <div className="max-w-3xl mx-auto">
+            <Card>
+              <h2 className="text-xl font-bold text-[var(--text)] mb-2">{submittedTitle}</h2>
+              <p className="text-sm text-gray-600">{submittedMessage}</p>
+              <div className="mt-6 flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    window.open(`${PDF_BASE}/pdf/${id}?t=${Date.now()}#toolbar=0`, '_blank', 'width=900,height=700');
+                  }}
+                >
+                  Preview PDF
+                </Button>
+                <a href={`${PDF_BASE}/pdf/${id}?download=1&t=${Date.now()}`} target="_blank" rel="noopener noreferrer">
+                  <Button variant="primary">Download PDF</Button>
+                </a>
+              </div>
+            </Card>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   // Introduction step is always first, then form steps
@@ -432,18 +604,9 @@ export const InstanceFillPage: React.FC = () => {
         <div className="w-full px-4 md:px-6 py-4">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <h1 className="text-xl font-bold text-[var(--text)]">{template.form.name}</h1>
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold text-gray-700">Role:</span>
-              <Select
-                value={role}
-                onChange={(v) => handleRoleChange(v as FormRole)}
-                options={[
-                  { value: 'student', label: 'Student' },
-                  { value: 'trainer', label: 'Trainer' },
-                  { value: 'office', label: 'Office' },
-                ]}
-                className="w-32"
-              />
+            <div className="flex items-center gap-2 flex-wrap justify-end">
+              <span className="text-xs px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200">{workflowLabel}</span>
+              <span className="text-sm font-semibold text-gray-700 capitalize">{role}</span>
             </div>
           </div>
         </div>
@@ -518,7 +681,7 @@ export const InstanceFillPage: React.FC = () => {
                               .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
                               .map((q) => {
                                 const re = (q.role_editability as Record<string, boolean>) || {};
-                                const editable = isRoleEditable(re, role);
+                                const editable = isRoleEditable(re, role) && canRoleEditCurrentWorkflow;
                                 const key = getAnswerKey(q.id, null);
                                 const val = answers[key];
                                 if (isAppendixA) {
@@ -781,7 +944,7 @@ export const InstanceFillPage: React.FC = () => {
                                   .filter((q) => q.type !== 'instruction_block' && q.type !== 'page_break' && isRoleVisible((q.role_visibility as Record<string, boolean>) || {}, role))
                                   .map((q, qIdx) => {
                                     const re = (q.role_editability as Record<string, boolean>) || {};
-                                    const editable = isRoleEditable(re, role);
+                                    const editable = isRoleEditable(re, role) && canRoleEditCurrentWorkflow;
                                     const trainerEditable = role === 'trainer' || role === 'office';
                                     const sat = trainerAssessments[q.id];
                                     const satYes = sat === 'yes';
@@ -1313,7 +1476,7 @@ export const InstanceFillPage: React.FC = () => {
                             .filter((q) => q.type !== 'likert_5' && isRoleVisible((q.role_visibility as Record<string, boolean>) || {}, role))
                             .map((q) => {
                               const re = (q.role_editability as Record<string, boolean>) || {};
-                              const editable = isRoleEditable(re, role);
+                              const editable = isRoleEditable(re, role) && canRoleEditCurrentWorkflow;
                               const key = getAnswerKey(q.id, null);
                               const val = answers[key];
                               if (q.type === 'signature' && (q.code === 'student.declarationSignature' || String(q.code || '').startsWith('student.'))) {
@@ -1388,7 +1551,7 @@ export const InstanceFillPage: React.FC = () => {
                         .map((q) => {
                           const re = (q.role_editability as Record<string, boolean>) || {};
                           const isQualUnitField = q.code === 'qualification.code' || q.code === 'qualification.name' || q.code === 'unit.code' || q.code === 'unit.name';
-                          const editable = isQualUnitField ? false : isRoleEditable(re, role);
+                          const editable = isQualUnitField ? false : (isRoleEditable(re, role) && canRoleEditCurrentWorkflow);
                           if (q.type === 'likert_5' && q.rows.length > 0) {
                             const val =
                               q.rows.length === 1
@@ -1565,6 +1728,21 @@ export const InstanceFillPage: React.FC = () => {
               >
                 Next
               </Button>
+              {currentStep >= steps.length && role === 'student' && workflowStatus === 'draft' && (
+                <Button variant="primary" onClick={handleFinalSubmitByRole} disabled={workflowSubmitting}>
+                  Final Submit
+                </Button>
+              )}
+              {currentStep >= steps.length && role === 'trainer' && workflowStatus === 'waiting_trainer' && (
+                <Button variant="primary" onClick={handleFinalSubmitByRole} disabled={workflowSubmitting}>
+                  Trainer Checked (Submit)
+                </Button>
+              )}
+              {currentStep >= steps.length && role === 'office' && workflowStatus === 'waiting_office' && (
+                <Button variant="primary" onClick={handleFinalSubmitByRole} disabled={workflowSubmitting}>
+                  Office Checked
+                </Button>
+              )}
             </div>
           </div>
 
@@ -1625,6 +1803,16 @@ export const InstanceFillPage: React.FC = () => {
           </div>
         </div>
       </div>
+      <ConfirmDialog
+        isOpen={!!confirmConfig}
+        onClose={() => setConfirmConfig(null)}
+        onConfirm={runFinalSubmitByRole}
+        title={confirmConfig?.title || 'Confirm'}
+        message={confirmConfig?.message || ''}
+        confirmLabel={confirmConfig?.confirmLabel || 'Confirm'}
+        cancelLabel="Cancel"
+        variant="default"
+      />
     </div>
   );
 };

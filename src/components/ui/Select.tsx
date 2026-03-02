@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { ChevronDown } from 'lucide-react';
 import { cn } from '../utils/cn';
 
@@ -17,6 +18,8 @@ interface SelectProps {
   disabled?: boolean;
   className?: string;
   required?: boolean;
+  /** Render dropdown in a portal (good for tables); default false (inline inside container). */
+  portal?: boolean;
 }
 
 export const Select: React.FC<SelectProps> = ({
@@ -29,14 +32,31 @@ export const Select: React.FC<SelectProps> = ({
   disabled,
   className,
   required,
+  portal = false,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const selectRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [dropdownStyle, setDropdownStyle] = useState<{ top: number; left: number; minWidth: number } | null>(null);
   const selectId = `select-${Math.random().toString(36).substr(2, 9)}`;
 
   useEffect(() => {
+    if (isOpen && triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect();
+      setDropdownStyle({
+        top: rect.bottom + 4,
+        left: rect.left,
+        minWidth: rect.width,
+      });
+    } else {
+      setDropdownStyle(null);
+    }
+  }, [isOpen]);
+
+  useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (selectRef.current && !selectRef.current.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (selectRef.current && !selectRef.current.contains(target) && !(target as Element).closest?.('[data-select-dropdown]')) {
         setIsOpen(false);
       }
     };
@@ -59,6 +79,7 @@ export const Select: React.FC<SelectProps> = ({
       )}
       <div ref={selectRef} className="relative">
         <button
+          ref={triggerRef}
           type="button"
           id={selectId}
           onClick={() => !disabled && setIsOpen(!isOpen)}
@@ -85,7 +106,40 @@ export const Select: React.FC<SelectProps> = ({
           />
         </button>
 
-        {isOpen && (
+        {portal && isOpen && dropdownStyle && typeof document !== 'undefined' &&
+          createPortal(
+            <div
+              data-select-dropdown
+              className="fixed z-[9999] max-h-60 overflow-auto bg-white border-2 border-gray-200 rounded-lg shadow-lg py-1"
+              style={{
+                top: dropdownStyle.top,
+                left: dropdownStyle.left,
+                minWidth: dropdownStyle.minWidth,
+              }}
+            >
+              {options.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => {
+                    onChange(option.value);
+                    setIsOpen(false);
+                  }}
+                  className={cn(
+                    'w-full px-4 py-2.5 text-left text-sm transition-colors whitespace-nowrap overflow-hidden text-ellipsis',
+                    'hover:bg-[var(--brand)] hover:text-white',
+                    value === option.value && 'bg-orange-50 text-[var(--brand)] font-semibold'
+                  )}
+                  title={option.label}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>,
+            document.body
+          )
+        }
+        {!portal && isOpen && (
           <div className="absolute z-[100] left-1/2 -translate-x-1/2 mt-1 min-w-full bg-white border-2 border-gray-200 rounded-lg shadow-lg max-h-60 overflow-auto">
             {options.map((option) => (
               <button

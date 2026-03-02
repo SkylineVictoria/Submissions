@@ -1,7 +1,7 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Plus, FileText, Edit, Eye, Trash2, MoreVertical, Copy } from 'lucide-react';
-import { listForms, createForm, createFormInstance, duplicateForm } from '../lib/formEngine';
+import { listFormsPaged, createForm, duplicateForm } from '../lib/formEngine';
 import type { Form } from '../types/database';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -16,8 +16,11 @@ interface AssessmentTask {
 }
 
 export const AdminFormsListPage: React.FC = () => {
+  const PAGE_SIZE = 20;
   const navigate = useNavigate();
   const [forms, setForms] = useState<Form[]>([]);
+  const [totalForms, setTotalForms] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [newName, setNewName] = useState('');
   const [newVersion, setNewVersion] = useState('1.0.0');
@@ -34,12 +37,17 @@ export const AdminFormsListPage: React.FC = () => {
   const [openMenuId, setOpenMenuId] = useState<number | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
-    listForms().then((data) => {
-      setForms(data);
-      setLoading(false);
-    });
+  const loadFormsPage = useCallback(async (page: number) => {
+    setLoading(true);
+    const res = await listFormsPaged(page, PAGE_SIZE);
+    setForms(res.data);
+    setTotalForms(res.total);
+    setLoading(false);
   }, []);
+
+  useEffect(() => {
+    loadFormsPage(currentPage);
+  }, [currentPage, loadFormsPage]);
 
   const canCreate =
     newName.trim() &&
@@ -66,7 +74,8 @@ export const AdminFormsListPage: React.FC = () => {
       })),
     });
     if (created) {
-      setForms((prev) => [created, ...prev]);
+      setCurrentPage(1);
+      await loadFormsPage(1);
       setNewName('');
       setNewVersion('1.0.0');
       setQualificationCode('');
@@ -97,11 +106,8 @@ export const AdminFormsListPage: React.FC = () => {
 
   const handlePreview = async (formId: number) => {
     setPreviewing(formId);
-    const instance = await createFormInstance(formId, 'student');
+    navigate(`/admin/forms/${formId}/preview`);
     setPreviewing(null);
-    if (instance) {
-      navigate(`/instances/${instance.id}`);
-    }
   };
 
   const handleDuplicate = async (formId: number) => {
@@ -110,7 +116,8 @@ export const AdminFormsListPage: React.FC = () => {
     const duplicated = await duplicateForm(formId);
     setDuplicating(null);
     if (duplicated) {
-      setForms((prev) => [duplicated, ...prev]);
+      setCurrentPage(1);
+      await loadFormsPage(1);
     }
   };
 
@@ -126,28 +133,10 @@ export const AdminFormsListPage: React.FC = () => {
     return () => document.removeEventListener('click', handler);
   }, []);
 
+  const totalPages = Math.max(1, Math.ceil(totalForms / PAGE_SIZE));
+
   return (
     <div className="min-h-screen bg-[var(--bg)]">
-      <header className="bg-white border-b border-[var(--border)] shadow-sm sticky top-0 z-20">
-        <div className="w-full px-4 md:px-6 lg:px-8 py-4">
-            <div className="flex items-center justify-between">
-            <h1 className="text-xl font-bold text-[var(--text)]">Form Builder Admin</h1>
-            <div className="flex gap-2">
-              <Link to="/admin/students">
-                <Button variant="outline" size="sm">
-                  Students
-                </Button>
-              </Link>
-              <Link to="/forms">
-                <Button variant="outline" size="sm">
-                  View Published Forms
-                </Button>
-              </Link>
-            </div>
-          </div>
-        </div>
-      </header>
-
       <div className="w-full px-4 md:px-6 lg:px-8 py-6">
         <Card className="mb-6">
           <h2 className="text-lg font-bold text-[var(--text)] mb-4">Create New Form</h2>
@@ -258,7 +247,10 @@ export const AdminFormsListPage: React.FC = () => {
         </Card>
 
         <Card>
-          <h2 className="text-lg font-bold text-[var(--text)] mb-4">All Forms</h2>
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <h2 className="text-lg font-bold text-[var(--text)]">All Forms</h2>
+            <div className="text-xs text-gray-500">Page {currentPage} of {totalPages} ({totalForms} total)</div>
+          </div>
           {loading ? (
             <div className="py-12">
               <Loader variant="dots" size="lg" message="Loading forms..." />
@@ -342,6 +334,26 @@ export const AdminFormsListPage: React.FC = () => {
                 </li>
               ))}
             </ul>
+          )}
+          {!loading && totalForms > PAGE_SIZE && (
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage <= 1}
+              >
+                Previous
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage >= totalPages}
+              >
+                Next
+              </Button>
+            </div>
           )}
         </Card>
       </div>

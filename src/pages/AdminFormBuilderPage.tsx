@@ -19,7 +19,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { supabase } from '../lib/supabase';
-import { fetchForm, fetchFormSteps, createFormInstance, updateForm, ensureTaskSectionsForForm, formNameExists } from '../lib/formEngine';
+import { fetchForm, fetchFormSteps, updateForm, ensureTaskSectionsForForm, formNameExists } from '../lib/formEngine';
 import { uploadFormCoverImage, uploadRowImage } from '../lib/storage';
 import type { Form, FormStep, FormSection, FormQuestion } from '../types/database';
 import { Card } from '../components/ui/Card';
@@ -55,6 +55,64 @@ const ROLES = [
   { value: 'trainer', label: 'Trainer' },
   { value: 'office', label: 'Office' },
 ];
+
+type GridColumnType = 'question' | 'answer';
+
+interface GridTableColumnMeta {
+  label: string;
+  type: GridColumnType;
+}
+
+const GRID_COLUMN_TYPE_OPTIONS = [
+  { value: 'answer', label: 'Answer (user input)' },
+  { value: 'question', label: 'Question (row description)' },
+];
+
+function normalizeGridColumnType(raw: unknown): GridColumnType {
+  return String(raw).trim().toLowerCase() === 'question' ? 'question' : 'answer';
+}
+
+function getGridColumnsMeta(pm: Record<string, unknown>): GridTableColumnMeta[] {
+  const rawMeta = pm.columnsMeta;
+  if (Array.isArray(rawMeta)) {
+    const parsed = rawMeta
+      .map((entry) => {
+        if (!entry || typeof entry !== 'object') return null;
+        const e = entry as Record<string, unknown>;
+        const label = String(e.label ?? '').trim();
+        if (!label) return null;
+        return { label, type: normalizeGridColumnType(e.type) } as GridTableColumnMeta;
+      })
+      .filter(Boolean) as GridTableColumnMeta[];
+    if (parsed.length > 0) return parsed;
+  }
+
+  const columns = Array.isArray(pm.columns) ? (pm.columns as unknown[]) : ['Column 1', 'Column 2'];
+  const types = Array.isArray(pm.columnTypes) ? (pm.columnTypes as unknown[]) : [];
+  return columns
+    .map((c, idx) => {
+      const label = String(c ?? '').trim();
+      if (!label) return null;
+      return {
+        label,
+        type: normalizeGridColumnType(types[idx]),
+      } as GridTableColumnMeta;
+    })
+    .filter(Boolean) as GridTableColumnMeta[];
+}
+
+function withGridColumnsMeta(pm: Record<string, unknown>, columnsMeta: GridTableColumnMeta[]): Record<string, unknown> {
+  const normalized = columnsMeta
+    .map((c) => ({ label: String(c.label || '').trim(), type: normalizeGridColumnType(c.type) }))
+    .filter((c) => c.label.length > 0);
+  return {
+    ...pm,
+    columnsMeta: normalized,
+    // keep legacy fields synced for backward compatibility
+    columns: normalized.map((c) => c.label),
+    columnTypes: normalized.map((c) => c.type),
+  };
+}
 
 // Prebuilt sections: can be reordered but not deleted (steps 5-20)
 const PREBUILT_SECTION_TITLES = [
@@ -1223,8 +1281,7 @@ export const AdminFormBuilderPage: React.FC = () => {
               try {
                 await new Promise((r) => setTimeout(r, 0));
                 await flushAllPendingSaves();
-                const instance = await createFormInstance(Number(formId), 'student');
-                if (instance) navigate(`/instances/${instance.id}`);
+                navigate(`/admin/forms/${formId}/preview`);
               } finally {
                 setPreviewing(false);
               }
@@ -1399,6 +1456,8 @@ export const AdminFormBuilderPage: React.FC = () => {
               const rv = (q.role_visibility as Record<string, boolean>) || {};
               const re = (q.role_editability as Record<string, boolean>) || {};
               const pm = (q.pdf_meta as Record<string, unknown>) || {};
+              const gridColumnsMeta = getGridColumnsMeta(pm);
+              const layout = (pm.layout as string) || 'default';
               return (
                 <Card>
                   <h3 className="font-bold mb-4">Edit Question</h3>
@@ -1482,7 +1541,7 @@ export const AdminFormBuilderPage: React.FC = () => {
                         <div className="text-sm font-semibold text-gray-700">1. Table layout</div>
                         <div>
                           <Select
-                            value={(pm.layout as string) || 'default'}
+                            value={layout}
                             onChange={(v) =>
                               updateQuestion(q.id, {
                                 pdf_meta: { ...pm, layout: v },
@@ -1495,62 +1554,84 @@ export const AdminFormBuilderPage: React.FC = () => {
                             ]}
                           />
                         </div>
-                        {((pm.layout as string) === 'no_image' || (pm.layout as string) === 'split') && (
+                        {layout === 'split' && (
                           <div className="grid grid-cols-2 gap-2">
                             <Input
                               label="1st column header"
-                              value={(pm.firstColumnLabel as string) || ((pm.layout as string) === 'no_image' ? 'Item' : 'Name')}
+                              value={(pm.firstColumnLabel as string | undefined) ?? 'Name'}
                               onChange={(e) =>
                                 updateQuestion(q.id, {
-                                  pdf_meta: { ...pm, firstColumnLabel: e.target.value || ((pm.layout as string) === 'no_image' ? 'Item' : 'Name') },
+                                  pdf_meta: { ...pm, firstColumnLabel: e.target.value },
                                 })
                               }
-                              placeholder={(pm.layout as string) === 'no_image' ? 'e.g. Question, Item' : 'e.g. Polygon Name, Measurement'}
+                              placeholder="e.g. Polygon Name, Measurement"
                             />
                             <Input
                               label="2nd column header"
-                              value={(pm.secondColumnLabel as string) || ((pm.layout as string) === 'no_image' ? 'Description' : 'Image')}
+                              value={(pm.secondColumnLabel as string | undefined) ?? 'Image'}
                               onChange={(e) =>
                                 updateQuestion(q.id, {
-                                  pdf_meta: { ...pm, secondColumnLabel: e.target.value || ((pm.layout as string) === 'no_image' ? 'Description' : 'Image') },
+                                  pdf_meta: { ...pm, secondColumnLabel: e.target.value },
                                 })
                               }
-                              placeholder={(pm.layout as string) === 'no_image' ? 'e.g. Description, Details' : 'e.g. Polygon Shape, Diagram'}
+                              placeholder="e.g. Polygon Shape, Diagram"
                             />
                           </div>
                         )}
                         <div>
-                          <div className="text-sm font-semibold mb-2">Input columns (comma-separated)</div>
-                          <Input
-                            value={((pm.columns as string[]) || []).join(', ')}
-                            onChange={(e) =>
-                              updateQuestion(q.id, {
-                                pdf_meta: {
-                                  ...pm,
-                                  columns: e.target.value.split(',').map((s) => s.trim()).filter(Boolean),
-                                },
-                              })
-                            }
-                            placeholder="e.g. Perimeter Formula, Example or Formula, Calculation"
-                          />
-                        </div>
-                        <div>
-                          <div className="text-sm font-semibold mb-2">Column type (question = display only, answer = user input)</div>
-                          <p className="text-xs text-gray-600 mb-2">
-                            Set each column as <strong>question</strong> (read-only, shows row description) or <strong>answer</strong> (user fills in). Comma-separated, same order as columns.
-                          </p>
-                          <Input
-                            value={((pm.columnTypes as string[]) || []).join(', ')}
-                            onChange={(e) =>
-                              updateQuestion(q.id, {
-                                pdf_meta: {
-                                  ...pm,
-                                  columnTypes: e.target.value.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
-                                },
-                              })
-                            }
-                            placeholder="e.g. answer, answer or question, answer"
-                          />
+                          <div className="text-sm font-semibold mb-2">Columns</div>
+                          <div className="space-y-2">
+                            {gridColumnsMeta.map((col, colIdx) => (
+                              <div key={`col-${colIdx}`} className="grid grid-cols-12 gap-2 items-end">
+                                <div className="col-span-7">
+                                  <Input
+                                    label={`Column ${colIdx + 1} header`}
+                                    value={col.label}
+                                    onChange={(e) => {
+                                      const next = [...gridColumnsMeta];
+                                      next[colIdx] = { ...next[colIdx], label: e.target.value };
+                                      updateQuestion(q.id, { pdf_meta: withGridColumnsMeta(pm, next) });
+                                    }}
+                                  />
+                                </div>
+                                <div className="col-span-4">
+                                  <Select
+                                    label="Type"
+                                    value={col.type}
+                                    onChange={(v) => {
+                                      const next = [...gridColumnsMeta];
+                                      next[colIdx] = { ...next[colIdx], type: normalizeGridColumnType(v) };
+                                      updateQuestion(q.id, { pdf_meta: withGridColumnsMeta(pm, next) });
+                                    }}
+                                    options={GRID_COLUMN_TYPE_OPTIONS}
+                                  />
+                                </div>
+                                <div className="col-span-1 flex justify-end">
+                                  <button
+                                    type="button"
+                                    className="text-xs text-red-600 hover:text-red-700 pb-2"
+                                    onClick={() => {
+                                      const next = gridColumnsMeta.filter((_, i) => i !== colIdx);
+                                      updateQuestion(q.id, { pdf_meta: withGridColumnsMeta(pm, next) });
+                                    }}
+                                  >
+                                    Remove
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                const next = [...gridColumnsMeta, { label: `Column ${gridColumnsMeta.length + 1}`, type: 'answer' as GridColumnType }];
+                                updateQuestion(q.id, { pdf_meta: withGridColumnsMeta(pm, next) });
+                              }}
+                            >
+                              + Add column
+                            </Button>
+                          </div>
                         </div>
                       </div>
                     )}
@@ -1792,7 +1873,7 @@ function QuestionRowsEditor({ questionId, sectionPdfMode, formId, steps, onSteps
   }, []);
 
   const addRow = async () => {
-    const defaultLabel = isAssessmentTasks ? 'New task' : 'New row';
+    const defaultLabel = '';
     const { data } = await supabase
       .from('skyline_form_question_rows')
       .insert({ question_id: questionId, row_label: defaultLabel, sort_order: rows.length })
@@ -1821,14 +1902,17 @@ function QuestionRowsEditor({ questionId, sectionPdfMode, formId, steps, onSteps
     }
   };
 
-  const flushRowSave = useCallback((id: number) => {
+  const flushRowSave = useCallback(async (id: number) => {
     const pending = rowPendingUpdates.current[id];
     delete rowPendingUpdates.current[id];
     const t = rowSaveTimers.current[id];
     if (t) clearTimeout(t);
     delete rowSaveTimers.current[id];
     if (pending && Object.keys(pending).length > 0) {
-      supabase.from('skyline_form_question_rows').update(pending).eq('id', id);
+      const { error } = await supabase.from('skyline_form_question_rows').update(pending).eq('id', id);
+      if (error) {
+        console.error('Failed to save row changes:', error);
+      }
     }
   }, []);
 
@@ -1837,7 +1921,7 @@ function QuestionRowsEditor({ questionId, sectionPdfMode, formId, steps, onSteps
     rowPendingUpdates.current[id] = { ...rowPendingUpdates.current[id], ...updates };
     const existing = rowSaveTimers.current[id];
     if (existing) clearTimeout(existing);
-    rowSaveTimers.current[id] = setTimeout(() => flushRowSave(id), ROW_SAVE_DEBOUNCE_MS);
+    rowSaveTimers.current[id] = setTimeout(() => { void flushRowSave(id); }, ROW_SAVE_DEBOUNCE_MS);
   }, [flushRowSave]);
 
   const saveInstructions = async (rowId: number, data: TaskInstructionsData) => {
@@ -1874,6 +1958,7 @@ function QuestionRowsEditor({ questionId, sectionPdfMode, formId, steps, onSteps
               <Input
                 value={r.row_label}
                 onChange={(e) => updateRow(r.id, { row_label: e.target.value })}
+                onBlur={() => { void flushRowSave(r.id); }}
                 placeholder={isAssessmentTasks ? 'Evidence number (e.g. Assessment task 1)' : 'Row label'}
                 className="flex-1"
               />
@@ -1906,6 +1991,7 @@ function QuestionRowsEditor({ questionId, sectionPdfMode, formId, steps, onSteps
                   <Input
                     value={r.row_image_url || ''}
                     onChange={(e) => updateRow(r.id, { row_image_url: e.target.value || null })}
+                    onBlur={() => { void flushRowSave(r.id); }}
                     placeholder="Or paste image URL"
                     className="w-40"
                   />
@@ -1921,6 +2007,7 @@ function QuestionRowsEditor({ questionId, sectionPdfMode, formId, steps, onSteps
               <Textarea
                 value={r.row_help || ''}
                 onChange={(e) => updateRow(r.id, { row_help: e.target.value || null })}
+                onBlur={() => { void flushRowSave(r.id); }}
                 placeholder={gridTableLayout === 'no_image' ? '2nd column content (e.g. question or description)' : 'Description / question text (for 2nd column or question-type columns)'}
                 rows={2}
                 className="text-sm"
@@ -1930,6 +2017,7 @@ function QuestionRowsEditor({ questionId, sectionPdfMode, formId, steps, onSteps
               <Textarea
                 value={r.row_help || ''}
                 onChange={(e) => updateRow(r.id, { row_help: e.target.value || null })}
+                onBlur={() => { void flushRowSave(r.id); }}
                 placeholder="Assessment method/ Type of evidence (use new lines for multiple items)"
                 rows={2}
                 className="text-sm"

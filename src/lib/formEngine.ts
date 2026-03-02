@@ -249,6 +249,67 @@ export async function fetchTemplateForInstance(instanceId: number): Promise<Form
   return { form, steps: stepsWithSections };
 }
 
+export async function fetchTemplateForForm(formId: number): Promise<FormTemplate | null> {
+  const form = await fetchForm(formId);
+  if (!form) return null;
+
+  const steps = await fetchFormSteps(formId);
+  const stepsWithSections: FormStepWithSections[] = [];
+
+  for (const step of steps) {
+    const { data: sections } = await supabase
+      .from('skyline_form_sections')
+      .select('*')
+      .eq('step_id', step.id)
+      .order('sort_order', { ascending: true });
+    const sectionsList = (sections as FormSection[]) || [];
+
+    const sectionsWithQuestions: FormSectionWithQuestions[] = [];
+    for (const section of sectionsList) {
+      const sec = section as FormSection & { assessment_task_row_id?: number | null };
+      let taskRow: FormQuestionRow | null = null;
+      if (sec.assessment_task_row_id) {
+        const { data: row } = await supabase
+          .from('skyline_form_question_rows')
+          .select('*')
+          .eq('id', sec.assessment_task_row_id)
+          .single();
+        taskRow = (row as FormQuestionRow) || null;
+      }
+
+      const { data: questions } = await supabase
+        .from('skyline_form_questions')
+        .select('*')
+        .eq('section_id', section.id)
+        .order('sort_order', { ascending: true });
+      const questionsList = (questions as FormQuestion[]) || [];
+
+      const questionsWithExtras: FormQuestionWithOptionsAndRows[] = [];
+      for (const q of questionsList) {
+        const { data: options } = await supabase
+          .from('skyline_form_question_options')
+          .select('*')
+          .eq('question_id', q.id)
+          .order('sort_order', { ascending: true });
+        const { data: rows } = await supabase
+          .from('skyline_form_question_rows')
+          .select('*')
+          .eq('question_id', q.id)
+          .order('sort_order', { ascending: true });
+        questionsWithExtras.push({
+          ...q,
+          options: (options as FormQuestionOption[]) || [],
+          rows: (rows as FormQuestionRow[]) || [],
+        });
+      }
+      sectionsWithQuestions.push({ ...section, questions: questionsWithExtras, taskRow: taskRow ?? undefined });
+    }
+    stepsWithSections.push({ ...step, sections: sectionsWithQuestions });
+  }
+
+  return { form, steps: stepsWithSections };
+}
+
 export async function fetchAnswersForInstance(instanceId: number): Promise<FormAnswer[]> {
   const { data, error } = await supabase
     .from('skyline_form_answers')
@@ -518,11 +579,290 @@ export async function createFormInstance(
   return data as FormInstance;
 }
 
+export type InstanceAccessRole = 'student' | 'trainer' | 'office';
+
+export interface InstanceAccessValidationResult {
+  valid: boolean;
+  role_context: InstanceAccessRole | null;
+  tokenId: number | null;
+  reason?: string;
+}
+
+function generateAccessToken(): string {
+  const bytes = new Uint8Array(24);
+  globalThis.crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+export async function issueInstanceAccessLink(
+  instanceId: number,
+  roleContext: InstanceAccessRole,
+  ttlMinutes = 60 * 24 * 7
+): Promise<string | null> {
+  const token = generateAccessToken();
+  const expiresAt = new Date(Date.now() + ttlMinutes * 60 * 1000).toISOString();
+  const { error } = await supabase.from('skyline_instance_access_tokens').insert({
+    instance_id: instanceId,
+    role_context: roleContext,
+    token,
+    expires_at: expiresAt,
+  });
+  if (error) {
+    console.error('issueInstanceAccessLink error', error);
+    return null;
+  }
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const base = `${origin}/instances/${instanceId}`;
+  return `${base}?token=${encodeURIComponent(token)}`;
+}
+
+export async function validateInstanceAccessToken(
+  instanceId: number,
+  token: string
+): Promise<InstanceAccessValidationResult> {
+  const { data, error } = await supabase
+    .from('skyline_instance_access_tokens')
+    .select('id, role_context, expires_at, consumed_at, revoked_at')
+    .eq('instance_id', instanceId)
+    .eq('token', token)
+    .maybeSingle();
+  if (error || !data) {
+    if (error) console.error('validateInstanceAccessToken error', error);
+    return { valid: false, role_context: null, tokenId: null, reason: 'Invalid secure link.' };
+  }
+  const row = data as Record<string, unknown>;
+  const role = String(row.role_context ?? '') as InstanceAccessRole;
+  if (role !== 'student' && role !== 'trainer' && role !== 'office') {
+    return { valid: false, role_context: null, tokenId: Number(row.id ?? 0) || null, reason: 'Invalid access role.' };
+  }
+  if (row.revoked_at) {
+    return { valid: false, role_context: null, tokenId: Number(row.id ?? 0) || null, reason: 'This secure link is no longer active.' };
+  }
+  if (row.consumed_at) {
+    return { valid: false, role_context: null, tokenId: Number(row.id ?? 0) || null, reason: 'This secure link was already used.' };
+  }
+  const expiresAt = row.expires_at ? new Date(String(row.expires_at)).getTime() : 0;
+  if (!expiresAt || Number.isNaN(expiresAt) || expiresAt <= Date.now()) {
+    return { valid: false, role_context: null, tokenId: Number(row.id ?? 0) || null, reason: 'This secure link has expired.' };
+  }
+  return {
+    valid: true,
+    role_context: role,
+    tokenId: Number(row.id ?? 0) || null,
+  };
+}
+
+export async function consumeInstanceAccessToken(tokenId: number): Promise<void> {
+  if (!tokenId) return;
+  const { error } = await supabase
+    .from('skyline_instance_access_tokens')
+    .update({ consumed_at: new Date().toISOString() })
+    .eq('id', tokenId);
+  if (error) console.error('consumeInstanceAccessToken error', error);
+}
+
+export async function revokeRoleAccessTokens(instanceId: number, roleContext: InstanceAccessRole): Promise<void> {
+  const { error } = await supabase
+    .from('skyline_instance_access_tokens')
+    .update({ revoked_at: new Date().toISOString() })
+    .eq('instance_id', instanceId)
+    .eq('role_context', roleContext)
+    .is('consumed_at', null)
+    .is('revoked_at', null);
+  if (error) console.error('revokeRoleAccessTokens error', error);
+}
+
+export interface Trainer {
+  id: number;
+  full_name: string;
+  email: string;
+  phone: string | null;
+  status: string | null;
+  created_at: string;
+}
+
+export interface CreateTrainerInput {
+  full_name: string;
+  email: string;
+  phone?: string;
+  status?: string;
+}
+
+export type UpdateTrainerInput = Partial<CreateTrainerInput>;
+
+export interface PaginatedResult<T> {
+  data: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+function mapTrainerRow(row: Record<string, unknown>): Trainer {
+  return {
+    id: Number(row.id),
+    full_name: String(row.full_name ?? ''),
+    email: String(row.email ?? ''),
+    phone: row.phone ? String(row.phone) : null,
+    status: row.status ? String(row.status) : null,
+    created_at: String(row.created_at ?? ''),
+  };
+}
+
+export async function listTrainers(): Promise<Trainer[]> {
+  const { data, error } = await supabase
+    .from('skyline_trainers')
+    .select('*')
+    .order('created_at', { ascending: false });
+  if (error) {
+    console.error('listTrainers error', error);
+    return [];
+  }
+  return ((data as Record<string, unknown>[]) || []).map(mapTrainerRow);
+}
+
+export async function listTrainersPaged(
+  page = 1,
+  pageSize = 20,
+  search?: string
+): Promise<PaginatedResult<Trainer>> {
+  const from = Math.max(0, (page - 1) * pageSize);
+  const to = from + pageSize - 1;
+  let query = supabase
+    .from('skyline_trainers')
+    .select('*', { count: 'exact' })
+    .order('created_at', { ascending: false });
+  const q = (search ?? '').trim();
+  if (q) {
+    const escaped = q.replace(/[%_,]/g, '');
+    query = query.or(`full_name.ilike.%${escaped}%,email.ilike.%${escaped}%,phone.ilike.%${escaped}%`);
+  }
+  const { data, error, count } = await query.range(from, to);
+  if (error) {
+    console.error('listTrainersPaged error', error);
+    return { data: [], total: 0, page, pageSize };
+  }
+  return {
+    data: ((data as Record<string, unknown>[]) || []).map(mapTrainerRow),
+    total: Number(count ?? 0),
+    page,
+    pageSize,
+  };
+}
+
+export async function createTrainer(input: CreateTrainerInput): Promise<Trainer | null> {
+  const { data, error } = await supabase
+    .from('skyline_trainers')
+    .insert({
+      full_name: input.full_name.trim(),
+      email: input.email.trim(),
+      phone: input.phone?.trim() || null,
+      status: input.status?.trim() || 'active',
+    })
+    .select('*')
+    .single();
+  if (error) {
+    console.error('createTrainer error', error);
+    return null;
+  }
+  const row = data as Record<string, unknown>;
+  return {
+    id: Number(row.id),
+    full_name: String(row.full_name ?? ''),
+    email: String(row.email ?? ''),
+    phone: row.phone ? String(row.phone) : null,
+    status: row.status ? String(row.status) : null,
+    created_at: String(row.created_at ?? ''),
+  };
+}
+
+export async function updateTrainer(id: number, input: UpdateTrainerInput): Promise<Trainer | null> {
+  const payload: Record<string, unknown> = {};
+  if (input.full_name !== undefined) payload.full_name = input.full_name.trim();
+  if (input.email !== undefined) payload.email = input.email.trim();
+  if (input.phone !== undefined) payload.phone = input.phone?.trim() || null;
+  if (input.status !== undefined) payload.status = input.status?.trim() || null;
+  const { data, error } = await supabase
+    .from('skyline_trainers')
+    .update(payload)
+    .eq('id', id)
+    .select('*')
+    .single();
+  if (error) {
+    console.error('updateTrainer error', error);
+    return null;
+  }
+  const row = data as Record<string, unknown>;
+  return {
+    id: Number(row.id),
+    full_name: String(row.full_name ?? ''),
+    email: String(row.email ?? ''),
+    phone: row.phone ? String(row.phone) : null,
+    status: row.status ? String(row.status) : null,
+    created_at: String(row.created_at ?? ''),
+  };
+}
+
 export interface Student {
   id: number;
+  student_id: string | null;
   name: string;
+  first_name: string | null;
+  last_name: string | null;
   email: string;
+  phone: string | null;
+  date_of_birth: string | null;
+  address_line_1: string | null;
+  address_line_2: string | null;
+  city: string | null;
+  state: string | null;
+  postal_code: string | null;
+  country: string | null;
+  guardian_name: string | null;
+  guardian_phone: string | null;
+  notes: string | null;
+  status: string | null;
   created_at: string;
+}
+
+function mapStudentRow(row: Record<string, unknown>): Student {
+  const first = String(row.first_name ?? '').trim();
+  const last = String(row.last_name ?? '').trim();
+  const displayName = String(row.name ?? '').trim() || [first, last].filter(Boolean).join(' ').trim();
+  return {
+    id: Number(row.id),
+    student_id: row.student_id ? String(row.student_id) : null,
+    name: displayName,
+    first_name: first || null,
+    last_name: last || null,
+    email: String(row.email ?? ''),
+    phone: row.phone ? String(row.phone) : null,
+    date_of_birth: row.date_of_birth ? String(row.date_of_birth) : null,
+    address_line_1: row.address_line_1 ? String(row.address_line_1) : null,
+    address_line_2: row.address_line_2 ? String(row.address_line_2) : null,
+    city: row.city ? String(row.city) : null,
+    state: row.state ? String(row.state) : null,
+    postal_code: row.postal_code ? String(row.postal_code) : null,
+    country: row.country ? String(row.country) : null,
+    guardian_name: row.guardian_name ? String(row.guardian_name) : null,
+    guardian_phone: row.guardian_phone ? String(row.guardian_phone) : null,
+    notes: row.notes ? String(row.notes) : null,
+    status: row.status ? String(row.status) : null,
+    created_at: String(row.created_at ?? ''),
+  } as Student;
+}
+
+export interface SubmittedInstanceRow {
+  id: number;
+  form_id: number;
+  form_name: string;
+  form_version: string | null;
+  student_id: number | null;
+  student_name: string;
+  student_email: string;
+  status: string;
+  role_context: string;
+  created_at: string;
+  submitted_at: string | null;
 }
 
 export async function listStudents(): Promise<Student[]> {
@@ -534,20 +874,339 @@ export async function listStudents(): Promise<Student[]> {
     console.error('listStudents error', error);
     return [];
   }
-  return (data as Student[]) || [];
+  return ((data as Record<string, unknown>[]) || []).map(mapStudentRow);
 }
 
-export async function createStudent(name: string, email: string): Promise<Student | null> {
+export async function listStudentsPaged(
+  page = 1,
+  pageSize = 20,
+  search?: string
+): Promise<PaginatedResult<Student>> {
+  const from = Math.max(0, (page - 1) * pageSize);
+  const to = from + pageSize - 1;
+  let query = supabase
+    .from('skyline_students')
+    .select('*', { count: 'exact' })
+    .order('created_at', { ascending: false });
+  const q = (search ?? '').trim();
+  if (q) {
+    const escaped = q.replace(/[%_,]/g, '');
+    query = query.or(
+      `student_id.ilike.%${escaped}%,first_name.ilike.%${escaped}%,last_name.ilike.%${escaped}%,name.ilike.%${escaped}%,email.ilike.%${escaped}%,phone.ilike.%${escaped}%,city.ilike.%${escaped}%`
+    );
+  }
+  const { data, error, count } = await query.range(from, to);
+  if (error) {
+    console.error('listStudentsPaged error', error);
+    return { data: [], total: 0, page, pageSize };
+  }
+  return {
+    data: ((data as Record<string, unknown>[]) || []).map(mapStudentRow),
+    total: Number(count ?? 0),
+    page,
+    pageSize,
+  };
+}
+
+export async function listSubmittedInstances(): Promise<SubmittedInstanceRow[]> {
+  const { data: instances, error } = await supabase
+    .from('skyline_form_instances')
+    .select('id, form_id, student_id, status, role_context, created_at, submitted_at')
+    .in('status', ['submitted', 'locked'])
+    .order('created_at', { ascending: false });
+  if (error) {
+    console.error('listSubmittedInstances error', error);
+    return [];
+  }
+
+  const rows = (instances as Array<Record<string, unknown>>) || [];
+  const formIds = Array.from(new Set(rows.map((r) => Number(r.form_id)).filter((n) => Number.isFinite(n) && n > 0)));
+  const studentIds = Array.from(new Set(rows.map((r) => Number(r.student_id)).filter((n) => Number.isFinite(n) && n > 0)));
+
+  const formMap = new Map<number, { name: string; version: string | null }>();
+  if (formIds.length > 0) {
+    const { data: forms } = await supabase.from('skyline_forms').select('id, name, version').in('id', formIds);
+    for (const f of (forms as Array<Record<string, unknown>>) || []) {
+      formMap.set(Number(f.id), {
+        name: String(f.name ?? ''),
+        version: f.version ? String(f.version) : null,
+      });
+    }
+  }
+
+  const studentMap = new Map<number, { name: string; email: string }>();
+  if (studentIds.length > 0) {
+    const { data: students } = await supabase
+      .from('skyline_students')
+      .select('id, name, first_name, last_name, email')
+      .in('id', studentIds);
+    for (const s of (students as Array<Record<string, unknown>>) || []) {
+      const first = String(s.first_name ?? '').trim();
+      const last = String(s.last_name ?? '').trim();
+      const name = [first, last].filter(Boolean).join(' ').trim() || String(s.name ?? '');
+      studentMap.set(Number(s.id), { name, email: String(s.email ?? '') });
+    }
+  }
+
+  return rows.map((r) => {
+    const formId = Number(r.form_id);
+    const studentIdRaw = r.student_id;
+    const studentId = studentIdRaw == null ? null : Number(studentIdRaw);
+    const form = formMap.get(formId);
+    const student = studentId != null ? studentMap.get(studentId) : undefined;
+    return {
+      id: Number(r.id),
+      form_id: formId,
+      form_name: form?.name || `Form #${formId}`,
+      form_version: form?.version ?? null,
+      student_id: studentId,
+      student_name: student?.name || 'Unknown student',
+      student_email: student?.email || '',
+      status: String(r.status ?? 'draft'),
+      role_context: String(r.role_context ?? 'student'),
+      created_at: String(r.created_at ?? ''),
+      submitted_at: r.submitted_at ? String(r.submitted_at) : null,
+    };
+  });
+}
+
+export async function listSubmittedInstancesPaged(
+  page = 1,
+  pageSize = 20,
+  search?: string
+): Promise<PaginatedResult<SubmittedInstanceRow>> {
+  const from = Math.max(0, (page - 1) * pageSize);
+  const to = from + pageSize - 1;
+  let query = supabase
+    .from('skyline_form_instances')
+    .select('id, form_id, student_id, status, role_context, created_at, submitted_at', { count: 'exact' })
+    .in('status', ['submitted', 'locked'])
+    .order('created_at', { ascending: false });
+
+  const q = (search ?? '').trim();
+  if (q) {
+    const escaped = q.replace(/[%_,]/g, '');
+    const conditions: string[] = [`status.ilike.%${escaped}%`, `role_context.ilike.%${escaped}%`];
+
+    const { data: formRows } = await supabase
+      .from('skyline_forms')
+      .select('id')
+      .or(`name.ilike.%${escaped}%,version.ilike.%${escaped}%`);
+    const formIds = ((formRows as Array<Record<string, unknown>>) || [])
+      .map((f) => Number(f.id))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    if (formIds.length > 0) conditions.push(`form_id.in.(${formIds.join(',')})`);
+
+    const { data: studentRows } = await supabase
+      .from('skyline_students')
+      .select('id')
+      .or(`student_id.ilike.%${escaped}%,name.ilike.%${escaped}%,first_name.ilike.%${escaped}%,last_name.ilike.%${escaped}%,email.ilike.%${escaped}%`);
+    const studentIds = ((studentRows as Array<Record<string, unknown>>) || [])
+      .map((s) => Number(s.id))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    if (studentIds.length > 0) conditions.push(`student_id.in.(${studentIds.join(',')})`);
+
+    query = query.or(conditions.join(','));
+  }
+
+  const { data: instances, error, count } = await query.range(from, to);
+  if (error) {
+    console.error('listSubmittedInstancesPaged error', error);
+    return { data: [], total: 0, page, pageSize };
+  }
+
+  const rows = (instances as Array<Record<string, unknown>>) || [];
+  const formIds = Array.from(new Set(rows.map((r) => Number(r.form_id)).filter((n) => Number.isFinite(n) && n > 0)));
+  const studentIds = Array.from(new Set(rows.map((r) => Number(r.student_id)).filter((n) => Number.isFinite(n) && n > 0)));
+
+  const formMap = new Map<number, { name: string; version: string | null }>();
+  if (formIds.length > 0) {
+    const { data: forms } = await supabase.from('skyline_forms').select('id, name, version').in('id', formIds);
+    for (const f of (forms as Array<Record<string, unknown>>) || []) {
+      formMap.set(Number(f.id), {
+        name: String(f.name ?? ''),
+        version: f.version ? String(f.version) : null,
+      });
+    }
+  }
+
+  const studentMap = new Map<number, { name: string; email: string }>();
+  if (studentIds.length > 0) {
+    const { data: students } = await supabase
+      .from('skyline_students')
+      .select('id, name, first_name, last_name, email')
+      .in('id', studentIds);
+    for (const s of (students as Array<Record<string, unknown>>) || []) {
+      const first = String(s.first_name ?? '').trim();
+      const last = String(s.last_name ?? '').trim();
+      const name = [first, last].filter(Boolean).join(' ').trim() || String(s.name ?? '');
+      studentMap.set(Number(s.id), { name, email: String(s.email ?? '') });
+    }
+  }
+
+  return {
+    data: rows.map((r) => {
+      const formId = Number(r.form_id);
+      const studentIdRaw = r.student_id;
+      const studentId = studentIdRaw == null ? null : Number(studentIdRaw);
+      const form = formMap.get(formId);
+      const student = studentId != null ? studentMap.get(studentId) : undefined;
+      return {
+        id: Number(r.id),
+        form_id: formId,
+        form_name: form?.name || `Form #${formId}`,
+        form_version: form?.version ?? null,
+        student_id: studentId,
+        student_name: student?.name || 'Unknown student',
+        student_email: student?.email || '',
+        status: String(r.status ?? 'draft'),
+        role_context: String(r.role_context ?? 'student'),
+        created_at: String(r.created_at ?? ''),
+        submitted_at: r.submitted_at ? String(r.submitted_at) : null,
+      };
+    }),
+    total: Number(count ?? 0),
+    page,
+    pageSize,
+  };
+}
+
+export interface CreateStudentInput {
+  student_id: string;
+  first_name: string;
+  last_name?: string;
+  email: string;
+  phone?: string;
+  date_of_birth?: string;
+  address_line_1?: string;
+  address_line_2?: string;
+  city?: string;
+  state?: string;
+  postal_code?: string;
+  country?: string;
+  guardian_name?: string;
+  guardian_phone?: string;
+  notes?: string;
+  status?: string;
+}
+
+export async function createStudent(input: CreateStudentInput): Promise<Student | null> {
+  const first = input.first_name.trim();
+  const last = (input.last_name ?? '').trim();
+  const fullName = [first, last].filter(Boolean).join(' ');
   const { data, error } = await supabase
     .from('skyline_students')
-    .insert({ name, email })
+    .insert({
+      student_id: input.student_id.trim(),
+      name: fullName || first,
+      first_name: first || null,
+      last_name: last || null,
+      email: input.email.trim(),
+      phone: input.phone?.trim() || null,
+      date_of_birth: input.date_of_birth?.trim() || null,
+      address_line_1: input.address_line_1?.trim() || null,
+      address_line_2: input.address_line_2?.trim() || null,
+      city: input.city?.trim() || null,
+      state: input.state?.trim() || null,
+      postal_code: input.postal_code?.trim() || null,
+      country: input.country?.trim() || null,
+      guardian_name: input.guardian_name?.trim() || null,
+      guardian_phone: input.guardian_phone?.trim() || null,
+      notes: input.notes?.trim() || null,
+      status: input.status?.trim() || 'active',
+    })
     .select('*')
     .single();
   if (error) {
     console.error('createStudent error', error);
     return null;
   }
-  return data as Student;
+  const row = data as Record<string, unknown>;
+  const firstName = String(row.first_name ?? '').trim();
+  const lastName = String(row.last_name ?? '').trim();
+  return {
+    id: Number(row.id),
+    student_id: row.student_id ? String(row.student_id) : null,
+    name: String(row.name ?? '') || [firstName, lastName].filter(Boolean).join(' '),
+    first_name: firstName || null,
+    last_name: lastName || null,
+    email: String(row.email ?? ''),
+    phone: row.phone ? String(row.phone) : null,
+    date_of_birth: row.date_of_birth ? String(row.date_of_birth) : null,
+    address_line_1: row.address_line_1 ? String(row.address_line_1) : null,
+    address_line_2: row.address_line_2 ? String(row.address_line_2) : null,
+    city: row.city ? String(row.city) : null,
+    state: row.state ? String(row.state) : null,
+    postal_code: row.postal_code ? String(row.postal_code) : null,
+    country: row.country ? String(row.country) : null,
+    guardian_name: row.guardian_name ? String(row.guardian_name) : null,
+    guardian_phone: row.guardian_phone ? String(row.guardian_phone) : null,
+    notes: row.notes ? String(row.notes) : null,
+    status: row.status ? String(row.status) : null,
+    created_at: String(row.created_at ?? ''),
+  };
+}
+
+export type UpdateStudentInput = Partial<Omit<CreateStudentInput, 'email'>> & { email?: string };
+
+export async function updateStudent(id: number, input: UpdateStudentInput): Promise<Student | null> {
+  const first = input.first_name !== undefined ? input.first_name.trim() : undefined;
+  const last = input.last_name !== undefined ? (input.last_name ?? '').trim() : undefined;
+  const fullName = first !== undefined && last !== undefined
+    ? [first, last].filter(Boolean).join(' ')
+    : undefined;
+  const payload: Record<string, unknown> = {};
+  if (fullName !== undefined) payload.name = fullName || first;
+  if (first !== undefined) payload.first_name = first || null;
+  if (last !== undefined) payload.last_name = last || null;
+  if (input.email !== undefined) payload.email = input.email.trim();
+  if (input.student_id !== undefined) payload.student_id = input.student_id?.trim() || null;
+  if (input.phone !== undefined) payload.phone = input.phone?.trim() || null;
+  if (input.date_of_birth !== undefined) payload.date_of_birth = input.date_of_birth?.trim() || null;
+  if (input.address_line_1 !== undefined) payload.address_line_1 = input.address_line_1?.trim() || null;
+  if (input.address_line_2 !== undefined) payload.address_line_2 = input.address_line_2?.trim() || null;
+  if (input.city !== undefined) payload.city = input.city?.trim() || null;
+  if (input.state !== undefined) payload.state = input.state?.trim() || null;
+  if (input.postal_code !== undefined) payload.postal_code = input.postal_code?.trim() || null;
+  if (input.country !== undefined) payload.country = input.country?.trim() || null;
+  if (input.guardian_name !== undefined) payload.guardian_name = input.guardian_name?.trim() || null;
+  if (input.guardian_phone !== undefined) payload.guardian_phone = input.guardian_phone?.trim() || null;
+  if (input.notes !== undefined) payload.notes = input.notes?.trim() || null;
+  if (input.status !== undefined) payload.status = input.status?.trim() || null;
+  const { data, error } = await supabase
+    .from('skyline_students')
+    .update(payload)
+    .eq('id', id)
+    .select('*')
+    .single();
+  if (error) {
+    console.error('updateStudent error', error);
+    return null;
+  }
+  const row = data as Record<string, unknown>;
+  const firstName = String(row.first_name ?? '').trim();
+  const lastName = String(row.last_name ?? '').trim();
+  return {
+    id: Number(row.id),
+    student_id: row.student_id ? String(row.student_id) : null,
+    name: String(row.name ?? '') || [firstName, lastName].filter(Boolean).join(' '),
+    first_name: firstName || null,
+    last_name: lastName || null,
+    email: String(row.email ?? ''),
+    phone: row.phone ? String(row.phone) : null,
+    date_of_birth: row.date_of_birth ? String(row.date_of_birth) : null,
+    address_line_1: row.address_line_1 ? String(row.address_line_1) : null,
+    address_line_2: row.address_line_2 ? String(row.address_line_2) : null,
+    city: row.city ? String(row.city) : null,
+    state: row.state ? String(row.state) : null,
+    postal_code: row.postal_code ? String(row.postal_code) : null,
+    country: row.country ? String(row.country) : null,
+    guardian_name: row.guardian_name ? String(row.guardian_name) : null,
+    guardian_phone: row.guardian_phone ? String(row.guardian_phone) : null,
+    notes: row.notes ? String(row.notes) : null,
+    status: row.status ? String(row.status) : null,
+    created_at: String(row.created_at ?? ''),
+  };
 }
 
 const DEFAULT_ROLES = { student: true, trainer: true, office: true };
@@ -886,7 +1545,15 @@ export async function createForm(input: CreateFormInput): Promise<Form | null> {
   const { name, version, qualification_code, qualification_name, unit_code, unit_name, assessment_tasks, assessment_task_1_label, assessment_task_1_method, assessment_task_2_label, assessment_task_2_method } = input;
   const { data, error } = await supabase
     .from('skyline_forms')
-    .insert({ name, qualification_code, qualification_name, unit_code, unit_name, version: (version || '1.0.0').trim() || '1.0.0' })
+    .insert({
+      name,
+      qualification_code: qualification_code,
+      qualification_name: qualification_name,
+      unit_code: unit_code,
+      unit_name: unit_name,
+      version: (version || '1.0.0').trim() || '1.0.0',
+      status: 'published',
+    })
     .select('*')
     .single();
   if (error) {
@@ -924,6 +1591,31 @@ export async function listForms(status?: string): Promise<Form[]> {
   return (data as Form[]) || [];
 }
 
+export async function listFormsPaged(
+  page = 1,
+  pageSize = 20,
+  status?: string
+): Promise<PaginatedResult<Form>> {
+  const from = Math.max(0, (page - 1) * pageSize);
+  const to = from + pageSize - 1;
+  let query = supabase
+    .from('skyline_forms')
+    .select('*', { count: 'exact' })
+    .order('created_at', { ascending: false });
+  if (status) query = query.eq('status', status);
+  const { data, error, count } = await query.range(from, to);
+  if (error) {
+    console.error('listFormsPaged error', error);
+    return { data: [], total: 0, page, pageSize };
+  }
+  return {
+    data: (data as Form[]) || [],
+    total: Number(count ?? 0),
+    page,
+    pageSize,
+  };
+}
+
 /** Returns true if another form (excluding excludeFormId) already has this name (case-insensitive trim). */
 export async function formNameExists(name: string, excludeFormId?: number): Promise<boolean> {
   const trimmed = name.trim();
@@ -951,7 +1643,7 @@ export async function duplicateForm(formId: number): Promise<Form | null> {
     .insert({
       name: newName,
       version: newVersion,
-      status: form.status ?? 'draft',
+      status: 'published',
       unit_code: form.unit_code,
       unit_name: form.unit_name,
       qualification_code: form.qualification_code,
@@ -1094,4 +1786,18 @@ export async function duplicateForm(formId: number): Promise<Form | null> {
 
 export async function updateInstanceRole(instanceId: number, roleContext: string): Promise<void> {
   await supabase.from('skyline_form_instances').update({ role_context: roleContext }).eq('id', instanceId);
+}
+
+export type InstanceWorkflowStatus = 'draft' | 'waiting_trainer' | 'waiting_office' | 'completed';
+
+export async function updateInstanceWorkflowStatus(instanceId: number, workflowStatus: InstanceWorkflowStatus): Promise<void> {
+  const nowIso = new Date().toISOString();
+  const payload: Record<string, unknown> = {};
+  // Use legacy status fields only, so this works even without workflow_status migration.
+  if (workflowStatus === 'draft') payload.status = 'draft';
+  if (workflowStatus === 'waiting_trainer' || workflowStatus === 'waiting_office') payload.status = 'submitted';
+  if (workflowStatus === 'completed') payload.status = 'locked';
+  if (workflowStatus === 'waiting_trainer') payload.submitted_at = nowIso;
+  const { error } = await supabase.from('skyline_form_instances').update(payload).eq('id', instanceId);
+  if (error) console.error('updateInstanceWorkflowStatus error', error);
 }

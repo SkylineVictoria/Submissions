@@ -193,6 +193,90 @@ async function getTemplateForInstance(instanceId: number) {
   return { instance: { ...instance, form }, steps: stepsWithSections };
 }
 
+async function getTemplateForForm(formId: number) {
+  const { data: form } = await supabase
+    .from('skyline_forms')
+    .select('*')
+    .eq('id', formId)
+    .single();
+
+  if (!form) return null;
+
+  const { data: steps } = await supabase
+    .from('skyline_form_steps')
+    .select('*')
+    .eq('form_id', formId)
+    .order('sort_order');
+
+  const stepsWithSections: Array<{
+    step: { id: number; title: string; subtitle: string | null; sort_order: number };
+    sections: Array<{
+      section: FormSection;
+      questions: Array<{
+        question: FormQuestion;
+        options: FormQuestionOption[];
+        rows: FormQuestionRow[];
+      }>;
+    }>;
+  }> = [];
+
+  for (const step of steps || []) {
+    const { data: sections } = await supabase
+      .from('skyline_form_sections')
+      .select('*')
+      .eq('step_id', step.id)
+      .order('sort_order');
+
+    const sectionsWithQs: Array<{
+      section: FormSection;
+      questions: Array<{
+        question: FormQuestion;
+        options: FormQuestionOption[];
+        rows: FormQuestionRow[];
+      }>;
+    }> = [];
+
+    for (const section of sections || []) {
+      const { data: questions } = await supabase
+        .from('skyline_form_questions')
+        .select('*')
+        .eq('section_id', section.id)
+        .order('sort_order');
+
+      const questionsWithExtras: Array<{
+        question: FormQuestion;
+        options: FormQuestionOption[];
+        rows: FormQuestionRow[];
+      }> = [];
+
+      for (const q of questions || []) {
+        const { data: options } = await supabase
+          .from('skyline_form_question_options')
+          .select('*')
+          .eq('question_id', q.id)
+          .order('sort_order');
+        const { data: rows } = await supabase
+          .from('skyline_form_question_rows')
+          .select('*')
+          .eq('question_id', q.id)
+          .order('sort_order');
+        questionsWithExtras.push({
+          question: q as FormQuestion,
+          options: (options as FormQuestionOption[]) || [],
+          rows: (rows as FormQuestionRow[]) || [],
+        });
+      }
+      sectionsWithQs.push({
+        section: section as FormSection,
+        questions: questionsWithExtras,
+      });
+    }
+    stepsWithSections.push({ step: step as { id: number; title: string; subtitle: string | null; sort_order: number }, sections: sectionsWithQs });
+  }
+
+  return { form, steps: stepsWithSections };
+}
+
 function getAnswerMap(answers: FormAnswer[]): Map<string, string | number | Record<string, unknown>> {
   const m = new Map<string, string | number | Record<string, unknown>>();
   for (const a of answers) {
@@ -202,6 +286,52 @@ function getAnswerMap(answers: FormAnswer[]): Map<string, string | number | Reco
     else if (a.value_json != null) m.set(key, a.value_json as Record<string, unknown>);
   }
   return m;
+}
+
+type GridColumnType = 'question' | 'answer';
+type GridHeaderCase = 'original' | 'uppercase' | 'title';
+type GridTableColumnMeta = { label: string; type: GridColumnType };
+
+function normalizeGridColumnType(raw: unknown): GridColumnType {
+  return String(raw).trim().toLowerCase() === 'question' ? 'question' : 'answer';
+}
+
+function toTitleCase(input: string): string {
+  return input
+    .toLowerCase()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function formatGridHeader(label: string, headerCase: GridHeaderCase): string {
+  if (headerCase === 'uppercase') return label.toUpperCase();
+  if (headerCase === 'title') return toTitleCase(label);
+  return label;
+}
+
+function getGridColumnsMeta(pm: Record<string, unknown>): GridTableColumnMeta[] {
+  const rawMeta = pm.columnsMeta;
+  if (Array.isArray(rawMeta)) {
+    const parsed = rawMeta
+      .map((entry) => {
+        if (!entry || typeof entry !== 'object') return null;
+        const e = entry as Record<string, unknown>;
+        const label = String(e.label ?? '').trim();
+        if (!label) return null;
+        return { label, type: normalizeGridColumnType(e.type) } as GridTableColumnMeta;
+      })
+      .filter(Boolean) as GridTableColumnMeta[];
+    if (parsed.length > 0) return parsed;
+  }
+
+  const columns = Array.isArray(pm.columns) ? (pm.columns as unknown[]) : ['Column 1', 'Column 2'];
+  const types = Array.isArray(pm.columnTypes) ? (pm.columnTypes as unknown[]) : [];
+  return columns
+    .map((c, idx) => {
+      const label = String(c ?? '').trim();
+      if (!label) return null;
+      return { label, type: normalizeGridColumnType(types[idx]) } as GridTableColumnMeta;
+    })
+    .filter(Boolean) as GridTableColumnMeta[];
 }
 
 function buildHtml(data: {
@@ -265,8 +395,9 @@ function buildHtml(data: {
   <meta charset="UTF-8">
   <style>
     @page { size: A4; margin: 190px 15mm 70px 15mm; }
-    @page :first { margin: 0; }
-    body { font-family: 'Calibri', 'Calibri Light', Arial, Helvetica, sans-serif; font-size: 11pt; margin: 0; padding: 0; color: #000000; box-sizing: border-box; min-height: 100%; }
+    @page cover { size: A4; margin: 0; }
+    html, body { margin: 0; padding: 0; }
+    body { font-family: 'Calibri', 'Calibri Light', Arial, Helvetica, sans-serif; font-size: 11pt; color: #000000; box-sizing: border-box; min-height: 100%; }
     .header { position: fixed; top: 0; left: 15mm; right: 15mm; width: calc(100% - 30mm); z-index: 1000; background: #fff; padding: 16px 0 16px 0; display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; border-bottom: 1px solid #9ca3af; box-sizing: border-box; overflow: visible; }
     .header-inner { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; width: 100%; gap: 16px; overflow: visible; }
     .header img { max-height: 110px; max-width: 220px; flex-shrink: 0; }
@@ -432,6 +563,7 @@ function buildHtml(data: {
     .radio-circle.filled { background: #000000; border-color: #000000; }
     .signature-img { max-width: 150px; max-height: 60px; display: block; }
     .grid-table-no-border th, .grid-table-no-border td { border: 1px solid #000 !important; background: transparent !important; }
+    .grid-table-no-border th { color: #000000 !important; font-weight: 700; }
     .grid-table-no-border tbody tr { background: transparent !important; }
     .grid-table-no-border .label-cell, .grid-table-no-border .value-cell { background: transparent !important; }
     .grid-table-no-border .sub-section-header { background: transparent !important; color: #000000 !important; border: 1px solid #000 !important; }
@@ -473,12 +605,14 @@ function buildHtml(data: {
     p, .intro-page p, .declarations-section { orphans: 2; widows: 2; }
     /* COVER PAGE ONLY */
     .cover-page{
+      page: cover;
       position: relative;
       z-index: 1001;
-      width: 210mm;
+      width: 100%;
+      min-height: 297mm;
       height: 297mm;
       page-break-after: always;
-      overflow: visible;
+      overflow: hidden;
       background: #b0b8c0;
       -webkit-print-color-adjust: exact;
       print-color-adjust: exact;
@@ -857,22 +991,28 @@ function buildHtml(data: {
         }
       } else if (section.pdf_render_mode === 'grid_table') {
         const pm = (questions[0]?.question?.pdf_meta as Record<string, unknown>) || {};
-        const cols = (Array.isArray(pm.columns) ? pm.columns : ['Column 1', 'Column 2']) as string[];
-        const columnTypes = (pm.columnTypes as string[]) || cols.map(() => 'answer');
+        const columnsMeta = getGridColumnsMeta(pm);
+        const cols = columnsMeta.map((c) => c.label);
+        const headerCaseRaw = String(pm.headerCase ?? 'original').toLowerCase();
+        const headerCase: GridHeaderCase = headerCaseRaw === 'uppercase' || headerCaseRaw === 'title' ? headerCaseRaw : 'original';
         const layout = (pm.layout as string) || 'default';
         const isSplit = layout === 'split' || layout === 'polygon';
         const isNoImage = layout === 'no_image';
+        const noImageIncludeBaseColumns = !isNoImage;
         const firstCol = (pm.firstColumnLabel as string) || (isNoImage ? 'Item' : layout === 'polygon' ? 'Polygon Name' : 'Name');
         const secondCol = (pm.secondColumnLabel as string) || (isNoImage ? 'Description' : layout === 'polygon' ? 'Polygon Shape' : 'Image');
+        const firstQuestionColIndex = columnsMeta.findIndex((c) => c.type === 'question');
         html += '<table class="grid-table-no-border"><thead><tr>';
         if (isSplit) {
-          html += `<th>${secondCol}</th>`;
+          html += `<th>${formatGridHeader(secondCol, headerCase)}</th>`;
         } else if (isNoImage) {
-          html += `<th>${firstCol}</th><th>${secondCol}</th>`;
+          if (noImageIncludeBaseColumns) {
+            html += `<th>${formatGridHeader(firstCol, headerCase)}</th><th>${formatGridHeader(secondCol, headerCase)}</th>`;
+          }
         } else {
           html += '<th>Shape</th>';
         }
-        for (const c of cols) html += `<th>${c}</th>`;
+        for (const c of cols) html += `<th>${formatGridHeader(c, headerCase)}</th>`;
         html += '</tr></thead><tbody>';
         for (const { question, rows } of questions) {
           for (const row of rows) {
@@ -882,14 +1022,19 @@ function buildHtml(data: {
             if (isSplit) {
               html += `<td>${row.row_image_url ? `<img src="${row.row_image_url}" class="signature-img" alt="" /><br/>${row.row_label}` : row.row_label}</td>`;
             } else if (isNoImage) {
-              html += `<td>${row.row_label}</td>`;
-              html += `<td>${row.row_help || '—'}</td>`;
+              if (noImageIncludeBaseColumns) {
+                html += `<td>${row.row_label}</td>`;
+                html += `<td>${row.row_help || '—'}</td>`;
+              }
             } else {
               html += `<td>${row.row_image_url ? `<img src="${row.row_image_url}" class="signature-img" alt="" /><br/>${row.row_label}` : row.row_label}</td>`;
             }
             for (let i = 0; i < cols.length; i++) {
-              const colType = columnTypes[i] === 'question' ? 'question' : 'answer';
-              const cellVal = colType === 'question' ? (row.row_help || '—') : (val && typeof val === 'object' ? (val[`r${row.id}_c${i}`] || '') : '');
+              const colType = columnsMeta[i]?.type === 'question' ? 'question' : 'answer';
+              const questionCell = isNoImage && !noImageIncludeBaseColumns && i === firstQuestionColIndex
+                ? (row.row_label || row.row_help || '—')
+                : (row.row_help || '—');
+              const cellVal = colType === 'question' ? questionCell : (val && typeof val === 'object' ? (val[`r${row.id}_c${i}`] || '') : '');
               html += `<td>${cellVal}</td>`;
             }
             html += '</tr>';
@@ -995,21 +1140,28 @@ function buildHtml(data: {
           html += `<div class="task-q-question-label">${question.label}</div>`;
           if (isGridTable) {
             const pm = (question.pdf_meta as Record<string, unknown>) || {};
-            const cols = (Array.isArray(pm.columns) ? pm.columns : ['Column 1', 'Column 2']) as string[];
+            const columnsMeta = getGridColumnsMeta(pm);
+            const cols = columnsMeta.map((c) => c.label);
+            const headerCaseRaw = String(pm.headerCase ?? 'original').toLowerCase();
+            const headerCase: GridHeaderCase = headerCaseRaw === 'uppercase' || headerCaseRaw === 'title' ? headerCaseRaw : 'original';
             const layout = (pm.layout as string) || 'default';
             const isSplit = layout === 'split' || layout === 'polygon';
             const isNoImage = layout === 'no_image';
+            const noImageIncludeBaseColumns = !isNoImage;
             const firstCol = (pm.firstColumnLabel as string) || (isNoImage ? 'Item' : 'Name');
             const secondCol = (pm.secondColumnLabel as string) || (isNoImage ? 'Description' : 'Image');
+            const firstQuestionColIndex = columnsMeta.findIndex((c) => c.type === 'question');
             html += '<table class="section-table grid-table-no-border task-q-inner-table"><thead><tr>';
             if (isSplit) {
-              html += `<th>${secondCol}</th>`;
+              html += `<th>${formatGridHeader(secondCol, headerCase)}</th>`;
             } else if (isNoImage) {
-              html += `<th>${firstCol}</th><th>${secondCol}</th>`;
+              if (noImageIncludeBaseColumns) {
+                html += `<th>${formatGridHeader(firstCol, headerCase)}</th><th>${formatGridHeader(secondCol, headerCase)}</th>`;
+              }
             } else {
               html += '<th>Shape</th>';
             }
-            for (const c of cols) html += `<th>${c}</th>`;
+            for (const c of cols) html += `<th>${formatGridHeader(c, headerCase)}</th>`;
             html += '</tr></thead><tbody>';
             for (const row of rows) {
               const key = `q-${question.id}-${row.id}`;
@@ -1018,15 +1170,19 @@ function buildHtml(data: {
               if (isSplit) {
                 html += `<td class="value-cell">${row.row_image_url ? `<img src="${row.row_image_url}" class="signature-img" alt="" /><br/>${row.row_label}` : row.row_label}</td>`;
               } else if (isNoImage) {
-                html += `<td class="label-cell">${row.row_label}</td>`;
-                html += `<td class="value-cell">${row.row_help || '—'}</td>`;
+                if (noImageIncludeBaseColumns) {
+                  html += `<td class="label-cell">${row.row_label}</td>`;
+                  html += `<td class="value-cell">${row.row_help || '—'}</td>`;
+                }
               } else {
                 html += `<td class="label-cell">${row.row_image_url ? `<img src="${row.row_image_url}" class="signature-img" alt="" /><br/>${row.row_label}` : row.row_label}</td>`;
               }
-              const columnTypes = (pm.columnTypes as string[]) || cols.map(() => 'answer');
               for (let i = 0; i < cols.length; i++) {
-                const colType = columnTypes[i] === 'question' ? 'question' : 'answer';
-                const cellVal = colType === 'question' ? (row.row_help || '—') : (val && typeof val === 'object' ? (val[`r${row.id}_c${i}`] || '') : '');
+                const colType = columnsMeta[i]?.type === 'question' ? 'question' : 'answer';
+                const questionCell = isNoImage && !noImageIncludeBaseColumns && i === firstQuestionColIndex
+                  ? (row.row_label || row.row_help || '—')
+                  : (row.row_help || '—');
+                const cellVal = colType === 'question' ? questionCell : (val && typeof val === 'object' ? (val[`r${row.id}_c${i}`] || '') : '');
                 html += `<td class="value-cell">${cellVal}</td>`;
               }
               html += '</tr>';
@@ -1442,6 +1598,35 @@ function buildHtml(data: {
   return { html, unitCode, version, headerHtml };
 }
 
+function splitCoverAndRestHtml(fullHtml: string): { coverHtml: string; restHtml: string } {
+  const bodyOpenTag = '<body>';
+  const bodyCloseTag = '</body>';
+  const introMarker = '<div class="step-page intro-page">';
+  const bodyStart = fullHtml.indexOf(bodyOpenTag);
+  const bodyEnd = fullHtml.lastIndexOf(bodyCloseTag);
+
+  if (bodyStart < 0 || bodyEnd < 0 || bodyEnd <= bodyStart) {
+    return { coverHtml: fullHtml, restHtml: fullHtml };
+  }
+
+  const beforeBody = fullHtml.slice(0, bodyStart + bodyOpenTag.length);
+  const bodyContent = fullHtml.slice(bodyStart + bodyOpenTag.length, bodyEnd);
+  const introIndex = bodyContent.indexOf(introMarker);
+
+  if (introIndex <= 0) {
+    return { coverHtml: fullHtml, restHtml: fullHtml };
+  }
+
+  const coverContent = bodyContent.slice(0, introIndex);
+  const restContent = bodyContent.slice(introIndex);
+  const htmlClose = '\n</body>\n</html>';
+
+  return {
+    coverHtml: `${beforeBody}${coverContent}${htmlClose}`,
+    restHtml: `${beforeBody}${restContent}${htmlClose}`,
+  };
+}
+
 app.get('/pdf/:instanceId', async (req, res) => {
   const instanceId = Number(req.params.instanceId);
   const download = req.query.download === '1';
@@ -1603,7 +1788,8 @@ app.get('/pdf/:instanceId', async (req, res) => {
 
     const browser = await chromium.launch();
     const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: 'networkidle' });
+    const { coverHtml, restHtml } = splitCoverAndRestHtml(html);
+    await page.setContent(coverHtml, { waitUntil: 'networkidle' });
 
     // Cover page (page 1): no footer - hide version, unit code, page number
     const coverPdf = await page.pdf({
@@ -1611,10 +1797,10 @@ app.get('/pdf/:instanceId', async (req, res) => {
       printBackground: true,
       margin: { top: 0, right: 0, bottom: 0, left: 0 },
       displayHeaderFooter: false,
-      pageRanges: '1',
     });
 
     let pdf: Buffer;
+    await page.setContent(restHtml, { waitUntil: 'networkidle' });
     const restPdf = await page.pdf({
       format: 'A4',
       printBackground: true,
@@ -1622,7 +1808,6 @@ app.get('/pdf/:instanceId', async (req, res) => {
       displayHeaderFooter: true,
       headerTemplate: headerHtml,
       footerTemplate: footerHtml,
-      pageRanges: '2-',
     });
 
     await browser.close();
@@ -1679,6 +1864,116 @@ app.get('/pdf/:instanceId', async (req, res) => {
   } catch (err) {
     console.error('PDF generation error:', err);
     res.status(500).send('Failed to generate PDF');
+  }
+});
+
+app.get('/pdf/preview/form/:formId', async (req, res) => {
+  const formId = Number(req.params.formId);
+  const download = req.query.download === '1';
+
+  if (!formId) {
+    res.status(400).send('Invalid form ID');
+    return;
+  }
+
+  try {
+    const template = await getTemplateForForm(formId);
+    if (!template) {
+      res.status(404).send('Form not found');
+      return;
+    }
+
+    const answerMap = getAnswerMap([]);
+
+    const taskRowIds = new Set<number>();
+    for (const g of template.steps) {
+      for (const { section } of g.sections) {
+        const sid = (section as { assessment_task_row_id?: number | null }).assessment_task_row_id;
+        if (sid) taskRowIds.add(sid);
+      }
+    }
+    const taskRowsMap = new Map<number, FormQuestionRow>();
+    if (taskRowIds.size > 0) {
+      const { data: taskRows } = await supabase
+        .from('skyline_form_question_rows')
+        .select('*')
+        .in('id', Array.from(taskRowIds));
+      for (const r of (taskRows as FormQuestionRow[]) || []) taskRowsMap.set(r.id, r);
+    }
+
+    const form = template.form as { name: string; version: string | null; unit_code: string | null; header_asset_url: string | null; cover_asset_url?: string | null };
+    const { html, unitCode, version, headerHtml } = buildHtml({
+      form,
+      steps: template.steps,
+      answers: answerMap,
+      taskRowsMap,
+      trainerAssessments: new Map<number, string>(),
+      resultsOffice: new Map<number, { entered_date: string | null; entered_by: string | null }>(),
+      resultsData: new Map<number, { first_attempt_satisfactory?: string | null; first_attempt_date?: string | null; first_attempt_feedback?: string | null; second_attempt_satisfactory?: string | null; second_attempt_date?: string | null; second_attempt_feedback?: string | null; trainer_name?: string | null; trainer_signature?: string | null; trainer_date?: string | null }>(),
+      assessmentSummaryData: {},
+    });
+    const footerHtml = `
+      <div style="font-size: 9pt; color: #374151; width: 100%; height: 50px; display: flex; justify-content: space-between; align-items: center; padding: 0 15mm; box-sizing: border-box; page-break-inside: avoid;">
+        <span>Version Number: ${version}</span>
+        <span>Unit Code: ${unitCode || ''}</span>
+        <span>Page <span class="pageNumber"></span> of <span class="totalPages"></span></span>
+      </div>
+    `;
+
+    const browser = await chromium.launch();
+    const page = await browser.newPage();
+    const { coverHtml, restHtml } = splitCoverAndRestHtml(html);
+    await page.setContent(coverHtml, { waitUntil: 'networkidle' });
+
+    const coverPdf = await page.pdf({
+      format: 'A4',
+      printBackground: true,
+      margin: { top: 0, right: 0, bottom: 0, left: 0 },
+      displayHeaderFooter: false,
+    });
+
+    let pdf: Buffer;
+    await page.setContent(restHtml, { waitUntil: 'networkidle' });
+    const restPdf = await page.pdf({
+      format: 'A4',
+      printBackground: true,
+      margin: { top: '190px', right: '15mm', bottom: '70px', left: '15mm' },
+      displayHeaderFooter: true,
+      headerTemplate: headerHtml,
+      footerTemplate: footerHtml,
+    });
+
+    await browser.close();
+
+    const mergedPdf = await PDFDocument.create();
+    const coverDoc = await PDFDocument.load(coverPdf);
+    const [coverPage] = await mergedPdf.copyPages(coverDoc, [0]);
+    mergedPdf.addPage(coverPage);
+
+    const restDoc = await PDFDocument.load(restPdf);
+    const restPageCount = restDoc.getPageCount();
+    if (restPageCount > 0) {
+      for (let i = 0; i < restPageCount; i++) {
+        const [p] = await mergedPdf.copyPages(restDoc, [i]);
+        mergedPdf.addPage(p);
+      }
+    }
+
+    pdf = Buffer.from(await mergedPdf.save());
+
+    if (download) {
+      const safeName = String(form.name || 'form-preview').replace(/[/\\:*?"<>|]/g, '_').trim();
+      res.setHeader('Content-Disposition', `attachment; filename="${safeName || 'form-preview'}.pdf"`);
+    }
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.send(pdf);
+  } catch (err) {
+    console.error('PDF preview generation error:', err);
+    res.status(500).send('Failed to generate preview PDF');
   }
 });
 

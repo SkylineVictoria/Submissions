@@ -124,3 +124,12 @@ input[type="date"]:focus,
   --rdp-today-color: #F47A1F;
   --rdp-day_button-border-radius: 8px;
 }
+
+/* DatePicker custom header is used; hide built-in duplicate month-year labels/nav */
+.rdp-datepicker-modern .rdp-caption,
+.rdp-datepicker-modern .rdp-caption_label,
+.rdp-datepicker-modern .rdp-month_caption,
+.rdp-datepicker-modern .rdp-nav,
+.rdp-datepicker-modern .rdp-chevron {
+  display: none !important;
+}

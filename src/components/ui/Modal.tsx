@@ -33,30 +33,30 @@ export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, 
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-white/10 backdrop-blur-md"
       onClick={onClose}
     >
       <div
         className={cn(
-          'bg-white rounded-lg shadow-xl w-full',
+          'bg-white rounded-xl shadow-2xl w-full max-h-[90vh] flex flex-col',
           sizeClasses[size]
         )}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-[var(--border)]">
-          <h2 className="text-xl font-bold text-[var(--text)]">{title}</h2>
+        <div className="flex items-center justify-between shrink-0 px-5 py-4 border-b border-[var(--border)]">
+          <h2 className="text-lg font-bold text-[var(--text)]">{title}</h2>
           <button
             onClick={onClose}
-            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+            className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors text-gray-500 hover:text-gray-700"
             aria-label="Close"
           >
-            <X className="w-5 h-5 text-gray-500" />
+            <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Content */}
-        <div className="p-6">{children}</div>
+        {/* Content - scrollable */}
+        <div className="p-5 overflow-y-auto flex-1 min-h-0">{children}</div>
       </div>
     </div>
   );

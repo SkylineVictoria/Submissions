@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { fetchForm, createFormInstance } from '../lib/formEngine';
+import { fetchForm, createFormInstance, issueInstanceAccessLink } from '../lib/formEngine';
 import type { Form } from '../types/database';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -30,7 +30,10 @@ export const FormStartPage: React.FC = () => {
     const instance = await createFormInstance(Number(formId), role);
     setStarting(false);
     if (instance) {
-      navigate(`/instances/${instance.id}`);
+      const secureUrl = await issueInstanceAccessLink(instance.id, role as 'student' | 'trainer' | 'office');
+      if (!secureUrl) return;
+      const path = secureUrl.replace(window.location.origin, '');
+      navigate(path);
     }
   };
 
