@@ -21,7 +21,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { supabase } from '../lib/supabase';
 import { fetchForm, fetchFormSteps, updateForm, ensureTaskSectionsForForm, formNameExists } from '../lib/formEngine';
 import { uploadFormCoverImage, uploadRowImage } from '../lib/storage';
-import type { Form, FormStep, FormSection, FormQuestion } from '../types/database';
+import type { Form, FormStep, FormSection, FormQuestion, Json } from '../types/database';
 import { Card } from '../components/ui/Card';
 import { Loader } from '../components/ui/Loader';
 import { Button } from '../components/ui/Button';
@@ -101,7 +101,7 @@ function getGridColumnsMeta(pm: Record<string, unknown>): GridTableColumnMeta[] 
     .filter(Boolean) as GridTableColumnMeta[];
 }
 
-function withGridColumnsMeta(pm: Record<string, unknown>, columnsMeta: GridTableColumnMeta[]): Record<string, unknown> {
+function withGridColumnsMeta(pm: Record<string, unknown>, columnsMeta: GridTableColumnMeta[]): Json {
   const normalized = columnsMeta
     .map((c) => ({ label: String(c.label || '').trim(), type: normalizeGridColumnType(c.type) }))
     .filter((c) => c.label.length > 0);
@@ -111,7 +111,7 @@ function withGridColumnsMeta(pm: Record<string, unknown>, columnsMeta: GridTable
     // keep legacy fields synced for backward compatibility
     columns: normalized.map((c) => c.label),
     columnTypes: normalized.map((c) => c.type),
-  };
+  } as Json;
 }
 
 // Prebuilt sections: can be reordered but not deleted (steps 5-20)
@@ -695,13 +695,14 @@ export const AdminFormBuilderPage: React.FC = () => {
       prev.map((s) => (s.id === stepId ? { ...s, ...updates } : s))
     );
     if (updates.title != null) {
+      const nextTitle = updates.title;
       const step = steps.find((s) => s.id === stepId);
       const taskLinkedModes = ['task_instructions', 'task_questions', 'task_results'];
       const firstTaskSec = step?.sections.find((sec) => taskLinkedModes.includes(sec.pdf_render_mode));
       const rowId = firstTaskSec ? (firstTaskSec as FormSection & { assessment_task_row_id?: number | null }).assessment_task_row_id : null;
       if (rowId != null) {
-        await supabase.from('skyline_form_question_rows').update({ row_label: updates.title }).eq('id', rowId);
-        setAssessmentTaskRows((prev) => prev.map((r) => (r.id === rowId ? { ...r, row_label: updates.title } : r)));
+        await supabase.from('skyline_form_question_rows').update({ row_label: nextTitle }).eq('id', rowId);
+        setAssessmentTaskRows((prev) => prev.map((r) => (r.id === rowId ? { ...r, row_label: nextTitle } : r)));
       }
     }
   };

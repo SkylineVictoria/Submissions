@@ -61,7 +61,6 @@ export const DatePicker: React.FC<DatePickerProps> = ({
     isValidDate ? (parsedDate as Date) : new Date()
   );
   const today = new Date();
-  const maxAllowedDate = disableFuture ? today : new Date(toYear, 11, 31);
 
   useEffect(() => {
     if (value && isValid(parse(value, ISO_FORMAT, new Date()))) {

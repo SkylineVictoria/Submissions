@@ -237,8 +237,6 @@ export const AdminStudentsPage: React.FC = () => {
     }
   }, [editingStudent]);
 
-  const editDraft = editForm;
-
   const handleSaveEdit = async () => {
     if (!editingId || !editForm) return;
     const formError = validateStudentForm(editForm);
