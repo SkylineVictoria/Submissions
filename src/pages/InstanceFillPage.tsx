@@ -186,13 +186,13 @@ export const InstanceFillPage: React.FC = () => {
       const currentStudentName = (rd?.student_name ?? '').trim();
       const currentTrainerName = (rd?.trainer_name ?? '').trim();
       const sigIsTypedText = (s: string | null | undefined) => s && typeof s === 'string' && !s.startsWith('data:') && s.length > 1;
-      if (currentStudentName.length <= 1) {
-        const better = studentName || (sigIsTypedText(rd?.student_signature) ? rd!.student_signature! : '');
-        if (better) updates.push({ sectionId: sec.id, field: 'student_name', value: better });
+      const betterStudent = studentName || (sigIsTypedText(rd?.student_signature) ? rd!.student_signature! : '');
+      const betterTrainer = trainerName || (sigIsTypedText(rd?.trainer_signature) ? rd!.trainer_signature! : '');
+      if (betterStudent && (currentStudentName === '' || betterStudent.length > currentStudentName.length)) {
+        updates.push({ sectionId: sec.id, field: 'student_name', value: betterStudent });
       }
-      if (currentTrainerName.length <= 1) {
-        const better = trainerName || (sigIsTypedText(rd?.trainer_signature) ? rd!.trainer_signature! : '');
-        if (better) updates.push({ sectionId: sec.id, field: 'trainer_name', value: better });
+      if (betterTrainer && (currentTrainerName === '' || betterTrainer.length > currentTrainerName.length)) {
+        updates.push({ sectionId: sec.id, field: 'trainer_name', value: betterTrainer });
       }
     }
     if (updates.length === 0) return;
@@ -220,11 +220,11 @@ export const InstanceFillPage: React.FC = () => {
     const updates: { questionId: number; value: string }[] = [];
     if (evalStudentNameQ && studentName) {
       const current = String(answers[getAnswerKey(evalStudentNameQ.id, null)] ?? '').trim();
-      if (!current || current.length <= 1) updates.push({ questionId: evalStudentNameQ.id, value: studentName });
+      if (current !== studentName) updates.push({ questionId: evalStudentNameQ.id, value: studentName });
     }
     if (evalTrainerNameQ && trainerName) {
       const current = String(answers[getAnswerKey(evalTrainerNameQ.id, null)] ?? '').trim();
-      if (!current || current.length <= 1) updates.push({ questionId: evalTrainerNameQ.id, value: trainerName });
+      if (current !== trainerName) updates.push({ questionId: evalTrainerNameQ.id, value: trainerName });
     }
     if (updates.length === 0) return;
     setAnswers((prev) => {
@@ -237,6 +237,24 @@ export const InstanceFillPage: React.FC = () => {
     for (const u of updates) {
       saveAnswer(id, u.questionId, null, { text: u.value });
     }
+    setPdfRefresh((r) => r + 1);
+  }, [template, answers, id]);
+
+  useEffect(() => {
+    if (!template || !id) return;
+    const formExt = template.form as { unit_code?: string | null; unit_name?: string | null } | undefined;
+    const unitName = formExt ? [formExt.unit_code, formExt.unit_name].filter(Boolean).join(' ').trim() : '';
+    if (!unitName) return;
+    const evalUnitNameQ = template.steps?.flatMap((st) => st.sections).flatMap((s) => s.questions).find((q) => q.code === 'evaluation.unitName');
+    if (!evalUnitNameQ) return;
+    const current = String(answers[getAnswerKey(evalUnitNameQ.id, null)] ?? '').trim();
+    if (current) return;
+    setAnswers((prev) => {
+      const next = { ...prev };
+      next[getAnswerKey(evalUnitNameQ.id, null)] = unitName;
+      return next;
+    });
+    saveAnswer(id, evalUnitNameQ.id, null, { text: unitName });
     setPdfRefresh((r) => r + 1);
   }, [template, answers, id]);
 
@@ -831,6 +849,65 @@ export const InstanceFillPage: React.FC = () => {
                             </div>
                           );
                         })()
+                      ) : section.questions.some((q) => q.code === 'written.evidence.checklist') ? (
+                        (() => {
+                          const checklistQ = section.questions.find((q) => q.code === 'written.evidence.checklist' && q.type === 'single_choice' && q.rows.length > 0);
+                          if (!checklistQ) return null;
+                          const re = (checklistQ.role_editability as Record<string, boolean>) || {};
+                          const editable = isRoleEditable(re, role) && canRoleEditCurrentWorkflow;
+                          return (
+                            <div className="overflow-x-auto">
+                              <table className="w-full border-collapse border border-black text-sm">
+                                <thead>
+                                  <tr>
+                                    <th className="bg-[#5E5E5E] text-white font-bold p-2 text-center border border-black w-[48px]" rowSpan={2}></th>
+                                    <th className="bg-[#5E5E5E] text-white font-bold p-2 text-left border border-black" rowSpan={2}>Written Evidence</th>
+                                    <th className="bg-[#5E5E5E] text-white font-bold p-2 text-center border border-black" colSpan={2}>Submitted</th>
+                                  </tr>
+                                  <tr>
+                                    <th className="bg-[#5E5E5E] text-white font-bold p-2 text-center border border-black w-[70px]">Yes</th>
+                                    <th className="bg-[#5E5E5E] text-white font-bold p-2 text-center border border-black w-[70px]">No</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {checklistQ.rows.map((row, idx) => {
+                                    const key = getAnswerKey(checklistQ.id, row.id);
+                                    const raw = answers[key];
+                                    const val = typeof raw === 'string' ? raw : '';
+                                    const yes = val === 'yes';
+                                    const no = val === 'no';
+                                    return (
+                                      <tr key={row.id}>
+                                        <td className="p-2 text-center border border-black">{idx + 1}</td>
+                                        <td className="p-2 border border-black">{row.row_label}</td>
+                                        <td className="p-2 text-center border border-black">
+                                          <input
+                                            type="radio"
+                                            name={`written-check-${row.id}`}
+                                            checked={yes}
+                                            onChange={() => handleAnswerChange(checklistQ.id, row.id, yes ? '' : 'yes')}
+                                            disabled={!editable}
+                                            className="w-4 h-4 accent-black"
+                                          />
+                                        </td>
+                                        <td className="p-2 text-center border border-black">
+                                          <input
+                                            type="radio"
+                                            name={`written-check-${row.id}`}
+                                            checked={no}
+                                            onChange={() => handleAnswerChange(checklistQ.id, row.id, no ? '' : 'no')}
+                                            disabled={!editable}
+                                            className="w-4 h-4 accent-black"
+                                          />
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          );
+                        })()
                       ) : section.pdf_render_mode === 'assessment_submission' ? (
                         <div className="border border-black p-4 bg-white">
                           <div className="grid grid-cols-2 gap-x-6 gap-y-3">
@@ -893,6 +970,45 @@ export const InstanceFillPage: React.FC = () => {
                           const taskRow = (section as { taskRow?: { row_label: string; row_help: string | null; row_meta?: { instructions?: Record<string, string | string[]> } } }).taskRow;
                           const instr = taskRow?.row_meta?.instructions;
                           if (!instr) return <div className="text-gray-500 italic">No instructions configured for this task.</div>;
+                          const customBlocks = Array.isArray((instr as { blocks?: unknown[] }).blocks)
+                            ? ((instr as { blocks?: Array<{ id?: string; type?: string; heading?: string; content?: string; rows?: Array<{ heading?: string; content?: string }> }> }).blocks || [])
+                            : [];
+                          if (customBlocks.length > 0) {
+                            return (
+                              <div className="border border-gray-200 rounded-lg overflow-hidden bg-white">
+                                <div className="bg-[#5E5E5E] text-white font-bold px-4 py-3">
+                                  Student Instructions: {taskRow?.row_label || section.title}
+                                </div>
+                                <div className="p-4 space-y-4">
+                                  {customBlocks.map((b, idx) => (
+                                    <div key={String(b.id || idx)}>
+                                      {b.type === 'table' && !!String(b.heading || '').trim() && (
+                                        <div className="bg-gray-600 text-white font-semibold text-sm px-3 py-2 rounded-t">{String(b.heading)}</div>
+                                      )}
+                                      {b.type === 'table' ? (
+                                        <div className={`border border-gray-200 ${String(b.heading || '').trim() ? 'border-t-0 rounded-b' : 'rounded'} overflow-x-auto`}>
+                                          <table className="w-full border-collapse text-sm table-fixed">
+                                            <tbody>
+                                              {(Array.isArray(b.rows) ? b.rows : []).map((r, ri) => (
+                                                <tr key={ri} className={ri % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                                                  <td className="border border-gray-300 p-2 align-top font-semibold w-[24%] break-words whitespace-normal">{String(r.heading || '')}</td>
+                                                  <td className="border border-gray-300 border-r p-2 align-top w-[76%]">
+                                                    <div className="prose prose-sm max-w-none break-words whitespace-normal overflow-visible" dangerouslySetInnerHTML={{ __html: String(r.content || '') }} />
+                                                  </td>
+                                                </tr>
+                                              ))}
+                                            </tbody>
+                                          </table>
+                                        </div>
+                                      ) : (
+                                        <div className="prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: String(b.content || '') }} />
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            );
+                          }
                           const blocks: { title: string; content: string }[] = [
                             { title: 'Assessment type', content: String(instr.assessment_type || '') },
                             { title: 'Instructions provided to the student:', content: String(instr.task_description || '') },
@@ -1551,7 +1667,15 @@ export const InstanceFillPage: React.FC = () => {
                         .map((q) => {
                           const re = (q.role_editability as Record<string, boolean>) || {};
                           const isQualUnitField = q.code === 'qualification.code' || q.code === 'qualification.name' || q.code === 'unit.code' || q.code === 'unit.name';
-                          const editable = isQualUnitField ? false : (isRoleEditable(re, role) && canRoleEditCurrentWorkflow);
+                          const isEvalUnitName = q.code === 'evaluation.unitName';
+                          const isEvalTrainerName = q.code === 'evaluation.trainerName';
+                          const isEvalEmployer = q.code === 'evaluation.employer';
+                          const trainerCanEditHere = role === 'trainer' || role === 'office';
+                          const editable = isQualUnitField || isEvalUnitName
+                            ? false
+                            : isEvalTrainerName || isEvalEmployer
+                              ? (trainerCanEditHere && canRoleEditCurrentWorkflow)
+                              : (isRoleEditable(re, role) && canRoleEditCurrentWorkflow);
                           if (q.type === 'likert_5' && q.rows.length > 0) {
                             const val =
                               q.rows.length === 1
@@ -1677,12 +1801,13 @@ export const InstanceFillPage: React.FC = () => {
                             );
                           }
                           const formExt = template?.form as { qualification_code?: string | null; qualification_name?: string | null; unit_code?: string | null; unit_name?: string | null } | undefined;
-                          if (isQualUnitField && (val == null || val === '') && formExt) {
+                          if ((isQualUnitField || isEvalUnitName) && (val == null || val === '') && formExt) {
                             const fallback =
                               q.code === 'qualification.code' ? formExt.qualification_code
                               : q.code === 'qualification.name' ? formExt.qualification_name
                               : q.code === 'unit.code' ? formExt.unit_code
                               : q.code === 'unit.name' ? formExt.unit_name
+                              : q.code === 'evaluation.unitName' ? [formExt.unit_code, formExt.unit_name].filter(Boolean).join(' ').trim() || null
                               : null;
                             val = fallback ?? '';
                           }

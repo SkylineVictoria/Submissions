@@ -90,22 +90,35 @@ export const DatePicker: React.FC<DatePickerProps> = ({
   }, []);
 
   // Position popover relative to input (for portal - avoids overflow clipping)
+  const POPOVER_WIDTH = 320;
   useLayoutEffect(() => {
     if (open && inputRef.current) {
       const rect = inputRef.current.getBoundingClientRect();
+      let left = rect.left;
+      if (left + POPOVER_WIDTH > window.innerWidth - 8) {
+        left = Math.max(8, window.innerWidth - POPOVER_WIDTH - 8);
+      } else if (left < 8) {
+        left = 8;
+      }
       setPopoverStyle(
         placement === 'above'
           ? {
               position: 'fixed',
               bottom: window.innerHeight - rect.top + 8,
-              left: rect.left,
-              zIndex: 9999,
+              left,
+              width: POPOVER_WIDTH,
+              minWidth: POPOVER_WIDTH,
+              zIndex: 99999,
+              overflow: 'visible',
             }
           : {
               position: 'fixed',
               top: rect.bottom + 8,
-              left: rect.left,
-              zIndex: 9999,
+              left,
+              width: POPOVER_WIDTH,
+              minWidth: POPOVER_WIDTH,
+              zIndex: 99999,
+              overflow: 'visible',
             }
       );
     }
@@ -125,7 +138,7 @@ export const DatePicker: React.FC<DatePickerProps> = ({
   };
 
   return (
-    <div ref={containerRef} className={cn('relative w-full', className)}>
+    <div ref={containerRef} className={cn('relative', compact ? 'min-w-0' : 'w-full', className)}>
       {label && (
         <label
           htmlFor={id}
@@ -191,8 +204,8 @@ export const DatePicker: React.FC<DatePickerProps> = ({
         createPortal(
         <div
           ref={popoverRef}
-          className="p-3 bg-white rounded-xl shadow-lg border border-gray-200 rdp-datepicker-modern"
-          style={{ ...popoverStyle, minWidth: '280px' }}
+          className="p-3 bg-white rounded-xl shadow-lg border border-gray-200 rdp-datepicker-modern overflow-visible"
+          style={popoverStyle}
         >
           {/* Header: \"February 2026\" – cycles day → month → year views on click */}
           <div className="flex items-center justify-center mb-2">

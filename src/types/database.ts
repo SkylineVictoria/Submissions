@@ -15,6 +15,8 @@ export interface Database {
           qualification_name: string | null;
           header_asset_url: string | null;
           cover_asset_url: string | null;
+          start_date: string | null;
+          end_date: string | null;
           created_at: string;
         };
         Insert: {
@@ -28,6 +30,8 @@ export interface Database {
           qualification_name?: string | null;
           header_asset_url?: string | null;
           cover_asset_url?: string | null;
+          start_date?: string | null;
+          end_date?: string | null;
           created_at?: string;
         };
         Update: Partial<Database['public']['Tables']['forms']['Insert']>;

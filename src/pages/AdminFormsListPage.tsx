@@ -1,12 +1,13 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Plus, FileText, Edit, Eye, Trash2, MoreVertical, Copy } from 'lucide-react';
-import { listFormsPaged, createForm, duplicateForm } from '../lib/formEngine';
+import { listFormsPaged, createForm, duplicateForm, getDefaultFormDates } from '../lib/formEngine';
 import type { Form } from '../types/database';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Textarea } from '../components/ui/Textarea';
+import { DatePicker } from '../components/ui/DatePicker';
 import { Loader } from '../components/ui/Loader';
 
 interface AssessmentTask {
@@ -24,6 +25,8 @@ export const AdminFormsListPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [newName, setNewName] = useState('');
   const [newVersion, setNewVersion] = useState('1.0.0');
+  const [newStartDate, setNewStartDate] = useState(() => getDefaultFormDates().start_date);
+  const [newEndDate, setNewEndDate] = useState(() => getDefaultFormDates().end_date);
   const [qualificationCode, setQualificationCode] = useState('');
   const [qualificationName, setQualificationName] = useState('');
   const [unitCode, setUnitCode] = useState('');
@@ -64,6 +67,8 @@ export const AdminFormsListPage: React.FC = () => {
     const created = await createForm({
       name: newName.trim(),
       version: newVersion.trim() || '1.0.0',
+      start_date: newStartDate.trim() || undefined,
+      end_date: newEndDate.trim() || undefined,
       qualification_code: qualificationCode.trim(),
       qualification_name: qualificationName.trim(),
       unit_code: unitCode.trim(),
@@ -78,6 +83,8 @@ export const AdminFormsListPage: React.FC = () => {
       await loadFormsPage(1);
       setNewName('');
       setNewVersion('1.0.0');
+      setNewStartDate(getDefaultFormDates().start_date);
+      setNewEndDate(getDefaultFormDates().end_date);
       setQualificationCode('');
       setQualificationName('');
       setUnitCode('');
@@ -143,7 +150,7 @@ export const AdminFormsListPage: React.FC = () => {
           <p className="text-sm text-gray-600 mb-4">
             All fields are required. Qualification, unit, and assessment task details must be filled before creating the form.
           </p>
-          <div className="space-y-3">
+          <div className="space-y-3 min-w-0 overflow-x-auto">
             <Input
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
@@ -158,7 +165,32 @@ export const AdminFormsListPage: React.FC = () => {
                 placeholder="1.0.0"
               />
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="min-w-0">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Link validity period (sent links expire at end date)</label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="min-w-0">
+                  <span className="block text-xs text-gray-500 mb-1">Start date</span>
+                  <DatePicker
+                    value={newStartDate}
+                    onChange={setNewStartDate}
+                    compact
+                    placement="above"
+                    className="w-full min-w-0"
+                  />
+                </div>
+                <div className="min-w-0">
+                  <span className="block text-xs text-gray-500 mb-1">End date</span>
+                  <DatePicker
+                    value={newEndDate}
+                    onChange={setNewEndDate}
+                    compact
+                    placement="above"
+                    className="w-full min-w-0"
+                  />
+                </div>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 min-w-0">
               <Input
                 value={qualificationCode}
                 onChange={(e) => setQualificationCode(e.target.value)}

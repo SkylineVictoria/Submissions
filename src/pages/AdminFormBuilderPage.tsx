@@ -32,6 +32,7 @@ import { Textarea } from '../components/ui/Textarea';
 import { Checkbox } from '../components/ui/Checkbox';
 import { TaskInstructionsModal, type TaskInstructionsData } from '../components/form-fill/TaskInstructionsModal';
 import { SectionInstructionsEditor } from '../components/form-fill/SectionInstructionsEditor';
+import { DatePicker } from '../components/ui/DatePicker';
 import { cn } from '../components/utils/cn';
 
 const FLUSH_PENDING_EVENT = 'form-builder:flush-pending';
@@ -72,6 +73,11 @@ function normalizeGridColumnType(raw: unknown): GridColumnType {
   return String(raw).trim().toLowerCase() === 'question' ? 'question' : 'answer';
 }
 
+function normalizeWordLimit(raw: unknown): number | null {
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+}
+
 function getGridColumnsMeta(pm: Record<string, unknown>): GridTableColumnMeta[] {
   const rawMeta = pm.columnsMeta;
   if (Array.isArray(rawMeta)) {
@@ -102,6 +108,7 @@ function getGridColumnsMeta(pm: Record<string, unknown>): GridTableColumnMeta[] 
 }
 
 function withGridColumnsMeta(pm: Record<string, unknown>, columnsMeta: GridTableColumnMeta[]): Json {
+  const existingLimitsRaw = Array.isArray(pm.columnWordLimits) ? (pm.columnWordLimits as unknown[]) : [];
   const normalized = columnsMeta
     .map((c) => ({ label: String(c.label || '').trim(), type: normalizeGridColumnType(c.type) }))
     .filter((c) => c.label.length > 0);
@@ -111,6 +118,7 @@ function withGridColumnsMeta(pm: Record<string, unknown>, columnsMeta: GridTable
     // keep legacy fields synced for backward compatibility
     columns: normalized.map((c) => c.label),
     columnTypes: normalized.map((c) => c.type),
+    columnWordLimits: normalized.map((_, idx) => normalizeWordLimit(existingLimitsRaw[idx])),
   } as Json;
 }
 
@@ -1182,22 +1190,22 @@ export const AdminFormBuilderPage: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[var(--bg)]">
-      <header className="bg-white border-b border-[var(--border)] shadow-sm sticky top-0 z-20">
-        <div className="w-full px-4 md:px-6 py-4 flex items-center justify-between flex-wrap gap-3">
-          <div className="flex items-center gap-4">
-            <button
-              type="button"
-              onClick={async (e) => {
-                e.preventDefault();
-                await new Promise((r) => setTimeout(r, 0));
-                await flushAllPendingSaves();
-                navigate('/admin/forms');
-              }}
-              className="text-gray-600 hover:text-gray-900 bg-transparent border-none cursor-pointer font-inherit p-0"
-            >
-              ← Back
-            </button>
-            <div>
+      <header className="bg-white border-b border-[var(--border)] shadow-sm sticky top-0 z-20 overflow-x-hidden">
+        <div className="w-full px-4 md:px-6 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex flex-col gap-2 min-w-0">
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={async (e) => {
+                  e.preventDefault();
+                  await new Promise((r) => setTimeout(r, 0));
+                  await flushAllPendingSaves();
+                  navigate('/admin/forms');
+                }}
+                className="text-gray-600 hover:text-gray-900 bg-transparent border-none cursor-pointer font-inherit p-0 shrink-0"
+              >
+                ← Back
+              </button>
               <input
                 type="text"
                 value={form.name}
@@ -1224,11 +1232,12 @@ export const AdminFormBuilderPage: React.FC = () => {
                   lastSavedFormNameRef.current = newName;
                   setForm((prev) => (prev ? { ...prev, name: newName } : null));
                 }}
-                className="text-xl font-bold text-[var(--text)] bg-transparent border-b-2 border-transparent hover:border-[var(--border)] focus:outline-none focus:border-[var(--brand)] py-0.5 px-0 w-full max-w-md"
+                className="text-xl font-bold text-[var(--text)] bg-transparent border-b-2 border-transparent hover:border-[var(--border)] focus:outline-none focus:border-[var(--brand)] py-0.5 px-0 min-w-0 flex-1 max-w-sm"
                 placeholder="Form name"
               />
-              <div className="flex items-center gap-2 mt-1">
-                <span className="text-xs font-medium text-gray-500">Version:</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-medium text-gray-500 shrink-0">Version:</span>
                 <input
                   type="text"
                   value={form.version ?? '1.0.0'}
@@ -1238,14 +1247,37 @@ export const AdminFormBuilderPage: React.FC = () => {
                     await updateForm(Number(formId), { version: v });
                     setForm((prev) => (prev ? { ...prev, version: v } : null));
                   }}
-                  className="text-sm border border-[var(--border)] rounded px-2 py-0.5 w-20 focus:outline-none focus:ring-1 focus:ring-[var(--brand)] focus:border-[var(--brand)]"
+                  className="text-sm border border-[var(--border)] rounded px-2 py-0.5 w-14 focus:outline-none focus:ring-1 focus:ring-[var(--brand)] focus:border-[var(--brand)] shrink-0"
                   placeholder="1.0.0"
                 />
-              </div>
+                <span className="text-xs font-medium text-gray-500 shrink-0">Link valid:</span>
+                <DatePicker
+                  value={form.start_date ?? ''}
+                  onChange={(v) => {
+                    const val = (v && v.trim()) ? v : null;
+                    setForm((prev) => (prev ? { ...prev, start_date: val } : null));
+                    void updateForm(Number(formId), { start_date: val });
+                  }}
+                  compact
+                  placement="below"
+                  className="w-[150px] max-w-[150px] shrink-0"
+                />
+                <span className="text-gray-400 shrink-0">–</span>
+                <DatePicker
+                  value={form.end_date ?? ''}
+                  onChange={(v) => {
+                    const val = (v && v.trim()) ? v : null;
+                    setForm((prev) => (prev ? { ...prev, end_date: val } : null));
+                    void updateForm(Number(formId), { end_date: val });
+                  }}
+                  compact
+                  placement="below"
+                  className="w-[150px] max-w-[150px] shrink-0"
+                />
+                <span className="text-xs text-gray-400 shrink-0" title="Sent links expire at end date">(expires end date)</span>
             </div>
           </div>
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0 self-start sm:self-center">
               <input
                 ref={coverInputRef}
                 type="file"
@@ -1273,7 +1305,6 @@ export const AdminFormBuilderPage: React.FC = () => {
                   </>
                 )}
               </Button>
-            </div>
             <Button
             variant="outline"
             size="sm"
@@ -1295,7 +1326,7 @@ export const AdminFormBuilderPage: React.FC = () => {
               <Eye className="w-4 h-4 mr-1" />
             )}
             {previewing ? 'Loading...' : 'Preview'}
-          </Button>
+            </Button>
           </div>
         </div>
       </header>
@@ -1458,7 +1489,12 @@ export const AdminFormBuilderPage: React.FC = () => {
               const re = (q.role_editability as Record<string, boolean>) || {};
               const pm = (q.pdf_meta as Record<string, unknown>) || {};
               const gridColumnsMeta = getGridColumnsMeta(pm);
+              const questionWordLimit = normalizeWordLimit(pm.wordLimit);
+              const gridColumnWordLimits = gridColumnsMeta.map((_, idx) =>
+                normalizeWordLimit(Array.isArray(pm.columnWordLimits) ? (pm.columnWordLimits as unknown[])[idx] : null)
+              );
               const layout = (pm.layout as string) || 'default';
+              const isNoImageNoHeader = layout === 'no_image_no_header';
               return (
                 <Card>
                   <h3 className="font-bold mb-4">Edit Question</h3>
@@ -1496,6 +1532,20 @@ export const AdminFormBuilderPage: React.FC = () => {
                       onChange={(v) => updateQuestion(q.id, { type: v })}
                       options={QUESTION_TYPES}
                     />
+                    {(q.type === 'short_text' || q.type === 'long_text') && (
+                      <Input
+                        label="Word limit (optional)"
+                        type="number"
+                        min={1}
+                        value={questionWordLimit ?? ''}
+                        onChange={(e) =>
+                          updateQuestion(q.id, {
+                            pdf_meta: { ...pm, wordLimit: normalizeWordLimit(e.target.value) },
+                          })
+                        }
+                        placeholder="e.g. 50"
+                      />
+                    )}
                     {q.type !== 'page_break' && (
                     <>
                       <div>
@@ -1551,6 +1601,7 @@ export const AdminFormBuilderPage: React.FC = () => {
                             options={[
                               { value: 'default', label: 'Default (image + label in first column)' },
                               { value: 'no_image', label: 'No image (header 1st | header 2nd | input columns)' },
+                              { value: 'no_image_no_header', label: 'No image (no header)' },
                               { value: 'split', label: 'Layout 1 (name | image | input columns – for polygon, measurement, etc.)' },
                             ]}
                           />
@@ -1580,22 +1631,26 @@ export const AdminFormBuilderPage: React.FC = () => {
                           </div>
                         )}
                         <div>
-                          <div className="text-sm font-semibold mb-2">Columns</div>
+                          <div className="text-sm font-semibold mb-2">{isNoImageNoHeader ? 'Columns (structure only, headers hidden)' : 'Columns'}</div>
                           <div className="space-y-2">
                             {gridColumnsMeta.map((col, colIdx) => (
                               <div key={`col-${colIdx}`} className="grid grid-cols-12 gap-2 items-end">
-                                <div className="col-span-7">
-                                  <Input
-                                    label={`Column ${colIdx + 1} header`}
-                                    value={col.label}
-                                    onChange={(e) => {
-                                      const next = [...gridColumnsMeta];
-                                      next[colIdx] = { ...next[colIdx], label: e.target.value };
-                                      updateQuestion(q.id, { pdf_meta: withGridColumnsMeta(pm, next) });
-                                    }}
-                                  />
+                                <div className={isNoImageNoHeader ? 'col-span-11' : 'col-span-7'}>
+                                  {isNoImageNoHeader ? (
+                                    <div className="text-sm text-gray-600 pb-2">Column {colIdx + 1}</div>
+                                  ) : (
+                                    <Input
+                                      label={`Column ${colIdx + 1} header`}
+                                      value={col.label}
+                                      onChange={(e) => {
+                                        const next = [...gridColumnsMeta];
+                                        next[colIdx] = { ...next[colIdx], label: e.target.value };
+                                        updateQuestion(q.id, { pdf_meta: withGridColumnsMeta(pm, next) });
+                                      }}
+                                    />
+                                  )}
                                 </div>
-                                <div className="col-span-4">
+                                <div className={isNoImageNoHeader ? 'col-span-11 -mt-2' : 'col-span-2'}>
                                   <Select
                                     label="Type"
                                     value={col.type}
@@ -1607,7 +1662,24 @@ export const AdminFormBuilderPage: React.FC = () => {
                                     options={GRID_COLUMN_TYPE_OPTIONS}
                                   />
                                 </div>
-                                <div className="col-span-1 flex justify-end">
+                                <div className={isNoImageNoHeader ? 'col-span-11 -mt-2' : 'col-span-2'}>
+                                  <Input
+                                    label="Word limit (optional)"
+                                    type="number"
+                                    min={1}
+                                    value={gridColumnWordLimits[colIdx] ?? ''}
+                                    disabled={col.type !== 'answer'}
+                                    onChange={(e) => {
+                                      const nextLimits = [...gridColumnWordLimits];
+                                      nextLimits[colIdx] = normalizeWordLimit(e.target.value);
+                                      updateQuestion(q.id, {
+                                        pdf_meta: { ...(withGridColumnsMeta(pm, gridColumnsMeta) as Record<string, unknown>), columnWordLimits: nextLimits } as Json,
+                                      });
+                                    }}
+                                    placeholder={col.type === 'answer' ? 'e.g. 20' : 'N/A'}
+                                  />
+                                </div>
+                                <div className={isNoImageNoHeader ? 'col-span-12 flex justify-end -mt-2' : 'col-span-1 flex justify-end'}>
                                   <button
                                     type="button"
                                     className="text-xs text-red-600 hover:text-red-700 pb-2"
@@ -1636,9 +1708,10 @@ export const AdminFormBuilderPage: React.FC = () => {
                         </div>
                       </div>
                     )}
-                    {(q.type === 'likert_5' || q.type === 'grid_table') && (
+                    {(q.type === 'likert_5' || q.type === 'grid_table' || (q.type === 'single_choice' && q.code === 'written.evidence.checklist')) && (
                       <>
                         {q.type === 'grid_table' && <div className="text-sm font-semibold text-gray-700 mb-2">2. Table rows</div>}
+                        {q.type === 'single_choice' && q.code === 'written.evidence.checklist' && <div className="text-sm font-semibold text-gray-700 mb-2">Checklist rows</div>}
                         <QuestionRowsEditor
                           questionId={q.id}
                           sectionPdfMode={selectedSection?.pdf_render_mode}
@@ -1646,6 +1719,7 @@ export const AdminFormBuilderPage: React.FC = () => {
                           steps={steps}
                           onStepsCreated={loadData}
                           gridTableLayout={q.type === 'grid_table' ? ((q.pdf_meta as Record<string, unknown>)?.layout as string) : undefined}
+                          simpleLabelsOnly={q.type === 'single_choice' && q.code === 'written.evidence.checklist'}
                         />
                       </>
                     )}
@@ -1822,7 +1896,7 @@ interface QuestionRow {
 
 const ROW_SAVE_DEBOUNCE_MS = 450;
 
-function QuestionRowsEditor({ questionId, sectionPdfMode, formId, steps, onStepsCreated, gridTableLayout }: { questionId: number; sectionPdfMode?: string; formId?: number | null; steps?: { sort_order: number }[]; onStepsCreated?: () => void; gridTableLayout?: string }) {
+function QuestionRowsEditor({ questionId, sectionPdfMode, formId, steps, onStepsCreated, gridTableLayout, simpleLabelsOnly = false }: { questionId: number; sectionPdfMode?: string; formId?: number | null; steps?: { sort_order: number }[]; onStepsCreated?: () => void; gridTableLayout?: string; simpleLabelsOnly?: boolean }) {
   const [rows, setRows] = useState<QuestionRow[]>([]);
   const [instructionsModalRow, setInstructionsModalRow] = useState<QuestionRow | null>(null);
   const [uploadingRowId, setUploadingRowId] = useState<number | null>(null);
@@ -1936,6 +2010,23 @@ function QuestionRowsEditor({ questionId, sectionPdfMode, formId, steps, onSteps
 
   const isAssessmentTasks = sectionPdfMode === 'assessment_tasks';
 
+  const removeRow = async (r: QuestionRow) => {
+    if (!window.confirm('Remove this row? This cannot be undone.')) return;
+    delete rowSaveTimers.current[r.id];
+    delete rowPendingUpdates.current[r.id];
+    if (isAssessmentTasks && formId && onStepsCreated) {
+      const { data: sections } = await supabase.from('skyline_form_sections').select('step_id').eq('assessment_task_row_id', r.id);
+      const stepIds = [...new Set((sections || []).map((s: { step_id: number }) => s.step_id))];
+      for (const stepId of stepIds) {
+        await supabase.from('skyline_form_sections').delete().eq('step_id', stepId);
+        await supabase.from('skyline_form_steps').delete().eq('id', stepId);
+      }
+      onStepsCreated();
+    }
+    await supabase.from('skyline_form_question_rows').delete().eq('id', r.id);
+    setRows((prev) => prev.filter((x) => x.id !== r.id));
+  };
+
   return (
     <div>
       <div className="text-sm font-semibold mb-2">{isAssessmentTasks ? 'Assessment tasks' : 'Table rows'}</div>
@@ -1946,6 +2037,10 @@ function QuestionRowsEditor({ questionId, sectionPdfMode, formId, steps, onSteps
       ) : gridTableLayout === 'no_image' ? (
         <p className="text-xs text-gray-600 mb-3">
           Each row = one table row. <strong>Row label</strong> → 1st column. <strong>Description</strong> → 2nd column. Add input columns in Table layout below.
+        </p>
+      ) : gridTableLayout === 'no_image_no_header' ? (
+        <p className="text-xs text-gray-600 mb-3">
+          Each row = one table row. Header row is hidden in this layout.
         </p>
       ) : (
         <p className="text-xs text-gray-600 mb-3">
@@ -1963,7 +2058,10 @@ function QuestionRowsEditor({ questionId, sectionPdfMode, formId, steps, onSteps
                 placeholder={isAssessmentTasks ? 'Evidence number (e.g. Assessment task 1)' : 'Row label'}
                 className="flex-1"
               />
-              {!isAssessmentTasks && gridTableLayout !== 'no_image' && (
+              <Button variant="outline" size="sm" onClick={() => removeRow(r)} title="Remove row" className="text-red-600 hover:text-red-700 hover:border-red-300">
+                <Trash2 className="w-4 h-4" />
+              </Button>
+              {!isAssessmentTasks && !simpleLabelsOnly && gridTableLayout !== 'no_image' && (
                 <div className="flex items-center gap-2 min-w-0">
                   <input
                     type="file"
@@ -2004,7 +2102,7 @@ function QuestionRowsEditor({ questionId, sectionPdfMode, formId, steps, onSteps
                 </Button>
               )}
             </div>
-            {!isAssessmentTasks && (
+            {!isAssessmentTasks && !simpleLabelsOnly && (
               <Textarea
                 value={r.row_help || ''}
                 onChange={(e) => updateRow(r.id, { row_help: e.target.value || null })}

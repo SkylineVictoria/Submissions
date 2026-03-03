@@ -7,24 +7,12 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Select } from '../components/ui/Select';
-import { DatePicker } from '../components/ui/DatePicker';
-import { Textarea } from '../components/ui/Textarea';
 import { Modal } from '../components/ui/Modal';
 import { Loader } from '../components/ui/Loader';
 import { toast } from '../utils/toast';
 
 export const AdminStudentsPage: React.FC = () => {
   const PAGE_SIZE = 20;
-  const STATE_OPTIONS = [
-    { value: 'NSW', label: 'New South Wales (NSW)' },
-    { value: 'VIC', label: 'Victoria (VIC)' },
-    { value: 'QLD', label: 'Queensland (QLD)' },
-    { value: 'WA', label: 'Western Australia (WA)' },
-    { value: 'SA', label: 'South Australia (SA)' },
-    { value: 'TAS', label: 'Tasmania (TAS)' },
-    { value: 'ACT', label: 'Australian Capital Territory (ACT)' },
-    { value: 'NT', label: 'Northern Territory (NT)' },
-  ];
   const [students, setStudents] = useState<Student[]>([]);
   const [forms, setForms] = useState<Form[]>([]);
   const [loading, setLoading] = useState(true);
@@ -41,65 +29,30 @@ export const AdminStudentsPage: React.FC = () => {
     student_id: '',
     first_name: '',
     last_name: '',
-    email: '',
     phone: '',
-    date_of_birth: '',
-    status: 'active',
-    guardian_name: '',
-    guardian_phone: '',
-    address_line_1: '',
-    address_line_2: '',
-    city: '',
-    state: '',
-    postal_code: '',
-    country: 'Australia',
-    notes: '',
   });
 
   const digitsOnly = (val: string) => val.replace(/\D/g, '');
-  const validateStudentForm = (form: {
+  const buildStudentEmail = (studentId: string) => `${studentId.trim().toLowerCase()}@student.slit.edu.au`;
+
+  const validateCreateStudentForm = (form: {
     student_id: string;
     first_name: string;
     last_name: string;
-    email: string;
     phone: string;
-    date_of_birth: string;
-    status: string;
-    guardian_name: string;
-    guardian_phone: string;
-    address_line_1: string;
-    address_line_2: string;
-    city: string;
-    state: string;
-    postal_code: string;
-    country: string;
-    notes: string;
   }): string | null => {
     const requiredFields: Array<[string, string]> = [
       ['student_id', 'Student ID'],
       ['first_name', 'First name'],
       ['last_name', 'Last name'],
-      ['email', 'Email'],
       ['phone', 'Phone'],
-      ['date_of_birth', 'Date of birth'],
-      ['status', 'Status'],
-      ['guardian_name', 'Guardian / Emergency contact'],
-      ['guardian_phone', 'Guardian phone'],
-      ['address_line_1', 'Address line 1'],
-      ['address_line_2', 'Address line 2'],
-      ['city', 'City'],
-      ['state', 'State'],
-      ['postal_code', 'Postal code'],
-      ['country', 'Country'],
-      ['notes', 'Notes'],
     ];
     for (const [key, label] of requiredFields) {
       if (!String((form as Record<string, unknown>)[key] ?? '').trim()) return `${label} is required.`;
     }
-    if (!/^\S+@\S+\.\S+$/.test(form.email.trim())) return 'Enter a valid email address.';
+    if (/\s/.test(form.student_id.trim())) return 'Student ID cannot contain spaces.';
     if (!/^\d{10}$/.test(form.phone.trim())) return 'Phone must be exactly 10 digits.';
-    if (!/^\d{10}$/.test(form.guardian_phone.trim())) return 'Guardian phone must be exactly 10 digits.';
-    if (!/^\d+$/.test(form.postal_code.trim())) return 'Postal code must contain numbers only.';
+    if (!/^\S+@\S+\.\S+$/.test(buildStudentEmail(form.student_id))) return 'Generated student email is invalid.';
     return null;
   };
 
@@ -133,15 +86,25 @@ export const AdminStudentsPage: React.FC = () => {
   }, [forms, students]);
 
   const formOptions = forms.map((f) => ({ value: String(f.id), label: `${f.name} (${f.version ?? '1.0.0'})` }));
+  const generatedStudentEmail = useMemo(() => {
+    const id = studentDraft.student_id.trim();
+    return id ? buildStudentEmail(id) : '';
+  }, [studentDraft.student_id]);
 
   const handleCreate = async () => {
-    const formError = validateStudentForm(studentDraft);
+    const formError = validateCreateStudentForm(studentDraft);
     if (formError) {
       toast.error(formError);
       return;
     }
     setCreating(true);
-    const created = await createStudent(studentDraft);
+    const created = await createStudent({
+      student_id: studentDraft.student_id,
+      first_name: studentDraft.first_name,
+      last_name: studentDraft.last_name,
+      phone: studentDraft.phone,
+      email: buildStudentEmail(studentDraft.student_id),
+    });
     if (created) {
       setCurrentPage(1);
       const res = await listStudentsPaged(1, PAGE_SIZE, searchTerm);
@@ -151,19 +114,7 @@ export const AdminStudentsPage: React.FC = () => {
         student_id: '',
         first_name: '',
         last_name: '',
-        email: '',
         phone: '',
-        date_of_birth: '',
-        status: 'active',
-        guardian_name: '',
-        guardian_phone: '',
-        address_line_1: '',
-        address_line_2: '',
-        city: '',
-        state: '',
-        postal_code: '',
-        country: 'Australia',
-        notes: '',
       });
       setIsCreateOpen(false);
       toast.success('Student added');
@@ -197,19 +148,7 @@ export const AdminStudentsPage: React.FC = () => {
     student_id: string;
     first_name: string;
     last_name: string;
-    email: string;
     phone: string;
-    date_of_birth: string;
-    status: string;
-    guardian_name: string;
-    guardian_phone: string;
-    address_line_1: string;
-    address_line_2: string;
-    city: string;
-    state: string;
-    postal_code: string;
-    country: string;
-    notes: string;
   } | null>(null);
 
   useEffect(() => {
@@ -218,19 +157,7 @@ export const AdminStudentsPage: React.FC = () => {
         student_id: editingStudent.student_id ?? '',
         first_name: editingStudent.first_name ?? '',
         last_name: editingStudent.last_name ?? '',
-        email: editingStudent.email,
         phone: editingStudent.phone ?? '',
-        date_of_birth: editingStudent.date_of_birth ?? '',
-        status: editingStudent.status ?? 'active',
-        guardian_name: editingStudent.guardian_name ?? '',
-        guardian_phone: editingStudent.guardian_phone ?? '',
-        address_line_1: editingStudent.address_line_1 ?? '',
-        address_line_2: editingStudent.address_line_2 ?? '',
-        city: editingStudent.city ?? '',
-        state: editingStudent.state ?? '',
-        postal_code: editingStudent.postal_code ?? '',
-        country: editingStudent.country ?? 'Australia',
-        notes: editingStudent.notes ?? '',
       });
     } else {
       setEditForm(null);
@@ -239,13 +166,19 @@ export const AdminStudentsPage: React.FC = () => {
 
   const handleSaveEdit = async () => {
     if (!editingId || !editForm) return;
-    const formError = validateStudentForm(editForm);
+    const formError = validateCreateStudentForm(editForm);
     if (formError) {
       toast.error(formError);
       return;
     }
     setSavingEdit(true);
-    const updated = await updateStudent(editingId, editForm);
+    const updated = await updateStudent(editingId, {
+      student_id: editForm.student_id,
+      first_name: editForm.first_name,
+      last_name: editForm.last_name,
+      phone: editForm.phone,
+      email: buildStudentEmail(editForm.student_id),
+    });
     setSavingEdit(false);
     if (updated) {
       const res = await listStudentsPaged(currentPage, PAGE_SIZE, searchTerm);
@@ -258,8 +191,12 @@ export const AdminStudentsPage: React.FC = () => {
     }
   };
 
-  const createFormError = useMemo(() => validateStudentForm(studentDraft), [studentDraft]);
-  const editFormError = useMemo(() => (editForm ? validateStudentForm(editForm) : 'Student form is unavailable.'), [editForm]);
+  const createFormError = useMemo(() => validateCreateStudentForm(studentDraft), [studentDraft]);
+  const editFormError = useMemo(() => (editForm ? validateCreateStudentForm(editForm) : 'Student form is unavailable.'), [editForm]);
+  const generatedEditEmail = useMemo(() => {
+    const id = editForm?.student_id?.trim() || '';
+    return id ? buildStudentEmail(id) : '';
+  }, [editForm?.student_id]);
   const totalPages = Math.max(1, Math.ceil(totalStudents / PAGE_SIZE));
 
   return (
@@ -304,7 +241,6 @@ export const AdminStudentsPage: React.FC = () => {
                   <tr>
                     <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Student</th>
                     <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Contact</th>
-                    <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Profile</th>
                     <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Form</th>
                     <th className="text-right px-4 py-3 font-semibold border-b border-[var(--border)]">Action</th>
                   </tr>
@@ -334,15 +270,6 @@ export const AdminStudentsPage: React.FC = () => {
                           <div className="flex items-center gap-2 text-gray-700">
                             <Phone className="w-4 h-4 text-gray-400" />
                             <span>{student.phone || 'No phone'}</span>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 border-b border-[var(--border)]">
-                        <div className="space-y-1 text-gray-700">
-                          <div><span className="text-gray-500">DOB:</span> {student.date_of_birth || '-'}</div>
-                          <div><span className="text-gray-500">City:</span> {student.city || '-'}</div>
-                          <div className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700">
-                            {student.status || 'active'}
                           </div>
                         </div>
                       </td>
@@ -432,11 +359,10 @@ export const AdminStudentsPage: React.FC = () => {
               required
             />
             <Input
-              value={studentDraft.email}
-              onChange={(e) => setStudentDraft((p) => ({ ...p, email: e.target.value }))}
-              placeholder="Email *"
+              value={generatedStudentEmail}
+              placeholder="Auto-generated email"
               type="email"
-              required
+              disabled
             />
             <Input
               value={studentDraft.phone}
@@ -444,96 +370,7 @@ export const AdminStudentsPage: React.FC = () => {
               placeholder="Phone"
               required
             />
-            <DatePicker
-              value={studentDraft.date_of_birth}
-              onChange={(v) => setStudentDraft((p) => ({ ...p, date_of_birth: v }))}
-              placeholder="Date of birth (dd-mm-yyyy)"
-              placement="below"
-              fromYear={1960}
-              toYear={new Date().getFullYear()}
-              disableFuture
-              required
-            />
-            <Select
-              value={studentDraft.status}
-              onChange={(v) => setStudentDraft((p) => ({ ...p, status: v }))}
-              options={[
-                { value: 'active', label: 'Active' },
-                { value: 'inactive', label: 'Inactive' },
-                { value: 'prospect', label: 'Prospect' },
-              ]}
-              required
-            />
           </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-            <Input
-              value={studentDraft.guardian_name}
-              onChange={(e) => setStudentDraft((p) => ({ ...p, guardian_name: e.target.value }))}
-              placeholder="Guardian / Emergency contact"
-              required
-            />
-            <Input
-              value={studentDraft.guardian_phone}
-              onChange={(e) => setStudentDraft((p) => ({ ...p, guardian_phone: digitsOnly(e.target.value).slice(0, 10) }))}
-              placeholder="Guardian phone"
-              required
-            />
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-            <Input
-              value={studentDraft.address_line_1}
-              onChange={(e) => setStudentDraft((p) => ({ ...p, address_line_1: e.target.value }))}
-              placeholder="Address line 1"
-              required
-            />
-            <Input
-              value={studentDraft.address_line_2}
-              onChange={(e) => setStudentDraft((p) => ({ ...p, address_line_2: e.target.value }))}
-              placeholder="Address line 2"
-              required
-            />
-            <Input
-              value={studentDraft.city}
-              onChange={(e) => setStudentDraft((p) => ({ ...p, city: e.target.value }))}
-              placeholder="City"
-              required
-            />
-            <Input
-              value={studentDraft.state}
-              onChange={() => {}}
-              placeholder="State"
-              required
-              className="hidden"
-            />
-            <Select
-              value={studentDraft.state}
-              onChange={(v) => setStudentDraft((p) => ({ ...p, state: v }))}
-              options={STATE_OPTIONS}
-              className="md:col-span-1"
-            />
-            <Input
-              value={studentDraft.postal_code}
-              onChange={(e) => setStudentDraft((p) => ({ ...p, postal_code: digitsOnly(e.target.value) }))}
-              placeholder="Postal code"
-              required
-            />
-            <Input
-              value={studentDraft.country}
-              onChange={(e) => setStudentDraft((p) => ({ ...p, country: e.target.value }))}
-              placeholder="Country"
-              required
-            />
-          </div>
-
-          <Textarea
-            value={studentDraft.notes}
-            onChange={(e) => setStudentDraft((p) => ({ ...p, notes: e.target.value }))}
-            placeholder="Notes"
-            rows={2}
-            required
-          />
 
           <div className="flex items-center justify-end gap-2 pt-1">
             <Button variant="outline" size="sm" onClick={() => setIsCreateOpen(false)}>
@@ -579,11 +416,10 @@ export const AdminStudentsPage: React.FC = () => {
                 required
               />
               <Input
-                value={editForm.email}
-                onChange={(e) => setEditForm((p) => p ? { ...p, email: e.target.value } : p)}
-                placeholder="Email *"
+                value={generatedEditEmail}
+                placeholder="Auto-generated email"
                 type="email"
-                required
+                disabled
               />
               <Input
                 value={editForm.phone}
@@ -591,93 +427,7 @@ export const AdminStudentsPage: React.FC = () => {
                 placeholder="Phone"
                 required
               />
-              <DatePicker
-                value={editForm.date_of_birth}
-                onChange={(v) => setEditForm((p) => (p ? { ...p, date_of_birth: v } : p))}
-                placeholder="Date of birth (dd-mm-yyyy)"
-                placement="below"
-                fromYear={1960}
-                toYear={new Date().getFullYear()}
-                disableFuture
-                required
-              />
-              <Select
-                value={editForm.status}
-                onChange={(v) => setEditForm((p) => p ? { ...p, status: v } : p)}
-                options={[
-                  { value: 'active', label: 'Active' },
-                  { value: 'inactive', label: 'Inactive' },
-                  { value: 'prospect', label: 'Prospect' },
-                ]}
-                required
-              />
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-              <Input
-                value={editForm.guardian_name}
-                onChange={(e) => setEditForm((p) => p ? { ...p, guardian_name: e.target.value } : p)}
-                placeholder="Guardian / Emergency contact"
-                required
-              />
-              <Input
-                value={editForm.guardian_phone}
-                onChange={(e) => setEditForm((p) => p ? { ...p, guardian_phone: digitsOnly(e.target.value).slice(0, 10) } : p)}
-                placeholder="Guardian phone"
-                required
-              />
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-              <Input
-                value={editForm.address_line_1}
-                onChange={(e) => setEditForm((p) => p ? { ...p, address_line_1: e.target.value } : p)}
-                placeholder="Address line 1"
-                required
-              />
-              <Input
-                value={editForm.address_line_2}
-                onChange={(e) => setEditForm((p) => p ? { ...p, address_line_2: e.target.value } : p)}
-                placeholder="Address line 2"
-                required
-              />
-              <Input
-                value={editForm.city}
-                onChange={(e) => setEditForm((p) => p ? { ...p, city: e.target.value } : p)}
-                placeholder="City"
-                required
-              />
-              <Input
-                value={editForm.state}
-                onChange={() => {}}
-                placeholder="State"
-                required
-                className="hidden"
-              />
-              <Select
-                value={editForm.state}
-                onChange={(v) => setEditForm((p) => (p ? { ...p, state: v } : p))}
-                options={STATE_OPTIONS}
-                className="md:col-span-1"
-              />
-              <Input
-                value={editForm.postal_code}
-                onChange={(e) => setEditForm((p) => p ? { ...p, postal_code: digitsOnly(e.target.value) } : p)}
-                placeholder="Postal code"
-                required
-              />
-              <Input
-                value={editForm.country}
-                onChange={(e) => setEditForm((p) => p ? { ...p, country: e.target.value } : p)}
-                placeholder="Country"
-                required
-              />
-            </div>
-            <Textarea
-              value={editForm.notes}
-              onChange={(e) => setEditForm((p) => p ? { ...p, notes: e.target.value } : p)}
-              placeholder="Notes"
-              rows={2}
-              required
-            />
             <div className="flex items-center justify-end gap-2 pt-1">
               <Button variant="outline" size="sm" onClick={() => setEditingId(null)}>
                 Cancel

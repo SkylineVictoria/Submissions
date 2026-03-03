@@ -45,7 +45,7 @@ export async function fetchForm(formId: number): Promise<Form | null> {
   return data as Form;
 }
 
-export async function updateForm(formId: number, updates: Partial<Pick<Form, 'name' | 'version' | 'unit_code' | 'unit_name' | 'qualification_code' | 'qualification_name' | 'header_asset_url' | 'cover_asset_url'>>): Promise<{ error: Error | null }> {
+export async function updateForm(formId: number, updates: Partial<Pick<Form, 'name' | 'version' | 'unit_code' | 'unit_name' | 'qualification_code' | 'qualification_name' | 'header_asset_url' | 'cover_asset_url' | 'start_date' | 'end_date'>>): Promise<{ error: Error | null }> {
   const { error } = await supabase.from('skyline_forms').update(updates).eq('id', formId);
   return { error: error ? new Error(error.message) : null };
 }
@@ -597,10 +597,23 @@ function generateAccessToken(): string {
 export async function issueInstanceAccessLink(
   instanceId: number,
   roleContext: InstanceAccessRole,
-  ttlMinutes = 60 * 24 * 7
+  ttlMinutes?: number
 ): Promise<string | null> {
   const token = generateAccessToken();
-  const expiresAt = new Date(Date.now() + ttlMinutes * 60 * 1000).toISOString();
+  let expiresAt: string;
+  const { data: instance } = await supabase.from('skyline_form_instances').select('form_id').eq('id', instanceId).single();
+  if (instance) {
+    const { data: form } = await supabase.from('skyline_forms').select('end_date').eq('id', (instance as { form_id: number }).form_id).single();
+    const endDate = form && (form as { end_date: string | null }).end_date;
+    if (endDate) {
+      const d = new Date(endDate + 'T23:59:59.999Z');
+      expiresAt = d.toISOString();
+    } else {
+      expiresAt = new Date(Date.now() + (ttlMinutes ?? 60 * 24 * 7) * 60 * 1000).toISOString();
+    }
+  } else {
+    expiresAt = new Date(Date.now() + (ttlMinutes ?? 60 * 24 * 7) * 60 * 1000).toISOString();
+  }
   const { error } = await supabase.from('skyline_instance_access_tokens').insert({
     instance_id: instanceId,
     role_context: roleContext,
@@ -670,6 +683,39 @@ export async function revokeRoleAccessTokens(instanceId: number, roleContext: In
     .is('consumed_at', null)
     .is('revoked_at', null);
   if (error) console.error('revokeRoleAccessTokens error', error);
+}
+
+export interface InstanceAccessTokenInfo {
+  id: number;
+  role_context: InstanceAccessRole;
+  expires_at: string;
+  revoked_at: string | null;
+  consumed_at: string | null;
+}
+
+export async function listInstanceAccessTokens(instanceId: number): Promise<InstanceAccessTokenInfo[]> {
+  const { data, error } = await supabase
+    .from('skyline_instance_access_tokens')
+    .select('id, role_context, expires_at, revoked_at, consumed_at')
+    .eq('instance_id', instanceId)
+    .order('id', { ascending: false });
+  if (error) {
+    console.error('listInstanceAccessTokens error', error);
+    return [];
+  }
+  return (data as InstanceAccessTokenInfo[]) || [];
+}
+
+/** Re-enable revoked links and extend expiry. Admin can use this to allow access past form end_date. */
+export async function extendInstanceAccessTokens(instanceId: number, roleContext: InstanceAccessRole, extraDays = 30): Promise<void> {
+  const newExpiresAt = new Date(Date.now() + extraDays * 24 * 60 * 60 * 1000).toISOString();
+  const { error } = await supabase
+    .from('skyline_instance_access_tokens')
+    .update({ revoked_at: null, expires_at: newExpiresAt })
+    .eq('instance_id', instanceId)
+    .eq('role_context', roleContext)
+    .is('consumed_at', null);
+  if (error) console.error('extendInstanceAccessTokens error', error);
 }
 
 export interface Trainer {
@@ -863,6 +909,8 @@ export interface SubmittedInstanceRow {
   role_context: string;
   created_at: string;
   submitted_at: string | null;
+  /** True if the link for this role is revoked or past expiry (show Enable); false = active (show Expire) */
+  link_expired: boolean;
 }
 
 export async function listStudents(): Promise<Student[]> {
@@ -912,7 +960,7 @@ export async function listSubmittedInstances(): Promise<SubmittedInstanceRow[]> 
   const { data: instances, error } = await supabase
     .from('skyline_form_instances')
     .select('id, form_id, student_id, status, role_context, created_at, submitted_at')
-    .in('status', ['submitted', 'locked'])
+    .not('student_id', 'is', null)
     .order('created_at', { ascending: false });
   if (error) {
     console.error('listSubmittedInstances error', error);
@@ -920,8 +968,24 @@ export async function listSubmittedInstances(): Promise<SubmittedInstanceRow[]> 
   }
 
   const rows = (instances as Array<Record<string, unknown>>) || [];
+  const instanceIds = rows.map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0);
   const formIds = Array.from(new Set(rows.map((r) => Number(r.form_id)).filter((n) => Number.isFinite(n) && n > 0)));
   const studentIds = Array.from(new Set(rows.map((r) => Number(r.student_id)).filter((n) => Number.isFinite(n) && n > 0)));
+
+  const now = Date.now();
+  const tokenMap = new Map<string, boolean>();
+  if (instanceIds.length > 0) {
+    const { data: tokens } = await supabase
+      .from('skyline_instance_access_tokens')
+      .select('instance_id, role_context, expires_at, revoked_at')
+      .in('instance_id', instanceIds);
+    for (const t of (tokens as Array<{ instance_id: number; role_context: string; expires_at: string; revoked_at: string | null }>) || []) {
+      const key = `${t.instance_id}:${t.role_context}`;
+      const valid = t.revoked_at == null && t.expires_at && new Date(t.expires_at).getTime() > now;
+      if (valid) tokenMap.set(key, false);
+      else if (!tokenMap.has(key)) tokenMap.set(key, true);
+    }
+  }
 
   const formMap = new Map<number, { name: string; version: string | null }>();
   if (formIds.length > 0) {
@@ -954,6 +1018,8 @@ export async function listSubmittedInstances(): Promise<SubmittedInstanceRow[]> 
     const studentId = studentIdRaw == null ? null : Number(studentIdRaw);
     const form = formMap.get(formId);
     const student = studentId != null ? studentMap.get(studentId) : undefined;
+    const roleCtx = String(r.role_context ?? 'student');
+    const link_expired = tokenMap.get(`${Number(r.id)}:${roleCtx}`) !== false;
     return {
       id: Number(r.id),
       form_id: formId,
@@ -963,9 +1029,10 @@ export async function listSubmittedInstances(): Promise<SubmittedInstanceRow[]> 
       student_name: student?.name || 'Unknown student',
       student_email: student?.email || '',
       status: String(r.status ?? 'draft'),
-      role_context: String(r.role_context ?? 'student'),
+      role_context: roleCtx,
       created_at: String(r.created_at ?? ''),
       submitted_at: r.submitted_at ? String(r.submitted_at) : null,
+      link_expired,
     };
   });
 }
@@ -980,7 +1047,7 @@ export async function listSubmittedInstancesPaged(
   let query = supabase
     .from('skyline_form_instances')
     .select('id, form_id, student_id, status, role_context, created_at, submitted_at', { count: 'exact' })
-    .in('status', ['submitted', 'locked'])
+    .not('student_id', 'is', null)
     .order('created_at', { ascending: false });
 
   const q = (search ?? '').trim();
@@ -1016,8 +1083,24 @@ export async function listSubmittedInstancesPaged(
   }
 
   const rows = (instances as Array<Record<string, unknown>>) || [];
+  const instanceIds = rows.map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0);
   const formIds = Array.from(new Set(rows.map((r) => Number(r.form_id)).filter((n) => Number.isFinite(n) && n > 0)));
   const studentIds = Array.from(new Set(rows.map((r) => Number(r.student_id)).filter((n) => Number.isFinite(n) && n > 0)));
+
+  const now = Date.now();
+  const tokenMap = new Map<string, boolean>();
+  if (instanceIds.length > 0) {
+    const { data: tokens } = await supabase
+      .from('skyline_instance_access_tokens')
+      .select('instance_id, role_context, expires_at, revoked_at')
+      .in('instance_id', instanceIds);
+    for (const t of (tokens as Array<{ instance_id: number; role_context: string; expires_at: string; revoked_at: string | null }>) || []) {
+      const key = `${t.instance_id}:${t.role_context}`;
+      const valid = t.revoked_at == null && t.expires_at && new Date(t.expires_at).getTime() > now;
+      if (valid) tokenMap.set(key, false);
+      else if (!tokenMap.has(key)) tokenMap.set(key, true);
+    }
+  }
 
   const formMap = new Map<number, { name: string; version: string | null }>();
   if (formIds.length > 0) {
@@ -1051,6 +1134,9 @@ export async function listSubmittedInstancesPaged(
       const studentId = studentIdRaw == null ? null : Number(studentIdRaw);
       const form = formMap.get(formId);
       const student = studentId != null ? studentMap.get(studentId) : undefined;
+      const roleCtx = String(r.role_context ?? 'student');
+      const tokenKey = `${Number(r.id)}:${roleCtx}`;
+      const link_expired = tokenMap.get(tokenKey) !== false;
       return {
         id: Number(r.id),
         form_id: formId,
@@ -1060,9 +1146,10 @@ export async function listSubmittedInstancesPaged(
         student_name: student?.name || 'Unknown student',
         student_email: student?.email || '',
         status: String(r.status ?? 'draft'),
-        role_context: String(r.role_context ?? 'student'),
+        role_context: roleCtx,
         created_at: String(r.created_at ?? ''),
         submitted_at: r.submitted_at ? String(r.submitted_at) : null,
+        link_expired,
       };
     }),
     total: Number(count ?? 0),
@@ -1212,6 +1299,8 @@ export async function updateStudent(id: number, input: UpdateStudentInput): Prom
 const DEFAULT_ROLES = { student: true, trainer: true, office: true };
 const READ_ONLY_VISIBLE = { student: true, trainer: true, office: true };
 const READ_ONLY_EDIT = { student: false, trainer: false, office: false };
+const STUDENT_ONLY = { student: true, trainer: false, office: false };
+const TRAINER_OFFICE_VISIBLE = { student: false, trainer: true, office: true };
 const TRAINER_ONLY_EDIT = { student: false, trainer: true, office: false };
 const TRAINER_OFFICE_EDIT = { student: false, trainer: true, office: true };
 
@@ -1246,9 +1335,9 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
   if (sec1) {
     const s = sec1 as { id: number };
     await supabase.from('skyline_form_questions').insert([
-      { section_id: s.id, type: 'short_text', code: 'student.fullName', label: 'Student Full Name', required: true, sort_order: 0, role_visibility: DEFAULT_ROLES, role_editability: DEFAULT_ROLES },
-      { section_id: s.id, type: 'short_text', code: 'student.id', label: 'Student ID', required: true, sort_order: 1, role_visibility: DEFAULT_ROLES, role_editability: DEFAULT_ROLES },
-      { section_id: s.id, type: 'short_text', code: 'student.email', label: 'Student Email', required: true, sort_order: 2, role_visibility: DEFAULT_ROLES, role_editability: DEFAULT_ROLES },
+      { section_id: s.id, type: 'short_text', code: 'student.fullName', label: 'Student Full Name', required: true, sort_order: 0, role_visibility: DEFAULT_ROLES, role_editability: STUDENT_ONLY },
+      { section_id: s.id, type: 'short_text', code: 'student.id', label: 'Student ID', required: true, sort_order: 1, role_visibility: DEFAULT_ROLES, role_editability: STUDENT_ONLY },
+      { section_id: s.id, type: 'short_text', code: 'student.email', label: 'Student Email', required: true, sort_order: 2, role_visibility: DEFAULT_ROLES, role_editability: STUDENT_ONLY },
       { section_id: s.id, type: 'short_text', code: 'trainer.fullName', label: 'Trainer Full Name', required: true, sort_order: 3, role_visibility: DEFAULT_ROLES, role_editability: TRAINER_OFFICE_EDIT },
     ]);
   }
@@ -1323,7 +1412,7 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
     const s = sec2c as { id: number };
     const { data: qSub } = await supabase
       .from('skyline_form_questions')
-      .insert({ section_id: s.id, type: 'multi_choice', code: 'assessment.submission', label: 'Assessment Submission Method', sort_order: 0, role_visibility: READ_ONLY_VISIBLE, role_editability: DEFAULT_ROLES })
+      .insert({ section_id: s.id, type: 'multi_choice', code: 'assessment.submission', label: 'Assessment Submission Method', sort_order: 0, role_visibility: READ_ONLY_VISIBLE, role_editability: STUDENT_ONLY })
       .select('id')
       .single();
     if (qSub) {
@@ -1335,7 +1424,7 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
         { question_id: qid, value: 'other', label: 'Any other method', sort_order: 3 },
       ]);
     }
-    await supabase.from('skyline_form_questions').insert({ section_id: s.id, type: 'short_text', code: 'assessment.otherDesc', label: 'Please describe other method', sort_order: 1, role_visibility: READ_ONLY_VISIBLE, role_editability: DEFAULT_ROLES });
+    await supabase.from('skyline_form_questions').insert({ section_id: s.id, type: 'short_text', code: 'assessment.otherDesc', label: 'Please describe other method', sort_order: 1, role_visibility: READ_ONLY_VISIBLE, role_editability: STUDENT_ONLY });
   }
 
   // Introductory Reasonable Adjustment (short form: yes/no, task, description, signature)
@@ -1432,11 +1521,11 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
       const pSecId = (participantSec as { id: number }).id;
       await supabase.from('skyline_form_questions').insert([
         { section_id: pSecId, type: 'short_text', code: 'evaluation.unitName', label: 'Unit of Competency Name', sort_order: 0, role_visibility: READ_ONLY_VISIBLE, role_editability: READ_ONLY_EDIT },
-        { section_id: pSecId, type: 'short_text', code: 'evaluation.studentName', label: 'Student Name (Optional)', sort_order: 1, role_visibility: READ_ONLY_VISIBLE, role_editability: DEFAULT_ROLES },
-        { section_id: pSecId, type: 'short_text', code: 'evaluation.trainerName', label: 'Trainer/Assessor Name', sort_order: 2, role_visibility: READ_ONLY_VISIBLE, role_editability: READ_ONLY_EDIT },
-        { section_id: pSecId, type: 'short_text', code: 'evaluation.employer', label: 'Employer/Work site (if applicable)', sort_order: 3, role_visibility: READ_ONLY_VISIBLE, role_editability: DEFAULT_ROLES },
-        { section_id: pSecId, type: 'short_text', code: 'evaluation.trainingDates', label: 'Dates of Training', sort_order: 4, role_visibility: READ_ONLY_VISIBLE, role_editability: READ_ONLY_EDIT },
-        { section_id: pSecId, type: 'short_text', code: 'evaluation.evaluationDate', label: 'Date of Evaluation', sort_order: 5, role_visibility: READ_ONLY_VISIBLE, role_editability: DEFAULT_ROLES },
+        { section_id: pSecId, type: 'short_text', code: 'evaluation.studentName', label: 'Student Name (Optional)', sort_order: 1, role_visibility: READ_ONLY_VISIBLE, role_editability: STUDENT_ONLY },
+        { section_id: pSecId, type: 'short_text', code: 'evaluation.trainerName', label: 'Trainer/Assessor Name', sort_order: 2, role_visibility: READ_ONLY_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
+        { section_id: pSecId, type: 'short_text', code: 'evaluation.employer', label: 'Employer/Work site (if applicable)', sort_order: 3, role_visibility: READ_ONLY_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
+        { section_id: pSecId, type: 'short_text', code: 'evaluation.trainingDates', label: 'Dates of Training', sort_order: 4, role_visibility: READ_ONLY_VISIBLE, role_editability: STUDENT_ONLY },
+        { section_id: pSecId, type: 'short_text', code: 'evaluation.evaluationDate', label: 'Date of Evaluation', sort_order: 5, role_visibility: READ_ONLY_VISIBLE, role_editability: STUDENT_ONLY },
       ]);
     }
 
@@ -1449,7 +1538,7 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
     if (logisticsSec) {
       const lSecId = (logisticsSec as { id: number }).id;
       const logisticsQ = await supabase.from('skyline_form_questions')
-        .insert({ section_id: lSecId, type: 'likert_5', code: 'evaluation.logistics', label: 'Logistics and Support Evaluation', sort_order: 0, role_visibility: DEFAULT_ROLES, role_editability: DEFAULT_ROLES })
+        .insert({ section_id: lSecId, type: 'likert_5', code: 'evaluation.logistics', label: 'Logistics and Support Evaluation', sort_order: 0, role_visibility: READ_ONLY_VISIBLE, role_editability: STUDENT_ONLY })
         .select('id')
         .single();
       if (logisticsQ.data) {
@@ -1462,7 +1551,7 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
         ]);
       }
       await supabase.from('skyline_form_questions').insert({
-        section_id: lSecId, type: 'long_text', code: 'evaluation.logisticsComments', label: 'Additional Comments on Logistics and Support', sort_order: 1, role_visibility: DEFAULT_ROLES, role_editability: DEFAULT_ROLES
+        section_id: lSecId, type: 'long_text', code: 'evaluation.logisticsComments', label: 'Additional Comments on Logistics and Support', sort_order: 1, role_visibility: READ_ONLY_VISIBLE, role_editability: STUDENT_ONLY
       });
     }
 
@@ -1475,7 +1564,7 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
     if (trainerSec) {
       const tSecId = (trainerSec as { id: number }).id;
       const trainerQ = await supabase.from('skyline_form_questions')
-        .insert({ section_id: tSecId, type: 'likert_5', code: 'evaluation.trainer', label: 'Trainer/Assessor Evaluation', sort_order: 0, role_visibility: DEFAULT_ROLES, role_editability: DEFAULT_ROLES })
+        .insert({ section_id: tSecId, type: 'likert_5', code: 'evaluation.trainer', label: 'Trainer/Assessor Evaluation', sort_order: 0, role_visibility: READ_ONLY_VISIBLE, role_editability: STUDENT_ONLY })
         .select('id')
         .single();
       if (trainerQ.data) {
@@ -1491,7 +1580,7 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
         ]);
       }
       await supabase.from('skyline_form_questions').insert({
-        section_id: tSecId, type: 'long_text', code: 'evaluation.trainerComments', label: 'Additional Comments on Training', sort_order: 1, role_visibility: DEFAULT_ROLES, role_editability: DEFAULT_ROLES
+        section_id: tSecId, type: 'long_text', code: 'evaluation.trainerComments', label: 'Additional Comments on Training', sort_order: 1, role_visibility: READ_ONLY_VISIBLE, role_editability: STUDENT_ONLY
       });
     }
 
@@ -1504,7 +1593,7 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
     if (learningSec) {
       const learnSecId = (learningSec as { id: number }).id;
       const learningQ = await supabase.from('skyline_form_questions')
-        .insert({ section_id: learnSecId, type: 'likert_5', code: 'evaluation.learning', label: 'Learning Evaluation', sort_order: 0, role_visibility: DEFAULT_ROLES, role_editability: DEFAULT_ROLES })
+        .insert({ section_id: learnSecId, type: 'likert_5', code: 'evaluation.learning', label: 'Learning Evaluation', sort_order: 0, role_visibility: READ_ONLY_VISIBLE, role_editability: STUDENT_ONLY })
         .select('id')
         .single();
       if (learningQ.data) {
@@ -1520,8 +1609,48 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
         ]);
       }
       await supabase.from('skyline_form_questions').insert({
-        section_id: learnSecId, type: 'long_text', code: 'evaluation.learningComments', label: 'Additional Comments on Learning Evaluation', sort_order: 1, role_visibility: DEFAULT_ROLES, role_editability: DEFAULT_ROLES
+        section_id: learnSecId, type: 'long_text', code: 'evaluation.learningComments', label: 'Additional Comments on Learning Evaluation', sort_order: 1, role_visibility: READ_ONLY_VISIBLE, role_editability: STUDENT_ONLY
       });
+    }
+  }
+
+  // Written Evidence Checklist (trainer editable) - keep this as the final step
+  const { data: writtenStep } = await supabase
+    .from('skyline_form_steps')
+    .insert({ form_id: formId, title: 'Written Evidence Checklist', subtitle: 'Trainer checklist for evidence submission', sort_order: taskStepOrder++ })
+    .select('id')
+    .single();
+  if (writtenStep) {
+    const writtenStepId = (writtenStep as { id: number }).id;
+    // Use safe pdf_render_mode ('normal') for compatibility with existing DB constraints.
+    const { data: writtenSec } = await supabase
+      .from('skyline_form_sections')
+      .insert({ step_id: writtenStepId, title: 'Written Evidence Checklist', pdf_render_mode: 'normal', sort_order: 0 })
+      .select('id')
+      .single();
+    if (writtenSec) {
+      const sectionId = (writtenSec as { id: number }).id;
+      const { data: writtenQ } = await supabase
+        .from('skyline_form_questions')
+        .insert({
+          section_id: sectionId,
+          type: 'single_choice',
+          code: 'written.evidence.checklist',
+          label: 'Written Evidence Checklist',
+          sort_order: 0,
+          role_visibility: TRAINER_OFFICE_VISIBLE,
+          role_editability: TRAINER_ONLY_EDIT,
+        })
+        .select('id')
+        .single();
+      if (writtenQ) {
+        const qId = (writtenQ as { id: number }).id;
+        await supabase.from('skyline_form_question_options').insert([
+          { question_id: qId, value: 'yes', label: 'Yes', sort_order: 0 },
+          { question_id: qId, value: 'no', label: 'No', sort_order: 1 },
+        ]);
+        // No default rows: trainer adds checklist rows via form builder
+      }
     }
   }
 }
@@ -1534,6 +1663,8 @@ export interface CreateFormInput {
   unit_code: string;
   unit_name: string;
   assessment_tasks: AssessmentTask[];
+  start_date?: string | null;
+  end_date?: string | null;
   // Legacy fields for backward compatibility
   assessment_task_1_label?: string;
   assessment_task_1_method?: string;
@@ -1541,8 +1672,22 @@ export interface CreateFormInput {
   assessment_task_2_method?: string;
 }
 
+export function getDefaultFormDates(): { start_date: string; end_date: string } {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return {
+    start_date: `${y}-${pad(m + 1)}-01`,
+    end_date: `${y}-${pad(m + 1)}-${pad(new Date(y, m + 1, 0).getDate())}`,
+  };
+}
+
 export async function createForm(input: CreateFormInput): Promise<Form | null> {
-  const { name, version, qualification_code, qualification_name, unit_code, unit_name, assessment_tasks, assessment_task_1_label, assessment_task_1_method, assessment_task_2_label, assessment_task_2_method } = input;
+  const { name, version, qualification_code, qualification_name, unit_code, unit_name, assessment_tasks, start_date: inputStart, end_date: inputEnd, assessment_task_1_label, assessment_task_1_method, assessment_task_2_label, assessment_task_2_method } = input;
+  const defaults = getDefaultFormDates();
+  const start_date = (inputStart && inputStart.trim()) ? inputStart.trim() : defaults.start_date;
+  const end_date = (inputEnd && inputEnd.trim()) ? inputEnd.trim() : defaults.end_date;
   const { data, error } = await supabase
     .from('skyline_forms')
     .insert({
@@ -1553,6 +1698,8 @@ export async function createForm(input: CreateFormInput): Promise<Form | null> {
       unit_name: unit_name,
       version: (version || '1.0.0').trim() || '1.0.0',
       status: 'published',
+      start_date,
+      end_date,
     })
     .select('*')
     .single();
@@ -1638,6 +1785,7 @@ export async function duplicateForm(formId: number): Promise<Form | null> {
   const newVersion = nextVersion(form.version);
   const newName = `${form.name} (Copy)`;
 
+  const { start_date: defStart, end_date: defEnd } = getDefaultFormDates();
   const { data: newFormData, error: formErr } = await supabase
     .from('skyline_forms')
     .insert({
@@ -1650,6 +1798,8 @@ export async function duplicateForm(formId: number): Promise<Form | null> {
       qualification_name: form.qualification_name,
       header_asset_url: form.header_asset_url,
       cover_asset_url: form.cover_asset_url,
+      start_date: form.start_date ?? defStart,
+      end_date: form.end_date ?? defEnd,
     })
     .select('*')
     .single();

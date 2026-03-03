@@ -19,6 +19,16 @@ interface GridTableColumnMeta {
 
 const normalizeGridColumnType = (raw: unknown): GridColumnType =>
   String(raw).trim().toLowerCase() === 'question' ? 'question' : 'answer';
+const normalizeWordLimit = (raw: unknown): number | null => {
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+};
+const truncateToWordLimit = (text: string, maxWords: number): string => {
+  if (!text.trim()) return text;
+  const words = text.trim().split(/\s+/);
+  if (words.length <= maxWords) return text;
+  return words.slice(0, maxWords).join(' ');
+};
 
 const toTitleCase = (input: string): string =>
   input
@@ -71,11 +81,15 @@ export const GridTableQuestion: React.FC<GridTableQuestionProps> = ({
   const headerCase: GridHeaderCase = headerCaseRaw === 'uppercase' || headerCaseRaw === 'title' ? headerCaseRaw : 'original';
   const layout = (pm.layout as string) || 'default';
   const isSplit = layout === 'split' || layout === 'polygon';
-  const isNoImage = layout === 'no_image';
+  const isNoImage = layout === 'no_image' || layout === 'no_image_no_header';
+  const isNoHeader = layout === 'no_image_no_header';
   const noImageIncludeBaseColumns = !isNoImage;
   const firstCol = (pm.firstColumnLabel as string) || (isNoImage ? 'Item' : layout === 'polygon' ? 'Polygon Name' : 'Name');
   const secondCol = (pm.secondColumnLabel as string) || (isNoImage ? 'Description' : layout === 'polygon' ? 'Polygon Shape' : 'Image');
   const firstQuestionColIndex = columnsMeta.findIndex((c) => c.type === 'question');
+  const columnWordLimits = columnsMeta.map((_, idx) =>
+    normalizeWordLimit(Array.isArray(pm.columnWordLimits) ? (pm.columnWordLimits as unknown[])[idx] : null)
+  );
 
   const updateCell = (rowId: number, colIndex: number, val: string) => {
     const key = `r${rowId}_c${colIndex}`;
@@ -92,8 +106,8 @@ export const GridTableQuestion: React.FC<GridTableQuestionProps> = ({
     return columnsMeta[colIndex]?.type === 'question' ? 'question' : 'answer';
   };
 
-  const cellClass = 'p-2 align-top bg-transparent border border-gray-300';
-  const headerClass = 'p-2 text-left font-semibold text-gray-700 bg-transparent border border-gray-300';
+  const cellClass = 'p-2 align-top bg-transparent border border-gray-300 break-words';
+  const headerClass = 'p-2 text-left font-semibold text-gray-700 bg-transparent border border-gray-300 break-words';
 
   const renderCell = (row: { id: number; row_label: string; row_help?: string | null }, colIndex: number) => {
     const type = getColumnType(colIndex);
@@ -112,9 +126,13 @@ export const GridTableQuestion: React.FC<GridTableQuestionProps> = ({
         <input
           type="text"
           value={getCellValue(row.id, colIndex)}
-          onChange={(e) => updateCell(row.id, colIndex, e.target.value)}
+          onChange={(e) => {
+            const limit = columnWordLimits[colIndex];
+            const next = limit ? truncateToWordLimit(e.target.value, limit) : e.target.value;
+            updateCell(row.id, colIndex, next);
+          }}
           disabled={disabled}
-          className="w-full px-2 py-1.5 text-sm bg-transparent border-none border-b border-gray-300 focus:border-[var(--brand)] focus:outline-none"
+          className="w-full min-h-[34px] px-2 py-1.5 text-sm bg-transparent border-none border-b border-gray-300 focus:border-[var(--brand)] focus:outline-none"
         />
       </td>
     );
@@ -122,45 +140,47 @@ export const GridTableQuestion: React.FC<GridTableQuestionProps> = ({
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[400px] border-collapse text-sm border border-gray-300">
-        <thead>
-          <tr>
-            {(isSplit || isNoImage) ? (
-              <>
-                {isSplit ? (
+      <table className="w-full min-w-[760px] border-collapse text-sm border border-gray-300 table-fixed">
+        {!isNoHeader && (
+          <thead>
+            <tr>
+              {(isSplit || isNoImage) ? (
+                <>
+                  {isSplit ? (
+                    <th className={`${headerClass} w-24`}>
+                      {formatHeader(secondCol, headerCase)}
+                    </th>
+                  ) : (
+                    <>
+                      {noImageIncludeBaseColumns && (
+                        <>
+                          <th className={headerClass}>{formatHeader(firstCol, headerCase)}</th>
+                          <th className={headerClass}>{formatHeader(secondCol, headerCase)}</th>
+                        </>
+                      )}
+                    </>
+                  )}
+                  {columns.map((col, i) => (
+                    <th key={i} className={headerClass}>
+                      {formatHeader(col, headerCase)}
+                    </th>
+                  ))}
+                </>
+              ) : (
+                <>
                   <th className={`${headerClass} w-24`}>
-                    {formatHeader(secondCol, headerCase)}
+                    Shape
                   </th>
-                ) : (
-                  <>
-                    {noImageIncludeBaseColumns && (
-                      <>
-                        <th className={headerClass}>{formatHeader(firstCol, headerCase)}</th>
-                        <th className={headerClass}>{formatHeader(secondCol, headerCase)}</th>
-                      </>
-                    )}
-                  </>
-                )}
-                {columns.map((col, i) => (
-                  <th key={i} className={headerClass}>
-                    {formatHeader(col, headerCase)}
-                  </th>
-                ))}
-              </>
-            ) : (
-              <>
-                <th className={`${headerClass} w-24`}>
-                  Shape
-                </th>
-                {columns.map((col, i) => (
-                  <th key={i} className={headerClass}>
-                    {formatHeader(col, headerCase)}
-                  </th>
-                ))}
-              </>
-            )}
-          </tr>
-        </thead>
+                  {columns.map((col, i) => (
+                    <th key={i} className={headerClass}>
+                      {formatHeader(col, headerCase)}
+                    </th>
+                  ))}
+                </>
+              )}
+            </tr>
+          </thead>
+        )}
         <tbody>
             {question.rows.map((row) => (
             <tr key={row.id}>

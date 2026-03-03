@@ -486,6 +486,10 @@ function buildHtml(data: {
     .task-instructions-block-content { padding: 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-top: none; line-height: 1.5; }
     .task-instructions-block-content ul { margin: 8px 0; padding-left: 20px; }
     .task-instructions-block-content p { margin: 6px 0; }
+    .task-instructions-table { width: 100%; table-layout: fixed; border: 1px solid #000; border-collapse: collapse; }
+    .task-instructions-table td { vertical-align: top; overflow-wrap: anywhere; word-break: break-word; }
+    .task-instructions-table .label-cell { width: 24% !important; }
+    .task-instructions-table td:last-child { border-right: 1px solid #000 !important; }
     .result-sheet-page { page-break-before: always; }
     .task-results-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 10pt; padding: 12px 16px; margin: 16px 0 0 0; }
     .task-results-outcome { margin: 12px 0; }
@@ -534,7 +538,7 @@ function buildHtml(data: {
     .decl-sig-inline .decl-sig-line { display: inline-block; border: none; border-bottom: 1px solid #000; min-width: 280px; min-height: 18px; background: transparent; vertical-align: bottom; padding: 0 2px 2px 0; }
     .assessment-summary-page .answer-box { min-height: 18px; padding: 4px 6px; font-size: 8pt; }
     .assessment-summary-page .answer-box.answer-box-large { min-height: 48px; }
-    .answer-box { border: 1px solid #333; min-height: 24px; padding: 6px 8px; overflow: visible; background: #fff; }
+    .answer-box { border: 1px solid #333; min-height: 24px; padding: 6px 8px; overflow: visible; background: #fff; box-sizing: border-box; overflow-wrap: anywhere; word-break: break-word; }
     .answer-box.answer-box-large { min-height: 80px; }
     table { width: 100%; border-collapse: collapse; font-size: 8pt; margin-bottom: 12px; }
     th, td { border: 1px solid #000; padding: 10px 12px; vertical-align: middle; line-height: 1.35; overflow: visible; }
@@ -562,11 +566,22 @@ function buildHtml(data: {
     .radio-circle { display: inline-block; width: 12px; height: 12px; border: 1.5px solid #4b5563; border-radius: 50%; }
     .radio-circle.filled { background: #000000; border-color: #000000; }
     .signature-img { max-width: 150px; max-height: 60px; display: block; }
-    .grid-table-no-border th, .grid-table-no-border td { border: 1px solid #000 !important; background: transparent !important; }
+    .grid-table-no-border { width: 100%; table-layout: fixed; }
+    .grid-table-no-border th, .grid-table-no-border td { border: 1px solid #000 !important; background: transparent !important; overflow-wrap: anywhere; word-break: break-word; }
     .grid-table-no-border th { color: #000000 !important; font-weight: 700; }
     .grid-table-no-border tbody tr { background: transparent !important; }
     .grid-table-no-border .label-cell, .grid-table-no-border .value-cell { background: transparent !important; }
     .grid-table-no-border .sub-section-header { background: transparent !important; color: #000000 !important; border: 1px solid #000 !important; }
+    .written-evidence-table { width: 100%; border-collapse: collapse; font-size: 10pt; margin: 0 0 12px 0; border: 1px solid #000; }
+    .written-evidence-table th, .written-evidence-table td { border: 1px solid #000; padding: 8px 10px; vertical-align: middle; line-height: 1.25; color: #000; }
+    .written-evidence-table th { background: #595959 !important; color: #fff !important; font-weight: 700; text-align: center; }
+    .written-evidence-table .we-left { text-align: left; }
+    .written-evidence-table .we-index { width: 28px; text-align: center; }
+    .written-evidence-table .we-yn { width: 56px; text-align: center; }
+    .written-evidence-table .we-radio { display: inline-flex; align-items: center; justify-content: center; }
+    .written-evidence-table .we-radio .radio-circle { width: 12px; height: 12px; border: 1.5px solid #374151; border-radius: 50%; display: inline-block; }
+    .written-evidence-table .we-radio .radio-circle.filled { background: #000; border-color: #000; }
+    .written-evidence-page { page-break-before: always; }
     .task-q-question-box { border: 1px solid #595959; margin-bottom: 20px; page-break-inside: avoid; break-inside: avoid; }
     .task-q-question-box:last-child { margin-bottom: 0; }
     .task-q-question-box .task-questions-table th,
@@ -583,8 +598,8 @@ function buildHtml(data: {
     .task-questions-table .task-q-radio { display: inline-flex; align-items: center; gap: 6px; }
     .task-questions-table .task-q-radio .radio-circle { width: 12px; height: 12px; border: 1.5px solid #374151; border-radius: 50%; flex-shrink: 0; }
     .task-questions-table .task-q-radio .radio-circle.filled { background: #000; border-color: #000; }
-    .task-q-answer-block { padding: 12px; min-height: 24px; font-size: 11pt; background: #fff; }
-    .task-q-answer-block.task-q-answer-large { min-height: 80px; }
+    .task-q-answer-block { padding: 12px; min-height: 36px; font-size: 11pt; background: #fff; box-sizing: border-box; overflow-wrap: anywhere; word-break: break-word; }
+    .task-q-answer-block.task-q-answer-large { min-height: 96px; }
     .task-questions-table .task-q-inner-table th, .task-questions-table .task-q-inner-table td,
     .task-questions-table .task-q-inner-table .label-cell, .task-questions-table .task-q-inner-table .value-cell { background: #fff !important; border: 1px solid #595959 !important; }
     .task-questions-table .label-cell, .task-questions-table .value-cell, .task-questions-table td { background: #fff !important; }
@@ -997,23 +1012,28 @@ function buildHtml(data: {
         const headerCase: GridHeaderCase = headerCaseRaw === 'uppercase' || headerCaseRaw === 'title' ? headerCaseRaw : 'original';
         const layout = (pm.layout as string) || 'default';
         const isSplit = layout === 'split' || layout === 'polygon';
-        const isNoImage = layout === 'no_image';
+        const isNoImage = layout === 'no_image' || layout === 'no_image_no_header';
+        const isNoHeader = layout === 'no_image_no_header';
         const noImageIncludeBaseColumns = !isNoImage;
         const firstCol = (pm.firstColumnLabel as string) || (isNoImage ? 'Item' : layout === 'polygon' ? 'Polygon Name' : 'Name');
         const secondCol = (pm.secondColumnLabel as string) || (isNoImage ? 'Description' : layout === 'polygon' ? 'Polygon Shape' : 'Image');
         const firstQuestionColIndex = columnsMeta.findIndex((c) => c.type === 'question');
-        html += '<table class="grid-table-no-border"><thead><tr>';
-        if (isSplit) {
-          html += `<th>${formatGridHeader(secondCol, headerCase)}</th>`;
-        } else if (isNoImage) {
-          if (noImageIncludeBaseColumns) {
-            html += `<th>${formatGridHeader(firstCol, headerCase)}</th><th>${formatGridHeader(secondCol, headerCase)}</th>`;
+        html += '<table class="grid-table-no-border">';
+        if (!isNoHeader) {
+          html += '<thead><tr>';
+          if (isSplit) {
+            html += `<th>${formatGridHeader(secondCol, headerCase)}</th>`;
+          } else if (isNoImage) {
+            if (noImageIncludeBaseColumns) {
+              html += `<th>${formatGridHeader(firstCol, headerCase)}</th><th>${formatGridHeader(secondCol, headerCase)}</th>`;
+            }
+          } else {
+            html += '<th>Shape</th>';
           }
-        } else {
-          html += '<th>Shape</th>';
+          for (const c of cols) html += `<th>${formatGridHeader(c, headerCase)}</th>`;
+          html += '</tr></thead>';
         }
-        for (const c of cols) html += `<th>${formatGridHeader(c, headerCase)}</th>`;
-        html += '</tr></thead><tbody>';
+        html += '<tbody>';
         for (const { question, rows } of questions) {
           for (const row of rows) {
             const key = `q-${question.id}-${row.id}`;
@@ -1054,6 +1074,29 @@ function buildHtml(data: {
           }
           html += '</tbody></table>';
         }
+      } else if (questions.some((q) => q.question.code === 'written.evidence.checklist')) {
+        const checklistQ = questions.find((q) => q.question.code === 'written.evidence.checklist' && q.question.type === 'single_choice' && q.rows.length > 0);
+        if (checklistQ) {
+          html += '<div class="written-evidence-page"><table class="written-evidence-table">';
+          html += '<thead>';
+          html += '<tr><th rowspan="2" class="we-index"></th><th rowspan="2" class="we-left">Written Evidence</th><th colspan="2">Submitted</th></tr>';
+          html += '<tr><th class="we-yn">Yes</th><th class="we-yn">No</th></tr>';
+          html += '</thead><tbody>';
+          for (let i = 0; i < checklistQ.rows.length; i++) {
+            const row = checklistQ.rows[i];
+            const key = `q-${checklistQ.question.id}-${row.id}`;
+            const val = String(answers.get(key) ?? '');
+            const yes = val === 'yes';
+            const no = val === 'no';
+            html += '<tr>';
+            html += `<td class="we-index">${i + 1}</td>`;
+            html += `<td class="we-left">${row.row_label || ''}</td>`;
+            html += `<td class="we-yn"><span class="we-radio"><span class="radio-circle${yes ? ' filled' : ''}"></span></span></td>`;
+            html += `<td class="we-yn"><span class="we-radio"><span class="radio-circle${no ? ' filled' : ''}"></span></span></td>`;
+            html += '</tr>';
+          }
+          html += '</tbody></table></div>';
+        }
       } else if (section.pdf_render_mode === 'assessment_submission') {
         const multiChoice = questions.find((q) => q.question.type === 'multi_choice');
         const otherDescQ = questions.find((q) => q.question.type === 'short_text');
@@ -1092,6 +1135,30 @@ function buildHtml(data: {
         html += `<div class="task-instructions-header">Student Instructions: ${row?.row_label || section.title} – ${assessmentType}</div>`;
         html += `<div class="task-instructions-subheader">Assessment method-based instructions and guidelines: ${row?.row_help || ''}</div>`;
         if (instr) {
+          const customBlocks = Array.isArray((instr as { blocks?: unknown[] }).blocks)
+            ? ((instr as { blocks?: Array<{ id?: string; type?: string; heading?: string; content?: string; rows?: Array<{ heading?: string; content?: string }> }> }).blocks || [])
+            : [];
+          if (customBlocks.length > 0) {
+            for (const b of customBlocks) {
+              const heading = String(b.heading || '').trim();
+              if (b.type === 'table') {
+                if (heading) html += `<div class="task-instructions-block-title">${heading}</div>`;
+                const rows = Array.isArray(b.rows) ? b.rows : [];
+                if (rows.length > 0) {
+                  html += '<table class="section-table task-instructions-table"><tbody>';
+                  for (const r of rows) {
+                    html += '<tr>';
+                    html += `<td class="label-cell" style="width:35%;font-weight:700">${String(r.heading || '')}</td>`;
+                    html += `<td class="value-cell">${String(r.content || '')}</td>`;
+                    html += '</tr>';
+                  }
+                  html += '</tbody></table>';
+                }
+              } else if (String(b.content || '').replace(/<[^>]*>/g, '').trim()) {
+                html += `<div class="task-instructions-block-content">${String(b.content || '')}</div>`;
+              }
+            }
+          } else {
           const blocks: { title: string; content: string }[] = [
             { title: 'Assessment type', content: String(instr.assessment_type || '') },
             { title: 'Instructions provided to the student:', content: String(instr.task_description || '') },
@@ -1108,6 +1175,7 @@ function buildHtml(data: {
           }
           if (instr.task_instructions && String(instr.task_instructions).replace(/<[^>]*>/g, '').trim()) {
             html += `<div class="task-instructions-block"><div class="task-instructions-block-title">Task instructions</div><div class="task-instructions-block-content">${instr.task_instructions}</div></div>`;
+          }
           }
         }
       } else if (section.pdf_render_mode === 'task_questions') {
@@ -1146,23 +1214,28 @@ function buildHtml(data: {
             const headerCase: GridHeaderCase = headerCaseRaw === 'uppercase' || headerCaseRaw === 'title' ? headerCaseRaw : 'original';
             const layout = (pm.layout as string) || 'default';
             const isSplit = layout === 'split' || layout === 'polygon';
-            const isNoImage = layout === 'no_image';
+            const isNoImage = layout === 'no_image' || layout === 'no_image_no_header';
+            const isNoHeader = layout === 'no_image_no_header';
             const noImageIncludeBaseColumns = !isNoImage;
             const firstCol = (pm.firstColumnLabel as string) || (isNoImage ? 'Item' : 'Name');
             const secondCol = (pm.secondColumnLabel as string) || (isNoImage ? 'Description' : 'Image');
             const firstQuestionColIndex = columnsMeta.findIndex((c) => c.type === 'question');
-            html += '<table class="section-table grid-table-no-border task-q-inner-table"><thead><tr>';
-            if (isSplit) {
-              html += `<th>${formatGridHeader(secondCol, headerCase)}</th>`;
-            } else if (isNoImage) {
-              if (noImageIncludeBaseColumns) {
-                html += `<th>${formatGridHeader(firstCol, headerCase)}</th><th>${formatGridHeader(secondCol, headerCase)}</th>`;
+            html += '<table class="section-table grid-table-no-border task-q-inner-table">';
+            if (!isNoHeader) {
+              html += '<thead><tr>';
+              if (isSplit) {
+                html += `<th>${formatGridHeader(secondCol, headerCase)}</th>`;
+              } else if (isNoImage) {
+                if (noImageIncludeBaseColumns) {
+                  html += `<th>${formatGridHeader(firstCol, headerCase)}</th><th>${formatGridHeader(secondCol, headerCase)}</th>`;
+                }
+              } else {
+                html += '<th>Shape</th>';
               }
-            } else {
-              html += '<th>Shape</th>';
+              for (const c of cols) html += `<th>${formatGridHeader(c, headerCase)}</th>`;
+              html += '</tr></thead>';
             }
-            for (const c of cols) html += `<th>${formatGridHeader(c, headerCase)}</th>`;
-            html += '</tr></thead><tbody>';
+            html += '<tbody>';
             for (const row of rows) {
               const key = `q-${question.id}-${row.id}`;
               const val = answers.get(key) as Record<string, string> | undefined;

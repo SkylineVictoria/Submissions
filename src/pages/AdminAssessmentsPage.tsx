@@ -1,11 +1,12 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Copy, ExternalLink, Send, RefreshCw } from 'lucide-react';
-import { listSubmittedInstancesPaged, updateInstanceRole, issueInstanceAccessLink } from '../lib/formEngine';
-import type { SubmittedInstanceRow } from '../lib/formEngine';
+import { Copy, ExternalLink, Send, RefreshCw, Ban, CheckCircle, User } from 'lucide-react';
+import { listSubmittedInstancesPaged, updateInstanceRole, issueInstanceAccessLink, revokeRoleAccessTokens, extendInstanceAccessTokens, listTrainers } from '../lib/formEngine';
+import type { SubmittedInstanceRow, Trainer } from '../lib/formEngine';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Loader } from '../components/ui/Loader';
+import { Modal } from '../components/ui/Modal';
 import { toast } from '../utils/toast';
 
 const formatDateTime = (value: string | null): string => {
@@ -17,6 +18,7 @@ const formatDateTime = (value: string | null): string => {
 
 const getWorkflowLabel = (row: SubmittedInstanceRow): string => {
   if (row.status === 'locked') return 'Completed';
+  if (row.status === 'draft') return 'Awaiting Student';
   if (row.role_context === 'trainer') return 'Waiting Trainer';
   if (row.role_context === 'office') return 'Waiting Office';
   return 'Submitted (Not Sent)';
@@ -24,6 +26,7 @@ const getWorkflowLabel = (row: SubmittedInstanceRow): string => {
 
 const getWorkflowBadgeClass = (row: SubmittedInstanceRow): string => {
   if (row.status === 'locked') return 'bg-emerald-100 text-emerald-800';
+  if (row.status === 'draft') return 'bg-slate-100 text-slate-700';
   if (row.role_context === 'trainer') return 'bg-amber-100 text-amber-800';
   if (row.role_context === 'office') return 'bg-blue-100 text-blue-800';
   return 'bg-gray-100 text-gray-700';
@@ -37,7 +40,12 @@ export const AdminAssessmentsPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [sendingId, setSendingId] = useState<number | null>(null);
+  const [managingId, setManagingId] = useState<number | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [sendToTrainerRow, setSendToTrainerRow] = useState<SubmittedInstanceRow | null>(null);
+  const [trainers, setTrainers] = useState<Trainer[]>([]);
+  const [trainersLoading, setTrainersLoading] = useState(false);
+  const [selectedTrainerId, setSelectedTrainerId] = useState<number | null>(null);
 
   const loadRows = useCallback(async (page: number, search: string, opts?: { silent?: boolean }) => {
     if (!opts?.silent) setLoading(true);
@@ -58,7 +66,7 @@ export const AdminAssessmentsPage: React.FC = () => {
     setRefreshing(true);
     await loadRows(currentPage, searchTerm, { silent: true });
     setRefreshing(false);
-    toast.success('Submitted assessments refreshed');
+    toast.success('Assessments refreshed');
   };
 
   const handleCopyLink = async (instanceId: number, roleContext: 'student' | 'trainer' | 'office') => {
@@ -71,16 +79,51 @@ export const AdminAssessmentsPage: React.FC = () => {
     toast.success('Instance link copied');
   };
 
-  const handleSendToTrainer = async (row: SubmittedInstanceRow) => {
-    setSendingId(row.id);
-    if (row.role_context !== 'trainer') {
-      await updateInstanceRole(row.id, 'trainer');
-      setRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, role_context: 'trainer' } : r)));
-    }
-    setSendingId(null);
-    await handleCopyLink(row.id, 'trainer');
+  const handleExpireLink = async (instanceId: number, roleContext: 'student' | 'trainer' | 'office') => {
+    setManagingId(instanceId);
+    await revokeRoleAccessTokens(instanceId, roleContext);
+    setManagingId(null);
     await loadRows(currentPage, searchTerm, { silent: true });
-    toast.success(row.role_context === 'trainer' ? 'Trainer link copied again' : 'Sent to trainer and copied link');
+    toast.success('Link expired. Student/trainer will not be able to access until you enable it.');
+  };
+
+  const handleEnableLink = async (instanceId: number, roleContext: 'student' | 'trainer' | 'office') => {
+    setManagingId(instanceId);
+    await extendInstanceAccessTokens(instanceId, roleContext, 30);
+    setManagingId(null);
+    await loadRows(currentPage, searchTerm, { silent: true });
+    toast.success('Link re-enabled for 30 days. Student/trainer can access even if form date passed.');
+  };
+
+  const openSendToTrainer = (row: SubmittedInstanceRow) => {
+    setSendToTrainerRow(row);
+    setSelectedTrainerId(null);
+    setTrainersLoading(true);
+    listTrainers().then((list) => {
+      setTrainers(list);
+      setTrainersLoading(false);
+    });
+  };
+
+  const handleSendToTrainerConfirm = async () => {
+    if (!sendToTrainerRow || !selectedTrainerId) return;
+    const trainer = trainers.find((t) => t.id === selectedTrainerId);
+    setSendingId(sendToTrainerRow.id);
+    if (sendToTrainerRow.role_context !== 'trainer') {
+      await updateInstanceRole(sendToTrainerRow.id, 'trainer');
+      setRows((prev) => prev.map((r) => (r.id === sendToTrainerRow.id ? { ...r, role_context: 'trainer' } : r)));
+    }
+    const url = await issueInstanceAccessLink(sendToTrainerRow.id, 'trainer');
+    setSendingId(null);
+    setSendToTrainerRow(null);
+    setSelectedTrainerId(null);
+    if (!url) {
+      toast.error('Failed to create secure link');
+      return;
+    }
+    await navigator.clipboard.writeText(url);
+    await loadRows(currentPage, searchTerm, { silent: true });
+    toast.success(`Link copied for ${trainer?.full_name ?? 'trainer'}. Share it with them.`);
   };
 
   const totalPages = Math.max(1, Math.ceil(totalRows / PAGE_SIZE));
@@ -91,9 +134,9 @@ export const AdminAssessmentsPage: React.FC = () => {
         <Card className="mb-6">
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
             <div>
-              <h2 className="text-lg font-bold text-[var(--text)]">Submitted Assessments</h2>
+              <h2 className="text-lg font-bold text-[var(--text)]">Assessments</h2>
               <p className="text-sm text-gray-600 mt-1">
-                Track student submissions and send pending assessments to trainer from one place.
+                View all assessments sent to students (pending and submitted) and send completed ones to trainer.
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -103,7 +146,7 @@ export const AdminAssessmentsPage: React.FC = () => {
                   setSearchTerm(e.target.value);
                   setCurrentPage(1);
                 }}
-                placeholder="Search student, form, or status..."
+                placeholder="Search student, form, or workflow..."
                 className="w-[260px]"
               />
               <Button
@@ -122,10 +165,10 @@ export const AdminAssessmentsPage: React.FC = () => {
 
         <Card>
           {loading ? (
-            <Loader variant="dots" size="lg" message="Loading submitted assessments..." />
+            <Loader variant="dots" size="lg" message="Loading assessments..." />
           ) : rows.length === 0 ? (
             <div className="py-12 text-center text-sm text-gray-500">
-              No submitted instances found yet.
+              No assessments sent to students yet.
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -134,7 +177,7 @@ export const AdminAssessmentsPage: React.FC = () => {
                   <tr className="border-b border-gray-200 text-left text-xs uppercase tracking-wide text-gray-500">
                     <th className="py-3 pr-3">Student</th>
                     <th className="py-3 pr-3">Form</th>
-                    <th className="py-3 pr-3">Submitted</th>
+                    <th className="py-3 pr-3">Date</th>
                     <th className="py-3 pr-3">Workflow</th>
                     <th className="py-3 text-right">Actions</th>
                   </tr>
@@ -189,11 +232,45 @@ export const AdminAssessmentsPage: React.FC = () => {
                             <Copy className="w-4 h-4" />
                             <span>Copy Link</span>
                           </Button>
-                          {row.status !== 'locked' && (
+                          {!row.link_expired && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                const role = row.role_context === 'trainer' ? 'trainer' : row.role_context === 'office' ? 'office' : 'student';
+                                void handleExpireLink(row.id, role);
+                              }}
+                              disabled={managingId === row.id}
+                              className="inline-flex items-center gap-1.5 whitespace-nowrap text-amber-700 hover:text-amber-800 hover:border-amber-400"
+                              title="Revoke link access"
+                            >
+                              <Ban className="w-4 h-4" />
+                              <span>Expire</span>
+                            </Button>
+                          )}
+                          {row.link_expired && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                const role = row.role_context === 'trainer' ? 'trainer' : row.role_context === 'office' ? 'office' : 'student';
+                                void handleEnableLink(row.id, role);
+                              }}
+                              disabled={managingId === row.id}
+                              className="inline-flex items-center gap-1.5 whitespace-nowrap text-emerald-700 hover:text-emerald-800 hover:border-emerald-400"
+                              title="Re-enable link (30 days) even if form date passed"
+                            >
+                              <CheckCircle className="w-4 h-4" />
+                              <span>Enable</span>
+                            </Button>
+                          )}
+                          {row.status === 'submitted' && (
                             <Button
                               type="button"
                               size="sm"
-                              onClick={() => handleSendToTrainer(row)}
+                              onClick={() => openSendToTrainer(row)}
                               disabled={sendingId === row.id}
                               className="inline-flex items-center gap-1.5 whitespace-nowrap"
                             >
@@ -239,6 +316,74 @@ export const AdminAssessmentsPage: React.FC = () => {
             </div>
           )}
         </Card>
+
+        <Modal
+          isOpen={!!sendToTrainerRow}
+          onClose={() => {
+            setSendToTrainerRow(null);
+            setSelectedTrainerId(null);
+          }}
+          title="Send to Trainer"
+          size="md"
+        >
+          {sendToTrainerRow && (
+            <div className="space-y-4">
+              <p className="text-sm text-gray-600">
+                Select a trainer. The assessment link will be copied to your clipboard for you to share with them.
+              </p>
+              {trainersLoading ? (
+                <Loader variant="dots" size="sm" message="Loading trainers..." />
+              ) : trainers.length === 0 ? (
+                <p className="text-sm text-gray-500 py-4">No trainers found. Add trainers first.</p>
+              ) : (
+                <div className="max-h-[280px] overflow-y-auto border border-[var(--border)] rounded-lg divide-y divide-[var(--border)]">
+                  {trainers.map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => setSelectedTrainerId(selectedTrainerId === t.id ? null : t.id)}
+                      className={`w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 transition-colors ${
+                        selectedTrainerId === t.id ? 'bg-[var(--brand)]/10 ring-1 ring-[var(--brand)]' : ''
+                      }`}
+                    >
+                      <div
+                        className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 ${
+                          selectedTrainerId === t.id ? 'border-[var(--brand)] bg-[var(--brand)]' : 'border-gray-300'
+                        }`}
+                      >
+                        {selectedTrainerId === t.id && (
+                          <div className="w-2 h-2 rounded-full bg-white" />
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium text-gray-900 truncate">{t.full_name}</div>
+                        <div className="text-xs text-gray-500 truncate">{t.email}</div>
+                      </div>
+                      <User className="w-4 h-4 text-gray-400 shrink-0" />
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="flex justify-end gap-2 pt-2">
+                <Button variant="outline" onClick={() => { setSendToTrainerRow(null); setSelectedTrainerId(null); }}>
+                  Cancel
+                </Button>
+                <Button
+                  onClick={handleSendToTrainerConfirm}
+                  disabled={!selectedTrainerId || sendingId === sendToTrainerRow.id}
+                  className="inline-flex items-center gap-2"
+                >
+                  {sendingId === sendToTrainerRow.id ? (
+                    <Loader variant="dots" size="sm" inline />
+                  ) : (
+                    <Copy className="w-4 h-4" />
+                  )}
+                  <span>{sendingId === sendToTrainerRow.id ? 'Copying...' : 'Copy Link & Close'}</span>
+                </Button>
+              </div>
+            </div>
+          )}
+        </Modal>
       </div>
     </div>
   );

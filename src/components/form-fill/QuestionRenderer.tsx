@@ -9,6 +9,17 @@ import { LikertTableQuestion } from './LikertTableQuestion';
 import { GridTableQuestion } from './GridTableQuestion';
 import { SignaturePad } from './SignaturePad';
 
+const truncateToWordLimit = (text: string, maxWords: number): string => {
+  if (!text.trim()) return text;
+  const words = text.trim().split(/\s+/);
+  if (words.length <= maxWords) return text;
+  return words.slice(0, maxWords).join(' ');
+};
+const normalizeWordLimit = (raw: unknown): number | null => {
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+};
+
 interface QuestionRendererProps {
   question: FormQuestionWithOptionsAndRows;
   value: string | number | boolean | Record<string, unknown> | string[] | null;
@@ -26,6 +37,8 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
   error,
   declarationStyle,
 }) => {
+  const pm = (question.pdf_meta as Record<string, unknown>) || {};
+  const wordLimit = normalizeWordLimit(pm.wordLimit);
   if (question.type === 'instruction_block') {
     return (
       <div className="py-2">
@@ -80,15 +93,32 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
   }
 
   if (question.type === 'short_text') {
+    const isDateField = question.code === 'evaluation.trainingDates' || question.code === 'evaluation.evaluationDate';
+    if (isDateField) {
+      return (
+        <DatePicker
+          label={question.label}
+          value={(value as string) || ''}
+          onChange={(v) => onChange(v)}
+          disabled={disabled}
+          error={error}
+          required={question.required && !disabled}
+          placement="above"
+        />
+      );
+    }
     return (
       <Input
         label={question.label}
         value={(value as string) || ''}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => {
+          const next = e.target.value;
+          onChange(wordLimit ? truncateToWordLimit(next, wordLimit) : next);
+        }}
         disabled={disabled}
         error={error}
         required={question.required && !disabled}
-        helperText={question.help_text || undefined}
+        helperText={[question.help_text, wordLimit ? `Word limit: ${wordLimit}` : null].filter(Boolean).join(' • ') || undefined}
       />
     );
   }
@@ -104,7 +134,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
         required={question.required && !disabled}
         helperText={question.help_text || undefined}
         rows={8}
-        maxChars={250}
+        maxWords={wordLimit ?? undefined}
       />
     );
   }
