@@ -23,7 +23,7 @@ export const Input: React.FC<InputProps> = ({
   return (
     <div className="w-full">
       {label && (
-        <label htmlFor={inputId} className="block text-xs sm:text-sm font-semibold text-gray-700 mb-1.5 sm:mb-2">
+        <label htmlFor={inputId} className="block text-xs sm:text-sm font-semibold text-gray-700 mb-1.5 sm:mb-2 whitespace-pre-line">
           {label}
           {required && <span className="text-[#F27A1A] ml-1">*</span>}
           {tooltip && (

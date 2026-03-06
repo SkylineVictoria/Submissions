@@ -1391,13 +1391,15 @@ export async function listSubmittedInstancesPaged(
   };
 }
 
-/** Get assessments for trainer (students in their batches) or office (all waiting office). */
+/** Get assessments for trainer (students in their batches) or office (all waiting office).
+ * When pendingOnly is true, returns only pending items for current role (trainer: waiting trainer, office: waiting office). */
 export async function listDashboardInstances(
   role: 'trainer' | 'office',
   userId: number,
   page = 1,
   pageSize = 20,
-  search?: string
+  search?: string,
+  pendingOnly = false
 ): Promise<PaginatedResult<SubmittedInstanceRow>> {
   let studentIds: number[] = [];
   if (role === 'trainer') {
@@ -1425,9 +1427,17 @@ export async function listDashboardInstances(
 
   if (role === 'trainer') {
     query = query.in('student_id', studentIds);
-    query = query.or('role_context.eq.trainer,role_context.eq.office,status.eq.locked');
+    if (pendingOnly) {
+      query = query.eq('role_context', 'trainer').neq('status', 'locked');
+    } else {
+      query = query.or('role_context.eq.trainer,role_context.eq.office,status.eq.locked');
+    }
   } else {
-    query = query.or('role_context.eq.office,status.eq.locked');
+    if (pendingOnly) {
+      query = query.eq('role_context', 'office').neq('status', 'locked');
+    } else {
+      query = query.or('role_context.eq.office,status.eq.locked');
+    }
   }
 
   const q = (search ?? '').trim();

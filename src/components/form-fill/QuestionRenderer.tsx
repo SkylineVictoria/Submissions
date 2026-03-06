@@ -9,6 +9,8 @@ import { LikertTableQuestion } from './LikertTableQuestion';
 import { GridTableQuestion } from './GridTableQuestion';
 import { SignaturePad } from './SignaturePad';
 
+const countWords = (text: string): number =>
+  text.trim() ? text.trim().split(/\s+/).length : 0;
 const truncateToWordLimit = (text: string, maxWords: number): string => {
   if (!text.trim()) return text;
   const words = text.trim().split(/\s+/);
@@ -42,7 +44,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
   if (question.type === 'instruction_block') {
     return (
       <div className="py-2">
-        <div className="text-sm font-medium text-gray-700">{question.label}</div>
+        <div className="text-sm font-medium text-gray-700 whitespace-pre-line">{question.label}</div>
         {question.help_text && (
           <div className="text-xs text-gray-500 mt-1">{question.help_text}</div>
         )}
@@ -118,7 +120,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
         disabled={disabled}
         error={error}
         required={question.required && !disabled}
-        helperText={[question.help_text, wordLimit ? `Word limit: ${wordLimit}` : null].filter(Boolean).join(' • ') || undefined}
+        helperText={[question.help_text, wordLimit ? `${countWords(String(value || ''))} / ${wordLimit} words` : null].filter(Boolean).join(' • ') || undefined}
       />
     );
   }
@@ -133,8 +135,9 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
         error={error}
         required={question.required && !disabled}
         helperText={question.help_text || undefined}
-        rows={8}
+        rows={wordLimit ? Math.max(2, Math.min(10, Math.ceil(wordLimit / 10))) : 8}
         maxWords={wordLimit ?? undefined}
+        fixedHeightFromWordLimit={!!wordLimit}
       />
     );
   }
@@ -171,7 +174,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
     }
     return (
       <div>
-        <div className="text-sm font-semibold text-gray-700 mb-2">
+        <div className="text-sm font-semibold text-gray-700 mb-2 whitespace-pre-line">
           {question.label}
           {question.required && <span className="text-[var(--brand)] ml-1">*</span>}
         </div>
@@ -193,7 +196,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
   if (question.type === 'single_choice') {
     return (
       <div>
-        <div className="text-sm font-semibold text-gray-700 mb-2">
+        <div className="text-sm font-semibold text-gray-700 mb-2 whitespace-pre-line">
           {question.label}
           {question.required && <span className="text-[var(--brand)] ml-1">*</span>}
         </div>
@@ -214,7 +217,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
     const selected = new Set((Array.isArray(value) ? value : []) as string[]);
     return (
       <div>
-        <div className="text-sm font-semibold text-gray-700 mb-2">
+        <div className="text-sm font-semibold text-gray-700 mb-2 whitespace-pre-line">
           {question.label}
           {question.required && <span className="text-[var(--brand)] ml-1">*</span>}
         </div>

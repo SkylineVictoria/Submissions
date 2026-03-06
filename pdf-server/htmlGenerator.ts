@@ -183,6 +183,11 @@ export function buildHtml(data: {
   resultsData?: Map<number, { first_attempt_satisfactory?: string | null; first_attempt_date?: string | null; first_attempt_feedback?: string | null; second_attempt_satisfactory?: string | null; second_attempt_date?: string | null; second_attempt_feedback?: string | null; trainer_name?: string | null; trainer_signature?: string | null; trainer_date?: string | null }>;
   assessmentSummaryData?: Record<string, string | null>;
 }): { html: string; unitCode: string; version: string; headerHtml: string } {
+  function heightFromWordLimit(wordLimit: number | null | undefined): number {
+    if (!wordLimit || wordLimit < 1) return 96;
+    const lines = Math.max(1, Math.ceil(wordLimit / 10));
+    return Math.min(3000, Math.max(36, lines * 24));
+  }
   const { form, steps, answers, taskRowsMap = new Map(), trainerAssessments = new Map(), resultsOffice = new Map(), resultsData = new Map(), assessmentSummaryData = {} } = data;
   // Header images: crest (shield logo) and text logo
   const basePath = (data as { _basePath?: string })._basePath ?? path.join(__dirname, '..');
@@ -246,7 +251,7 @@ export function buildHtml(data: {
     .row-alt .value-cell { color: #000000; background: #F0F4FA; }
     .row-normal .label-cell, .row-normal .value-cell { background: #F0F4FA; }
     .question { margin: 12px 0; overflow: visible; page-break-inside: avoid; break-inside: avoid; }
-    .question-label { font-weight: bold; margin-bottom: 4px; overflow: visible; line-height: 1.4; }
+    .question-label { font-weight: bold; margin-bottom: 4px; overflow: visible; line-height: 1.4; white-space: pre-line; }
     .decl-heading-bar { font-size: 10pt; font-weight: bold; margin: 12px 0 6px 0; color: #000000; border-left: 4px solid #9ca3af; padding-left: 8px; }
     .declarations-section { border: 1px solid #000; border-left: 1px solid #000 !important; padding: 12px; background: #fff; margin-bottom: 12px; }
     .declarations-section.declarations-section-no-border { border: none !important; padding: 0; background: transparent; }
@@ -276,7 +281,7 @@ export function buildHtml(data: {
     .reasonable-adjustment-radio { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
     .reasonable-adjustment-section .radio-circle { display: inline-block; width: 12px; height: 12px; border: 1.5px solid #4b5563; border-radius: 50%; }
     .reasonable-adjustment-section .radio-circle.filled { background: #000000; border-color: #000000; }
-    .reasonable-adjustment-desc { min-height: 48px; }
+    .reasonable-adjustment-desc { min-height: 48px; white-space: pre-line; }
     .reasonable-adjustment-sig-row { display: flex; align-items: center; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
     .reasonable-adjustment-sig-label { font-weight: 600; }
     .reasonable-adjustment-sig-line { flex: 1; min-width: 120px; border-bottom: 1px solid #333; min-height: 20px; }
@@ -323,7 +328,7 @@ export function buildHtml(data: {
     .result-sheet-table .result-value { background: #fff !important; color: #000000; }
     .result-sheet-table .answer-line { border: none; border-bottom: 1px solid #333; min-height: 18px; padding: 2px 4px; background: transparent; display: block; }
     .result-sheet-table .answer-line-inline { border: none; border-bottom: 1px solid #333; min-height: 14px; padding: 0 4px 2px; background: transparent; display: inline-block; min-width: 80px; }
-    .result-sheet-table .answer-box { border: 1px solid #333; min-height: 24px; padding: 6px 8px; background: #e5e7eb; display: block; }
+    .result-sheet-table .answer-box { border: 1px solid #333; min-height: 24px; padding: 6px 8px; background: #e5e7eb; display: block; white-space: pre-line; }
     .result-sheet-table .answer-box-large { min-height: 60px; background: #fff; }
     .result-sheet-table .result-radio { display: inline-flex; align-items: center; gap: 6px; margin-right: 16px; }
     .result-sheet-table .result-radio .radio-circle { width: 12px; height: 12px; border: 1.5px solid #374151; border-radius: 50%; flex-shrink: 0; }
@@ -336,7 +341,7 @@ export function buildHtml(data: {
     .assessment-summary-table th, .assessment-summary-table td { border: 1px solid #000; padding: 5px 8px; vertical-align: top; line-height: 1.25; }
     .assessment-summary-table .summary-label { width: 25%; background: #595959 !important; color: #fff !important; font-weight: 600; }
     .assessment-summary-table tbody tr { page-break-inside: avoid; break-inside: avoid; }
-    .assessment-summary-table .summary-value { background: #fff !important; color: #000000; }
+    .assessment-summary-table .summary-value { background: #fff !important; color: #000000; white-space: pre-line; }
     .assessment-summary-table .summary-attempt-value { background: #f3f4f6 !important; color: #000000; }
     .assessment-summary-table .summary-result-header { background: #595959 !important; color: #fff !important; font-weight: bold; text-align: center; }
     .assessment-summary-table .summary-attempt-col { width: 25%; text-align: center; }
@@ -349,7 +354,7 @@ export function buildHtml(data: {
     .decl-table td { border: 1px solid #000; padding: 10px 12px; vertical-align: middle; line-height: 1.35; overflow: visible; }
     .decl-table td:first-child { border-left: 1px solid #000 !important; }
     .decl-table .decl-label { width: 35%; background: #d9d9d9; color: #000000;font-weight: bold; }
-    .decl-table .decl-value { background: #fff; color: #000000; }
+    .decl-table .decl-value { background: #fff; color: #000000; white-space: pre-line; }
     .decl-table .decl-sig-value { color: #2563eb; font-style: italic; text-decoration: underline; }
     .decl-table .decl-other-header { background: #595959 !important; color: #fff !important; font-weight: bold; padding: 10px 12px; vertical-align: middle; }
     .decl-table .decl-office-label { font-style: italic; }
@@ -360,7 +365,7 @@ export function buildHtml(data: {
     .decl-sig-inline .decl-sig-line { display: inline-block; border: none; border-bottom: 1px solid #000; min-width: 280px; min-height: 18px; background: transparent; vertical-align: bottom; padding: 0 2px 2px 0; }
     .assessment-summary-page .answer-box { min-height: 18px; padding: 4px 6px; font-size: 8pt; }
     .assessment-summary-page .answer-box.answer-box-large { min-height: 48px; }
-    .answer-box { border: 1px solid #333; min-height: 24px; padding: 6px 8px; overflow: visible; background: #fff; }
+    .answer-box { border: 1px solid #333; min-height: 24px; padding: 6px 8px; overflow: visible; background: #fff; white-space: pre-line; }
     .answer-box.answer-box-large { min-height: 80px; }
     table { width: 100%; border-collapse: collapse; font-size: 8pt; margin-bottom: 12px; }
     th, td { border: 1px solid #000; padding: 10px 12px; vertical-align: middle; line-height: 1.35; overflow: visible; }
@@ -388,9 +393,10 @@ export function buildHtml(data: {
     .radio-circle { display: inline-block; width: 12px; height: 12px; border: 1.5px solid #4b5563; border-radius: 50%; }
     .radio-circle.filled { background: #000000; border-color: #000000; }
     .signature-img { max-width: 150px; max-height: 60px; display: block; }
-    .grid-table-no-border th, .grid-table-no-border td { border: 1px solid #000 !important; background: transparent !important; }
+    .grid-table-no-border th, .grid-table-no-border td { border: 1px solid #000 !important; overflow-wrap: anywhere; word-break: break-word; }
+    .grid-table-no-border th { background: #595959 !important; color: #ffffff !important; font-weight: 700; border: 1px solid #000 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .grid-table-no-border tbody tr { background: transparent !important; }
-    .grid-table-no-border .label-cell, .grid-table-no-border .value-cell { background: transparent !important; }
+    .grid-table-no-border .label-cell, .grid-table-no-border .value-cell { background: transparent !important; white-space: pre-line; }
     .grid-table-no-border .sub-section-header { background: transparent !important; color: #000000 !important; border: 1px solid #000 !important; }
     .task-q-question-box { border: 1px solid #595959; margin-bottom: 20px; page-break-inside: avoid; break-inside: avoid; }
     .task-q-question-box:last-child { margin-bottom: 0; }
@@ -401,17 +407,21 @@ export function buildHtml(data: {
     .task-questions-table { border: none !important; margin: 0 !important; }
     .task-questions-table .task-q-num-cell { background: #fff !important; border: 1px solid #595959 !important; padding: 12px !important; vertical-align: top !important; font-weight: bold; font-size: 11pt; width: 5%; }
     .task-questions-table .task-q-question-cell { background: #fff !important; border: 1px solid #595959 !important; border-left: none !important; padding: 12px !important; vertical-align: top !important; }
-    .task-questions-table .task-q-question-label { font-weight: bold; font-size: 11pt; margin-bottom: 8px; color: #000; }
+    .task-questions-table .task-q-question-label { font-weight: bold; font-size: 11pt; margin-bottom: 8px; color: #000; white-space: pre-line; }
+    .task-q-text-above-header { font-weight: bold; font-size: 11pt; margin-bottom: 8px; color: #000; }
+    .task-q-content-block, .task-q-additional-grid { width: 100%; max-width: 100%; box-sizing: border-box; }
+    .task-q-additional-grid table { min-width: 0; width: 100% !important; table-layout: fixed !important; }
     .task-questions-table .task-q-satisfactory-cell { background: #fff !important; border: 1px solid #595959 !important; border-left: none !important; padding: 12px !important; vertical-align: top !important; text-align: right; width: 25%; }
     .task-questions-table .task-q-satisfactory-header { font-weight: bold; font-size: 10pt; margin-bottom: 6px; }
     .task-questions-table .task-q-satisfactory-cell .task-q-radio-group { display: flex; flex-direction: row; align-items: center; justify-content: flex-end; gap: 16px; }
     .task-questions-table .task-q-radio { display: inline-flex; align-items: center; gap: 6px; }
     .task-questions-table .task-q-radio .radio-circle { width: 12px; height: 12px; border: 1.5px solid #374151; border-radius: 50%; flex-shrink: 0; }
     .task-questions-table .task-q-radio .radio-circle.filled { background: #000; border-color: #000; }
-    .task-q-answer-block { padding: 12px; min-height: 24px; font-size: 11pt; background: #fff; }
+    .task-q-answer-block { padding: 12px; min-height: 24px; font-size: 11pt; background: #fff; white-space: pre-line; }
     .task-q-answer-block.task-q-answer-large { min-height: 80px; }
     .task-questions-table .task-q-inner-table th, .task-questions-table .task-q-inner-table td,
-    .task-questions-table .task-q-inner-table .label-cell, .task-questions-table .task-q-inner-table .value-cell { background: #fff !important; border: 1px solid #595959 !important; }
+    .task-questions-table .task-q-inner-table .label-cell, .task-questions-table .task-q-inner-table .value-cell { background: transparent !important; border: 1px solid #595959 !important; color: #000000; white-space: pre-line; }
+    .task-questions-table .task-q-inner-table th { background: #595959 !important; color: #ffffff !important; font-weight: 700; border: 1px solid #000 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .task-questions-table .label-cell, .task-questions-table .value-cell, .task-questions-table td { background: #fff !important; }
     .step-page { page-break-after: always; }
     .task-q-question-box.page-break-after { page-break-after: always; }
@@ -816,10 +826,10 @@ export function buildHtml(data: {
         const pm = (questions[0]?.question?.pdf_meta as Record<string, unknown>) || {};
         const cols = (Array.isArray(pm.columns) ? pm.columns : ['Column 1', 'Column 2']) as string[];
         const columnTypes = (pm.columnTypes as string[]) || cols.map(() => 'answer');
-        const layout = (pm.layout as string) || 'default';
+        const layout = (pm.layout as string) || 'no_image';
         const isSplit = layout === 'split' || layout === 'polygon';
         const isNoImage = layout === 'no_image';
-        const firstCol = (pm.firstColumnLabel as string) || (isNoImage ? 'Item' : layout === 'polygon' ? 'Polygon Name' : 'Name');
+        const firstCol = (pm.firstColumnLabel as string) || (isNoImage ? 'Item' : layout === 'polygon' ? 'Polygon Name' : layout === 'default' ? 'Shape' : 'Name');
         const secondCol = (pm.secondColumnLabel as string) || (isNoImage ? 'Description' : layout === 'polygon' ? 'Polygon Shape' : 'Image');
         html += '<table class="grid-table-no-border"><thead><tr>';
         if (isSplit) {
@@ -827,7 +837,7 @@ export function buildHtml(data: {
         } else if (isNoImage) {
           html += `<th>${firstCol}</th><th>${secondCol}</th>`;
         } else {
-          html += '<th>Shape</th>';
+          html += `<th>${firstCol}</th>`;
         }
         for (const c of cols) html += `<th>${c}</th>`;
         html += '</tr></thead><tbody>';
@@ -932,7 +942,9 @@ export function buildHtml(data: {
         html += `<div class="task-questions-header">${taskHeaderTitle}</div>`;
         html += `<div class="task-questions-subheader">Provide your response to each question in the box below.</div>`;
         headerNum++;
-        const renderableQs = questions.filter((q) => q.question.type !== 'instruction_block');
+        const renderableQs = questions.filter(
+          (q) => q.question.type !== 'instruction_block' && !((q.question.pdf_meta as Record<string, unknown>)?.isAdditionalBlockOf)
+        );
         let qNum = 0;
         for (let i = 0; i < renderableQs.length; i++) {
           const { question, rows } = renderableQs[i];
@@ -950,21 +962,25 @@ export function buildHtml(data: {
           html += `<td class="task-q-num-cell">Q${qNum}:</td>`;
           html += '<td class="task-q-question-cell">';
           html += `<div class="task-q-question-label">${question.label}</div>`;
+          const pmTop = (question.pdf_meta as Record<string, unknown>) || {};
+          const textAboveHeader = String(pmTop.textAboveHeader ?? '').trim();
+          if (textAboveHeader) html += `<div class="task-q-text-above-header">${textAboveHeader}</div>`;
           if (isGridTable) {
             const pm = (question.pdf_meta as Record<string, unknown>) || {};
             const cols = (Array.isArray(pm.columns) ? pm.columns : ['Column 1', 'Column 2']) as string[];
-            const layout = (pm.layout as string) || 'default';
+            const layout = (pm.layout as string) || 'no_image';
             const isSplit = layout === 'split' || layout === 'polygon';
             const isNoImage = layout === 'no_image';
-            const firstCol = (pm.firstColumnLabel as string) || (isNoImage ? 'Item' : 'Name');
+            const firstCol = (pm.firstColumnLabel as string) || (isNoImage ? 'Item' : layout === 'default' ? 'Shape' : 'Name');
             const secondCol = (pm.secondColumnLabel as string) || (isNoImage ? 'Description' : 'Image');
+            const columnWordLimits = (Array.isArray(pm.columnWordLimits) ? pm.columnWordLimits : []).map((v: unknown) => (typeof v === 'number' && v > 0 ? v : null)) as (number | null)[];
             html += '<table class="section-table grid-table-no-border task-q-inner-table"><thead><tr>';
             if (isSplit) {
               html += `<th>${secondCol}</th>`;
             } else if (isNoImage) {
               html += `<th>${firstCol}</th><th>${secondCol}</th>`;
             } else {
-              html += '<th>Shape</th>';
+              html += `<th>${firstCol}</th>`;
             }
             for (const c of cols) html += `<th>${c}</th>`;
             html += '</tr></thead><tbody>';
@@ -984,11 +1000,91 @@ export function buildHtml(data: {
               for (let i = 0; i < cols.length; i++) {
                 const colType = columnTypes[i] === 'question' ? 'question' : 'answer';
                 const cellVal = colType === 'question' ? (row.row_help || '—') : (val && typeof val === 'object' ? (val[`r${row.id}_c${i}`] || '') : '');
-                html += `<td class="value-cell">${cellVal}</td>`;
+                const wl = columnWordLimits[i];
+                const cellStyle = colType === 'answer' && wl ? `min-height:${heightFromWordLimit(wl)}px;max-height:${heightFromWordLimit(wl)}px;height:${heightFromWordLimit(wl)}px;` : '';
+                html += `<td class="value-cell"${cellStyle ? ` style="${cellStyle}"` : ''}>${cellVal}</td>`;
               }
               html += '</tr>';
             }
             html += '</tbody></table>';
+          }
+          if (!isGridTable) {
+            const key = rows[0] ? `q-${question.id}-${rows[0].id}` : `q-${question.id}`;
+            const val = answers.get(key);
+            const qPm = question.pdf_meta as Record<string, unknown> | undefined;
+            const qWordLimit = typeof qPm?.wordLimit === 'number' && qPm.wordLimit > 0 ? qPm.wordLimit : null;
+            const blockClass = question.type === 'long_text' ? 'task-q-answer-block task-q-answer-large' : 'task-q-answer-block';
+            const blockStyle = qWordLimit ? `min-height:${heightFromWordLimit(qWordLimit)}px;max-height:${heightFromWordLimit(qWordLimit)}px;height:${heightFromWordLimit(qWordLimit)}px;` : '';
+            html += `<div class="${blockClass}"${blockStyle ? ` style="${blockStyle}"` : ''}>${val ?? ''}</div>`;
+          }
+          const legacyAb = pmTop?.additionalBlock as Record<string, unknown> | undefined;
+          const contentBlocks: Array<{ type: string; content?: string; questionId?: number; headerText?: string }> = Array.isArray(pmTop?.contentBlocks)
+            ? (pmTop.contentBlocks as Array<{ type: string; content?: string; questionId?: number; headerText?: string }>)
+            : legacyAb ? [{ type: String(legacyAb.type ?? 'instruction_block'), content: legacyAb.content as string, questionId: legacyAb.questionId as number }] : [];
+          const blockHeaderHtml = (ht: string | undefined) => (ht ? `<div class="task-q-text-above-header">${ht}</div>` : '');
+          for (const block of contentBlocks) {
+            if (block.type === 'instruction_block' && (block.content as string)) {
+              html += `<div class="task-q-content-block mt-3">${blockHeaderHtml(block.headerText)}<div class="task-q-additional-instruction">${block.content as string}</div></div>`;
+              continue;
+            }
+            if ((block.type === 'short_text' || block.type === 'long_text') && block.questionId) {
+              const childQ = questions.find((x) => x.question.id === block.questionId);
+              if (childQ) {
+                const cq = childQ.question;
+                const key = `q-${cq.id}`;
+                const val = answers.get(key);
+                const cqPm = (cq.pdf_meta as Record<string, unknown>) || {};
+                const qWordLimit = typeof cqPm?.wordLimit === 'number' && cqPm.wordLimit > 0 ? cqPm.wordLimit : null;
+                const blockClass = block.type === 'long_text' ? 'task-q-answer-block task-q-answer-large' : 'task-q-answer-block';
+                const blockStyle = qWordLimit ? `min-height:${heightFromWordLimit(qWordLimit)}px;max-height:${heightFromWordLimit(qWordLimit)}px;height:${heightFromWordLimit(qWordLimit)}px;` : '';
+                html += `<div class="task-q-content-block mt-3">${blockHeaderHtml(block.headerText)}<div class="task-q-question-label">${cq.label}</div><div class="${blockClass}"${blockStyle ? ` style="${blockStyle}"` : ''}>${val ?? ''}</div></div>`;
+              }
+              continue;
+            }
+            if (block.type === 'grid_table' && block.questionId) {
+            const childQ = questions.find((x) => x.question.id === block.questionId);
+            if (childQ) {
+              html += `<div class="task-q-content-block mt-3">${blockHeaderHtml(block.headerText)}`;
+              const { question: cq, rows: cRows } = childQ;
+              const cqPm = (cq.pdf_meta as Record<string, unknown>) || {};
+              const cCols = (Array.isArray(cqPm.columns) ? cqPm.columns : ['Column 1', 'Column 2']) as string[];
+              const cLayout = (cqPm.layout as string) || 'no_image';
+              const cIsSplit = cLayout === 'split' || cLayout === 'polygon';
+              const cIsNoImage = cLayout === 'no_image';
+              const cFirstCol = (cqPm.firstColumnLabel as string) || (cIsNoImage ? 'Item' : cLayout === 'default' ? 'Shape' : 'Name');
+              const cSecondCol = (cqPm.secondColumnLabel as string) || (cIsNoImage ? 'Description' : 'Image');
+              const cColumnWordLimits = (Array.isArray(cqPm.columnWordLimits) ? cqPm.columnWordLimits : []).map((v: unknown) => (typeof v === 'number' && v > 0 ? v : null)) as (number | null)[];
+              html += '<div class="task-q-additional-grid"><table class="section-table grid-table-no-border task-q-inner-table"><thead><tr>';
+              if (cIsSplit) html += `<th>${cSecondCol}</th>`;
+              else if (cIsNoImage) html += `<th>${cFirstCol}</th><th>${cSecondCol}</th>`;
+              else html += `<th>${cFirstCol}</th>`;
+              for (const c of cCols) html += `<th>${c}</th>`;
+              html += '</tr></thead><tbody>';
+              for (const row of cRows) {
+                const key = `q-${cq.id}-${row.id}`;
+                const val = answers.get(key) as Record<string, string> | undefined;
+                html += '<tr>';
+                if (cIsSplit) {
+                  html += `<td class="value-cell">${row.row_image_url ? `<img src="${row.row_image_url}" class="signature-img" alt="" /><br/>${row.row_label}` : row.row_label}</td>`;
+                } else if (cIsNoImage) {
+                  html += `<td class="label-cell">${row.row_label}</td>`;
+                  html += `<td class="value-cell">${row.row_help || '—'}</td>`;
+                } else {
+                  html += `<td class="label-cell">${row.row_image_url ? `<img src="${row.row_image_url}" class="signature-img" alt="" /><br/>${row.row_label}` : row.row_label}</td>`;
+                }
+                const cColumnTypes = (cqPm.columnTypes as string[]) || cCols.map(() => 'answer');
+                for (let i = 0; i < cCols.length; i++) {
+                  const colType = cColumnTypes[i] === 'question' ? 'question' : 'answer';
+                  const cellVal = colType === 'question' ? (row.row_help || '—') : (val && typeof val === 'object' ? (val[`r${row.id}_c${i}`] || '') : '');
+                  const wl = cColumnWordLimits[i];
+                  const cellStyle = colType === 'answer' && wl ? `min-height:${heightFromWordLimit(wl)}px;max-height:${heightFromWordLimit(wl)}px;height:${heightFromWordLimit(wl)}px;` : '';
+                  html += `<td class="value-cell"${cellStyle ? ` style="${cellStyle}"` : ''}>${cellVal}</td>`;
+                }
+                html += '</tr>';
+              }
+              html += '</tbody></table></div></div>';
+            }
+            }
           }
           html += '</td>';
           html += '<td class="task-q-satisfactory-cell">';
@@ -997,12 +1093,6 @@ export function buildHtml(data: {
           html += '<div class="task-q-radio"><span class="radio-circle' + (satNo ? ' filled' : '') + '"></span>No</div></div>';
           html += '</td></tr>';
           html += '</tbody></table>';
-          if (!isGridTable) {
-            const key = rows[0] ? `q-${question.id}-${rows[0].id}` : `q-${question.id}`;
-            const val = answers.get(key);
-            const blockClass = question.type === 'long_text' ? 'task-q-answer-block task-q-answer-large' : 'task-q-answer-block';
-            html += `<div class="${blockClass}">${val ?? ''}</div>`;
-          }
           html += '</div>';
         }
         html += '</div>'; // Close task-questions-page wrapper

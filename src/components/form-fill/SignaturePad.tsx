@@ -56,7 +56,7 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
 
   return (
     <div className="space-y-2">
-      <div className="text-sm font-semibold text-gray-700">
+      <div className="text-sm font-semibold text-gray-700 whitespace-pre-line">
         {label}
         {error && <span className="text-red-600 ml-1">*</span>}
       </div>

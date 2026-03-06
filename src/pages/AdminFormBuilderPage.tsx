@@ -32,6 +32,7 @@ import { Textarea } from '../components/ui/Textarea';
 import { Checkbox } from '../components/ui/Checkbox';
 import { TaskInstructionsModal, type TaskInstructionsData } from '../components/form-fill/TaskInstructionsModal';
 import { SectionInstructionsEditor } from '../components/form-fill/SectionInstructionsEditor';
+import { TableLayoutSelect } from '../components/form-fill/TableLayoutSelect';
 import { DatePicker } from '../components/ui/DatePicker';
 import { cn } from '../components/utils/cn';
 
@@ -68,6 +69,24 @@ const GRID_COLUMN_TYPE_OPTIONS = [
   { value: 'answer', label: 'Answer (user input)' },
   { value: 'question', label: 'Question (row description)' },
 ];
+
+const CONTENT_BLOCK_TYPES = [
+  { value: 'instruction_block', label: 'Instruction block' },
+  { value: 'grid_table', label: 'Grid table' },
+  { value: 'short_text', label: 'Short text' },
+  { value: 'long_text', label: 'Long text' },
+];
+
+type ContentBlockType = 'instruction_block' | 'grid_table' | 'short_text' | 'long_text';
+
+interface ContentBlock {
+  type: ContentBlockType;
+  content?: string;
+  questionId?: number;
+  wordLimit?: number;
+  /** Optional bold hint text above this block (e.g. "Painting terminology:", "Decorating terminologies:") */
+  headerText?: string;
+}
 
 function normalizeGridColumnType(raw: unknown): GridColumnType {
   return String(raw).trim().toLowerCase() === 'question' ? 'question' : 'answer';
@@ -1077,10 +1096,17 @@ export const AdminFormBuilderPage: React.FC = () => {
     const overId = String(over.id);
     if (!activeId.startsWith('question-') || !overId.startsWith('question-')) return;
     const questions = selectedSection?.questions ?? [];
-    const oldIndex = questions.findIndex((q) => `question-${q.id}` === activeId);
-    const newIndex = questions.findIndex((q) => `question-${q.id}` === overId);
+    const mainQuestions = questions.filter((q) => !(q.pdf_meta as Record<string, unknown>)?.isAdditionalBlockOf);
+    const children = questions.filter((q) => (q.pdf_meta as Record<string, unknown>)?.isAdditionalBlockOf);
+    const oldIndex = mainQuestions.findIndex((q) => `question-${q.id}` === activeId);
+    const newIndex = mainQuestions.findIndex((q) => `question-${q.id}` === overId);
     if (oldIndex === -1 || newIndex === -1 || !selectedSection) return;
-    const reordered = arrayMove(questions, oldIndex, newIndex);
+    const reorderedMain = arrayMove(mainQuestions, oldIndex, newIndex);
+    const reordered: FormQuestion[] = [];
+    for (const main of reorderedMain) {
+      reordered.push(main);
+      reordered.push(...children.filter((c) => (c.pdf_meta as Record<string, unknown>)?.isAdditionalBlockOf === main.id));
+    }
     setSteps((prev) =>
       prev.map((s) => ({
         ...s,
@@ -1119,6 +1145,67 @@ export const AdminFormBuilderPage: React.FC = () => {
       );
       setEditingQuestionId(data.id);
     }
+  };
+
+  const createContentBlockQuestion = async (
+    parentQuestion: FormQuestion,
+    blockType: ContentBlockType,
+    blockIndex: number,
+    blocks: ContentBlock[]
+  ) => {
+    if (!selectedSectionId) return;
+    await flushQuestionSave(parentQuestion.id);
+    const maxSort = selectedSection?.questions?.length
+      ? Math.max(...selectedSection.questions.map((q) => (q.sort_order ?? 0) as number), -1)
+      : -1;
+    const parentPm = parentQuestion.pdf_meta as Record<string, unknown> | undefined;
+
+    let insertPayload: Record<string, unknown>;
+    if (blockType === 'grid_table') {
+      insertPayload = {
+        section_id: selectedSectionId,
+        type: 'grid_table',
+        label: 'Table',
+        sort_order: maxSort + 1,
+        pdf_meta: { isAdditionalBlockOf: parentQuestion.id, layout: 'no_image', columnsMeta: [{ label: 'Terms', type: 'question' }, { label: 'Explanation', type: 'answer' }] },
+      };
+    } else if (blockType === 'short_text' || blockType === 'long_text') {
+      insertPayload = {
+        section_id: selectedSectionId,
+        type: blockType,
+        label: blockType === 'short_text' ? 'Short answer' : 'Long answer',
+        sort_order: maxSort + 1,
+        pdf_meta: { isAdditionalBlockOf: parentQuestion.id, wordLimit: blockType === 'long_text' ? 200 : 50 },
+      };
+    } else {
+      return;
+    }
+
+    const { data: newQ, error: insertErr } = await supabase
+      .from('skyline_form_questions')
+      .insert(insertPayload)
+      .select('*')
+      .single();
+    if (insertErr || !newQ) {
+      console.error('Failed to create content block:', insertErr);
+      const nextBlocks = blocks.filter((_, i) => i !== blockIndex);
+      updateQuestion(parentQuestion.id, { pdf_meta: { ...parentPm, contentBlocks: nextBlocks } as unknown as Json });
+      return;
+    }
+    const childId = (newQ as FormQuestion).id;
+    const nextBlocks = [...blocks];
+    nextBlocks[blockIndex] = { ...nextBlocks[blockIndex], questionId: childId };
+    const { error: updateErr } = await supabase
+      .from('skyline_form_questions')
+      .update({ pdf_meta: { ...parentPm, contentBlocks: nextBlocks } as unknown as Json })
+      .eq('id', parentQuestion.id);
+    if (updateErr) {
+      console.error('Failed to link content block:', updateErr);
+      const reverted = blocks.filter((_, i) => i !== blockIndex);
+      updateQuestion(parentQuestion.id, { pdf_meta: { ...parentPm, contentBlocks: reverted } as unknown as Json });
+      return;
+    }
+    await loadData();
   };
 
   const flushQuestionSave = useCallback((questionId: number): Promise<void> => {
@@ -1455,9 +1542,11 @@ export const AdminFormBuilderPage: React.FC = () => {
                 </p>
               ) : (
                 <DndContext sensors={questionSensors} collisionDetection={closestCenter} onDragEnd={handleQuestionsDragEnd}>
-                  <SortableContext items={selectedSection.questions.map((q) => `question-${q.id}`)} strategy={verticalListSortingStrategy}>
+                  <SortableContext items={selectedSection.questions.filter((q) => !(q.pdf_meta as Record<string, unknown>)?.isAdditionalBlockOf).map((q) => `question-${q.id}`)} strategy={verticalListSortingStrategy}>
                     <div className="space-y-1">
-                      {selectedSection.questions.map((q) => (
+                      {selectedSection.questions
+                        .filter((q) => !(q.pdf_meta as Record<string, unknown>)?.isAdditionalBlockOf)
+                        .map((q) => (
                         <SortableQuestionItem
                           key={q.id}
                           question={q}
@@ -1493,7 +1582,7 @@ export const AdminFormBuilderPage: React.FC = () => {
               const gridColumnWordLimits = gridColumnsMeta.map((_, idx) =>
                 normalizeWordLimit(Array.isArray(pm.columnWordLimits) ? (pm.columnWordLimits as unknown[])[idx] : null)
               );
-              const layout = (pm.layout as string) || 'default';
+              const layout = (pm.layout as string) || 'no_image';
               const isNoImageNoHeader = layout === 'no_image_no_header';
               return (
                 <Card>
@@ -1505,11 +1594,13 @@ export const AdminFormBuilderPage: React.FC = () => {
                       </p>
                     ) : (
                       <>
-                        <Input
+                        <Textarea
                           label="Label"
                           value={q.label}
                           onChange={(e) => updateQuestion(q.id, { label: e.target.value })}
                           onBlur={() => { questionBlurSavePromise.current = flushQuestionSave(q.id); }}
+                          rows={4}
+                          placeholder="Use multiple lines for sub-questions (e.g. 11.1, 11.2)"
                         />
                         <Textarea
                           label="Help Text"
@@ -1587,25 +1678,43 @@ export const AdminFormBuilderPage: React.FC = () => {
                     {(q.type === 'single_choice' || q.type === 'multi_choice' || q.type === 'yes_no') && (
                       <QuestionOptionsEditor questionId={q.id} />
                     )}
+                    {selectedSection?.pdf_render_mode === 'task_questions' && (
+                      <Input
+                        label="Text above table/header (optional, bold)"
+                        value={String(pm.textAboveHeader ?? '').trim()}
+                        onChange={(e) =>
+                          updateQuestion(q.id, {
+                            pdf_meta: { ...pm, textAboveHeader: e.target.value || undefined },
+                          })
+                        }
+                        placeholder="e.g. Painting terminology:"
+                      />
+                    )}
                     {q.type === 'grid_table' && (
                       <div className="space-y-3 mb-4">
                         <div className="text-sm font-semibold text-gray-700">1. Table layout</div>
                         <div>
-                          <Select
+                          <TableLayoutSelect
                             value={layout}
                             onChange={(v) =>
                               updateQuestion(q.id, {
                                 pdf_meta: { ...pm, layout: v },
                               })
                             }
-                            options={[
-                              { value: 'default', label: 'Default (image + label in first column)' },
-                              { value: 'no_image', label: 'No image (header 1st | header 2nd | input columns)' },
-                              { value: 'no_image_no_header', label: 'No image (no header)' },
-                              { value: 'split', label: 'Layout 1 (name | image | input columns – for polygon, measurement, etc.)' },
-                            ]}
                           />
                         </div>
+                        {layout === 'default' && (
+                          <Input
+                            label="First column header (image + label)"
+                            value={(pm.firstColumnLabel as string | undefined) ?? 'Shape'}
+                            onChange={(e) =>
+                              updateQuestion(q.id, {
+                                pdf_meta: { ...pm, firstColumnLabel: e.target.value },
+                              })
+                            }
+                            placeholder="e.g. Shape, Name, Item"
+                          />
+                        )}
                         {layout === 'split' && (
                           <div className="grid grid-cols-2 gap-2">
                             <Input
@@ -1722,6 +1831,112 @@ export const AdminFormBuilderPage: React.FC = () => {
                           simpleLabelsOnly={q.type === 'single_choice' && q.code === 'written.evidence.checklist'}
                         />
                       </>
+                    )}
+                    {selectedSection?.pdf_render_mode === 'task_questions' && (
+                      <div className="space-y-3 pt-4 border-t border-gray-200">
+                        <div className="text-sm font-semibold text-gray-700">Content blocks</div>
+                        <p className="text-xs text-gray-500">Add extra blocks below the main content (tables, instructions, short/long text). Order and mix as needed.</p>
+                        {(() => {
+                          const legacyAb = pm.additionalBlock as Record<string, unknown> | undefined;
+                          const blocks: ContentBlock[] = Array.isArray(pm.contentBlocks)
+                            ? (pm.contentBlocks as ContentBlock[])
+                            : legacyAb
+                              ? [{ type: (legacyAb.type as ContentBlockType) || 'instruction_block', content: legacyAb.content as string | undefined, questionId: legacyAb.questionId as number | undefined }]
+                              : [];
+                          const setBlocks = (next: ContentBlock[]) => {
+                            const { additionalBlock: _, contentBlocks: __, ...rest } = pm;
+                            updateQuestion(q.id, { pdf_meta: { ...rest, contentBlocks: next } as unknown as Json });
+                          };
+                          const addBlock = (type: ContentBlockType) => {
+                            const next = [...blocks, { type }];
+                            setBlocks(next);
+                            if (type === 'instruction_block') return;
+                            createContentBlockQuestion(q, type, next.length - 1, next);
+                          };
+                          const removeBlock = (idx: number) => {
+                            const next = blocks.filter((_, i) => i !== idx);
+                            setBlocks(next);
+                          };
+                          const updateBlock = (idx: number, upd: Partial<ContentBlock>) => {
+                            const next = [...blocks];
+                            next[idx] = { ...next[idx], ...upd };
+                            setBlocks(next);
+                          };
+                          return (
+                            <div className="space-y-4">
+                              {blocks.map((block, idx) => (
+                                <div key={idx} className="pl-4 border-l-2 border-gray-200 space-y-2">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="text-sm font-medium text-gray-600">Block {idx + 1}: {CONTENT_BLOCK_TYPES.find((o) => o.value === block.type)?.label ?? block.type}</span>
+                                    <button type="button" className="text-xs text-red-600 hover:text-red-700" onClick={() => removeBlock(idx)}>
+                                      Remove
+                                    </button>
+                                  </div>
+                                  <Input
+                                    label="Hint text above block (optional, bold)"
+                                    value={String(block.headerText ?? '').trim()}
+                                    onChange={(e) => updateBlock(idx, { headerText: e.target.value || undefined })}
+                                    placeholder="e.g. Painting terminology:"
+                                  />
+                                  {block.type === 'instruction_block' && (
+                                    <Textarea
+                                      label="Content"
+                                      value={String(block.content ?? '').trim()}
+                                      onChange={(e) => updateBlock(idx, { content: e.target.value || undefined })}
+                                      placeholder="Enter instruction text (supports HTML)"
+                                      rows={3}
+                                    />
+                                  )}
+                                  {(block.type === 'short_text' || block.type === 'long_text') && (() => {
+                                    const childQ = block.questionId ? selectedSection.questions.find((x) => x.id === block.questionId) : null;
+                                    if (!childQ) return <p className="text-sm text-amber-600">Creating... Please wait.</p>;
+                                    const childPm = (childQ.pdf_meta as Record<string, unknown>) || {};
+                                    const wl = normalizeWordLimit(childPm.wordLimit);
+                                    return (
+                                      <div className="space-y-1">
+                                        <Input label="Label" value={childQ.label} onChange={(e) => updateQuestion(childQ.id, { label: e.target.value })} />
+                                        <Input label="Word limit" type="number" min={1} value={wl ?? ''} onChange={(e) => updateQuestion(childQ.id, { pdf_meta: { ...childPm, wordLimit: normalizeWordLimit(e.target.value) } })} placeholder="e.g. 100" />
+                                      </div>
+                                    );
+                                  })()}
+                                  {block.type === 'grid_table' && (() => {
+                                    const childQ = block.questionId ? selectedSection.questions.find((x) => x.id === block.questionId) : null;
+                                    if (!childQ) return <p className="text-sm text-amber-600">Creating... Please wait.</p>;
+                                    const childPm = (childQ.pdf_meta as Record<string, unknown>) || {};
+                                    const childColumns = getGridColumnsMeta(childPm);
+                                    return (
+                                      <div className="space-y-2">
+                                        <TableLayoutSelect value={(childPm.layout as string) || 'no_image'} onChange={(v) => updateQuestion(childQ.id, { pdf_meta: { ...childPm, layout: v } })} />
+                                        <div className="space-y-2">
+                                          {childColumns.map((col, colIdx) => (
+                                            <div key={colIdx} className="grid grid-cols-12 gap-2 items-end">
+                                              <div className="col-span-8">
+                                                <Input label={`Column ${colIdx + 1}`} value={col.label} onChange={(e) => { const next = [...childColumns]; next[colIdx] = { ...next[colIdx], label: e.target.value }; updateQuestion(childQ.id, { pdf_meta: withGridColumnsMeta(childPm, next) }); }} />
+                                              </div>
+                                              <div className="col-span-4">
+                                                <button type="button" className="text-xs text-red-600 hover:text-red-700" onClick={() => { const next = childColumns.filter((_, i) => i !== colIdx); updateQuestion(childQ.id, { pdf_meta: withGridColumnsMeta(childPm, next) }); }}>Remove</button>
+                                              </div>
+                                            </div>
+                                          ))}
+                                          <Button type="button" variant="outline" size="sm" onClick={() => { const next = [...childColumns, { label: `Column ${childColumns.length + 1}`, type: 'answer' as GridColumnType }]; updateQuestion(childQ.id, { pdf_meta: withGridColumnsMeta(childPm, next) }); }}>+ Add column</Button>
+                                        </div>
+                                        <QuestionRowsEditor questionId={childQ.id} sectionPdfMode="task_questions" formId={formId ? Number(formId) : null} steps={steps} onStepsCreated={loadData} gridTableLayout={(childPm.layout as string) || undefined} />
+                                      </div>
+                                    );
+                                  })()}
+                                </div>
+                              ))}
+                              <div className="flex flex-wrap gap-2">
+                                {CONTENT_BLOCK_TYPES.map((opt) => (
+                                  <Button key={opt.value} type="button" variant="outline" size="sm" onClick={() => addBlock(opt.value as ContentBlockType)}>
+                                    + Add {opt.label}
+                                  </Button>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </div>
                     )}
                   </div>
                 </Card>

@@ -50,7 +50,7 @@ export const DashboardPage: React.FC = () => {
       if (!opts?.silent) setLoading(true);
       const [countRes, listRes] = await Promise.all([
         getDashboardPendingCount(role, user.id),
-        listDashboardInstances(role, user.id, page, PAGE_SIZE, search),
+        listDashboardInstances(role, user.id, page, PAGE_SIZE, search, true),
       ]);
       setPendingCount(countRes);
       setRows(listRes.data);
@@ -87,7 +87,6 @@ export const DashboardPage: React.FC = () => {
   };
 
   const totalPages = Math.max(1, Math.ceil(totalRows / PAGE_SIZE));
-  const title = role === 'trainer' ? 'My Assessments' : 'Office Assessments';
 
   return (
     <div className="min-h-screen bg-[var(--bg)]">
@@ -100,14 +99,14 @@ export const DashboardPage: React.FC = () => {
             </h1>
             <p className="text-sm text-gray-600 mt-1">
               {role === 'trainer'
-                ? 'Assessments for students in your batches'
-                : 'Assessments waiting for office processing and completed'}
+                ? 'Pending assessments awaiting your review'
+                : 'Pending assessments awaiting office processing'}
             </p>
           </div>
         </div>
 
-        {/* Pending count cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+        {/* Pending and role cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
           <Card className="bg-gradient-to-br from-[var(--brand)] to-[#ea580c] text-white overflow-hidden relative">
             <div className="absolute top-0 right-0 w-24 h-24 -mt-4 -mr-4 rounded-full bg-white/10" />
             <div className="relative">
@@ -119,11 +118,6 @@ export const DashboardPage: React.FC = () => {
             </div>
           </Card>
           <Card className="border border-[var(--border)]">
-            <p className="text-gray-600 text-sm font-medium">Total</p>
-            <p className="text-3xl font-bold text-[var(--text)] mt-1">{totalRows}</p>
-            <p className="text-gray-500 text-xs mt-1">Assessments in list</p>
-          </Card>
-          <Card className="border border-[var(--border)] hidden lg:block">
             <p className="text-gray-600 text-sm font-medium">Role</p>
             <p className="text-xl font-bold text-[var(--text)] mt-1 capitalize">{role}</p>
             <p className="text-gray-500 text-xs mt-1">{user?.full_name}</p>
@@ -132,7 +126,7 @@ export const DashboardPage: React.FC = () => {
 
         <Card>
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
-            <h2 className="text-lg font-bold text-[var(--text)]">{title}</h2>
+            <h2 className="text-lg font-bold text-[var(--text)]">Pending assessments</h2>
             <div className="flex items-center gap-2">
               <Input
                 value={searchTerm}
@@ -161,11 +155,11 @@ export const DashboardPage: React.FC = () => {
           ) : rows.length === 0 ? (
             <div className="py-12 text-center text-gray-500">
               <ClipboardCheck className="w-12 h-12 mx-auto text-gray-300 mb-3" />
-              <p>No assessments yet.</p>
+              <p>No pending assessments.</p>
               <p className="text-sm mt-1">
                 {role === 'trainer'
-                  ? 'Assessments will appear when students in your batches are assigned forms.'
-                  : 'Assessments will appear once trainers submit them for office review.'}
+                  ? 'Pending items will appear when students submit for your review.'
+                  : 'Pending items will appear once trainers submit them for office review.'}
               </p>
             </div>
           ) : (

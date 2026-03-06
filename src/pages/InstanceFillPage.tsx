@@ -633,7 +633,10 @@ export const InstanceFillPage: React.FC = () => {
 
       <div className="w-full px-4 md:px-6 py-6">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          <div className="lg:col-span-9 space-y-6 overflow-y-auto max-h-[calc(100vh-8rem)] pr-2">
+          <form
+            className="lg:col-span-9 space-y-6 overflow-y-auto max-h-[calc(100vh-8rem)] pr-2"
+            onSubmit={(e) => e.preventDefault()}
+          >
             <Card>
               <Stepper steps={steps} currentStep={currentStep} />
             </Card>
@@ -1058,7 +1061,7 @@ export const InstanceFillPage: React.FC = () => {
                               </thead>
                               <tbody>
                                 {section.questions
-                                  .filter((q) => q.type !== 'instruction_block' && q.type !== 'page_break' && isRoleVisible((q.role_visibility as Record<string, boolean>) || {}, role))
+                                  .filter((q) => q.type !== 'instruction_block' && q.type !== 'page_break' && !(q.pdf_meta as Record<string, unknown>)?.isAdditionalBlockOf && isRoleVisible((q.role_visibility as Record<string, boolean>) || {}, role))
                                   .map((q, qIdx) => {
                                     const re = (q.role_editability as Record<string, boolean>) || {};
                                     const editable = isRoleEditable(re, role) && canRoleEditCurrentWorkflow;
@@ -1069,48 +1072,94 @@ export const InstanceFillPage: React.FC = () => {
                                     return (
                                       <tr key={q.id} className={qIdx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                                         <td className="p-3 border border-gray-300 align-top">
-                                          {q.type === 'grid_table' && q.rows.length > 0 ? (
-                                            (() => {
-                                              const merged: Record<string, string> = {};
-                                              for (const r of q.rows) {
-                                                const v = answers[getAnswerKey(q.id, r.id)];
-                                                if (v && typeof v === 'object') Object.assign(merged, v as Record<string, string>);
+                                          {(() => {
+                                            const pm = (q.pdf_meta as Record<string, unknown>) || {};
+                                            const textAboveHeader = String(pm.textAboveHeader ?? '').trim();
+                                            const legacyAb = pm.additionalBlock as Record<string, unknown> | undefined;
+                                            const contentBlocks: Array<{ type: string; content?: string; questionId?: number; headerText?: string }> = Array.isArray(pm.contentBlocks)
+                                              ? (pm.contentBlocks as Array<{ type: string; content?: string; questionId?: number; headerText?: string }>)
+                                              : legacyAb ? [{
+                                                  type: String(legacyAb.type ?? 'instruction_block'),
+                                                  content: legacyAb.content as string | undefined,
+                                                  questionId: legacyAb.questionId as number | undefined,
+                                                }] : [];
+                                            const wrapWithHeader = (key: string, headerText: string | undefined, content: React.ReactNode) => (
+                                              <div key={key} className="mt-3">
+                                                {headerText && <div className="font-bold text-gray-900 mb-2">{headerText}</div>}
+                                                {content}
+                                              </div>
+                                            );
+                                            const renderBlock = (block: { type: string; content?: string; questionId?: number; headerText?: string }, key: string) => {
+                                              if (block.type === 'instruction_block' && block.content) {
+                                                return wrapWithHeader(key, block.headerText, <div className="text-sm text-gray-700 prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: String(block.content) }} />);
                                               }
-                                              const onGridChange = (v: string | number | boolean | Record<string, unknown> | string[]) => {
-                                                const byRow = new Map<number, Record<string, string>>();
-                                                const o = v as Record<string, string>;
-                                                if (!o || typeof o !== 'object') return;
-                                                for (const [k, val] of Object.entries(o)) {
-                                                  const match = /^r(\d+)_c/.exec(k);
-                                                  if (match) {
-                                                    const rowId = Number(match[1]);
-                                                    if (!byRow.has(rowId)) byRow.set(rowId, {});
-                                                    byRow.get(rowId)![k] = String(val);
+                                              const childQ = block.questionId ? section.questions.find((x) => x.id === block.questionId) : null;
+                                              if (!childQ) return null;
+                                              if (block.type === 'grid_table' && childQ.rows?.length) {
+                                                const merged: Record<string, string> = {};
+                                                for (const r of childQ.rows) {
+                                                  const v = answers[getAnswerKey(childQ.id, r.id)];
+                                                  if (v && typeof v === 'object') Object.assign(merged, v as Record<string, string>);
+                                                }
+                                                const onGridChange = (v: string | number | boolean | Record<string, unknown> | string[]) => {
+                                                  const o = v as Record<string, string>;
+                                                  if (!o || typeof o !== 'object') return;
+                                                  const byRow = new Map<number, Record<string, string>>();
+                                                  for (const [k, val] of Object.entries(o)) {
+                                                    const match = /^r(\d+)_c/.exec(k);
+                                                    if (match) {
+                                                      const rowId = Number(match[1]);
+                                                      if (!byRow.has(rowId)) byRow.set(rowId, {});
+                                                      byRow.get(rowId)![k] = String(val);
+                                                    }
                                                   }
-                                                }
-                                                for (const [rowId, rowData] of byRow.entries()) {
-                                                  handleAnswerChange(q.id, rowId, rowData);
-                                                }
-                                              };
-                                              return (
-                                                <QuestionRenderer
-                                                  question={q}
-                                                  value={Object.keys(merged).length ? merged : null}
-                                                  onChange={onGridChange}
-                                                  disabled={!editable}
-                                                  error={errors[`q-${q.id}`]}
-                                                />
-                                              );
-                                            })()
-                                          ) : (
-                                            <QuestionRenderer
-                                              question={q}
-                                              value={(answers[getAnswerKey(q.id, null)] as string | number | boolean | Record<string, unknown> | string[] | undefined) ?? null}
-                                              onChange={(v) => handleAnswerChange(q.id, null, v as string | number | boolean | Record<string, unknown> | string[])}
-                                              disabled={!editable}
-                                              error={errors[`q-${q.id}`]}
-                                            />
-                                          )}
+                                                  for (const [rowId, rowData] of byRow.entries()) {
+                                                    handleAnswerChange(childQ.id, rowId, rowData);
+                                                  }
+                                                };
+                                                return wrapWithHeader(key, block.headerText, <QuestionRenderer question={childQ} value={Object.keys(merged).length ? merged : null} onChange={onGridChange} disabled={!editable} error={errors[`q-${childQ.id}`]} />);
+                                              }
+                                              if (block.type === 'short_text' || block.type === 'long_text') {
+                                                const val = answers[getAnswerKey(childQ.id, null)] as string | undefined;
+                                                return wrapWithHeader(key, block.headerText, <QuestionRenderer question={childQ} value={val ?? null} onChange={(v) => handleAnswerChange(childQ.id, null, v as string | number | boolean | Record<string, unknown> | string[])} disabled={!editable} error={errors[`q-${childQ.id}`]} />);
+                                              }
+                                              return null;
+                                            };
+                                            return (
+                                              <div className="space-y-3">
+                                                {textAboveHeader && <div className="font-bold text-gray-900">{textAboveHeader}</div>}
+                                                {q.type === 'grid_table' && q.rows.length > 0 ? (
+                                                  (() => {
+                                                    const merged: Record<string, string> = {};
+                                                    for (const r of q.rows) {
+                                                      const v = answers[getAnswerKey(q.id, r.id)];
+                                                      if (v && typeof v === 'object') Object.assign(merged, v as Record<string, string>);
+                                                    }
+                                                    const onGridChange = (v: string | number | boolean | Record<string, unknown> | string[]) => {
+                                                      const byRow = new Map<number, Record<string, string>>();
+                                                      const o = v as Record<string, string>;
+                                                      if (!o || typeof o !== 'object') return;
+                                                      for (const [k, val] of Object.entries(o)) {
+                                                        const match = /^r(\d+)_c/.exec(k);
+                                                        if (match) {
+                                                          const rowId = Number(match[1]);
+                                                          if (!byRow.has(rowId)) byRow.set(rowId, {});
+                                                          byRow.get(rowId)![k] = String(val);
+                                                        }
+                                                      }
+                                                      for (const [rowId, rowData] of byRow.entries()) {
+                                                        handleAnswerChange(q.id, rowId, rowData);
+                                                      }
+                                                    };
+                                                    return <QuestionRenderer question={q} value={Object.keys(merged).length ? merged : null} onChange={onGridChange} disabled={!editable} error={errors[`q-${q.id}`]} />;
+                                                  })()
+                                                ) : (
+                                                  <QuestionRenderer question={q} value={(answers[getAnswerKey(q.id, null)] as string | number | boolean | Record<string, unknown> | string[] | undefined) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string | number | boolean | Record<string, unknown> | string[])} disabled={!editable} error={errors[`q-${q.id}`]} />
+                                                )}
+                                                {contentBlocks.map((block, bi) => renderBlock(block, String(block.questionId ?? `block-${bi}`)))}
+                                              </div>
+                                            );
+                                          })()}
                                         </td>
                                         <td className="p-2 border border-gray-300 align-top" style={{ width: '9.5rem' }}>
                                           <div className="flex flex-row items-center justify-center gap-3">
@@ -1870,7 +1919,7 @@ export const InstanceFillPage: React.FC = () => {
                 </Button>
               )}
             </div>
-          </div>
+          </form>
 
           <div className="lg:col-span-3">
             <div className="lg:sticky lg:top-3">
