@@ -635,7 +635,7 @@ export function buildHtml(data: {
       <div style="position:absolute;left:15mm;right:15mm;top:110px;border-top:1px solid #8b95a5;z-index:0;"></div>
       <div style="position:absolute;left:15mm;top:0px;z-index:1;">${crestImg ? `<img src="${crestImg}" alt="Skyline Institute of Technology" style="width:210px;height:165px;object-fit:contain;display:block;" />` : ''}</div>
       <div style="position:absolute;left:50%;top:18px;transform:translateX(-50%);z-index:1;">${textImg ? `<img src="${textImg}" alt="SKYLINE INSTITUTE OF TECHNOLOGY" style="height:100px;width:auto;object-fit:contain;display:block;" />` : '<div style="display:flex;flex-direction:column;align-items:center;"><span style="font-size:22pt;font-weight:700;color:#f97316;letter-spacing:2px;">SKYLINE</span><span style="font-size:9pt;font-weight:600;color:#374151;letter-spacing:2px;margin-top:2px;">INSTITUTE OF TECHNOLOGY</span></div>'}</div>
-      <div style="position:absolute;right:15mm;top:40px;width:260px;font-size:11pt;font-family:'Calibri','Calibri Light',Arial,sans-serif;color:#374151;text-align:right;line-height:1.25;font-weight:300;z-index:1;">
+      <div style="position:absolute;right:15mm;top:8px;width:220px;font-size:9pt;font-family:'Calibri','Calibri Light',Arial,sans-serif;color:#374151;text-align:right;line-height:1.25;font-weight:300;z-index:1;">
         Level 8, 310 King Street<br/>Melbourne VIC – 3000<br/>RTO: 45989 CRICOS: 04114B<br/>Email: <a href="mailto:info@slit.edu.au" style="color:#2563eb;text-decoration:underline;">info@slit.edu.au</a><br/>Phone: +61 3 9125 1661
       </div>
     </div>
