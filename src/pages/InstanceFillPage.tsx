@@ -16,6 +16,7 @@ import {
   updateInstanceRole,
   updateInstanceWorkflowStatus,
   validateInstanceAccessToken,
+  revokeRoleAccessTokens,
 } from '../lib/formEngine';
 import type { FormTemplate } from '../lib/formEngine';
 import type { FormAnswer } from '../types/database';
@@ -446,6 +447,7 @@ export const InstanceFillPage: React.FC = () => {
     if (role === 'student' && workflowStatus === 'draft') {
       await updateInstanceWorkflowStatus(id, 'waiting_trainer');
       await updateInstanceRole(id, 'trainer');
+      await revokeRoleAccessTokens(id, 'student');
       setWorkflowStatus('waiting_trainer');
       toast.success('Submitted successfully. Waiting for trainer checking.');
       setWorkflowSubmitting(false);

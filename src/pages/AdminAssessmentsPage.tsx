@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Copy, ExternalLink, Send, RefreshCw, Ban, CheckCircle, User } from 'lucide-react';
-import { listSubmittedInstancesPaged, updateInstanceRole, issueInstanceAccessLink, revokeRoleAccessTokens, extendInstanceAccessTokens, listTrainers } from '../lib/formEngine';
+import { listSubmittedInstancesPaged, updateInstanceRole, issueInstanceAccessLink, revokeRoleAccessTokens, extendInstanceAccessTokens, allowStudentResubmission, listTrainers } from '../lib/formEngine';
 import type { SubmittedInstanceRow, Trainer } from '../lib/formEngine';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -25,11 +25,12 @@ const getWorkflowLabel = (row: SubmittedInstanceRow): string => {
 };
 
 const getWorkflowBadgeClass = (row: SubmittedInstanceRow): string => {
-  if (row.status === 'locked') return 'bg-emerald-100 text-emerald-800';
-  if (row.status === 'draft') return 'bg-slate-100 text-slate-700';
-  if (row.role_context === 'trainer') return 'bg-amber-100 text-amber-800';
-  if (row.role_context === 'office') return 'bg-blue-100 text-blue-800';
-  return 'bg-gray-100 text-gray-700';
+  const base = 'border border-gray-200/80';
+  if (row.status === 'locked') return `${base} bg-emerald-50 text-emerald-800`;
+  if (row.status === 'draft') return `${base} bg-gray-50 text-gray-700`;
+  if (row.role_context === 'trainer') return `${base} bg-amber-50 text-amber-800`;
+  if (row.role_context === 'office') return `${base} bg-sky-50 text-sky-800`;
+  return `${base} bg-gray-50 text-gray-600`;
 };
 
 export const AdminAssessmentsPage: React.FC = () => {
@@ -178,13 +179,13 @@ export const AdminAssessmentsPage: React.FC = () => {
                     <th className="py-3 pr-3">Student</th>
                     <th className="py-3 pr-3">Form</th>
                     <th className="py-3 pr-3">Date</th>
-                    <th className="py-3 pr-3">Workflow</th>
-                    <th className="py-3 text-right">Actions</th>
+                    <th className="py-3 pr-3 w-[140px]">Workflow</th>
+                    <th className="py-3 text-right min-w-[320px]">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {rows.map((row) => (
-                    <tr key={row.id} className="border-b border-gray-100 align-top">
+                    <tr key={row.id} className="border-b border-gray-100 hover:bg-gray-50/50 transition-colors">
                       <td className="py-3 pr-3">
                         <div className="font-medium text-gray-900">{row.student_name}</div>
                         <div className="text-xs text-gray-500">{row.student_email || '-'}</div>
@@ -195,12 +196,12 @@ export const AdminAssessmentsPage: React.FC = () => {
                       </td>
                       <td className="py-3 pr-3 text-gray-700">{formatDateTime(row.submitted_at || row.created_at)}</td>
                       <td className="py-3 pr-3">
-                        <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${getWorkflowBadgeClass(row)}`}>
+                        <span className={`inline-flex rounded-md px-2.5 py-1 text-xs font-medium ${getWorkflowBadgeClass(row)}`}>
                           {getWorkflowLabel(row)}
                         </span>
                       </td>
-                      <td className="py-3">
-                        <div className="flex items-center justify-end gap-2">
+                      <td className="py-3 align-middle">
+                        <div className="flex flex-wrap items-center justify-end gap-1.5">
                           <Button
                             type="button"
                             variant="outline"
@@ -242,7 +243,7 @@ export const AdminAssessmentsPage: React.FC = () => {
                                 void handleExpireLink(row.id, role);
                               }}
                               disabled={managingId === row.id}
-                              className="inline-flex items-center gap-1.5 whitespace-nowrap text-amber-700 hover:text-amber-800 hover:border-amber-400"
+                              className="inline-flex items-center gap-1.5 whitespace-nowrap"
                               title="Revoke link access"
                             >
                               <Ban className="w-4 h-4" />
@@ -259,16 +260,39 @@ export const AdminAssessmentsPage: React.FC = () => {
                                 void handleEnableLink(row.id, role);
                               }}
                               disabled={managingId === row.id}
-                              className="inline-flex items-center gap-1.5 whitespace-nowrap text-emerald-700 hover:text-emerald-800 hover:border-emerald-400"
+                              className="inline-flex items-center gap-1.5 whitespace-nowrap"
                               title="Re-enable link (30 days) even if form date passed"
                             >
                               <CheckCircle className="w-4 h-4" />
                               <span>Enable</span>
                             </Button>
                           )}
+                          {row.status === 'submitted' && (row.role_context === 'trainer' || row.role_context === 'office') && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={async () => {
+                                setManagingId(row.id);
+                                await allowStudentResubmission(row.id);
+                                setManagingId(null);
+                                await loadRows(currentPage, searchTerm, { silent: true });
+                                const url = `${window.location.origin}/forms/${row.form_id}/student-access`;
+                                await navigator.clipboard.writeText(url);
+                                toast.success('Resubmission allowed. Generic link copied—student uses email and password.');
+                              }}
+                              disabled={managingId === row.id}
+                              className="inline-flex items-center gap-1.5 whitespace-nowrap"
+                              title="Allow student to resubmit (2nd/3rd attempt)"
+                            >
+                              <CheckCircle className="w-4 h-4" />
+                              <span>Allow Resubmission</span>
+                            </Button>
+                          )}
                           {row.status === 'submitted' && (
                             <Button
                               type="button"
+                              variant="outline"
                               size="sm"
                               onClick={() => openSendToTrainer(row)}
                               disabled={sendingId === row.id}

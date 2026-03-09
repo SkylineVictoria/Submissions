@@ -560,7 +560,7 @@ export async function saveAnswer(
   }
 }
 
-/** Get existing instance for student+form (to avoid duplicate sends) */
+/** Get existing instance for student+form (to avoid duplicate sends). Finds instance regardless of current role. */
 export async function getInstanceForStudentAndForm(
   formId: number,
   studentId: number
@@ -570,7 +570,6 @@ export async function getInstanceForStudentAndForm(
     .select('id')
     .eq('form_id', formId)
     .eq('student_id', studentId)
-    .eq('role_context', 'student')
     .limit(1)
     .maybeSingle();
   if (error || !data) return null;
@@ -733,6 +732,83 @@ export async function extendInstanceAccessTokens(instanceId: number, roleContext
     .eq('role_context', roleContext)
     .is('consumed_at', null);
   if (error) console.error('extendInstanceAccessTokens error', error);
+}
+
+/** Allow student resubmission: set instance back to draft, role to student, and re-enable student link. For 2nd/3rd attempts. */
+export async function allowStudentResubmission(instanceId: number): Promise<void> {
+  await supabase.from('skyline_form_instances').update({ status: 'draft', role_context: 'student' }).eq('id', instanceId);
+  await extendInstanceAccessTokens(instanceId, 'student', 30);
+}
+
+export interface StudentLoginResult {
+  success: boolean;
+  url?: string;
+  instanceId?: number;
+  error?: string;
+}
+
+/** Student login via email+password for generic link access. Returns URL with token to redirect to. */
+export async function studentLoginForForm(formId: number, email: string, password: string): Promise<StudentLoginResult> {
+  const { data: authData, error: authError } = await supabase.rpc('skyline_student_authenticate', {
+    p_email: email.trim(),
+    p_password: password,
+  });
+  if (authError) {
+    return { success: false, error: 'Authentication failed.' };
+  }
+  const rows = authData as Array<{ id: number; email: string }> | null;
+  if (!rows || rows.length === 0) {
+    return { success: false, error: 'Invalid email or password.' };
+  }
+  const studentId = rows[0].id;
+
+  let instance = await getInstanceForStudentAndForm(formId, studentId);
+  if (!instance) {
+    const created = await createFormInstance(formId, 'student', studentId);
+    if (!created) return { success: false, error: 'Failed to create form instance.' };
+    instance = { id: created.id };
+  }
+
+  const { data: instRow } = await supabase
+    .from('skyline_form_instances')
+    .select('status, submitted_at')
+    .eq('id', instance.id)
+    .single();
+  const status = (instRow as { status?: string } | null)?.status ?? 'draft';
+  const hasSubmittedBefore = !!(instRow as { submitted_at?: string } | null)?.submitted_at;
+
+  if (hasSubmittedBefore && status !== 'draft') {
+    const { data: allTokens } = await supabase
+      .from('skyline_instance_access_tokens')
+      .select('expires_at, revoked_at')
+      .eq('instance_id', instance.id)
+      .eq('role_context', 'student');
+    const now = Date.now();
+    const anyValid = (allTokens as Array<{ expires_at: string; revoked_at: string | null }> | null)?.some(
+      (t) => !t.revoked_at && t.expires_at && new Date(t.expires_at).getTime() > now
+    ) ?? false;
+    if (!anyValid) {
+      return {
+        success: false,
+        error: 'Assessment submitted. Admin must allow resubmission before you can access again.',
+      };
+    }
+  }
+
+  const url = await issueInstanceAccessLink(instance.id, 'student');
+  if (!url) return { success: false, error: 'Failed to generate access link.' };
+  return { success: true, url, instanceId: instance.id };
+}
+
+export async function setStudentPassword(studentId: number, password: string): Promise<{ success: boolean; message: string }> {
+  const { data, error } = await supabase.rpc('skyline_student_set_password', {
+    p_student_id: studentId,
+    p_password: password,
+  });
+  if (error) return { success: false, message: error.message };
+  const rows = data as Array<{ success: boolean; message: string }> | null;
+  const row = rows?.[0];
+  return row ? { success: row.success, message: row.message } : { success: false, message: 'Unknown error.' };
 }
 
 export interface Trainer {

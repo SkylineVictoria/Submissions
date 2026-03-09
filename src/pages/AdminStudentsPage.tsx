@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Plus, Send, Mail, Phone, Pencil } from 'lucide-react';
-import { listStudentsPaged, createStudent, updateStudent, createFormInstance, getInstanceForStudentAndForm, listForms, issueInstanceAccessLink, listBatches, listStudentsInBatch } from '../lib/formEngine';
+import { Plus, Send, Mail, Phone, Pencil, Key, Link } from 'lucide-react';
+import { listStudentsPaged, createStudent, updateStudent, createFormInstance, getInstanceForStudentAndForm, listForms, listBatches, listStudentsInBatch, setStudentPassword } from '../lib/formEngine';
 import type { Student } from '../lib/formEngine';
 import type { Form } from '../types/database';
 import { Card } from '../components/ui/Card';
@@ -29,12 +29,17 @@ export const AdminStudentsPage: React.FC = () => {
   const [sendToBatchFormId, setSendToBatchFormId] = useState('');
   const [sendToBatchBatchId, setSendToBatchBatchId] = useState('');
   const [batches, setBatches] = useState<{ id: number; name: string }[]>([]);
+  const [setPasswordStudentId, setSetPasswordStudentId] = useState<number | null>(null);
+  const [passwordDraft, setPasswordDraft] = useState('');
+  const [settingPassword, setSettingPassword] = useState(false);
   const [studentDraft, setStudentDraft] = useState({
     student_id: '',
     first_name: '',
     last_name: '',
+    email: '',
     phone: '',
     batch_id: '',
+    password: '',
   });
 
   const digitsOnly = (val: string) => val.replace(/\D/g, '');
@@ -44,8 +49,10 @@ export const AdminStudentsPage: React.FC = () => {
     student_id: string;
     first_name: string;
     last_name: string;
+    email?: string;
     phone: string;
     batch_id?: string;
+    password?: string;
   }): string | null => {
     const requiredFields: Array<[string, string]> = [
       ['student_id', 'Student ID'],
@@ -53,13 +60,16 @@ export const AdminStudentsPage: React.FC = () => {
       ['last_name', 'Last name'],
       ['phone', 'Phone'],
       ['batch_id', 'Batch'],
+      ['password', 'Password'],
     ];
     for (const [key, label] of requiredFields) {
       if (!String((form as Record<string, unknown>)[key] ?? '').trim()) return `${label} is required.`;
     }
+    const email = (form.email || '').trim() || buildStudentEmail(form.student_id);
+    if (!/^\S+@\S+\.\S+$/.test(email)) return 'Please enter a valid email address.';
     if (/\s/.test(form.student_id.trim())) return 'Student ID cannot contain spaces.';
     if (!/^\d{10}$/.test(form.phone.trim())) return 'Phone must be exactly 10 digits.';
-    if (!/^\S+@\S+\.\S+$/.test(buildStudentEmail(form.student_id))) return 'Generated student email is invalid.';
+    if (form.password && form.password.length < 6) return 'Password must be at least 6 characters.';
     return null;
   };
 
@@ -94,7 +104,7 @@ export const AdminStudentsPage: React.FC = () => {
   }, [forms, students]);
 
   const formOptions = forms.map((f) => ({ value: String(f.id), label: `${f.name} (${f.version ?? '1.0.0'})` }));
-  const generatedStudentEmail = useMemo(() => {
+  const defaultEmail = useMemo(() => {
     const id = studentDraft.student_id.trim();
     return id ? buildStudentEmail(id) : '';
   }, [studentDraft.student_id]);
@@ -111,15 +121,19 @@ export const AdminStudentsPage: React.FC = () => {
       toast.error('Select a batch');
       return;
     }
+    const email = (studentDraft.email || '').trim() || buildStudentEmail(studentDraft.student_id);
     const created = await createStudent({
       student_id: studentDraft.student_id,
       first_name: studentDraft.first_name,
       last_name: studentDraft.last_name,
       phone: studentDraft.phone,
-      email: buildStudentEmail(studentDraft.student_id),
+      email,
       batch_id: batchId,
     });
     if (created) {
+      if (studentDraft.password.trim().length >= 6) {
+        await setStudentPassword(created.id, studentDraft.password);
+      }
       setCurrentPage(1);
       const res = await listStudentsPaged(1, PAGE_SIZE, searchTerm);
       setStudents(res.data);
@@ -128,8 +142,10 @@ export const AdminStudentsPage: React.FC = () => {
         student_id: '',
         first_name: '',
         last_name: '',
+        email: '',
         phone: '',
         batch_id: '',
+        password: '',
       });
       setIsCreateOpen(false);
       toast.success('Student added');
@@ -144,25 +160,41 @@ export const AdminStudentsPage: React.FC = () => {
     if (!formId) return;
     setSending(studentId);
     const existing = await getInstanceForStudentAndForm(formId, studentId);
-    let instanceId: number | null = null;
-    if (existing) {
-      instanceId = existing.id;
-    } else {
-      const instance = await createFormInstance(formId, 'student', studentId);
-      instanceId = instance?.id ?? null;
+    if (!existing) {
+      await createFormInstance(formId, 'student', studentId);
     }
     setSending(null);
-    if (instanceId) {
-      const secureUrl = await issueInstanceAccessLink(instanceId, 'student');
-      if (secureUrl) {
-        await navigator.clipboard.writeText(secureUrl);
-        toast.success(existing ? 'Student already has this form. New link copied.' : 'Secure student form link copied! Share with student.');
-      } else {
-        toast.error('Failed to create secure access link');
-      }
-    } else {
-      toast.error('Failed to create form link');
+    const url = `${window.location.origin}/forms/${formId}/student-access`;
+    await navigator.clipboard.writeText(url);
+    toast.success(existing ? 'Student already has this form. Generic link copied.' : 'Secure student form link copied! Share with student.');
+  };
+
+  const handleSetPassword = async () => {
+    if (!setPasswordStudentId || !passwordDraft.trim() || passwordDraft.length < 6) {
+      toast.error('Password must be at least 6 characters.');
+      return;
     }
+    setSettingPassword(true);
+    const res = await setStudentPassword(setPasswordStudentId, passwordDraft);
+    setSettingPassword(false);
+    if (res.success) {
+      setSetPasswordStudentId(null);
+      setPasswordDraft('');
+      toast.success(res.message);
+    } else {
+      toast.error(res.message);
+    }
+  };
+
+  const handleCopyGenericLink = () => {
+    const formId = sendToBatchFormId || (forms[0] ? String(forms[0].id) : '');
+    if (!formId) {
+      toast.error('Select a form first.');
+      return;
+    }
+    const url = `${window.location.origin}/forms/${formId}/student-access`;
+    navigator.clipboard.writeText(url);
+    toast.success('Generic student access link copied. Share with students—they enter email and password.');
   };
 
   const handleSendToBatch = async () => {
@@ -187,9 +219,11 @@ export const AdminStudentsPage: React.FC = () => {
     }
     setSendingBatch(false);
     if (created > 0 || skipped > 0) {
+      const url = `${window.location.origin}/forms/${formId}/student-access`;
+      await navigator.clipboard.writeText(url);
       const msg = skipped > 0
-        ? `Form sent to ${created} students. ${skipped} already had this form.`
-        : `Form sent to ${created} students.`;
+        ? `Form sent to ${created} students. ${skipped} already had this form. Generic link copied—students use email and password.`
+        : `Form sent to ${created} students. Generic link copied—students use email and password.`;
       toast.success(msg);
     } else if (batchStudents.length === 0) {
       toast.error('No students in this batch');
@@ -203,6 +237,7 @@ export const AdminStudentsPage: React.FC = () => {
     student_id: string;
     first_name: string;
     last_name: string;
+    email: string;
     phone: string;
     batch_id: string;
   } | null>(null);
@@ -213,6 +248,7 @@ export const AdminStudentsPage: React.FC = () => {
         student_id: editingStudent.student_id ?? '',
         first_name: editingStudent.first_name ?? '',
         last_name: editingStudent.last_name ?? '',
+        email: (editingStudent.email || '').trim() || buildStudentEmail(editingStudent.student_id || ''),
         phone: editingStudent.phone ?? '',
         batch_id: editingStudent.batch_id != null ? String(editingStudent.batch_id) : '',
       });
@@ -239,7 +275,7 @@ export const AdminStudentsPage: React.FC = () => {
       first_name: editForm.first_name,
       last_name: editForm.last_name,
       phone: editForm.phone,
-      email: buildStudentEmail(editForm.student_id),
+      email: editForm.email.trim(),
       batch_id: batchId,
     });
     setSavingEdit(false);
@@ -254,12 +290,27 @@ export const AdminStudentsPage: React.FC = () => {
     }
   };
 
+  const validateEditStudentForm = (form: {
+    student_id: string;
+    first_name: string;
+    last_name: string;
+    email: string;
+    phone: string;
+    batch_id?: string;
+  }): string | null => {
+    if (!form.student_id?.trim()) return 'Student ID is required.';
+    if (!form.first_name?.trim()) return 'First name is required.';
+    if (!form.last_name?.trim()) return 'Last name is required.';
+    if (!form.email?.trim()) return 'Email is required.';
+    if (!/^\S+@\S+\.\S+$/.test(form.email.trim())) return 'Please enter a valid email address.';
+    if (!form.phone?.trim()) return 'Phone is required.';
+    if (!/^\d{10}$/.test(form.phone.trim())) return 'Phone must be exactly 10 digits.';
+    if (!form.batch_id) return 'Batch is required.';
+    return null;
+  };
+
   const createFormError = useMemo(() => validateCreateStudentForm(studentDraft), [studentDraft]);
-  const editFormError = useMemo(() => (editForm ? validateCreateStudentForm(editForm) : 'Student form is unavailable.'), [editForm]);
-  const generatedEditEmail = useMemo(() => {
-    const id = editForm?.student_id?.trim() || '';
-    return id ? buildStudentEmail(id) : '';
-  }, [editForm?.student_id]);
+  const editFormError = useMemo(() => (editForm ? validateEditStudentForm(editForm) : null), [editForm]);
   const totalPages = Math.max(1, Math.ceil(totalStudents / PAGE_SIZE));
 
   return (
@@ -334,7 +385,19 @@ export const AdminStudentsPage: React.FC = () => {
                 </>
               )}
             </Button>
+            <Button
+              variant="outline"
+              onClick={handleCopyGenericLink}
+              disabled={forms.length === 0}
+              title="Copy generic link for students to login with email/password"
+            >
+              <Link className="w-4 h-4 mr-2 inline" />
+              Copy generic link
+            </Button>
           </div>
+          <p className="text-xs text-gray-500 mt-2">
+            Generic link: students enter email + password to access. Set each student&apos;s password first (Password button).
+          </p>
         </Card>
 
         <Card>
@@ -398,7 +461,17 @@ export const AdminStudentsPage: React.FC = () => {
                         />
                       </td>
                       <td className="px-4 py-3 border-b border-[var(--border)] text-right">
-                        <div className="flex items-center justify-end gap-2">
+                        <div className="flex items-center justify-end gap-2 flex-wrap">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setSetPasswordStudentId(student.id)}
+                            className="inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
+                            title="Set password for email/password login"
+                          >
+                            <Key className="w-4 h-4" />
+                            Password
+                          </Button>
                           <Button
                             variant="outline"
                             size="sm"
@@ -474,15 +547,24 @@ export const AdminStudentsPage: React.FC = () => {
               required
             />
             <Input
-              value={generatedStudentEmail}
-              placeholder="Auto-generated email"
+              value={studentDraft.email || defaultEmail}
+              onChange={(e) => setStudentDraft((p) => ({ ...p, email: e.target.value }))}
+              placeholder="Email (editable, default: studentID@student.slit.edu.au)"
               type="email"
-              disabled
+              autoComplete="email"
             />
             <Input
               value={studentDraft.phone}
               onChange={(e) => setStudentDraft((p) => ({ ...p, phone: digitsOnly(e.target.value).slice(0, 10) }))}
               placeholder="Phone"
+              required
+            />
+            <Input
+              type="password"
+              value={studentDraft.password}
+              onChange={(e) => setStudentDraft((p) => ({ ...p, password: e.target.value }))}
+              placeholder="Password * (min 6 characters)"
+              autoComplete="new-password"
               required
             />
             <div className="md:col-span-2">
@@ -504,7 +586,7 @@ export const AdminStudentsPage: React.FC = () => {
             <Button variant="outline" size="sm" onClick={() => setIsCreateOpen(false)}>
               Cancel
             </Button>
-            <Button size="sm" onClick={handleCreate} disabled={creating || !!createFormError || !studentDraft.batch_id}>
+            <Button size="sm" onClick={handleCreate} disabled={creating || !!createFormError || !studentDraft.batch_id || (studentDraft.password?.length ?? 0) < 6}>
               {creating ? (
                 <>
                   <Loader variant="dots" size="sm" inline className="mr-2" />
@@ -544,10 +626,11 @@ export const AdminStudentsPage: React.FC = () => {
                 required
               />
               <Input
-                value={generatedEditEmail}
-                placeholder="Auto-generated email"
+                value={editForm.email}
+                onChange={(e) => setEditForm((p) => p ? { ...p, email: e.target.value } : p)}
+                placeholder="Email (editable)"
                 type="email"
-                disabled
+                autoComplete="email"
               />
               <Input
                 value={editForm.phone}
@@ -581,6 +664,56 @@ export const AdminStudentsPage: React.FC = () => {
                   </>
                 ) : (
                   'Save changes'
+                )}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {setPasswordStudentId && (
+        <Modal
+          isOpen={!!setPasswordStudentId}
+          onClose={() => {
+            setSetPasswordStudentId(null);
+            setPasswordDraft('');
+          }}
+          title="Set Student Password"
+          size="md"
+        >
+          <div className="space-y-4">
+            <p className="text-sm text-gray-600">
+              Set a password for this student. They will use their email and this password to access the form via the generic link.
+            </p>
+            <Input
+              type="password"
+              label="Password (min 6 characters)"
+              value={passwordDraft}
+              onChange={(e) => setPasswordDraft(e.target.value)}
+              placeholder="••••••••"
+              autoComplete="new-password"
+            />
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setSetPasswordStudentId(null);
+                  setPasswordDraft('');
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleSetPassword}
+                disabled={settingPassword || passwordDraft.length < 6}
+              >
+                {settingPassword ? (
+                  <>
+                    <Loader variant="dots" size="sm" inline className="mr-2" />
+                    Setting...
+                  </>
+                ) : (
+                  'Set Password'
                 )}
               </Button>
             </div>

@@ -23,6 +23,7 @@ const AdminBatchesPage = lazy(() => import('./pages/AdminBatchesPage').then(m =>
 const DashboardPage = lazy(() => import('./pages/DashboardPage').then(m => ({ default: m.DashboardPage })));
 const MyProfilePage = lazy(() => import('./pages/MyProfilePage').then(m => ({ default: m.MyProfilePage })));
 const FormStartPage = lazy(() => import('./pages/FormStartPage').then(m => ({ default: m.FormStartPage })));
+const StudentAccessPage = lazy(() => import('./pages/StudentAccessPage').then(m => ({ default: m.StudentAccessPage })));
 const InstanceFillPage = lazy(() => import('./pages/InstanceFillPage').then(m => ({ default: m.InstanceFillPage })));
 const FormWizardPage = lazy(() => import('./pages/FormWizardPage').then(m => ({ default: m.FormWizardPage })));
 const LoginPage = lazy(() => import('./pages/LoginPage').then(m => ({ default: m.LoginPage })));
@@ -51,6 +52,8 @@ function App() {
             <Route path="/" element={<DashboardOrFormsRedirect />} />
             <Route path="/forms" element={<Navigate to="/admin" replace />} />
             <Route path="/forms/:formId/start" element={<FormStartPage />} />
+            <Route path="/forms/:formId/student-access" element={<StudentAccessPage />} />
+            <Route path="/student-access" element={<StudentAccessPage />} />
             <Route path="/instances/:instanceId" element={<InstanceFillPage />} />
             <Route path="/admin" element={<ProtectedRoute><AdminLayout /></ProtectedRoute>}>
             <Route index element={<DashboardOrFormsRedirect />} />
