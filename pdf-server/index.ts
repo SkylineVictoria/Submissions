@@ -340,6 +340,10 @@ function heightFromWordLimit(wordLimit: number | null | undefined): number {
   return Math.min(3000, Math.max(36, lines * 24));
 }
 
+/* Inline SVG for check/X - avoids font glyph issues in PDF on Linux servers */
+const SVG_CHECK = '<svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle"><path d="M5 13l4 4L19 7"/></svg>';
+const SVG_X = '<svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle"><path d="M6 18L18 6M6 6l12 12"/></svg>';
+
 function buildHtml(data: {
   form: { name: string; version: string | null; unit_code: string | null; header_asset_url: string | null; cover_asset_url?: string | null };
   steps: Array<{
@@ -1316,7 +1320,7 @@ function buildHtml(data: {
                   const cellStyle = colType === 'answer' && wl ? `min-height:${heightFromWordLimit(wl)}px;max-height:${heightFromWordLimit(wl)}px;height:${heightFromWordLimit(wl)}px;` : '';
                   html += `<td class="${cellClass}"${cellStyle ? ` style="${cellStyle}"` : ''}>${cellVal}</td>`;
                 }
-                html += `<td class="value-cell" style="text-align:center;vertical-align:middle;width:48px"><div class="grid-status-yn-wrap"><span class="grid-status-cb${rowYes ? ' checked' : ''}">&#10003;</span><span class="grid-status-cb${rowNo ? ' checked' : ''}">&#10007;</span></div></td>`;
+                html += `<td class="value-cell" style="text-align:center;vertical-align:middle;width:48px"><div class="grid-status-yn-wrap"><span class="grid-status-cb${rowYes ? ' checked' : ''}">${SVG_CHECK}</span><span class="grid-status-cb${rowNo ? ' checked' : ''}">${SVG_X}</span></div></td>`;
                 html += '</tr>';
               }
               html += '</tbody></table>';
@@ -1397,7 +1401,7 @@ function buildHtml(data: {
                       const cellStyle = colType === 'answer' && wl ? `min-height:${heightFromWordLimit(wl)}px;max-height:${heightFromWordLimit(wl)}px;height:${heightFromWordLimit(wl)}px;` : '';
                       html += `<td class="${cellClass}"${cellStyle ? ` style="${cellStyle}"` : ''}>${cellVal}</td>`;
                     }
-                    html += `<td class="value-cell" style="text-align:center;vertical-align:middle;width:48px"><div class="grid-status-yn-wrap"><span class="grid-status-cb${rowYes ? ' checked' : ''}">&#10003;</span><span class="grid-status-cb${rowNo ? ' checked' : ''}">&#10007;</span></div></td>`;
+                    html += `<td class="value-cell" style="text-align:center;vertical-align:middle;width:48px"><div class="grid-status-yn-wrap"><span class="grid-status-cb${rowYes ? ' checked' : ''}">${SVG_CHECK}</span><span class="grid-status-cb${rowNo ? ' checked' : ''}">${SVG_X}</span></div></td>`;
                     html += '</tr>';
                   }
                   html += '</tbody></table></div></div>';
