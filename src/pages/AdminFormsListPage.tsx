@@ -1,21 +1,14 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Plus, FileText, Edit, Eye, Trash2, MoreVertical, Copy } from 'lucide-react';
+import { Plus, FileText, Edit, Eye, MoreVertical, Copy } from 'lucide-react';
 import { listFormsPaged, createForm, duplicateForm, getDefaultFormDates, listCourses, getCoursesForForms } from '../lib/formEngine';
 import type { Form } from '../types/database';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Select } from '../components/ui/Select';
-import { Textarea } from '../components/ui/Textarea';
 import { DatePicker } from '../components/ui/DatePicker';
 import { Loader } from '../components/ui/Loader';
-
-interface AssessmentTask {
-  id: string;
-  label: string;
-  method: string;
-}
 
 export const AdminFormsListPage: React.FC = () => {
   const PAGE_SIZE = 20;
@@ -32,9 +25,6 @@ export const AdminFormsListPage: React.FC = () => {
   const [qualificationName, setQualificationName] = useState('');
   const [unitCode, setUnitCode] = useState('');
   const [unitName, setUnitName] = useState('');
-  const [assessmentTasks, setAssessmentTasks] = useState<AssessmentTask[]>([
-    { id: '1', label: '', method: '' }
-  ]);
   const [creating, setCreating] = useState(false);
   const [previewing, setPreviewing] = useState<number | null>(null);
   const [duplicating, setDuplicating] = useState<number | null>(null);
@@ -66,9 +56,7 @@ export const AdminFormsListPage: React.FC = () => {
     qualificationCode.trim() &&
     qualificationName.trim() &&
     unitCode.trim() &&
-    unitName.trim() &&
-    assessmentTasks.length > 0 &&
-    assessmentTasks.every(task => task.label.trim() && task.method.trim());
+    unitName.trim();
 
   const handleCreate = async () => {
     if (!canCreate) return;
@@ -82,10 +70,7 @@ export const AdminFormsListPage: React.FC = () => {
       qualification_name: qualificationName.trim(),
       unit_code: unitCode.trim(),
       unit_name: unitName.trim(),
-      assessment_tasks: assessmentTasks.map(task => ({
-        label: task.label.trim(),
-        method: task.method.trim()
-      })),
+      assessment_tasks: [], // Default "Assessment - 1" / "Written Questions" created in form builder
     });
     if (created) {
       setCurrentPage(1);
@@ -98,26 +83,8 @@ export const AdminFormsListPage: React.FC = () => {
       setQualificationName('');
       setUnitCode('');
       setUnitName('');
-      setAssessmentTasks([{ id: '1', label: '', method: '' }]);
     }
     setCreating(false);
-  };
-
-  const addAssessmentTask = () => {
-    const newId = String(Date.now());
-    setAssessmentTasks([...assessmentTasks, { id: newId, label: '', method: '' }]);
-  };
-
-  const removeAssessmentTask = (id: string) => {
-    if (assessmentTasks.length > 1) {
-      setAssessmentTasks(assessmentTasks.filter(task => task.id !== id));
-    }
-  };
-
-  const updateAssessmentTask = (id: string, field: 'label' | 'method', value: string) => {
-    setAssessmentTasks(assessmentTasks.map(task =>
-      task.id === id ? { ...task, [field]: value } : task
-    ));
   };
 
   const handlePreview = async (formId: number) => {
@@ -157,7 +124,7 @@ export const AdminFormsListPage: React.FC = () => {
         <Card className="mb-6">
           <h2 className="text-lg font-bold text-[var(--text)] mb-4">Create New Form</h2>
           <p className="text-sm text-gray-600 mb-4">
-            All fields are required. Qualification, unit, and assessment task details must be filled before creating the form.
+            All fields are required. A default assessment (Assessment - 1 / Written Questions) is created automatically—you can edit or add more in the form builder.
           </p>
           <div className="space-y-3 min-w-0 overflow-x-auto">
             <Input
@@ -224,57 +191,6 @@ export const AdminFormsListPage: React.FC = () => {
                 placeholder="Unit Name *"
                 required
               />
-            </div>
-            <div className="border-t border-gray-200 pt-4 mt-2">
-              <div className="flex items-center justify-between mb-2">
-                <div className="text-sm font-semibold text-gray-700">Assessment Tasks (required)</div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={addAssessmentTask}
-                  className="inline-flex items-center justify-center gap-2 whitespace-nowrap"
-                >
-                  <Plus className="w-4 h-4 shrink-0" />
-                  <span>Add Assessment</span>
-                </Button>
-              </div>
-              <div className="space-y-3">
-                {assessmentTasks.map((task, index) => (
-                  <div key={task.id} className="border border-gray-200 rounded-lg p-3 bg-gray-50">
-                    <div className="flex items-start justify-between mb-2">
-                      <span className="text-xs font-medium text-gray-600">
-                        Assessment task {index + 1}
-                      </span>
-                      {assessmentTasks.length > 1 && (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => removeAssessmentTask(task.id)}
-                          className="text-red-600 hover:text-red-700 hover:border-red-300"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
-                      )}
-                    </div>
-                    <Input
-                      value={task.label}
-                      onChange={(e) => updateAssessmentTask(task.id, 'label', e.target.value)}
-                      placeholder={`Assessment task ${index + 1} - Evidence number (e.g. Assessment task ${index + 1}) *`}
-                      required
-                    />
-                    <Textarea
-                      value={task.method}
-                      onChange={(e) => updateAssessmentTask(task.id, 'method', e.target.value)}
-                      placeholder={`Assessment task ${index + 1} - Method/Type of evidence (e.g. Written Assessment (WA)) *`}
-                      rows={2}
-                      className="mt-1"
-                      required
-                    />
-                  </div>
-                ))}
-              </div>
             </div>
             <Button onClick={handleCreate} disabled={creating || !canCreate}>
               {creating ? (

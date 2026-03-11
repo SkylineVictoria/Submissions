@@ -2262,10 +2262,9 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
           { question_id: qid, row_label: assessmentTasks.task2_label, row_help: assessmentTasks.task2_method, sort_order: 1 },
         ];
       } else {
-        // Default fallback
+        // Default fallback: single assessment created automatically
         rowsToInsert = [
-          { question_id: qid, row_label: 'Assessment task 1', row_help: 'Written Assessment (WA)', sort_order: 0 },
-          { question_id: qid, row_label: 'Assessment task 2', row_help: 'Practical Task 2.1\nPractical Task 2.2\nPractical Task 2.3', sort_order: 1 },
+          { question_id: qid, row_label: 'Assessment - 1', row_help: 'Written Questions', sort_order: 0 },
         ];
       }
       
