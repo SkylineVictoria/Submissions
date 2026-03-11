@@ -1744,7 +1744,7 @@ function buildHtml(data: {
           html += `<h3>${headerNum}. Reasonable Adjustment</h3>`;
           headerNum++;
           html += '<p style="margin:0 0 10px 0;line-height:1.5">Reasonable Adjustment: See Appendix A – Reasonable Adjustments for details and to record any adjustments applied.</p>';
-        } else if (!isAppendixA) {
+        } else {
         const taskQ = isAppendixA
           ? (questions.find((q) => q.question.code === 'reasonable_adjustment_appendix.task') ?? questions.find((q) => q.question.code === 'reasonable_adjustment.task' && q.question.type === 'short_text'))
           : questions.find((q) => q.question.code === 'reasonable_adjustment.task');

@@ -2021,10 +2021,12 @@ export const InstanceFillPage: React.FC = () => {
                           const isEvalUnitName = q.code === 'evaluation.unitName';
                           const isEvalTrainerName = q.code === 'evaluation.trainerName';
                           const isEvalEmployer = q.code === 'evaluation.employer';
+                          const isEvalTrainingDates = q.code === 'evaluation.trainingDates';
+                          const isEvalEvaluationDate = q.code === 'evaluation.evaluationDate';
                           const trainerCanEditHere = role === 'trainer' || role === 'office';
                           const editable = isQualUnitField || isEvalUnitName
                             ? false
-                            : isEvalTrainerName || isEvalEmployer
+                            : isEvalTrainerName || isEvalEmployer || isEvalTrainingDates || isEvalEvaluationDate
                               ? (trainerCanEditHere && canRoleEditCurrentWorkflow)
                               : (isRoleEditable(re, role) && canRoleEditCurrentWorkflow);
                           if (q.type === 'likert_5' && q.rows.length > 0) {
