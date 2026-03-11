@@ -311,6 +311,7 @@ export function buildHtml(data: {
     .task-questions-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 14pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 12px 16px; margin: 16px 0 0 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .task-questions-subheader { font-size: 10pt; color: #000; margin: 0 0 12px 0; padding: 0; background: transparent !important; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; }
     .task-questions-instruction-label { font-size: 9pt; color: #000000; margin: 0 0 8px 0; padding: 0; background: transparent !important; }
+    .task-instructions-student-label { font-size: 11pt; font-weight: bold; color: #000000; margin: 8px 0 4px 0; padding: 0; background: transparent !important; }
     .task-instructions-subheader { font-size: 9pt; color: #000000; margin: 0 0 8px 0; padding: 0; background: transparent !important; }
     .task-instructions-block { margin: 12px 0; }
     .task-instructions-block-title { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 9pt; padding: 8px 12px; }
@@ -706,6 +707,7 @@ export function buildHtml(data: {
 </div>
 `;
 
+  const formHasAppendixA = steps.some((g) => /Appendix\s*A/i.test((g.step?.title ?? '').trim()));
   let headerNum = 1;
   for (const group of pageGroups) {
     html += `<div class="step-page">`;
@@ -924,7 +926,8 @@ export function buildHtml(data: {
         const row = rowId ? taskRowsMap.get(rowId) : null;
         const instr = row?.row_meta?.instructions as Record<string, string | string[] | undefined> | undefined;
         const assessmentType = instr?.assessment_type ? String(instr.assessment_type).replace(/<[^>]*>/g, '').trim() || 'Assessment' : 'Assessment';
-        html += `<div class="task-instructions-header">Student Instructions: ${row?.row_label || section.title} – ${assessmentType}</div>`;
+        html += `<div class="task-instructions-header">${row?.row_label || section.title} – ${assessmentType}</div>`;
+        html += `<div class="task-instructions-student-label">Student Instructions</div>`;
         html += `<div class="task-instructions-subheader">Assessment method-based instructions and guidelines: ${row?.row_help || ''}</div>`;
         if (instr) {
           const blocks: { title: string; content: string }[] = [
@@ -1258,6 +1261,11 @@ export function buildHtml(data: {
       } else if (section.pdf_render_mode === 'reasonable_adjustment') {
         const stepTitle = (step?.title || '').trim();
         const isAppendixA = /Appendix\s*A/i.test(stepTitle);
+        if (!isAppendixA && formHasAppendixA) {
+          html += `<h3>${headerNum}. Reasonable Adjustment</h3>`;
+          headerNum++;
+          html += '<p style="margin:0 0 10px 0;line-height:1.5">Reasonable Adjustment: See Appendix A – Reasonable Adjustments for details and to record any adjustments applied.</p>';
+        } else if (!isAppendixA) {
         const taskQ = isAppendixA ? questions.find((q) => q.question.code === 'reasonable_adjustment_appendix.task') : questions.find((q) => q.question.code === 'reasonable_adjustment.task');
         const descQ = isAppendixA ? questions.find((q) => q.question.code === 'reasonable_adjustment_appendix.explanation') : questions.find((q) => q.question.code === 'reasonable_adjustment.description');
         let sigQ = isAppendixA ? questions.find((q) => q.question.code === 'trainer.reasonableAdjustmentAppendixSignature') : questions.find((q) => q.question.type === 'signature');
@@ -1339,6 +1347,7 @@ export function buildHtml(data: {
         html += '<tr><td class="decl-label">Date</td><td class="decl-value">' + (dateVal || '') + '</td></tr>';
         html += '</tbody></table>';
         html += '</div>';
+        }
         }
       } else if (section.pdf_render_mode === 'declarations') {
         const sectionTitle = section.title.toLowerCase();

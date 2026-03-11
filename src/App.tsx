@@ -20,6 +20,7 @@ const AdminStudentsPage = lazy(() => import('./pages/AdminStudentsPage').then(m 
 const AdminAssessmentsPage = lazy(() => import('./pages/AdminAssessmentsPage').then(m => ({ default: m.AdminAssessmentsPage })));
 const AdminUsersPage = lazy(() => import('./pages/AdminUsersPage').then(m => ({ default: m.AdminUsersPage })));
 const AdminBatchesPage = lazy(() => import('./pages/AdminBatchesPage').then(m => ({ default: m.AdminBatchesPage })));
+const AdminCoursesPage = lazy(() => import('./pages/AdminCoursesPage').then(m => ({ default: m.AdminCoursesPage })));
 const DashboardPage = lazy(() => import('./pages/DashboardPage').then(m => ({ default: m.DashboardPage })));
 const MyProfilePage = lazy(() => import('./pages/MyProfilePage').then(m => ({ default: m.MyProfilePage })));
 const FormStartPage = lazy(() => import('./pages/FormStartPage').then(m => ({ default: m.FormStartPage })));
@@ -64,6 +65,7 @@ function App() {
             <Route path="forms/:formId/preview" element={<AdminOnlyRoute><AdminFormPreviewPage /></AdminOnlyRoute>} />
             <Route path="students" element={<AdminOnlyRoute><AdminStudentsPage /></AdminOnlyRoute>} />
             <Route path="batches" element={<AdminOnlyRoute><AdminBatchesPage /></AdminOnlyRoute>} />
+            <Route path="courses" element={<AdminOnlyRoute><AdminCoursesPage /></AdminOnlyRoute>} />
             <Route path="users" element={<AdminOnlyRoute><AdminUsersPage /></AdminOnlyRoute>} />
             <Route path="trainers" element={<Navigate to="/admin/users" replace />} />
             <Route path="assessments" element={<AdminOnlyRoute><AdminAssessmentsPage /></AdminOnlyRoute>} />

@@ -142,7 +142,6 @@ const PREBUILT_SECTION_TITLES = [
   'Qualification and unit of competency',
   'Assessment Tasks',
   'Assessment Submission Method',
-  'Student declaration',
   'Instructions to complete the outcomes of assessment',
   'Unit Requirements',
   'Feedback to student',
@@ -157,6 +156,7 @@ const PREBUILT_SECTION_TITLES = [
   'Assessment appeals process',
   'Recognised prior learning',
   'Special needs',
+  'Student declaration',
 ];
 
 function isPrebuiltSection(title: string): boolean {
@@ -182,6 +182,7 @@ function SortableStepItem({
   menuOpen,
   onMenuToggle,
   menuRef,
+  isDuplicating = false,
 }: {
   step: StepWithSections;
   isSelected: boolean;
@@ -192,6 +193,7 @@ function SortableStepItem({
   menuOpen: boolean;
   onMenuToggle: () => void;
   menuRef: React.RefObject<HTMLDivElement | null>;
+  isDuplicating?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(step.title);
@@ -266,16 +268,19 @@ function SortableStepItem({
           >
             <button
               type="button"
-              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--text)] hover:bg-gray-100"
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--text)] hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
               onClick={(e) => {
                 e.stopPropagation();
-                onDuplicate();
-                onMenuToggle();
+                if (!isDuplicating) {
+                  onDuplicate();
+                  onMenuToggle();
+                }
               }}
+              disabled={isDuplicating}
               role="menuitem"
             >
               <Copy className="w-4 h-4" />
-              Duplicate
+              {isDuplicating ? 'Duplicating…' : 'Duplicate'}
             </button>
           </div>
         )}
@@ -302,6 +307,7 @@ const PDF_RENDER_MODES = [
   { value: 'assessment_tasks', label: 'Assessment Tasks' },
   { value: 'assessment_submission', label: 'Assessment Submission' },
   { value: 'reasonable_adjustment', label: 'Reasonable Adjustment' },
+  { value: 'reasonable_adjustment_indicator', label: 'Reasonable Adjustment (Appendix A reference)' },
   { value: 'declarations', label: 'Declarations' },
   { value: 'task_instructions', label: 'Task Instructions' },
   { value: 'task_questions', label: 'Task Questions' },
@@ -328,6 +334,7 @@ function SortableSectionItem({
   menuRef,
   canDelete = true,
   assessmentTaskRows = [],
+  isDuplicating = false,
 }: {
   section: FormSection & { questions: FormQuestion[] };
   isSelected: boolean;
@@ -342,6 +349,7 @@ function SortableSectionItem({
   menuRef: React.RefObject<HTMLDivElement | null>;
   canDelete?: boolean;
   assessmentTaskRows?: AssessmentTaskRow[];
+  isDuplicating?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(section.title);
@@ -433,16 +441,19 @@ function SortableSectionItem({
           >
             <button
               type="button"
-              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--text)] hover:bg-gray-100"
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--text)] hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
               onClick={(e) => {
                 e.stopPropagation();
-                onDuplicate();
-                onMenuToggle();
+                if (!isDuplicating) {
+                  onDuplicate();
+                  onMenuToggle();
+                }
               }}
+              disabled={isDuplicating}
               role="menuitem"
             >
               <Copy className="w-4 h-4" />
-              Duplicate
+              {isDuplicating ? 'Duplicating…' : 'Duplicate'}
             </button>
           </div>
         )}
@@ -582,6 +593,8 @@ export const AdminFormBuilderPage: React.FC = () => {
   const [openStepMenuId, setOpenStepMenuId] = useState<number | null>(null);
   const [openSectionMenuId, setOpenSectionMenuId] = useState<number | null>(null);
   const [openQuestionMenuId, setOpenQuestionMenuId] = useState<number | null>(null);
+  const [duplicatingStepId, setDuplicatingStepId] = useState<number | null>(null);
+  const [duplicatingSectionId, setDuplicatingSectionId] = useState<number | null>(null);
   const stepMenuRef = useRef<HTMLDivElement | null>(null);
   const sectionMenuRef = useRef<HTMLDivElement | null>(null);
   const questionMenuRef = useRef<HTMLDivElement | null>(null);
@@ -821,12 +834,25 @@ export const AdminFormBuilderPage: React.FC = () => {
   };
 
   const executeRemoveStep = async (stepId: number) => {
+    const step = steps.find((s) => s.id === stepId);
+    const firstTaskSec = step?.sections?.find(
+      (s) => (s as { assessment_task_row_id?: number | null }).assessment_task_row_id != null
+    );
+    const rowId = firstTaskSec
+      ? (firstTaskSec as { assessment_task_row_id?: number | null }).assessment_task_row_id
+      : null;
+
     await supabase.from('skyline_form_steps').delete().eq('id', stepId);
     setSteps((prev) => prev.filter((s) => s.id !== stepId));
     if (selectedStepId === stepId) {
       const remaining = steps.filter((s) => s.id !== stepId);
       setSelectedStepId(remaining[0]?.id ?? null);
       setSelectedSectionId(remaining[0]?.sections[0]?.id ?? null);
+    }
+
+    if (rowId != null) {
+      await supabase.from('skyline_form_question_rows').delete().eq('id', rowId);
+      setAssessmentTaskRows((prev) => prev.filter((r) => r.id !== rowId));
     }
   };
 
@@ -851,6 +877,8 @@ export const AdminFormBuilderPage: React.FC = () => {
 
   const duplicateStep = async (stepId: number) => {
     if (!formId) return;
+    setDuplicatingStepId(stepId);
+    try {
     const step = steps.find((s) => s.id === stepId);
     if (!step) return;
     const stepIndex = steps.findIndex((s) => s.id === stepId);
@@ -963,10 +991,15 @@ export const AdminFormBuilderPage: React.FC = () => {
       const { data } = await supabase.from('skyline_form_question_rows').select('id, row_label').eq('question_id', assessmentTasksGridQuestionId).order('sort_order');
       setAssessmentTaskRows((data as AssessmentTaskRow[]) || []);
     }
+    } finally {
+      setDuplicatingStepId(null);
+    }
   };
 
   const duplicateSection = async (sectionId: number) => {
     if (!selectedStepId) return;
+    setDuplicatingSectionId(sectionId);
+    try {
     const step = steps.find((s) => s.id === selectedStepId);
     if (!step) return;
     const section = step.sections.find((s) => s.id === sectionId);
@@ -1048,6 +1081,9 @@ export const AdminFormBuilderPage: React.FC = () => {
       })
     );
     setSelectedSectionId((newSec as FormSection).id);
+    } finally {
+      setDuplicatingSectionId(null);
+    }
   };
 
   const handleStepsDragEnd = async (event: DragEndEvent) => {
@@ -1563,6 +1599,7 @@ export const AdminFormBuilderPage: React.FC = () => {
                     menuOpen={openStepMenuId === step.id}
                     onMenuToggle={() => setOpenStepMenuId(openStepMenuId === step.id ? null : step.id)}
                     menuRef={stepMenuRef}
+                    isDuplicating={duplicatingStepId === step.id}
                   />
                 ))}
               </div>
@@ -1606,6 +1643,7 @@ export const AdminFormBuilderPage: React.FC = () => {
                       onMenuToggle={() => setOpenSectionMenuId(openSectionMenuId === sec.id ? null : sec.id)}
                       menuRef={sectionMenuRef}
                       canDelete={!isPrebuiltSection(sec.title)}
+                      isDuplicating={duplicatingSectionId === sec.id}
                     />
                   ))}
                 </div>

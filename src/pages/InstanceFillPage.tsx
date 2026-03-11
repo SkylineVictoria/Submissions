@@ -6,7 +6,6 @@ import {
   fetchInstance,
   saveAnswer,
   saveTrainerAssessment,
-  saveTrainerRowAssessment,
   fetchTrainerAssessments,
   fetchTrainerRowAssessments,
   fetchResultsOffice,
@@ -34,6 +33,7 @@ import { SectionLikertTable } from '../components/form-fill/SectionLikertTable';
 import { SignatureField } from '../components/form-fill/SignatureField';
 import { AppendixAMatrixForm } from '../components/form-fill/AppendixAMatrixForm';
 import { DatePicker } from '../components/ui/DatePicker';
+import { Check, X } from 'lucide-react';
 import { toast } from '../utils/toast';
 
 const PDF_BASE = import.meta.env.VITE_PDF_API_URL ?? '';
@@ -408,16 +408,6 @@ export const InstanceFillPage: React.FC = () => {
     [id]
   );
 
-  const handleTrainerRowAssessmentChange = useCallback(
-    (questionId: number, rowId: number, satisfactory: 'yes' | 'no') => {
-      const key = `q-${questionId}-${rowId}`;
-      setTrainerRowAssessments((prev) => ({ ...prev, [key]: satisfactory }));
-      saveTrainerRowAssessment(id, questionId, rowId, satisfactory);
-      setPdfRefresh((r) => r + 1);
-    },
-    [id]
-  );
-
   const handleResultsOfficeChange = useCallback(
     (sectionId: number, field: 'entered_date' | 'entered_by', value: string | null) => {
       setResultsOffice((prev) => {
@@ -710,17 +700,31 @@ export const InstanceFillPage: React.FC = () => {
                     const hasInteractive = section.questions.some(
                       (q) => q.type !== 'instruction_block' && isRoleVisible((q.role_visibility as Record<string, boolean>) || {}, role)
                     );
-                    return hasInteractive || section.pdf_render_mode === 'assessment_tasks' || section.pdf_render_mode === 'assessment_submission' || section.pdf_render_mode === 'reasonable_adjustment' || section.pdf_render_mode === 'task_instructions' || section.pdf_render_mode === 'task_questions' || section.pdf_render_mode === 'task_results' || section.pdf_render_mode === 'assessment_summary';
+                    return hasInteractive || section.pdf_render_mode === 'assessment_tasks' || section.pdf_render_mode === 'assessment_submission' || section.pdf_render_mode === 'reasonable_adjustment' || section.pdf_render_mode === 'reasonable_adjustment_indicator' || section.pdf_render_mode === 'task_instructions' || section.pdf_render_mode === 'task_questions' || section.pdf_render_mode === 'task_results' || section.pdf_render_mode === 'assessment_summary';
                   })
                   .map((section) => (
                   <div key={section.id} className="mb-8 last:mb-0">
-                    {section.pdf_render_mode !== 'likert_table' && section.pdf_render_mode !== 'reasonable_adjustment' && section.pdf_render_mode !== 'task_instructions' && section.pdf_render_mode !== 'task_questions' && section.pdf_render_mode !== 'task_results' && section.pdf_render_mode !== 'assessment_summary' && (
+                    {section.pdf_render_mode !== 'likert_table' && section.pdf_render_mode !== 'reasonable_adjustment' && section.pdf_render_mode !== 'reasonable_adjustment_indicator' && section.pdf_render_mode !== 'task_instructions' && section.pdf_render_mode !== 'task_questions' && section.pdf_render_mode !== 'task_results' && section.pdf_render_mode !== 'assessment_summary' && (
                       <h3 className="text-lg font-semibold text-gray-700 mb-2">{section.title}</h3>
                     )}
                     <div className={section.pdf_render_mode === 'declarations' || section.pdf_render_mode === 'assessment_submission' ? 'border border-gray-200 rounded-lg p-4 bg-white space-y-4' : 'space-y-4'}>
-                      {section.pdf_render_mode === 'reasonable_adjustment' ? (
+                      {section.pdf_render_mode === 'reasonable_adjustment_indicator' ? (
+                        <div className="text-sm text-gray-700">
+                          <h3 className="text-lg font-semibold text-gray-700 mb-2">{section.title}</h3>
+                          <p className="leading-relaxed">{section.description || section.questions.find((q) => q.type === 'instruction_block')?.help_text || 'See Appendix A – Reasonable Adjustments for details and to record any adjustments applied.'}</p>
+                        </div>
+                      ) : section.pdf_render_mode === 'reasonable_adjustment' ? (
                         (() => {
                           const isAppendixA = currentStepData && /Appendix\s*A/i.test((currentStepData.title || '').trim());
+                          const formHasAppendixA = (template?.steps ?? []).some((s) => /Appendix\s*A/i.test((s.title ?? '').trim()));
+                          if (!isAppendixA && formHasAppendixA) {
+                            return (
+                              <div className="text-sm text-gray-700">
+                                <h3 className="text-lg font-semibold text-gray-700 mb-2">Reasonable Adjustment</h3>
+                                <p className="leading-relaxed">Reasonable Adjustment: See Appendix A – Reasonable Adjustments for details and to record any adjustments applied.</p>
+                              </div>
+                            );
+                          }
                           const taskResultSectionIds = (template?.steps ?? []).flatMap((st) => st.sections).filter((s) => s.pdf_render_mode === 'task_results').map((s) => s.id);
                           const firstTaskSectionId = taskResultSectionIds[0];
                           const firstTaskRdForRA = firstTaskSectionId ? resultsData[firstTaskSectionId] : null;
@@ -1185,23 +1189,26 @@ export const InstanceFillPage: React.FC = () => {
                                               handleAnswerChange(childQ.id, rowId, rowData);
                                             }
                                           };
-                                          const rowAssessForChild: Record<number, string> = {};
-                                          for (const r of childQ.rows) {
-                                            const v = trainerRowAssessments[`q-${childQ.id}-${r.id}`];
-                                            if (v) rowAssessForChild[r.id] = v;
-                                          }
+                                          const childSat = trainerAssessments[childQ.id];
+                                          const childSatYes = childSat === 'yes';
+                                          const childSatNo = childSat === 'no';
                                           return wrapWithHeader(key, block.headerText, (
-                                            <QuestionRenderer
-                                              question={childQ}
-                                              value={Object.keys(merged).length ? merged : null}
-                                              onChange={onGridChange}
-                                              disabled={!editable}
-                                              error={errors[`q-${childQ.id}`]}
-                                              showRowAssessmentColumn={true}
-                                              rowAssessments={rowAssessForChild}
-                                              onRowAssessmentChange={trainerEditable ? (rid, sat) => handleTrainerRowAssessmentChange(childQ.id, rid, sat) : undefined}
-                                              studentResubmissionReadOnlyForSatisfactoryRows={isResubmissionAfterTrainer}
-                                            />
+                                            <div>
+                                              <QuestionRenderer
+                                                question={childQ}
+                                                value={Object.keys(merged).length ? merged : null}
+                                                onChange={onGridChange}
+                                                disabled={!editable}
+                                                error={errors[`q-${childQ.id}`]}
+                                                showRowAssessmentColumn={false}
+                                                studentResubmissionReadOnlyForSatisfactoryRows={isResubmissionAfterTrainer}
+                                              />
+                                              <div className="mt-3 flex items-center gap-2">
+                                                <span className="text-sm font-semibold text-gray-700">Satisfactory response:</span>
+                                                <button type="button" onClick={() => trainerEditable && handleTrainerAssessmentChange(childQ.id, 'yes')} disabled={!trainerEditable} title="Satisfactory" className={`p-1.5 rounded border flex items-center justify-center ${childSatYes ? 'bg-red-50 border-red-600 text-red-600' : 'border-gray-300 text-gray-500 hover:border-gray-500 hover:text-gray-700'}`}><Check className="w-4 h-4" strokeWidth={2.5} /></button>
+                                                <button type="button" onClick={() => trainerEditable && handleTrainerAssessmentChange(childQ.id, 'no')} disabled={!trainerEditable} title="Not satisfactory" className={`p-1.5 rounded border flex items-center justify-center ${childSatNo ? 'bg-red-100 border-red-600 text-red-700' : 'border-gray-300 text-gray-500 hover:border-gray-500 hover:text-gray-700'}`}><X className="w-4 h-4" strokeWidth={2.5} /></button>
+                                              </div>
+                                            </div>
                                           ));
                                         }
                                         if (block.type === 'short_text' || block.type === 'long_text') {
@@ -1240,27 +1247,37 @@ export const InstanceFillPage: React.FC = () => {
                                                     handleAnswerChange(q.id, rowId, rowData);
                                                   }
                                                 };
-                                                const rowAssessForQ: Record<number, string> = {};
-                                                for (const r of q.rows) {
-                                                  const v = trainerRowAssessments[`q-${q.id}-${r.id}`];
-                                                  if (v) rowAssessForQ[r.id] = v;
-                                                }
+                                                const satQ = trainerAssessments[q.id];
+                                                const satQYes = satQ === 'yes';
+                                                const satQNo = satQ === 'no';
                                                 return (
-                                                  <QuestionRenderer
-                                                    question={q}
-                                                    value={Object.keys(merged).length ? merged : null}
-                                                    onChange={onGridChange}
-                                                    disabled={!editable}
-                                                    error={errors[`q-${q.id}`]}
-                                                    showRowAssessmentColumn={true}
-                                                    rowAssessments={rowAssessForQ}
-                                                    onRowAssessmentChange={trainerEditable ? (rid, sat) => handleTrainerRowAssessmentChange(q.id, rid, sat) : undefined}
-                                                    studentResubmissionReadOnlyForSatisfactoryRows={isResubmissionAfterTrainer}
-                                                  />
+                                                  <div>
+                                                    <QuestionRenderer
+                                                      question={q}
+                                                      value={Object.keys(merged).length ? merged : null}
+                                                      onChange={onGridChange}
+                                                      disabled={!editable}
+                                                      error={errors[`q-${q.id}`]}
+                                                      showRowAssessmentColumn={false}
+                                                      studentResubmissionReadOnlyForSatisfactoryRows={isResubmissionAfterTrainer}
+                                                    />
+                                                    <div className="mt-3 flex items-center gap-2">
+                                                      <span className="text-sm font-semibold text-gray-700">Satisfactory response:</span>
+                                                      <button type="button" onClick={() => trainerEditable && handleTrainerAssessmentChange(q.id, 'yes')} disabled={!trainerEditable} title="Satisfactory" className={`p-1.5 rounded border flex items-center justify-center ${satQYes ? 'bg-red-50 border-red-600 text-red-600' : 'border-gray-300 text-gray-500 hover:border-gray-500 hover:text-gray-700'}`}><Check className="w-4 h-4" strokeWidth={2.5} /></button>
+                                                      <button type="button" onClick={() => trainerEditable && handleTrainerAssessmentChange(q.id, 'no')} disabled={!trainerEditable} title="Not satisfactory" className={`p-1.5 rounded border flex items-center justify-center ${satQNo ? 'bg-red-100 border-red-600 text-red-700' : 'border-gray-300 text-gray-500 hover:border-gray-500 hover:text-gray-700'}`}><X className="w-4 h-4" strokeWidth={2.5} /></button>
+                                                    </div>
+                                                  </div>
                                                 );
                                               })()
                                             ) : (
-                                              <QuestionRenderer question={q} value={(answers[getAnswerKey(q.id, null)] as string | number | boolean | Record<string, unknown> | string[] | undefined) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string | number | boolean | Record<string, unknown> | string[])} disabled={!editable} error={errors[`q-${q.id}`]} />
+                                              <div>
+                                                <QuestionRenderer question={q} value={(answers[getAnswerKey(q.id, null)] as string | number | boolean | Record<string, unknown> | string[] | undefined) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string | number | boolean | Record<string, unknown> | string[])} disabled={!editable} error={errors[`q-${q.id}`]} />
+                                                <div className="mt-3 flex items-center gap-2">
+                                                  <span className="text-sm font-semibold text-gray-700">Satisfactory response:</span>
+                                                  <button type="button" onClick={() => trainerEditable && handleTrainerAssessmentChange(q.id, 'yes')} disabled={!trainerEditable} title="Satisfactory" className={`p-1.5 rounded border flex items-center justify-center ${trainerAssessments[q.id] === 'yes' ? 'bg-red-50 border-red-600 text-red-600' : 'border-gray-300 text-gray-500 hover:border-gray-500 hover:text-gray-700'}`}><Check className="w-4 h-4" strokeWidth={2.5} /></button>
+                                                  <button type="button" onClick={() => trainerEditable && handleTrainerAssessmentChange(q.id, 'no')} disabled={!trainerEditable} title="Not satisfactory" className={`p-1.5 rounded border flex items-center justify-center ${trainerAssessments[q.id] === 'no' ? 'bg-red-100 border-red-600 text-red-700' : 'border-gray-300 text-gray-500 hover:border-gray-500 hover:text-gray-700'}`}><X className="w-4 h-4" strokeWidth={2.5} /></button>
+                                                </div>
+                                              </div>
                                             )}
                                             {contentBlocks.map((block, bi) => renderBlock(block, String(block.questionId ?? `block-${bi}`)))}
                                           </div>

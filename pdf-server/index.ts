@@ -503,6 +503,7 @@ function buildHtml(data: {
     .task-questions-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 14pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 12px 16px; margin: 16px 0 0 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .task-questions-subheader { font-size: 10pt; color: #000; margin: 0 0 12px 0; padding: 0; background: transparent !important; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; }
     .task-questions-instruction-label { font-size: 9pt; color: #000000; margin: 0 0 8px 0; padding: 0; background: transparent !important; }
+    .task-instructions-student-label { font-size: 11pt; font-weight: bold; color: #000000; margin: 8px 0 4px 0; padding: 0; background: transparent !important; }
     .task-instructions-subheader { font-size: 9pt; color: #000000; margin: 0 0 8px 0; padding: 0; background: transparent !important; }
     .task-instructions-block { margin: 12px 0; }
     .task-instructions-block-title { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 9pt; padding: 8px 12px; }
@@ -918,6 +919,7 @@ function buildHtml(data: {
 </div>
 `;
 
+  const formHasAppendixA = steps.some((g) => /Appendix\s*A/i.test((g.step?.title ?? '').trim()));
   let headerNum = 1;
   for (const group of pageGroups) {
     html += `<div class="step-page">`;
@@ -1176,7 +1178,8 @@ function buildHtml(data: {
         const row = rowId ? taskRowsMap.get(rowId) : null;
         const instr = row?.row_meta?.instructions as Record<string, string | string[] | undefined> | undefined;
         const assessmentType = instr?.assessment_type ? String(instr.assessment_type).replace(/<[^>]*>/g, '').trim() || 'Assessment' : 'Assessment';
-        html += `<div class="task-instructions-header">Student Instructions: ${row?.row_label || section.title} – ${assessmentType}</div>`;
+        html += `<div class="task-instructions-header">${row?.row_label || section.title} – ${assessmentType}</div>`;
+        html += `<div class="task-instructions-student-label">Student Instructions</div>`;
         html += `<div class="task-instructions-subheader">Assessment method-based instructions and guidelines: ${row?.row_help || ''}</div>`;
         if (instr) {
           const customBlocks = Array.isArray((instr as { blocks?: unknown[] }).blocks)
@@ -1293,7 +1296,7 @@ function buildHtml(data: {
                 else if (isNoImage && noImageIncludeBaseColumns) html += `<th>${formatGridHeader(firstCol, headerCase)}</th><th>${formatGridHeader(secondCol, headerCase)}</th>`;
                 else if (!isNoImage) html += `<th>${formatGridHeader(firstCol, headerCase)}</th>`;
                 for (const c of cols) html += `<th>${formatGridHeader(c, headerCase)}</th>`;
-                html += '<th class="sub-section-header" style="width:48px;text-align:center">Status</th></tr></thead>';
+                html += '</tr></thead>';
               }
               html += '<tbody>';
               for (const r of rows) {
@@ -1324,10 +1327,10 @@ function buildHtml(data: {
                   const cellStyle = colType === 'answer' && wl ? `min-height:${heightFromWordLimit(wl)}px;max-height:${heightFromWordLimit(wl)}px;height:${heightFromWordLimit(wl)}px;` : '';
                   html += `<td class="${cellClass}"${cellStyle ? ` style="${cellStyle}"` : ''}>${cellVal}</td>`;
                 }
-                html += `<td class="value-cell" style="text-align:center;vertical-align:middle;width:48px"><div class="grid-status-yn-wrap"><span class="grid-status-cb${rowYes ? ' checked' : ''}">${SVG_CHECK}</span><span class="grid-status-cb${rowNo ? ' checked' : ''}">${SVG_X}</span></div></td>`;
                 html += '</tr>';
               }
               html += '</tbody></table>';
+              html += '<div class="mt-3" style="margin-top:10px"><span style="font-weight:600;margin-right:8px">Satisfactory response:</span><span class="grid-status-cb' + (satYes ? ' checked' : '') + '">' + SVG_CHECK + '</span> Yes <span style="margin-left:12px" class="grid-status-cb' + (satNo ? ' checked' : '') + '">' + SVG_X + '</span> No</div>';
             } else {
               const key = rows[0] ? `q-${question.id}-${rows[0].id}` : `q-${question.id}`;
               const val = answers.get(key);
@@ -1336,6 +1339,7 @@ function buildHtml(data: {
               const blockClass = question.type === 'long_text' ? 'task-q-answer-block task-q-answer-large' : 'task-q-answer-block';
               const blockStyle = qWordLimit ? `min-height:${heightFromWordLimit(qWordLimit)}px;max-height:${heightFromWordLimit(qWordLimit)}px;height:${heightFromWordLimit(qWordLimit)}px;` : '';
               html += `<div class="${blockClass}"${blockStyle ? ` style="${blockStyle}"` : ''}>${val ?? ''}</div>`;
+              html += '<div class="mt-3" style="margin-top:10px"><span style="font-weight:600;margin-right:8px">Satisfactory response:</span><span class="grid-status-cb' + (satYes ? ' checked' : '') + '">' + SVG_CHECK + '</span> Yes <span style="margin-left:12px" class="grid-status-cb' + (satNo ? ' checked' : '') + '">' + SVG_X + '</span> No</div>';
             }
             const legacyAb = pmTop?.additionalBlock as Record<string, unknown> | undefined;
             const contentBlocks: Array<{ type: string; content?: string; questionId?: number; headerText?: string }> = Array.isArray(pmTop?.contentBlocks)
@@ -1382,7 +1386,7 @@ function buildHtml(data: {
                     else if (cIsNoImage && cNoImageIncludeBaseColumns) html += `<th>${formatGridHeader(cFirstCol, cHeaderCase)}</th><th>${formatGridHeader(cSecondCol, cHeaderCase)}</th>`;
                     else if (!cIsNoImage) html += `<th>${formatGridHeader(cFirstCol, cHeaderCase)}</th>`;
                     for (const c of cCols) html += `<th>${formatGridHeader(c, cHeaderCase)}</th>`;
-                    html += '<th class="sub-section-header" style="width:48px;text-align:center">Status</th></tr></thead>';
+                    html += '</tr></thead>';
                   }
                   html += '<tbody>';
                   for (const r of cRows) {
@@ -1405,10 +1409,12 @@ function buildHtml(data: {
                       const cellStyle = colType === 'answer' && wl ? `min-height:${heightFromWordLimit(wl)}px;max-height:${heightFromWordLimit(wl)}px;height:${heightFromWordLimit(wl)}px;` : '';
                       html += `<td class="${cellClass}"${cellStyle ? ` style="${cellStyle}"` : ''}>${cellVal}</td>`;
                     }
-                    html += `<td class="value-cell" style="text-align:center;vertical-align:middle;width:48px"><div class="grid-status-yn-wrap"><span class="grid-status-cb${rowYes ? ' checked' : ''}">${SVG_CHECK}</span><span class="grid-status-cb${rowNo ? ' checked' : ''}">${SVG_X}</span></div></td>`;
                     html += '</tr>';
                   }
-                  html += '</tbody></table></div></div>';
+                  const cqSat = trainerAssessments.get(cq.id);
+                  const cqSatYes = cqSat === 'yes';
+                  const cqSatNo = cqSat === 'no';
+                  html += '</tbody></table><div class="mt-3" style="margin-top:10px"><span style="font-weight:600;margin-right:8px">Satisfactory response:</span><span class="grid-status-cb' + (cqSatYes ? ' checked' : '') + '">' + SVG_CHECK + '</span> Yes <span style="margin-left:12px" class="grid-status-cb' + (cqSatNo ? ' checked' : '') + '">' + SVG_X + '</span> No</div></div></div>';
                 }
               }
             }
@@ -1734,6 +1740,11 @@ function buildHtml(data: {
       } else if (section.pdf_render_mode === 'reasonable_adjustment') {
         const stepTitle = (step?.title || '').trim();
         const isAppendixA = /Appendix\s*A/i.test(stepTitle);
+        if (!isAppendixA && formHasAppendixA) {
+          html += `<h3>${headerNum}. Reasonable Adjustment</h3>`;
+          headerNum++;
+          html += '<p style="margin:0 0 10px 0;line-height:1.5">Reasonable Adjustment: See Appendix A – Reasonable Adjustments for details and to record any adjustments applied.</p>';
+        } else if (!isAppendixA) {
         const taskQ = isAppendixA
           ? (questions.find((q) => q.question.code === 'reasonable_adjustment_appendix.task') ?? questions.find((q) => q.question.code === 'reasonable_adjustment.task' && q.question.type === 'short_text'))
           : questions.find((q) => q.question.code === 'reasonable_adjustment.task');
@@ -1812,6 +1823,7 @@ function buildHtml(data: {
         html += '<tr><td class="decl-label">Date</td><td class="decl-value">' + (dateVal || '') + '</td></tr>';
         html += '</tbody></table>';
         html += '</div>';
+        }
         }
       } else if (section.pdf_render_mode === 'declarations') {
         const sectionTitle = section.title.toLowerCase();

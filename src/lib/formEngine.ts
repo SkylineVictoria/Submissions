@@ -1846,6 +1846,46 @@ export async function listDashboardInstances(
   };
 }
 
+/** Batches assigned to the trainer (read-only list for dashboard). */
+export async function listTrainerBatches(userId: number): Promise<Batch[]> {
+  const { data, error } = await supabase
+    .from('skyline_batches')
+    .select('id, name, trainer_id, created_at')
+    .eq('trainer_id', userId)
+    .order('name', { ascending: true });
+  if (error) {
+    console.error('listTrainerBatches error', error);
+    return [];
+  }
+  const rows = (data as Record<string, unknown>[]) || [];
+  if (rows.length === 0) return rows.map((r) => mapBatchRow(r, null));
+  const trainerIds = [...new Set(rows.map((r) => Number(r.trainer_id)).filter(Boolean))];
+  const trainerMap = new Map<number, string>();
+  if (trainerIds.length > 0) {
+    const { data: trainers } = await supabase
+      .from('skyline_users')
+      .select('id, full_name')
+      .in('id', trainerIds);
+    for (const t of (trainers as { id: number; full_name: string }[]) || []) {
+      trainerMap.set(t.id, t.full_name ?? '');
+    }
+  }
+  return rows.map((r) => mapBatchRow(r, trainerMap.get(Number(r.trainer_id)) ?? null));
+}
+
+/** Number of batches assigned to the trainer. */
+export async function getTrainerBatchCount(userId: number): Promise<number> {
+  const { count, error } = await supabase
+    .from('skyline_batches')
+    .select('id', { count: 'exact', head: true })
+    .eq('trainer_id', userId);
+  if (error) {
+    console.error('getTrainerBatchCount error', error);
+    return 0;
+  }
+  return Number(count ?? 0);
+}
+
 /** Pending count for dashboard: trainer = waiting_trainer in their batches, office = waiting_office. */
 export async function getDashboardPendingCount(role: 'trainer' | 'office', userId: number): Promise<number> {
   if (role === 'trainer') {
@@ -2260,19 +2300,16 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
     await supabase.from('skyline_form_questions').insert({ section_id: s.id, type: 'short_text', code: 'assessment.otherDesc', label: 'Please describe other method', sort_order: 1, role_visibility: READ_ONLY_VISIBLE, role_editability: STUDENT_ONLY });
   }
 
-  // Introductory Reasonable Adjustment (short form: yes/no, task, description, signature)
+  // Introductory Reasonable Adjustment – instruction only; full form is in Appendix A
   const { data: secRA } = await supabase
     .from('skyline_form_sections')
-    .insert({ step_id: stepId, title: 'Reasonable Adjustment', description: 'Students with carer responsibilities, cultural or religious obligations, English as an additional language, disability etc., can request reasonable adjustments. Academic standards will not be lowered; flexibility in delivery or assessment is required.', pdf_render_mode: 'reasonable_adjustment', sort_order: 4 })
+    .insert({ step_id: stepId, title: 'Reasonable Adjustment', description: 'Reasonable Adjustment: See Appendix A – Reasonable Adjustments for details and to record any adjustments applied.', pdf_render_mode: 'reasonable_adjustment_indicator', sort_order: 4 })
     .select('id')
     .single();
   if (secRA) {
     const raSecId = (secRA as { id: number }).id;
     await supabase.from('skyline_form_questions').insert([
-      { section_id: raSecId, type: 'yes_no', code: 'reasonable_adjustment.applied', label: 'Was reasonable adjustment applied to any of these assessment tasks?', sort_order: 0, role_visibility: READ_ONLY_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
-      { section_id: raSecId, type: 'short_text', code: 'reasonable_adjustment.task', label: 'Write (task name and number) where reasonable adjustments have been applied', sort_order: 1, role_visibility: READ_ONLY_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
-      { section_id: raSecId, type: 'long_text', code: 'reasonable_adjustment.description', label: 'Provide a description of the adjustment applied and explain reasons.', sort_order: 2, role_visibility: READ_ONLY_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
-      { section_id: raSecId, type: 'signature', code: 'trainer.reasonableAdjustmentSignature', label: 'Trainer/Assessor Signature', sort_order: 3, role_visibility: READ_ONLY_VISIBLE, role_editability: TRAINER_ONLY_EDIT, pdf_meta: { showNameField: true, showDateField: true } },
+      { section_id: raSecId, type: 'instruction_block', label: 'Reasonable Adjustment', help_text: 'Reasonable Adjustment: See Appendix A – Reasonable Adjustments for details and to record any adjustments applied.', sort_order: 0, role_visibility: READ_ONLY_VISIBLE, role_editability: { student: false, trainer: false, office: false } },
     ]);
   }
 
@@ -2574,7 +2611,8 @@ export async function listForms(status?: string): Promise<Form[]> {
 export async function listFormsPaged(
   page = 1,
   pageSize = 20,
-  status?: string
+  status?: string,
+  courseId?: number
 ): Promise<PaginatedResult<Form>> {
   const from = Math.max(0, (page - 1) * pageSize);
   const to = from + pageSize - 1;
@@ -2583,6 +2621,15 @@ export async function listFormsPaged(
     .select('*', { count: 'exact' })
     .order('created_at', { ascending: false });
   if (status) query = query.eq('status', status);
+  if (courseId && Number.isFinite(courseId)) {
+    const { data: links } = await supabase
+      .from('skyline_course_forms')
+      .select('form_id')
+      .eq('course_id', courseId);
+    const formIds = ((links as { form_id: number }[]) || []).map((r) => r.form_id);
+    if (formIds.length === 0) return { data: [], total: 0, page, pageSize };
+    query = query.in('id', formIds);
+  }
   const { data, error, count } = await query.range(from, to);
   if (error) {
     console.error('listFormsPaged error', error);
@@ -2594,6 +2641,173 @@ export async function listFormsPaged(
     page,
     pageSize,
   };
+}
+
+// ============ Courses (form categories, many-to-many with forms) ============
+
+export interface Course {
+  id: number;
+  name: string;
+  sort_order: number;
+  created_at: string;
+}
+
+export async function listCourses(): Promise<Course[]> {
+  const { data, error } = await supabase
+    .from('skyline_courses')
+    .select('*')
+    .order('sort_order', { ascending: true })
+    .order('name', { ascending: true });
+  if (error) {
+    console.error('listCourses error', error);
+    return [];
+  }
+  return (data as Course[]) || [];
+}
+
+export async function createCourse(name: string): Promise<Course | null> {
+  const trimmed = name.trim();
+  if (!trimmed) return null;
+  const { data, error } = await supabase
+    .from('skyline_courses')
+    .insert({ name: trimmed })
+    .select('*')
+    .single();
+  if (error) {
+    console.error('createCourse error', error);
+    return null;
+  }
+  return data as Course;
+}
+
+export async function updateCourse(id: number, input: { name?: string; sort_order?: number }): Promise<Course | null> {
+  const payload: Record<string, unknown> = {};
+  if (input.name !== undefined) payload.name = input.name.trim();
+  if (input.sort_order !== undefined) payload.sort_order = input.sort_order;
+  const { data, error } = await supabase
+    .from('skyline_courses')
+    .update(payload)
+    .eq('id', id)
+    .select('*')
+    .single();
+  if (error) {
+    console.error('updateCourse error', error);
+    return null;
+  }
+  return data as Course;
+}
+
+export async function deleteCourse(id: number): Promise<boolean> {
+  const { error } = await supabase.from('skyline_courses').delete().eq('id', id);
+  if (error) {
+    console.error('deleteCourse error', error);
+    return false;
+  }
+  return true;
+}
+
+/** Forms assigned to this course. */
+export async function getFormsForCourse(courseId: number): Promise<Form[]> {
+  const { data: links, error: linkErr } = await supabase
+    .from('skyline_course_forms')
+    .select('form_id')
+    .eq('course_id', courseId);
+  if (linkErr || !links?.length) return [];
+  const formIds = (links as { form_id: number }[]).map((r) => r.form_id);
+  const { data: forms, error } = await supabase
+    .from('skyline_forms')
+    .select('*')
+    .in('id', formIds)
+    .order('name');
+  if (error) {
+    console.error('getFormsForCourse error', error);
+    return [];
+  }
+  return (forms as Form[]) || [];
+}
+
+/** Courses for multiple forms at once (e.g. forms list). Returns map formId -> Course[]. */
+export async function getCoursesForForms(formIds: number[]): Promise<Map<number, Course[]>> {
+  const result = new Map<number, Course[]>();
+  if (formIds.length === 0) return result;
+  const { data: links, error: linkErr } = await supabase
+    .from('skyline_course_forms')
+    .select('course_id, form_id')
+    .in('form_id', formIds);
+  if (linkErr || !links?.length) return result;
+  const courseIds = [...new Set((links as { course_id: number }[]).map((r) => r.course_id))];
+  const { data: courses, error } = await supabase
+    .from('skyline_courses')
+    .select('*')
+    .in('id', courseIds)
+    .order('sort_order')
+    .order('name');
+  if (error || !courses?.length) return result;
+  const courseMap = new Map((courses as Course[]).map((c) => [c.id, c]));
+  for (const { form_id, course_id } of links as { form_id: number; course_id: number }[]) {
+    const c = courseMap.get(course_id);
+    if (c) {
+      const list = result.get(form_id) ?? [];
+      list.push(c);
+      result.set(form_id, list);
+    }
+  }
+  return result;
+}
+
+/** Courses this form belongs to. */
+export async function getCoursesForForm(formId: number): Promise<Course[]> {
+  const { data: links, error: linkErr } = await supabase
+    .from('skyline_course_forms')
+    .select('course_id')
+    .eq('form_id', formId);
+  if (linkErr || !links?.length) return [];
+  const courseIds = (links as { course_id: number }[]).map((r) => r.course_id);
+  const { data: courses, error } = await supabase
+    .from('skyline_courses')
+    .select('*')
+    .in('id', courseIds)
+    .order('sort_order')
+    .order('name');
+  if (error) {
+    console.error('getCoursesForForm error', error);
+    return [];
+  }
+  return (courses as Course[]) || [];
+}
+
+/** Replace form-course assignments. courseIds = which courses this form belongs to. */
+export async function setFormCourses(formId: number, courseIds: number[]): Promise<boolean> {
+  const { error: delErr } = await supabase.from('skyline_course_forms').delete().eq('form_id', formId);
+  if (delErr) {
+    console.error('setFormCourses delete error', delErr);
+    return false;
+  }
+  if (courseIds.length === 0) return true;
+  const rows = courseIds.map((course_id) => ({ course_id, form_id: formId }));
+  const { error } = await supabase.from('skyline_course_forms').insert(rows);
+  if (error) {
+    console.error('setFormCourses insert error', error);
+    return false;
+  }
+  return true;
+}
+
+/** Set which forms belong to a course. Replaces existing. */
+export async function setCourseForms(courseId: number, formIds: number[]): Promise<boolean> {
+  const { error: delErr } = await supabase.from('skyline_course_forms').delete().eq('course_id', courseId);
+  if (delErr) {
+    console.error('setCourseForms delete error', delErr);
+    return false;
+  }
+  if (formIds.length === 0) return true;
+  const rows = formIds.map((form_id) => ({ course_id: courseId, form_id }));
+  const { error } = await supabase.from('skyline_course_forms').insert(rows);
+  if (error) {
+    console.error('setCourseForms insert error', error);
+    return false;
+  }
+  return true;
 }
 
 /** Returns true if another form (excluding excludeFormId) already has this name (case-insensitive trim). */

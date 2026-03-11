@@ -1,5 +1,5 @@
 /**
- * Default steps 5-19 added when creating a new form (ends at Special needs).
+ * Default steps 5-19 added when creating a new form (ends at Student declaration).
  * Reasonable Adjustment (step 15) is trainer-only editable.
  */
 
@@ -30,32 +30,6 @@ interface QuestionDef {
 }
 
 const DEFAULT_STEPS_5_TO_20: StepDef[] = [
-  {
-    title: 'Student declaration',
-    sections: [
-      {
-        title: 'Student declaration',
-        description: `• I have read and understood the information in the Unit Requirements prior to commencing this Student Pack
-• I certify that the work submitted for this assessment pack is my own. I have clearly referenced any sources used in my submission. I understand that a false declaration is a form of malpractice.
-• I have kept a copy of this Student Pack and all relevant notes, attachments, and reference material that I used in the production of this Student Pack.
-• For the purposes of assessment, I give the trainer/assessor permission to:
-  i. Reproduce this assessment and provide a copy to another member of staff; and
-  ii. Take steps to authenticate the assessment, including communicating a copy of this assessment to a plagiarism checking service (which may retain a copy of the assessment on its database for future plagiarism checking).`,
-        pdf_render_mode: 'declarations',
-        questions: [
-          {
-            type: 'signature',
-            code: 'student.declarationSignature',
-            label: 'Student signature',
-            required: true,
-            role_visibility: STUDENT_ONLY,
-            role_editability: STUDENT_ONLY,
-            pdf_meta: { showNameField: true, showDateField: true },
-          },
-        ],
-      },
-    ],
-  },
   {
     title: 'Instructions to complete outcomes',
     sections: [
@@ -335,6 +309,32 @@ Every assessment has a 'Feedback to Student' section where all information must 
             help_text: 'Candidates with special needs should notify their trainer/assessor to request any required adjustments as soon as possible. This will enable the trainer/assessor to address the identified needs immediately.',
             role_visibility: READ_ONLY_VISIBLE,
             role_editability: { student: false, trainer: false, office: false },
+          },
+        ],
+      },
+    ],
+  },
+  {
+    title: 'Student declaration',
+    sections: [
+      {
+        title: 'Student declaration',
+        description: `• I have read and understood the information in the Unit Requirements prior to commencing this Student Pack
+• I certify that the work submitted for this assessment pack is my own. I have clearly referenced any sources used in my submission. I understand that a false declaration is a form of malpractice.
+• I have kept a copy of this Student Pack and all relevant notes, attachments, and reference material that I used in the production of this Student Pack.
+• For the purposes of assessment, I give the trainer/assessor permission to:
+  i. Reproduce this assessment and provide a copy to another member of staff; and
+  ii. Take steps to authenticate the assessment, including communicating a copy of this assessment to a plagiarism checking service (which may retain a copy of the assessment on its database for future plagiarism checking).`,
+        pdf_render_mode: 'declarations',
+        questions: [
+          {
+            type: 'signature',
+            code: 'student.declarationSignature',
+            label: 'Student signature',
+            required: true,
+            role_visibility: STUDENT_ONLY,
+            role_editability: STUDENT_ONLY,
+            pdf_meta: { showNameField: true, showDateField: true },
           },
         ],
       },

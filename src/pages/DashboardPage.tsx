@@ -1,11 +1,12 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { ExternalLink, RefreshCw, ClipboardCheck, LayoutDashboard } from 'lucide-react';
-import { listDashboardInstances, getDashboardPendingCount, issueInstanceAccessLink } from '../lib/formEngine';
-import type { SubmittedInstanceRow } from '../lib/formEngine';
+import { ExternalLink, RefreshCw, ClipboardCheck, LayoutDashboard, Users } from 'lucide-react';
+import { listDashboardInstances, getDashboardPendingCount, getTrainerBatchCount, listTrainerBatches, listStudentsInBatch, issueInstanceAccessLink } from '../lib/formEngine';
+import type { SubmittedInstanceRow, Batch, Student } from '../lib/formEngine';
 import { useAuth } from '../contexts/AuthContext';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
+import { Select } from '../components/ui/Select';
 import { Loader } from '../components/ui/Loader';
 import { toast } from '../utils/toast';
 
@@ -42,17 +43,26 @@ export const DashboardPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
+  const [batchCount, setBatchCount] = useState<number | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [trainerBatches, setTrainerBatches] = useState<Batch[]>([]);
+  const [selectedBatchId, setSelectedBatchId] = useState<string>('');
+  const [batchStudents, setBatchStudents] = useState<Student[]>([]);
+  const [batchStudentsLoading, setBatchStudentsLoading] = useState(false);
 
   const loadData = useCallback(
     async (page: number, search: string, opts?: { silent?: boolean }) => {
       if (!user?.id) return;
       if (!opts?.silent) setLoading(true);
-      const [countRes, listRes] = await Promise.all([
+      const [countRes, listRes, batchCountRes, trainerBatchesRes] = await Promise.all([
         getDashboardPendingCount(role, user.id),
         listDashboardInstances(role, user.id, page, PAGE_SIZE, search, true),
+        role === 'trainer' ? getTrainerBatchCount(user.id) : Promise.resolve(null),
+        role === 'trainer' ? listTrainerBatches(user.id) : Promise.resolve([]),
       ]);
       setPendingCount(countRes);
+      setBatchCount(batchCountRes);
+      setTrainerBatches(trainerBatchesRes ?? []);
       setRows(listRes.data);
       setTotalRows(listRes.total);
       setLoading(false);
@@ -64,6 +74,20 @@ export const DashboardPage: React.FC = () => {
     const t = setTimeout(() => loadData(currentPage, searchTerm), 250);
     return () => clearTimeout(t);
   }, [currentPage, searchTerm, loadData]);
+
+  useEffect(() => {
+    if (role !== 'trainer' || !selectedBatchId) {
+      setBatchStudents([]);
+      return;
+    }
+    const batchId = Number(selectedBatchId);
+    if (!Number.isFinite(batchId) || batchId <= 0) return;
+    setBatchStudentsLoading(true);
+    listStudentsInBatch(batchId).then((s) => {
+      setBatchStudents(s);
+      setBatchStudentsLoading(false);
+    });
+  }, [role, selectedBatchId]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -121,8 +145,63 @@ export const DashboardPage: React.FC = () => {
             <p className="text-gray-600 text-sm font-medium">Role</p>
             <p className="text-xl font-bold text-[var(--text)] mt-1 capitalize">{role}</p>
             <p className="text-gray-500 text-xs mt-1">{user?.full_name}</p>
+            {role === 'trainer' && batchCount !== null && (
+              <p className="text-gray-600 text-xs mt-2 pt-2 border-t border-gray-100">
+                Batches: <span className="font-semibold">{batchCount}</span>
+              </p>
+            )}
           </Card>
         </div>
+
+        {role === 'trainer' && trainerBatches.length > 0 && (
+          <Card className="mb-6">
+            <h2 className="text-lg font-bold text-[var(--text)] flex items-center gap-2 mb-4">
+              <Users className="w-5 h-5 text-[var(--brand)]" />
+              My batches
+            </h2>
+            <div className="flex flex-col sm:flex-row sm:items-end gap-4 mb-4">
+              <div className="w-full sm:w-64">
+                <Select
+                  label="Select batch"
+                  value={selectedBatchId}
+                  onChange={setSelectedBatchId}
+                  options={[
+                    { value: '', label: 'Select a batch...' },
+                    ...trainerBatches.map((b) => ({ value: String(b.id), label: b.name })),
+                  ]}
+                />
+              </div>
+            </div>
+            {selectedBatchId && (
+              <div className="border border-gray-100 rounded-lg overflow-hidden">
+                {batchStudentsLoading ? (
+                  <Loader variant="dots" size="md" message="Loading students..." />
+                ) : batchStudents.length === 0 ? (
+                  <div className="py-8 text-center text-gray-500 text-sm">No students in this batch.</div>
+                ) : (
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-gray-50 border-b border-gray-200 text-left text-xs uppercase tracking-wide text-gray-500">
+                        <th className="py-2.5 px-3">Student</th>
+                        <th className="py-2.5 px-3">Email</th>
+                        <th className="py-2.5 px-3">Student ID</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {batchStudents.map((s) => (
+                        <tr key={s.id} className="border-b border-gray-100 hover:bg-gray-50/50">
+                          <td className="py-2.5 px-3 font-medium text-gray-900">{s.name}</td>
+                          <td className="py-2.5 px-3 text-gray-600">{s.email}</td>
+                          <td className="py-2.5 px-3 text-gray-600">{s.student_id ?? '-'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )}
+          </Card>
+        )}
 
         <Card>
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Plus, Send, Mail, Phone, Pencil, Key, Link } from 'lucide-react';
-import { listStudentsPaged, createStudent, updateStudent, createFormInstance, getInstanceForStudentAndForm, listForms, listBatches, listStudentsInBatch, setStudentPassword } from '../lib/formEngine';
+import { listStudentsPaged, createStudent, updateStudent, createFormInstance, getInstanceForStudentAndForm, listForms, listBatches, listStudentsInBatch, setStudentPassword, listCourses, getFormsForCourse } from '../lib/formEngine';
 import type { Student } from '../lib/formEngine';
 import type { Form } from '../types/database';
 import { Card } from '../components/ui/Card';
@@ -28,7 +28,10 @@ export const AdminStudentsPage: React.FC = () => {
   const [sendingBatch, setSendingBatch] = useState(false);
   const [sendToBatchFormId, setSendToBatchFormId] = useState('');
   const [sendToBatchBatchId, setSendToBatchBatchId] = useState('');
+  const [courseFilter, setCourseFilter] = useState('');
+  const [filteredForms, setFilteredForms] = useState<Form[]>([]);
   const [batches, setBatches] = useState<{ id: number; name: string }[]>([]);
+  const [courses, setCourses] = useState<{ id: number; name: string }[]>([]);
   const [setPasswordStudentId, setSetPasswordStudentId] = useState<number | null>(null);
   const [passwordDraft, setPasswordDraft] = useState('');
   const [settingPassword, setSettingPassword] = useState(false);
@@ -79,6 +82,21 @@ export const AdminStudentsPage: React.FC = () => {
   useEffect(() => {
     listBatches().then((b) => setBatches(b));
   }, []);
+  useEffect(() => {
+    listCourses().then((c) => setCourses(c));
+  }, []);
+
+  useEffect(() => {
+    if (!courseFilter) {
+      setFilteredForms([]);
+      return;
+    }
+    const cid = Number(courseFilter);
+    if (!Number.isFinite(cid)) return;
+    getFormsForCourse(cid).then((f) => setFilteredForms(f.filter((form) => form.status === 'published')));
+  }, [courseFilter]);
+
+  const displayForms = courseFilter ? filteredForms : forms;
 
   useEffect(() => {
     const t = setTimeout(async () => {
@@ -92,8 +110,8 @@ export const AdminStudentsPage: React.FC = () => {
   }, [currentPage, searchTerm]);
 
   useEffect(() => {
-    if (forms.length === 0 || students.length === 0) return;
-    const firstFormId = String(forms[0].id);
+    if (displayForms.length === 0 || students.length === 0) return;
+    const firstFormId = String(displayForms[0].id);
     setRowFormMap((prev) => {
       const next = { ...prev };
       for (const st of students) {
@@ -101,9 +119,9 @@ export const AdminStudentsPage: React.FC = () => {
       }
       return next;
     });
-  }, [forms, students]);
+  }, [displayForms, students]);
 
-  const formOptions = forms.map((f) => ({ value: String(f.id), label: `${f.name} (${f.version ?? '1.0.0'})` }));
+  const formOptions = displayForms.map((f) => ({ value: String(f.id), label: `${f.name} (${f.version ?? '1.0.0'})` }));
   const defaultEmail = useMemo(() => {
     const id = studentDraft.student_id.trim();
     return id ? buildStudentEmail(id) : '';
@@ -187,7 +205,7 @@ export const AdminStudentsPage: React.FC = () => {
   };
 
   const handleCopyGenericLink = () => {
-    const formId = sendToBatchFormId || (forms[0] ? String(forms[0].id) : '');
+    const formId = sendToBatchFormId || (displayForms[0] ? String(displayForms[0].id) : '');
     if (!formId) {
       toast.error('Select a form first.');
       return;
@@ -350,6 +368,19 @@ export const AdminStudentsPage: React.FC = () => {
           </p>
           <div className="flex flex-wrap items-end gap-3">
             <div className="min-w-[200px]">
+              <label className="block text-xs font-medium text-gray-600 mb-1">Course</label>
+              <Select
+                value={courseFilter}
+                onChange={(v) => {
+                  setCourseFilter(v);
+                  setSendToBatchFormId('');
+                }}
+                options={[{ value: '', label: 'All courses' }, ...courses.map((c) => ({ value: String(c.id), label: c.name }))]}
+                className="w-full"
+                portal
+              />
+            </div>
+            <div className="min-w-[200px]">
               <label className="block text-xs font-medium text-gray-600 mb-1">Form</label>
               <Select
                 value={sendToBatchFormId}
@@ -371,7 +402,7 @@ export const AdminStudentsPage: React.FC = () => {
             </div>
             <Button
               onClick={handleSendToBatch}
-              disabled={sendingBatch || !sendToBatchFormId || !sendToBatchBatchId || forms.length === 0 || batches.length === 0}
+              disabled={sendingBatch || !sendToBatchFormId || !sendToBatchBatchId || displayForms.length === 0 || batches.length === 0}
             >
               {sendingBatch ? (
                 <>
@@ -388,7 +419,7 @@ export const AdminStudentsPage: React.FC = () => {
             <Button
               variant="outline"
               onClick={handleCopyGenericLink}
-              disabled={forms.length === 0}
+              disabled={displayForms.length === 0}
               title="Copy generic link for students to login with email/password"
             >
               <Link className="w-4 h-4 mr-2 inline" />
@@ -453,7 +484,7 @@ export const AdminStudentsPage: React.FC = () => {
                       </td>
                       <td className="px-4 py-3 border-b border-[var(--border)] w-[320px]">
                         <Select
-                          value={rowFormMap[student.id] || (forms[0] ? String(forms[0].id) : '')}
+                          value={rowFormMap[student.id] || (displayForms[0] ? String(displayForms[0].id) : '')}
                           onChange={(v) => setRowFormMap((prev) => ({ ...prev, [student.id]: v }))}
                           options={formOptions}
                           className="max-w-[320px]"
@@ -485,7 +516,7 @@ export const AdminStudentsPage: React.FC = () => {
                             variant="outline"
                             size="sm"
                             onClick={() => handleSendForm(student.id)}
-                            disabled={sending !== null || forms.length === 0}
+                            disabled={sending !== null || displayForms.length === 0}
                             className="inline-flex items-center justify-center gap-1.5 min-w-[110px] whitespace-nowrap"
                           >
                             <Send className="w-4 h-4" />

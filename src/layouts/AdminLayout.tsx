@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Outlet, NavLink, Link, useNavigate } from 'react-router-dom';
-import { FileText, Users, UserRoundCheck, ClipboardCheck, ChevronLeft, ChevronRight, Layers, LogOut, LayoutDashboard, User } from 'lucide-react';
+import { FileText, Users, UserRoundCheck, ClipboardCheck, ChevronLeft, ChevronRight, Layers, LogOut, LayoutDashboard, User, GraduationCap } from 'lucide-react';
 import { cn } from '../components/utils/cn';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -21,6 +21,7 @@ export const AdminLayout: React.FC = () => {
         { to: '/admin/forms', label: 'Forms', icon: <FileText className="w-5 h-5 shrink-0" />, end: true },
         { to: '/admin/students', label: 'Students', icon: <Users className="w-5 h-5 shrink-0" />, end: true },
         { to: '/admin/batches', label: 'Batches', icon: <Layers className="w-5 h-5 shrink-0" />, end: true },
+        { to: '/admin/courses', label: 'Courses', icon: <GraduationCap className="w-5 h-5 shrink-0" />, end: true },
         { to: '/admin/users', label: 'Users', icon: <UserRoundCheck className="w-5 h-5 shrink-0" />, end: true },
         { to: '/admin/assessments', label: 'Assessments', icon: <ClipboardCheck className="w-5 h-5 shrink-0" />, end: true },
       ];

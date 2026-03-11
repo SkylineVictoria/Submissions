@@ -19,6 +19,8 @@ interface MultiSelectProps {
   required?: boolean;
   /** Max height of dropdown (px) */
   maxHeight?: number;
+  /** Label for count display when multiple selected (e.g. "forms", "students") */
+  countLabel?: string;
 }
 
 export const MultiSelect: React.FC<MultiSelectProps> = ({
@@ -31,6 +33,7 @@ export const MultiSelect: React.FC<MultiSelectProps> = ({
   className,
   required,
   maxHeight = 200,
+  countLabel = 'students',
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState('');
@@ -79,7 +82,7 @@ export const MultiSelect: React.FC<MultiSelectProps> = ({
       ? placeholder
       : value.length === 1
         ? options.find((o) => o.value === value[0])?.label ?? `${value.length} selected`
-        : `${value.length} students selected`;
+        : `${value.length} ${countLabel} selected`;
 
   const toggleOption = (optValue: number) => {
     const next = new Set(value);

@@ -1,11 +1,12 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Plus, FileText, Edit, Eye, Trash2, MoreVertical, Copy } from 'lucide-react';
-import { listFormsPaged, createForm, duplicateForm, getDefaultFormDates } from '../lib/formEngine';
+import { listFormsPaged, createForm, duplicateForm, getDefaultFormDates, listCourses, getCoursesForForms } from '../lib/formEngine';
 import type { Form } from '../types/database';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
+import { Select } from '../components/ui/Select';
 import { Textarea } from '../components/ui/Textarea';
 import { DatePicker } from '../components/ui/DatePicker';
 import { Loader } from '../components/ui/Loader';
@@ -38,19 +39,27 @@ export const AdminFormsListPage: React.FC = () => {
   const [previewing, setPreviewing] = useState<number | null>(null);
   const [duplicating, setDuplicating] = useState<number | null>(null);
   const [openMenuId, setOpenMenuId] = useState<number | null>(null);
+  const [courses, setCourses] = useState<{ id: number; name: string }[]>([]);
+  const [courseFilter, setCourseFilter] = useState<string>('');
+  const [formCoursesMap, setFormCoursesMap] = useState<Map<number, { id: number; name: string }[]>>(new Map());
   const menuRef = useRef<HTMLDivElement | null>(null);
 
-  const loadFormsPage = useCallback(async (page: number) => {
+  const loadFormsPage = useCallback(async (page: number, courseId?: number) => {
     setLoading(true);
-    const res = await listFormsPaged(page, PAGE_SIZE);
+    const res = await listFormsPaged(page, PAGE_SIZE, undefined, courseId);
     setForms(res.data);
     setTotalForms(res.total);
+    const courseList = await listCourses();
+    setCourses(courseList);
+    const map = await getCoursesForForms(res.data.map((f) => f.id));
+    setFormCoursesMap(map);
     setLoading(false);
   }, []);
 
   useEffect(() => {
-    loadFormsPage(currentPage);
-  }, [currentPage, loadFormsPage]);
+    const cid = courseFilter ? Number(courseFilter) : undefined;
+    loadFormsPage(currentPage, cid);
+  }, [currentPage, courseFilter, loadFormsPage]);
 
   const canCreate =
     newName.trim() &&
@@ -80,7 +89,7 @@ export const AdminFormsListPage: React.FC = () => {
     });
     if (created) {
       setCurrentPage(1);
-      await loadFormsPage(1);
+      await loadFormsPage(1, courseFilter ? Number(courseFilter) : undefined);
       setNewName('');
       setNewVersion('1.0.0');
       setNewStartDate(getDefaultFormDates().start_date);
@@ -124,7 +133,7 @@ export const AdminFormsListPage: React.FC = () => {
     setDuplicating(null);
     if (duplicated) {
       setCurrentPage(1);
-      await loadFormsPage(1);
+      await loadFormsPage(1, courseFilter ? Number(courseFilter) : undefined);
     }
   };
 
@@ -279,9 +288,24 @@ export const AdminFormsListPage: React.FC = () => {
         </Card>
 
         <Card>
-          <div className="mb-4 flex items-center justify-between gap-3">
+          <div className="mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <h2 className="text-lg font-bold text-[var(--text)]">All Forms</h2>
-            <div className="text-xs text-gray-500">Page {currentPage} of {totalPages} ({totalForms} total)</div>
+            <div className="flex items-center gap-3">
+              <div className="w-56">
+                <Select
+                  value={courseFilter}
+                  onChange={(v) => {
+                    setCourseFilter(v);
+                    setCurrentPage(1);
+                  }}
+                  options={[
+                    { value: '', label: 'All courses' },
+                    ...courses.map((c) => ({ value: String(c.id), label: c.name })),
+                  ]}
+                />
+              </div>
+              <div className="text-xs text-gray-500">Page {currentPage} of {totalPages} ({totalForms} total)</div>
+            </div>
           </div>
           {loading ? (
             <div className="py-12">
@@ -302,6 +326,11 @@ export const AdminFormsListPage: React.FC = () => {
                       <div className="font-medium text-[var(--text)]">{form.name}</div>
                       <div className="text-xs text-gray-500">
                         Status: {form.status} | Version: {form.version || '-'}
+                        {formCoursesMap.get(form.id)?.length ? (
+                          <span className="ml-1">
+                            | Courses: {formCoursesMap.get(form.id)!.map((c) => c.name).join(', ')}
+                          </span>
+                        ) : null}
                       </div>
                     </div>
                   </div>
