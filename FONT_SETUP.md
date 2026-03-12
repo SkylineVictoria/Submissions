@@ -59,11 +59,17 @@ The fonts are automatically registered when the PDF component loads via `src/uti
 - Size: 9pt
 - Color: #374151 (Dark Grey)
 
-### Body Text
+### Body Text (Client-side react-pdf)
 
-All other text in the PDF (tables, form fields, etc.) uses:
-- Font: Inter (Regular)
-- Size: 10pt (default)
+All other text in the client-side PDF (tables, form fields, etc.) uses Inter (Regular) at 10pt.
+
+### Server-side PDF (Instance Fill / pdf-server)
+
+The server-generated PDFs (form fill, view/download) use:
+- Font: Calibri
+- Normal text: 12pt
+- Headings (h2, h3, section headers, task headers, etc.): 16pt
+- Fallback: Arial, Helvetica, sans-serif
 
 ## Fallback Behavior
 

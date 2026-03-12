@@ -364,8 +364,9 @@ function buildHtml(data: {
   resultsOffice?: Map<number, { entered_date: string | null; entered_by: string | null }>;
   resultsData?: Map<number, { first_attempt_satisfactory?: string | null; first_attempt_date?: string | null; first_attempt_feedback?: string | null; second_attempt_satisfactory?: string | null; second_attempt_date?: string | null; second_attempt_feedback?: string | null; third_attempt_satisfactory?: string | null; third_attempt_date?: string | null; third_attempt_feedback?: string | null; trainer_name?: string | null; trainer_signature?: string | null; trainer_date?: string | null }>;
   assessmentSummaryData?: Record<string, string | null>;
+  role?: 'student' | 'trainer' | 'office';
 }): { html: string; unitCode: string; version: string; headerHtml: string } {
-  const { form, steps, answers, taskRowsMap = new Map(), trainerAssessments = new Map(), trainerRowAssessments = new Map(), resultsOffice = new Map(), resultsData = new Map(), assessmentSummaryData = {} } = data;
+  const { form, steps, answers, taskRowsMap = new Map(), trainerAssessments = new Map(), trainerRowAssessments = new Map(), resultsOffice = new Map(), resultsData = new Map(), assessmentSummaryData = {}, role = 'student' } = data;
 
   const orderedTaskRowIds: number[] = [];
   for (const g of steps) {
@@ -420,31 +421,31 @@ function buildHtml(data: {
     @page { size: A4; margin: 190px 15mm 70px 15mm; }
     @page cover { size: A4; margin: 0; }
     html, body { margin: 0; padding: 0; }
-    body { font-family: 'Calibri', 'Calibri Light', Arial, Helvetica, sans-serif; font-size: 11pt; color: #000000; box-sizing: border-box; min-height: 100%; }
+    body { font-family: 'Calibri', 'Calibri Light', Arial, Helvetica, sans-serif; font-size: 12pt; color: #000000; box-sizing: border-box; min-height: 100%; }
     .header { position: fixed; top: 0; left: 15mm; right: 15mm; width: calc(100% - 30mm); z-index: 1000; background: #fff; padding: 16px 0 16px 0; display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; border-bottom: 1px solid #9ca3af; box-sizing: border-box; overflow: visible; }
     .header-inner { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; width: 100%; gap: 16px; overflow: visible; }
     .header img { max-height: 110px; max-width: 220px; flex-shrink: 0; }
     .header-address { text-align: right; font-size: 8pt; color: #374151; line-height: 1.35; flex-shrink: 0; overflow: visible; padding-left: 12px; }
     .header-address a { color: #2563eb; text-decoration: underline; }
     .divider { height: 1px; background: #9ca3af; margin: 8px 0 14px 0; }
-    h2 { font-size: 13pt; font-weight: bold; margin: 0 0 12px 0; color: #000000; border-left: 4px solid #9ca3af; padding-left: 8px; }
-    h3 { font-size: 10pt; font-weight: bold; margin: 12px 0 6px 0; color: #000000; }
-    .step-page:not(.intro-page) h3 { color: #595959; font-size: 14pt; font-weight: bold; margin: 12px 0 6px 0; }
-    .section-table { width: 100%; border-collapse: collapse; font-size: 11pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; margin: 0 0 12px 0; border: 1px solid #000; border-left: 1px solid #000 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    h2 { font-family: 'Calibri', 'Calibri Light', Arial, Helvetica, sans-serif; font-size: 16pt; font-weight: bold; margin: 0 0 12px 0; color: #000000; border-left: 4px solid #9ca3af; padding-left: 8px; }
+    h3 { font-family: 'Calibri', 'Calibri Light', Arial, Helvetica, sans-serif; font-size: 16pt; font-weight: bold; margin: 12px 0 6px 0; color: #000000; }
+    .step-page:not(.intro-page) h3 { color: #595959; font-size: 16pt; font-weight: bold; margin: 12px 0 6px 0; }
+    .section-table { width: 100%; border-collapse: collapse; font-size: 12pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; margin: 0 0 12px 0; border: 1px solid #000; border-left: 1px solid #000 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .section-table th, .section-table td { border: 1px solid #000; padding: 10px 12px; vertical-align: middle; line-height: 1.35; overflow: visible; }
     .section-table td:first-child, .section-table th:first-child { border-left: 1px solid #000 !important; }
     .section-table tbody tr { page-break-inside: avoid; break-inside: avoid; }
-    .sub-section-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 10pt;font-family:'Calibri','Calibri Light',Arial,sans-serif; padding: 10px 12px; vertical-align: middle; }
+    .sub-section-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 16pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 10px 12px; vertical-align: middle; }
     .label-cell { width: 35%; background: #F0F4FA; font-weight: 600; color: #374151; }
     .value-cell { width: 65%; color: #000000; background: #F0F4FA; }
     .section-table .label-cell, .section-table .row-alt .label-cell, .section-table .row-normal .label-cell { background: #fff !important; font-weight: normal; color: #000;font-family:'Calibri','Calibri Light',Arial,sans-serif; }
-    .section-table .value-cell, .section-table .row-alt .value-cell, .section-table .row-normal .value-cell { background: #fff !important; color: #000; font-size: 10pt;font-family:'Calibri','Calibri Light',Arial,sans-serif; }
+    .section-table .value-cell, .section-table .row-alt .value-cell, .section-table .row-normal .value-cell { background: #fff !important; color: #000; font-size: 12pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; }
     .row-alt .label-cell { color: #000000; background: #F0F4FA; }
     .row-alt .value-cell { color: #000000; background: #F0F4FA; }
     .row-normal .label-cell, .row-normal .value-cell { background: #F0F4FA; }
     .question { margin: 12px 0; overflow: visible; page-break-inside: avoid; break-inside: avoid; }
     .question-label { font-weight: bold; margin-bottom: 4px; overflow: visible; line-height: 1.4; white-space: pre-line; }
-    .decl-heading-bar { font-size: 10pt; font-weight: bold; margin: 12px 0 6px 0; color: #000000; border-left: 4px solid #9ca3af; padding-left: 8px; }
+    .decl-heading-bar { font-family: 'Calibri', 'Calibri Light', Arial, Helvetica, sans-serif; font-size: 16pt; font-weight: bold; margin: 12px 0 6px 0; color: #000000; border-left: 4px solid #9ca3af; padding-left: 8px; }
     .declarations-section { border: 1px solid #000; border-left: 1px solid #000 !important; padding: 12px; background: #fff; margin-bottom: 12px; }
     .declarations-section.declarations-section-no-border { border: none !important; padding: 0; background: transparent; }
     .declarations-section .question { margin: 10px 0; }
@@ -467,7 +468,7 @@ function buildHtml(data: {
     .assessment-submission-other-block .other-underline { display: block; margin: 0 auto; border: none; border-bottom: 1px solid #333; min-width: 200px; min-height: 18px; background: transparent; }
     .assessment-submission-hint { text-align: center; font-size: 8pt; font-style: italic; color: #6b7280; margin-top: 4px; }
     .reasonable-adjustment-section { border: 1px solid #000; margin-bottom: 12px; }
-    .reasonable-adjustment-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 9pt; padding: 10px 12px; display: flex; align-items: center; gap: 8px; }
+    .reasonable-adjustment-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 16pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 10px 12px; display: flex; align-items: center; gap: 8px; }
     .reasonable-adjustment-arrow { font-size: 10pt; }
     .reasonable-adjustment-body { padding: 12px; background: #fff; }
     .reasonable-adjustment-radio { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
@@ -488,8 +489,8 @@ function buildHtml(data: {
     .appendix-b-table-b-wrapper { page-break-before: always !important; page-break-inside: avoid; }
     .appendix-b-table-c-wrapper { page-break-before: always !important; page-break-inside: avoid; }
     .learner-eval-grey-bar { width: 100%; height: 40px; background: #595959 !important; margin-top: 20px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .appendix-a-title-bar { background: #595959 !important; color: #ffffff !important; font-weight: bold; font-size: 11pt; padding: 10px 12px; margin: 0 0 8px 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .appendix-section-bar { background: #595959 !important; color: #ffffff !important; font-weight: bold; font-size: 9pt; padding: 8px 12px; margin: 12px 0 6px 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .appendix-a-title-bar { background: #595959 !important; color: #ffffff !important; font-weight: bold; font-size: 16pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 10px 12px; margin: 0 0 8px 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .appendix-section-bar { background: #595959 !important; color: #ffffff !important; font-weight: bold; font-size: 16pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 8px 12px; margin: 12px 0 6px 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .appendix-matrix-table { width: 100%; border-collapse: collapse; font-size: 8pt; margin: 0 0 10px 0; border: 1px solid #000; }
     .appendix-matrix-table th, .appendix-matrix-table td { border: 1px solid #000; padding: 6px 8px; vertical-align: top; line-height: 1.3; }
     .appendix-matrix-table th { background: #595959 !important; color: #ffffff !important; font-weight: bold; }
@@ -498,15 +499,15 @@ function buildHtml(data: {
     .appendix-matrix-table .appendix-cell-item { display: flex; align-items: flex-start; gap: 4px; margin: 2px 0; }
     .appendix-declaration-box { border: 1px solid #333; padding: 12px; font-style: italic; margin: 12px 0; line-height: 1.4; background: #fff; }
     .appendix-footer-bar { font-size: 8pt; color: #374151; margin-bottom: 8px; padding: 6px 12px; background: #d9d9d9 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .task-instructions-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 14pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 12px 16px; margin: 16px 0 0 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .task-instructions-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 16pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 12px 16px; margin: 16px 0 0 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .task-questions-page { page-break-before: always; }
-    .task-questions-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 14pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 12px 16px; margin: 16px 0 0 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .task-questions-subheader { font-size: 10pt; color: #000; margin: 0 0 12px 0; padding: 0; background: transparent !important; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; }
-    .task-questions-instruction-label { font-size: 9pt; color: #000000; margin: 0 0 8px 0; padding: 0; background: transparent !important; }
-    .task-instructions-student-label { font-size: 11pt; font-weight: bold; color: #000000; margin: 8px 0 4px 0; padding: 0; background: transparent !important; }
-    .task-instructions-subheader { font-size: 9pt; color: #000000; margin: 0 0 8px 0; padding: 0; background: transparent !important; }
+    .task-questions-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 16pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 12px 16px; margin: 16px 0 0 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .task-questions-subheader { font-size: 12pt; color: #000; margin: 0 0 12px 0; padding: 0; background: transparent !important; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; }
+    .task-questions-instruction-label { font-size: 12pt; color: #000000; margin: 0 0 8px 0; padding: 0; background: transparent !important; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; }
+    .task-instructions-student-label { font-size: 12pt; font-weight: bold; color: #000000; margin: 8px 0 4px 0; padding: 0; background: transparent !important; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; }
+    .task-instructions-subheader { font-size: 12pt; color: #000000; margin: 0 0 8px 0; padding: 0; background: transparent !important; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; }
     .task-instructions-block { margin: 12px 0; }
-    .task-instructions-block-title { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 9pt; padding: 8px 12px; }
+    .task-instructions-block-title { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 16pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 8px 12px; }
     .task-instructions-block-content { padding: 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-top: none; line-height: 1.5; }
     .task-instructions-block-content ul { margin: 8px 0; padding-left: 20px; }
     .task-instructions-block-content p { margin: 6px 0; }
@@ -515,10 +516,12 @@ function buildHtml(data: {
     .task-instructions-table .label-cell { width: 24% !important; }
     .task-instructions-table td:last-child { border-right: 1px solid #000 !important; }
     .result-sheet-page { page-break-before: always; }
-    .task-results-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 10pt; padding: 12px 16px; margin: 16px 0 0 0; }
+    .result-sheet-main { page-break-inside: avoid; break-inside: avoid; }
+    .result-sheet-office { page-break-before: auto; }
+    .task-results-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 16pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 10px 16px; margin: 0 0 8px 0; }
     .task-results-outcome { margin: 12px 0; }
     .task-results-outcome-title { font-weight: bold; margin-bottom: 6px; }
-    .result-sheet-table { width: 100%; border-collapse: collapse; font-size: 9pt; margin: 0 0 12px 0; border: 1px solid #000; }
+    .result-sheet-table { width: 100%; border-collapse: collapse; font-size: 12pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; margin: 0 0 12px 0; border: 1px solid #000; }
     .result-sheet-table td { border: 1px solid #000; padding: 10px 12px; vertical-align: top; line-height: 1.35; }
     .result-sheet-table .result-label { width: 25%; background: #595959 !important; color: #ffffff; font-weight: 600; }
     .result-sheet-table .result-label.decl-office-label { background: #fae6d2 !important;color: #000000;}
@@ -534,7 +537,7 @@ function buildHtml(data: {
     .result-sheet-table .result-value-declaration ul:last-of-type { margin-bottom: 4px !important; }
     .result-sheet-table .result-value-declaration p:last-child { margin-bottom: 0 !important; }
     .assessment-summary-page { page-break-before: always; page-break-after: always; page-break-inside: avoid; }
-    .assessment-summary-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 11pt; padding: 10px 12px; text-align: center; margin: 0; border: 1px solid #000; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .assessment-summary-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 16pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 10px 12px; text-align: center; margin: 0; border: 1px solid #000; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .assessment-summary-intro { background: #fff !important; color: #374151 !important; font-size: 8.5pt; padding: 8px 12px; margin: 0; line-height: 1.4; border: 1px solid #000; border-top: none; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .assessment-summary-intro .intro-main { font-size: 9pt; font-weight: 600; margin-bottom: 4px; }
     .assessment-summary-table { width: 100%; border-collapse: collapse; font-size: 8pt; margin: 0 0 8px 0; border: 1px solid #000; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -550,15 +553,15 @@ function buildHtml(data: {
     .assessment-summary-table .summary-date-line { border: none; border-bottom: 1px solid #333; min-height: 12px; padding: 0 2px 1px; background: transparent; display: inline-block; min-width: 60px; font-size: 7pt; }
     .assessment-summary-table .summary-cb { width: 12px; height: 12px; border: 1px solid #000; border-radius: 0; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; font-size: 9px; color: #000000; background: #fff; }
     .assessment-summary-table .summary-cb.checked { background: #000000; color: #fff; }
-    .decl-table { width: 100%; border-collapse: collapse; font-size: 9pt; margin: 0 0 12px 0; border: 1px solid #000; border-left: 1px solid #000 !important; }
+    .decl-table { width: 100%; border-collapse: collapse; font-size: 12pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; margin: 0 0 12px 0; border: 1px solid #000; border-left: 1px solid #000 !important; }
     .decl-table td { border: 1px solid #000; padding: 10px 12px; vertical-align: middle; line-height: 1.35; overflow: visible; }
     .decl-table td:first-child { border-left: 1px solid #000 !important; }
     .decl-table .decl-label { width: 35%; background: #d9d9d9; color: #000000;font-weight: bold; }
     .decl-table .decl-value { background: #fff; color: #000000; white-space: pre-line; }
     .decl-table .decl-sig-value { color: #2563eb; font-style: italic; text-decoration: underline; }
-    .decl-table .decl-other-header { background: #595959 !important; color: #fff !important; font-weight: bold; padding: 10px 12px; vertical-align: middle; }
+    .decl-table .decl-other-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 16pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 10px 12px; vertical-align: middle; }
     .decl-table .decl-office-label { font-style: italic; }
-    .decl-sig-heading { font-size: 10pt; font-weight: bold; margin: 12px 0 6px 0; color: #000000; }
+    .decl-sig-heading { font-family: 'Calibri', 'Calibri Light', Arial, Helvetica, sans-serif; font-size: 16pt; font-weight: bold; margin: 12px 0 6px 0; color: #000000; }
     .decl-sig-inline-block { margin-bottom: 12px; }
     .decl-sig-inline { margin: 10px 0; font-size: 11pt; }
     .decl-sig-inline .decl-sig-label { font-weight: normal; margin-right: 8px; }
@@ -641,6 +644,8 @@ function buildHtml(data: {
     .grid-status-yn-wrap { display: inline-flex !important; flex-direction: row !important; align-items: center !important; justify-content: center !important; gap: 6px !important; white-space: nowrap !important; font-size: 9px !important; font-family: Arial, sans-serif !important; }
     .grid-status-cb { width: 10px !important; height: 10px !important; min-width: 10px !important; min-height: 10px !important; border: 1px solid #000 !important; border-radius: 2px !important; display: inline-flex !important; align-items: center !important; justify-content: center !important; flex-shrink: 0 !important; font-size: 8px !important; line-height: 1 !important; color: #000 !important; background: #fff !important; }
     .grid-status-cb.checked { background: #000 !important; color: #fff !important; }
+    .task-q-satisfactory-top-right { position: absolute; top: 4px; right: 8px; font-size: 15pt; font-weight: 600; white-space: nowrap; }
+    .task-q-satisfactory-top-right .grid-status-cb { width: 16px !important; height: 16px !important; min-width: 16px !important; min-height: 16px !important; font-size: 11px !important; }
     .task-q-answer-block { padding: 12px; min-height: 36px; font-size: 11pt; background: #fff; box-sizing: border-box; overflow-wrap: anywhere; word-break: break-word; white-space: pre-line; }
     .task-q-answer-block.task-q-answer-large { min-height: 96px; }
     .task-questions-table .task-q-inner-table th, .task-questions-table .task-q-inner-table td,
@@ -801,13 +806,15 @@ function buildHtml(data: {
 <body>
 `;
 
-  // Group steps: put Student & Trainer + Qualification & Unit on the same page
+  // Group steps: put Student & Trainer + Qualification & Unit on the same page. Appendix A hidden from students.
+  const isAppendixAStep = (s: { title?: string | null }) => /Appendix\s*A/i.test((s.title ?? '').trim());
+  const stepsForPdf = role === 'student' ? steps.filter((g) => !isAppendixAStep(g.step)) : steps;
   const isStudentTrainerStep = (s: { title: string }) => /student/i.test(s.title) && /trainer/i.test(s.title);
   const isQualificationStep = (s: { title: string }) => /qualification/i.test(s.title);
   const pageGroups: Array<typeof steps> = [];
-  for (let i = 0; i < steps.length; i++) {
-    const curr = steps[i];
-    const next = steps[i + 1];
+  for (let i = 0; i < stepsForPdf.length; i++) {
+    const curr = stepsForPdf[i];
+    const next = stepsForPdf[i + 1];
     if (next && isStudentTrainerStep(curr.step) && isQualificationStep(next.step)) {
       pageGroups.push([curr, next]);
       i++;
@@ -1250,6 +1257,7 @@ function buildHtml(data: {
         const taskHeaderTitle = `${row?.row_label || section.title} – ${assessmentType}`;
         const assessmentTaskIndex = rowId && orderedTaskRowIds.length > 0 ? (orderedTaskRowIds.indexOf(rowId) + 1) || 1 : 1;
         const isAssessment2Plus = assessmentTaskIndex >= 2;
+        const useTopRightSatisfactory = isAssessment2Plus;
         html += '<div class="task-questions-page">';
         html += `<div class="task-questions-header">${taskHeaderTitle}</div>`;
         html += `<div class="task-questions-subheader">Provide your response to each question in the box below.</div>`;
@@ -1268,7 +1276,11 @@ function buildHtml(data: {
           const satNo = sat === 'no';
           const isGridTable = question.type === 'grid_table' && rows.length > 0;
           const boxClass = 'task-q-question-box' + (nextIsPageBreak ? ' page-break-after' : '');
-          html += `<div class="${boxClass}">`;
+          const boxStyle = useTopRightSatisfactory ? 'position:relative;' : '';
+          html += `<div class="${boxClass}"${boxStyle ? ` style="${boxStyle}"` : ''}>`;
+          if (useTopRightSatisfactory) {
+            html += `<div class="task-q-satisfactory-top-right"><span style="font-weight:600;margin-right:8px">Satisfactory response:</span><span class="grid-status-cb${satYes ? ' checked' : ''}">${SVG_CHECK}</span> Yes <span style="margin-left:12px" class="grid-status-cb${satNo ? ' checked' : ''}">${SVG_X}</span> No</div>`;
+          }
           if (isAssessment2Plus) {
             html += `<div class="task-q-question-label" style="font-weight:bold;margin-bottom:8px">${question.label}</div>`;
             const pmTop = (question.pdf_meta as Record<string, unknown>) || {};
@@ -1330,7 +1342,7 @@ function buildHtml(data: {
                 html += '</tr>';
               }
               html += '</tbody></table>';
-              html += '<div class="mt-3" style="margin-top:10px"><span style="font-weight:600;margin-right:8px">Satisfactory response:</span><span class="grid-status-cb' + (satYes ? ' checked' : '') + '">' + SVG_CHECK + '</span> Yes <span style="margin-left:12px" class="grid-status-cb' + (satNo ? ' checked' : '') + '">' + SVG_X + '</span> No</div>';
+              if (!useTopRightSatisfactory) html += '<div class="mt-3" style="margin-top:10px"><span style="font-weight:600;margin-right:8px">Satisfactory response:</span><span class="grid-status-cb' + (satYes ? ' checked' : '') + '">' + SVG_CHECK + '</span> Yes <span style="margin-left:12px" class="grid-status-cb' + (satNo ? ' checked' : '') + '">' + SVG_X + '</span> No</div>';
             } else {
               const key = rows[0] ? `q-${question.id}-${rows[0].id}` : `q-${question.id}`;
               const val = answers.get(key);
@@ -1339,7 +1351,7 @@ function buildHtml(data: {
               const blockClass = question.type === 'long_text' ? 'task-q-answer-block task-q-answer-large' : 'task-q-answer-block';
               const blockStyle = qWordLimit ? `min-height:${heightFromWordLimit(qWordLimit)}px;max-height:${heightFromWordLimit(qWordLimit)}px;height:${heightFromWordLimit(qWordLimit)}px;` : '';
               html += `<div class="${blockClass}"${blockStyle ? ` style="${blockStyle}"` : ''}>${val ?? ''}</div>`;
-              html += '<div class="mt-3" style="margin-top:10px"><span style="font-weight:600;margin-right:8px">Satisfactory response:</span><span class="grid-status-cb' + (satYes ? ' checked' : '') + '">' + SVG_CHECK + '</span> Yes <span style="margin-left:12px" class="grid-status-cb' + (satNo ? ' checked' : '') + '">' + SVG_X + '</span> No</div>';
+              if (!useTopRightSatisfactory) html += '<div class="mt-3" style="margin-top:10px"><span style="font-weight:600;margin-right:8px">Satisfactory response:</span><span class="grid-status-cb' + (satYes ? ' checked' : '') + '">' + SVG_CHECK + '</span> Yes <span style="margin-left:12px" class="grid-status-cb' + (satNo ? ' checked' : '') + '">' + SVG_X + '</span> No</div>';
             }
             const legacyAb = pmTop?.additionalBlock as Record<string, unknown> | undefined;
             const contentBlocks: Array<{ type: string; content?: string; questionId?: number; headerText?: string }> = Array.isArray(pmTop?.contentBlocks)
@@ -1365,6 +1377,9 @@ function buildHtml(data: {
                 const childQ = questions.find((x) => x.question.id === block.questionId);
                 if (childQ) {
                   const { question: cq, rows: cRows } = childQ;
+                  const cqSat = trainerAssessments.get(cq.id);
+                  const cqSatYes = cqSat === 'yes';
+                  const cqSatNo = cqSat === 'no';
                   const cqPm = (cq.pdf_meta as Record<string, unknown>) || {};
                   const cColumnsMeta = getGridColumnsMeta(cqPm);
                   const cCols = cColumnsMeta.map((c) => c.label);
@@ -1379,7 +1394,9 @@ function buildHtml(data: {
                   const cFirstQuestionColIndex = cColumnsMeta.findIndex((c) => c.type === 'question');
                   const cColumnWordLimits = (Array.isArray(cqPm.columnWordLimits) ? cqPm.columnWordLimits : []).map((v: unknown) => (typeof v === 'number' && v > 0 ? v : null)) as (number | null)[];
                   html += `<div class="task-q-content-block mt-3">${blockHeaderHtml(block.headerText)}`;
-                  html += '<div class="task-q-additional-grid"><table class="section-table grid-table-no-border task-q-inner-table">';
+                  html += useTopRightSatisfactory
+                    ? `<div class="task-q-additional-grid" style="position:relative;"><div class="task-q-satisfactory-top-right"><span style="font-weight:600;margin-right:8px">Satisfactory response:</span><span class="grid-status-cb${cqSatYes ? ' checked' : ''}">${SVG_CHECK}</span> Yes <span style="margin-left:12px" class="grid-status-cb${cqSatNo ? ' checked' : ''}">${SVG_X}</span> No</div><table class="section-table grid-table-no-border task-q-inner-table">`
+                    : '<div class="task-q-additional-grid"><table class="section-table grid-table-no-border task-q-inner-table">';
                   if (cLayout !== 'no_image_no_header') {
                     html += '<thead><tr>';
                     if (cIsSplit) html += `<th>${formatGridHeader(cSecondCol, cHeaderCase)}</th>`;
@@ -1411,10 +1428,11 @@ function buildHtml(data: {
                     }
                     html += '</tr>';
                   }
-                  const cqSat = trainerAssessments.get(cq.id);
-                  const cqSatYes = cqSat === 'yes';
-                  const cqSatNo = cqSat === 'no';
-                  html += '</tbody></table><div class="mt-3" style="margin-top:10px"><span style="font-weight:600;margin-right:8px">Satisfactory response:</span><span class="grid-status-cb' + (cqSatYes ? ' checked' : '') + '">' + SVG_CHECK + '</span> Yes <span style="margin-left:12px" class="grid-status-cb' + (cqSatNo ? ' checked' : '') + '">' + SVG_X + '</span> No</div></div></div>';
+                  if (!useTopRightSatisfactory) {
+                    html += '</tbody></table><div class="mt-3" style="margin-top:10px"><span style="font-weight:600;margin-right:8px">Satisfactory response:</span><span class="grid-status-cb' + (cqSatYes ? ' checked' : '') + '">' + SVG_CHECK + '</span> Yes <span style="margin-left:12px" class="grid-status-cb' + (cqSatNo ? ' checked' : '') + '">' + SVG_X + '</span> No</div></div></div>';
+                  } else {
+                    html += '</tbody></table></div></div>';
+                  }
                 }
               }
             }
@@ -1606,7 +1624,24 @@ function buildHtml(data: {
         const f2n = rd?.second_attempt_satisfactory === 'ns';
         const f3s = rd?.third_attempt_satisfactory === 's';
         const f3n = rd?.third_attempt_satisfactory === 'ns';
-        html += `<div class="result-sheet-page"><div class="task-results-header">${taskTitle} – Results Sheet</div>`;
+        const studentNameDisplay = (() => {
+          const rn = (rd?.student_name ?? '').trim();
+          if (rn.length > 1) return rn;
+          const sig = rd?.student_signature;
+          if (sig && typeof sig === 'string' && !sig.startsWith('data:')) return sig;
+          return String(codeToValue.get('student.fullName') ?? '');
+        })();
+        const trainerNameDisplay = (() => {
+          const rn = (rd?.trainer_name ?? '').trim();
+          if (rn.length > 1) return rn;
+          const sig = rd?.trainer_signature;
+          if (sig && typeof sig === 'string' && !sig.startsWith('data:')) return sig;
+          return String(codeToValue.get('trainer.fullName') ?? '');
+        })();
+        const officeEntry = resultsOffice.get(section.id);
+        const officeDate = officeEntry?.entered_date ?? '';
+        const officeName = officeEntry?.entered_by ?? '';
+        html += `<div class="result-sheet-page"><div class="result-sheet-main"><div class="task-results-header">${taskTitle} – Results Sheet</div>`;
         html += '<table class="result-sheet-table"><tbody>';
         html += '<tr><td class="result-label" rowspan="3">Outcome</td><td class="result-value">';
         html += '<div class="task-results-outcome-title">First attempt:</div>';
@@ -1635,32 +1670,17 @@ function buildHtml(data: {
         html += '<p style="margin: 12px 0 4px 0;"><strong>I understand that if I disagree with the assessment outcome, I can appeal the assessment process, and either re-submit additional evidence undertake gap training and or have my submission re-assessed.</strong></p>';
         html += '<p style="margin: 4px 0 0 0;"><strong>All appeal options have been explained to me.</strong></p>';
         html += '</td></tr>';
-        const studentNameDisplay = (() => {
-          const rn = (rd?.student_name ?? '').trim();
-          if (rn.length > 1) return rn;
-          const sig = rd?.student_signature;
-          if (sig && typeof sig === 'string' && !sig.startsWith('data:')) return sig;
-          return String(codeToValue.get('student.fullName') ?? '');
-        })();
-        const trainerNameDisplay = (() => {
-          const rn = (rd?.trainer_name ?? '').trim();
-          if (rn.length > 1) return rn;
-          const sig = rd?.trainer_signature;
-          if (sig && typeof sig === 'string' && !sig.startsWith('data:')) return sig;
-          return String(codeToValue.get('trainer.fullName') ?? '');
-        })();
         html += '<tr><td class="result-label">Student Name</td><td class="result-value">' + studentNameDisplay + '</td></tr>';
         html += '<tr><td class="result-label">Student Signature</td><td class="result-value">' + renderSignatureHtml(rd?.student_signature ?? '') + '</td></tr>';
         html += '<tr><td class="result-label">Trainer/Assessor Name</td><td class="result-value">' + trainerNameDisplay + '</td></tr>';
         html += '<tr><td class="result-label">Trainer/Assessor Signature</td><td class="result-value">' + renderSignatureHtml(rd?.trainer_signature ?? '') + '</td></tr>';
         html += '<tr><td class="result-label">Date</td><td class="result-value">' + (rd?.trainer_date ?? '') + '</td></tr>';
-        const officeEntry = resultsOffice.get(section.id);
-        const officeDate = officeEntry?.entered_date ?? '';
-        const officeName = officeEntry?.entered_by ?? '';
+        html += '</tbody></table></div>';
+        html += '<div class="result-sheet-office"><table class="result-sheet-table"><tbody>';
         html += '<tr><td class="result-label decl-office-label">Office Use Only</td><td class="result-value">';
         html += 'The outcome of this assessment has been entered into the Student Management System on <span class="answer-line-inline">' + officeDate + '</span> (insert date) by <span class="answer-line-inline">' + officeName + '</span> (insert Name)';
         html += '</td></tr>';
-        html += '</tbody></table></div>';
+        html += '</tbody></table></div></div>';
       } else if (section.pdf_render_mode === 'assessment_summary' || section.title === 'Assessment Summary Sheet') {
         const taskRowsOrdered: { id: number; row_label: string }[] = [];
         const taskRowToSectionId = new Map<number, number>();
@@ -1740,7 +1760,9 @@ function buildHtml(data: {
       } else if (section.pdf_render_mode === 'reasonable_adjustment') {
         const stepTitle = (step?.title || '').trim();
         const isAppendixA = /Appendix\s*A/i.test(stepTitle);
-        if (!isAppendixA && formHasAppendixA) {
+        if (isAppendixA && role === 'student') {
+          /* Appendix A - Trainer and Office only: skip entire section for students */
+        } else if (!isAppendixA && formHasAppendixA) {
           html += `<h3>${headerNum}. Reasonable Adjustment</h3>`;
           headerNum++;
           html += '<p style="margin:0 0 10px 0;line-height:1.5">Reasonable Adjustment: See Appendix A – Reasonable Adjustments for details and to record any adjustments applied.</p>';
@@ -2035,6 +2057,8 @@ function splitCoverAndRestHtml(fullHtml: string): { coverHtml: string; restHtml:
 app.get('/pdf/:instanceId', async (req, res) => {
   const instanceId = Number(req.params.instanceId);
   const download = req.query.download === '1';
+  const roleParam = typeof req.query.role === 'string' ? req.query.role : '';
+  const role = roleParam === 'trainer' || roleParam === 'office' ? roleParam : 'student';
 
   if (!instanceId) {
     res.status(400).send('Invalid instance ID');
@@ -2198,6 +2222,7 @@ app.get('/pdf/:instanceId', async (req, res) => {
       resultsOffice: resultsOfficeMap,
       resultsData: resultsDataMap,
       assessmentSummaryData: assessmentSummaryMap,
+      role,
     });
     const footerHtml = `
       <div style="font-size: 9pt; color: #374151; width: 100%; height: 50px; display: flex; justify-content: space-between; align-items: center; padding: 0 15mm; box-sizing: border-box; page-break-inside: avoid;">

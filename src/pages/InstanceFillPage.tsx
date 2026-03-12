@@ -62,6 +62,7 @@ export const InstanceFillPage: React.FC = () => {
   const [assessmentSummary, setAssessmentSummary] = useState<import('../lib/formEngine').AssessmentSummaryDataEntry | null>(null);
   const [role, setRole] = useState<FormRole>('student');
   const [workflowStatus, setWorkflowStatus] = useState<'draft' | 'waiting_trainer' | 'waiting_office' | 'completed'>('draft');
+  const [submittedAt, setSubmittedAt] = useState<string | null>(null);
   const [confirmConfig, setConfirmConfig] = useState<{
     title: string;
     message: string;
@@ -130,6 +131,8 @@ export const InstanceFillPage: React.FC = () => {
             : 'draft'
     ) as 'draft' | 'waiting_trainer' | 'waiting_office' | 'completed';
     setWorkflowStatus(normalizedWorkflow);
+    const instSubmittedAt = (inst as unknown as { submitted_at?: string } | null)?.submitted_at;
+    setSubmittedAt(instSubmittedAt ? String(instSubmittedAt).split('T')[0] : null);
     const ansMap: Record<string, string | number | boolean | Record<string, unknown> | string[]> = {};
     for (const a of ans) {
       const key = getAnswerKey(a.question_id, a.row_id);
@@ -293,17 +296,24 @@ export const InstanceFillPage: React.FC = () => {
     if (!template || !id) return;
     const taskResultSectionIds = (template.steps ?? []).flatMap((st) => st.sections).filter((s) => s.pdf_render_mode === 'task_results').map((s) => s.id);
     const firstTaskSectionId = taskResultSectionIds[0];
+    const firstTaskRd = firstTaskSectionId ? resultsData[firstTaskSectionId] : null;
+    const studentDeclQ = template.steps?.flatMap((st) => st.sections).flatMap((s) => s.questions).find((q) => q.code === 'student.declarationSignature');
+    const studentDeclVal = studentDeclQ ? answers[getAnswerKey(studentDeclQ.id, null)] : undefined;
+    const studentDeclSigObj = studentDeclVal && typeof studentDeclVal === 'object' && !Array.isArray(studentDeclVal) ? (studentDeclVal as Record<string, unknown>) : null;
+    const studentDeclDate = studentDeclSigObj ? String(studentDeclSigObj.date ?? studentDeclSigObj.signedAtDate ?? '') : '';
+    const studentSubmitDate = studentDeclDate || submittedAt || '';
     const raTrainerQ = template.steps?.flatMap((st) => st.sections).flatMap((s) => s.questions).find((q) => q.code === 'trainer.reasonableAdjustmentSignature');
     const raVal = raTrainerQ ? answers[getAnswerKey(raTrainerQ.id, null)] : undefined;
     const raSigObj = raVal && typeof raVal === 'object' && !Array.isArray(raVal) ? (raVal as Record<string, unknown>) : null;
     const raTrainerDate = raSigObj ? String(raSigObj.date ?? raSigObj.signedAtDate ?? '') : '';
     const today = new Date().toISOString().split('T')[0];
+    const firstAttemptSource = raTrainerDate || firstTaskRd?.first_attempt_date || studentSubmitDate || today;
     const updates: { sectionId: number; field: 'trainer_date' | 'first_attempt_date' | 'second_attempt_date' | 'third_attempt_date'; value: string }[] = [];
     for (const sectionId of taskResultSectionIds) {
       const rd = resultsData[sectionId];
       const firstTaskData = firstTaskSectionId && firstTaskSectionId !== sectionId ? resultsData[firstTaskSectionId] : null;
       const trainerDateVal = raTrainerDate || (firstTaskData?.trainer_date ?? today);
-      const firstAttemptVal = raTrainerDate || (firstTaskData?.first_attempt_date ?? today);
+      const firstAttemptVal = firstAttemptSource;
       const secondAttemptVal = rd?.first_attempt_date || (firstTaskData?.second_attempt_date ?? today);
       const thirdAttemptVal = rd?.second_attempt_date || (firstTaskData?.third_attempt_date ?? today);
       if (!rd?.trainer_date && trainerDateVal) updates.push({ sectionId, field: 'trainer_date', value: trainerDateVal });
@@ -322,7 +332,7 @@ export const InstanceFillPage: React.FC = () => {
       setPdfRefresh((r) => r + 1);
       return next;
     });
-  }, [template, answers, resultsData, id]);
+  }, [template, answers, resultsData, submittedAt, id]);
 
   useEffect(() => {
     if (!template || !id || !assessmentSummary) return;
@@ -467,7 +477,9 @@ export const InstanceFillPage: React.FC = () => {
     if (!id) return;
     setWorkflowSubmitting(true);
     if (role === 'student' && workflowStatus === 'draft') {
+      const submitDate = new Date().toISOString().split('T')[0];
       await updateInstanceWorkflowStatus(id, 'waiting_trainer');
+      setSubmittedAt(submitDate);
       await updateInstanceRole(id, 'trainer');
       await revokeRoleAccessTokens(id, 'student');
       setWorkflowStatus('waiting_trainer');
@@ -601,12 +613,12 @@ export const InstanceFillPage: React.FC = () => {
                 <Button
                   variant="outline"
                   onClick={() => {
-                    window.open(`${PDF_BASE}/pdf/${id}?t=${Date.now()}#toolbar=0`, '_blank', 'width=900,height=700');
+                    window.open(`${PDF_BASE}/pdf/${id}?role=${role}&t=${Date.now()}#toolbar=0`, '_blank', 'width=900,height=700');
                   }}
                 >
                   Preview PDF
                 </Button>
-                <a href={`${PDF_BASE}/pdf/${id}?download=1&t=${Date.now()}`} target="_blank" rel="noopener noreferrer">
+                <a href={`${PDF_BASE}/pdf/${id}?role=${role}&download=1&t=${Date.now()}`} target="_blank" rel="noopener noreferrer">
                   <Button variant="primary">Download PDF</Button>
                 </a>
               </div>
@@ -617,10 +629,14 @@ export const InstanceFillPage: React.FC = () => {
     );
   }
 
-  // Introduction step is always first, then form steps
+  // Introduction step is always first, then form steps. Appendix A hidden from students.
+  const isAppendixAStep = (s: { title?: string | null }) => /Appendix\s*A/i.test((s.title || '').trim());
+  const visibleSteps = (template.steps ?? []).filter(
+    (s) => role !== 'student' || !isAppendixAStep(s)
+  );
   const steps = [
     { number: 1, label: 'Introduction', description: 'Student Pack overview' },
-    ...template.steps.map((s, i) => ({
+    ...visibleSteps.map((s, i) => ({
       number: i + 2,
       label: s.title,
       description: s.subtitle || '',
@@ -628,7 +644,7 @@ export const InstanceFillPage: React.FC = () => {
   ];
 
   const isIntroductionStep = currentStep === 1;
-  const currentStepData = isIntroductionStep ? null : template.steps[currentStep - 2];
+  const currentStepData = isIntroductionStep ? null : visibleSteps[currentStep - 2];
   const visibleQuestions: { q: typeof template.steps[0]['sections'][0]['questions'][0]; section: typeof template.steps[0]['sections'][0] }[] = [];
 
   if (currentStepData) {
@@ -697,6 +713,7 @@ export const InstanceFillPage: React.FC = () => {
                 </h2>
                 {currentStepData.sections
                   .filter((section) => {
+                    if (section.pdf_render_mode === 'reasonable_adjustment' && role === 'student') return false;
                     const hasInteractive = section.questions.some(
                       (q) => q.type !== 'instruction_block' && isRoleVisible((q.role_visibility as Record<string, boolean>) || {}, role)
                     );
@@ -1467,6 +1484,19 @@ export const InstanceFillPage: React.FC = () => {
                           const studentDeclVal = studentDeclQ ? answers[getAnswerKey(studentDeclQ.id, null)] : undefined;
                           const studentDeclSigObj = studentDeclVal && typeof studentDeclVal === 'object' && !Array.isArray(studentDeclVal) ? (studentDeclVal as Record<string, unknown>) : null;
                           const studentDeclSig = studentDeclSigObj ? (String(studentDeclSigObj.signature ?? studentDeclSigObj.imageDataUrl ?? '') || null) : (typeof studentDeclVal === 'string' ? studentDeclVal : null);
+                          const studentDeclDateForResults = studentDeclSigObj ? String(studentDeclSigObj.date ?? studentDeclSigObj.signedAtDate ?? '') : '';
+                          const studentSubmitDateForResults = studentDeclDateForResults || submittedAt || '';
+                          const minFirstAttempt = studentSubmitDateForResults || undefined;
+                          const minSecondAttempt = rd?.first_attempt_date || undefined;
+                          const minThirdAttempt = rd?.second_attempt_date || undefined;
+                          const minTrainerDate = [studentSubmitDateForResults, rd?.first_attempt_date].filter(Boolean).sort().pop() || undefined;
+                          const firstAttemptComplete = !!(rd?.first_attempt_date || rd?.first_attempt_satisfactory);
+                          const secondOrThirdHasData = !!(rd?.second_attempt_date || rd?.second_attempt_satisfactory || rd?.third_attempt_date || rd?.third_attempt_satisfactory);
+                          const thirdAttemptHasData = !!(rd?.third_attempt_date || rd?.third_attempt_satisfactory);
+                          const secondAttemptComplete = !!(rd?.second_attempt_date || rd?.second_attempt_satisfactory);
+                          const firstAttemptEditable = trainerCanEdit && !secondOrThirdHasData;
+                          const secondAttemptEditable = trainerCanEdit && firstAttemptComplete && !thirdAttemptHasData;
+                          const thirdAttemptEditable = trainerCanEdit && secondAttemptComplete;
                           const studentSuggestionSig = studentDeclSig ?? firstTaskData?.student_signature ?? null;
                           const studentNameQ = template?.steps?.flatMap((st) => st.sections).flatMap((s) => s.questions).find((q) => q.code === 'student.fullName');
                           const trainerNameQ = template?.steps?.flatMap((st) => st.sections).flatMap((s) => s.questions).find((q) => q.code === 'trainer.fullName');
@@ -1493,8 +1523,8 @@ export const InstanceFillPage: React.FC = () => {
                                           type="radio"
                                           name={`results-${section.id}-first`}
                                           checked={rd?.first_attempt_satisfactory === 's'}
-                                          onChange={() => trainerCanEdit && handleResultsDataChange(section.id, 'first_attempt_satisfactory', 's')}
-                                          disabled={!trainerCanEdit}
+                                          onChange={() => firstAttemptEditable && handleResultsDataChange(section.id, 'first_attempt_satisfactory', 's')}
+                                          disabled={!firstAttemptEditable}
                                           className="w-4 h-4"
                                         />
                                         <span>Satisfactory (S)</span>
@@ -1504,8 +1534,8 @@ export const InstanceFillPage: React.FC = () => {
                                           type="radio"
                                           name={`results-${section.id}-first`}
                                           checked={rd?.first_attempt_satisfactory === 'ns'}
-                                          onChange={() => trainerCanEdit && handleResultsDataChange(section.id, 'first_attempt_satisfactory', 'ns')}
-                                          disabled={!trainerCanEdit}
+                                          onChange={() => firstAttemptEditable && handleResultsDataChange(section.id, 'first_attempt_satisfactory', 'ns')}
+                                          disabled={!firstAttemptEditable}
                                           className="w-4 h-4"
                                         />
                                         <span>Not Satisfactory (NS)</span>
@@ -1515,17 +1545,18 @@ export const InstanceFillPage: React.FC = () => {
                                       <DatePicker
                                         value={rd?.first_attempt_date ?? ''}
                                         onChange={(v) => handleResultsDataChange(section.id, 'first_attempt_date', v || null)}
-                                        disabled={!trainerCanEdit}
+                                        disabled={!firstAttemptEditable}
                                         compact
                                         placement="above"
                                         className="inline-block min-w-[120px]"
+                                        minDate={minFirstAttempt}
                                       />
                                     </div>
                                     <div><span className="font-medium">Feedback:</span>
                                       <textarea
                                         value={rd?.first_attempt_feedback ?? ''}
                                         onChange={(e) => handleResultsDataChange(section.id, 'first_attempt_feedback', e.target.value || null)}
-                                        disabled={!trainerCanEdit}
+                                        disabled={!firstAttemptEditable}
                                         className="block w-full border border-gray-300 min-h-[60px] p-2 mt-1 bg-gray-50 text-sm focus:outline-none focus:ring-1 focus:ring-gray-400 disabled:bg-gray-100 disabled:cursor-not-allowed"
                                       />
                                     </div>
@@ -1541,8 +1572,8 @@ export const InstanceFillPage: React.FC = () => {
                                           type="radio"
                                           name={`results-${section.id}-second`}
                                           checked={rd?.second_attempt_satisfactory === 's'}
-                                          onChange={() => trainerCanEdit && handleResultsDataChange(section.id, 'second_attempt_satisfactory', 's')}
-                                          disabled={!trainerCanEdit}
+                                          onChange={() => secondAttemptEditable && handleResultsDataChange(section.id, 'second_attempt_satisfactory', 's')}
+                                          disabled={!secondAttemptEditable}
                                           className="w-4 h-4"
                                         />
                                         <span>Satisfactory (S)</span>
@@ -1552,8 +1583,8 @@ export const InstanceFillPage: React.FC = () => {
                                           type="radio"
                                           name={`results-${section.id}-second`}
                                           checked={rd?.second_attempt_satisfactory === 'ns'}
-                                          onChange={() => trainerCanEdit && handleResultsDataChange(section.id, 'second_attempt_satisfactory', 'ns')}
-                                          disabled={!trainerCanEdit}
+                                          onChange={() => secondAttemptEditable && handleResultsDataChange(section.id, 'second_attempt_satisfactory', 'ns')}
+                                          disabled={!secondAttemptEditable}
                                           className="w-4 h-4"
                                         />
                                         <span>Not Satisfactory (NS)</span>
@@ -1563,17 +1594,18 @@ export const InstanceFillPage: React.FC = () => {
                                       <DatePicker
                                         value={rd?.second_attempt_date ?? ''}
                                         onChange={(v) => handleResultsDataChange(section.id, 'second_attempt_date', v || null)}
-                                        disabled={!trainerCanEdit}
+                                        disabled={!secondAttemptEditable}
                                         compact
                                         placement="above"
                                         className="inline-block min-w-[120px]"
+                                        minDate={minSecondAttempt || undefined}
                                       />
                                     </div>
                                     <div><span className="font-medium">Feedback:</span>
                                       <textarea
                                         value={rd?.second_attempt_feedback ?? ''}
                                         onChange={(e) => handleResultsDataChange(section.id, 'second_attempt_feedback', e.target.value || null)}
-                                        disabled={!trainerCanEdit}
+                                        disabled={!secondAttemptEditable}
                                         className="block w-full border border-gray-300 min-h-[60px] p-2 mt-1 bg-gray-50 text-sm focus:outline-none focus:ring-1 focus:ring-gray-400 disabled:bg-gray-100 disabled:cursor-not-allowed"
                                       />
                                     </div>
@@ -1589,8 +1621,8 @@ export const InstanceFillPage: React.FC = () => {
                                           type="radio"
                                           name={`results-${section.id}-third`}
                                           checked={rd?.third_attempt_satisfactory === 's'}
-                                          onChange={() => trainerCanEdit && handleResultsDataChange(section.id, 'third_attempt_satisfactory', 's')}
-                                          disabled={!trainerCanEdit}
+                                          onChange={() => thirdAttemptEditable && handleResultsDataChange(section.id, 'third_attempt_satisfactory', 's')}
+                                          disabled={!thirdAttemptEditable}
                                           className="w-4 h-4"
                                         />
                                         <span>Satisfactory (S)</span>
@@ -1600,8 +1632,8 @@ export const InstanceFillPage: React.FC = () => {
                                           type="radio"
                                           name={`results-${section.id}-third`}
                                           checked={rd?.third_attempt_satisfactory === 'ns'}
-                                          onChange={() => trainerCanEdit && handleResultsDataChange(section.id, 'third_attempt_satisfactory', 'ns')}
-                                          disabled={!trainerCanEdit}
+                                          onChange={() => thirdAttemptEditable && handleResultsDataChange(section.id, 'third_attempt_satisfactory', 'ns')}
+                                          disabled={!thirdAttemptEditable}
                                           className="w-4 h-4"
                                         />
                                         <span>Not Satisfactory (NS)</span>
@@ -1611,17 +1643,18 @@ export const InstanceFillPage: React.FC = () => {
                                       <DatePicker
                                         value={rd?.third_attempt_date ?? ''}
                                         onChange={(v) => handleResultsDataChange(section.id, 'third_attempt_date', v || null)}
-                                        disabled={!trainerCanEdit}
+                                        disabled={!thirdAttemptEditable}
                                         compact
                                         placement="above"
                                         className="inline-block min-w-[120px]"
+                                        minDate={minThirdAttempt || undefined}
                                       />
                                     </div>
                                     <div><span className="font-medium">Feedback:</span>
                                       <textarea
                                         value={rd?.third_attempt_feedback ?? ''}
                                         onChange={(e) => handleResultsDataChange(section.id, 'third_attempt_feedback', e.target.value || null)}
-                                        disabled={!trainerCanEdit}
+                                        disabled={!thirdAttemptEditable}
                                         className="block w-full border border-gray-300 min-h-[60px] p-2 mt-1 bg-gray-50 text-sm focus:outline-none focus:ring-1 focus:ring-gray-400 disabled:bg-gray-100 disabled:cursor-not-allowed"
                                       />
                                     </div>
@@ -1713,6 +1746,7 @@ export const InstanceFillPage: React.FC = () => {
                                       compact
                                       placement="above"
                                       className="min-w-[120px]"
+                                      minDate={minTrainerDate || undefined}
                                     />
                                   </td>
                                 </tr>
@@ -1781,8 +1815,19 @@ export const InstanceFillPage: React.FC = () => {
                           const studentDeclSigObjForSum = studentDeclValForSum && typeof studentDeclValForSum === 'object' && !Array.isArray(studentDeclValForSum) ? (studentDeclValForSum as Record<string, unknown>) : null;
                           const studentDeclSigForSum = studentDeclSigObjForSum ? (String(studentDeclSigObjForSum.signature ?? studentDeclSigObjForSum.imageDataUrl ?? '') || null) : (typeof studentDeclValForSum === 'string' ? studentDeclValForSum : null);
                           const studentDeclDateForSum = studentDeclSigObjForSum ? String(studentDeclSigObjForSum.date ?? studentDeclSigObjForSum.signedAtDate ?? '') : '';
+                          const studentSubmitDateForSum = studentDeclDateForSum || submittedAt || '';
                           const studentRefSig = studentDeclSigForSum ?? firstTaskRd?.student_signature ?? undefined;
                           const studentRefDate = studentDeclSigForSum ? (studentDeclDateForSum || todayIso) : todayIso;
+                          const minSumTrainerDate1 = studentSubmitDateForSum || undefined;
+                          const minSumTrainerDate2 = sum.trainer_date_1 || undefined;
+                          const minSumTrainerDate3 = sum.trainer_date_2 || undefined;
+                          const sumFirstComplete = !!(firstTaskRd?.first_attempt_date || firstTaskRd?.first_attempt_satisfactory);
+                          const sumSecondOrThirdHasData = !!(firstTaskRd?.second_attempt_date || firstTaskRd?.second_attempt_satisfactory || firstTaskRd?.third_attempt_date || firstTaskRd?.third_attempt_satisfactory);
+                          const sumThirdHasData = !!(firstTaskRd?.third_attempt_date || firstTaskRd?.third_attempt_satisfactory);
+                          const sumSecondComplete = !!(firstTaskRd?.second_attempt_date || firstTaskRd?.second_attempt_satisfactory);
+                          const sumFirstEditable = !sumSecondOrThirdHasData;
+                          const sumSecondEditable = sumFirstComplete && !sumThirdHasData;
+                          const sumThirdEditable = sumSecondComplete;
                           const studentNameQ = template?.steps?.flatMap((st) => st.sections).flatMap((s) => s.questions).find((q) => q.code === 'student.fullName');
                           const studentIdQ = template?.steps?.flatMap((st) => st.sections).flatMap((s) => s.questions).find((q) => q.code === 'student.id');
                           const studentName = studentNameQ ? String(answers[getAnswerKey(studentNameQ.id, null)] ?? '') : '';
@@ -1862,20 +1907,20 @@ export const InstanceFillPage: React.FC = () => {
                                       <td className="border border-gray-400 bg-gray-100 font-semibold p-1.5 text-xs">Final Assessment result for this unit</td>
                                       <td className="border border-gray-400 p-1.5">
                                         <div className="flex flex-col gap-0.5">
-                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-1" checked={sum.final_attempt_1_result === 'competent'} onChange={() => trainerCanEdit && handleAssessmentSummaryChange('final_attempt_1_result', 'competent')} disabled={!trainerCanEdit} className="w-3.5 h-3.5" /> Competent</label>
-                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-1" checked={sum.final_attempt_1_result === 'not_yet_competent'} onChange={() => trainerCanEdit && handleAssessmentSummaryChange('final_attempt_1_result', 'not_yet_competent')} disabled={!trainerCanEdit} className="w-3.5 h-3.5" /> Not Yet Competent</label>
+                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-1" checked={sum.final_attempt_1_result === 'competent'} onChange={() => trainerCanEdit && sumFirstEditable && handleAssessmentSummaryChange('final_attempt_1_result', 'competent')} disabled={!trainerCanEdit || !sumFirstEditable} className="w-3.5 h-3.5" /> Competent</label>
+                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-1" checked={sum.final_attempt_1_result === 'not_yet_competent'} onChange={() => trainerCanEdit && sumFirstEditable && handleAssessmentSummaryChange('final_attempt_1_result', 'not_yet_competent')} disabled={!trainerCanEdit || !sumFirstEditable} className="w-3.5 h-3.5" /> Not Yet Competent</label>
                                         </div>
                                       </td>
                                       <td className="border border-gray-400 p-1.5">
                                         <div className="flex flex-col gap-0.5">
-                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-2" checked={sum.final_attempt_2_result === 'competent'} onChange={() => trainerCanEdit && handleAssessmentSummaryChange('final_attempt_2_result', 'competent')} disabled={!trainerCanEdit} className="w-3.5 h-3.5" /> Competent</label>
-                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-2" checked={sum.final_attempt_2_result === 'not_yet_competent'} onChange={() => trainerCanEdit && handleAssessmentSummaryChange('final_attempt_2_result', 'not_yet_competent')} disabled={!trainerCanEdit} className="w-3.5 h-3.5" /> Not Yet Competent</label>
+                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-2" checked={sum.final_attempt_2_result === 'competent'} onChange={() => trainerCanEdit && sumSecondEditable && handleAssessmentSummaryChange('final_attempt_2_result', 'competent')} disabled={!trainerCanEdit || !sumSecondEditable} className="w-3.5 h-3.5" /> Competent</label>
+                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-2" checked={sum.final_attempt_2_result === 'not_yet_competent'} onChange={() => trainerCanEdit && sumSecondEditable && handleAssessmentSummaryChange('final_attempt_2_result', 'not_yet_competent')} disabled={!trainerCanEdit || !sumSecondEditable} className="w-3.5 h-3.5" /> Not Yet Competent</label>
                                         </div>
                                       </td>
                                       <td className="border border-gray-400 p-1.5">
                                         <div className="flex flex-col gap-0.5">
-                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-3" checked={sum.final_attempt_3_result === 'competent'} onChange={() => trainerCanEdit && handleAssessmentSummaryChange('final_attempt_3_result', 'competent')} disabled={!trainerCanEdit} className="w-3.5 h-3.5" /> Competent</label>
-                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-3" checked={sum.final_attempt_3_result === 'not_yet_competent'} onChange={() => trainerCanEdit && handleAssessmentSummaryChange('final_attempt_3_result', 'not_yet_competent')} disabled={!trainerCanEdit} className="w-3.5 h-3.5" /> Not Yet Competent</label>
+                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-3" checked={sum.final_attempt_3_result === 'competent'} onChange={() => trainerCanEdit && sumThirdEditable && handleAssessmentSummaryChange('final_attempt_3_result', 'competent')} disabled={!trainerCanEdit || !sumThirdEditable} className="w-3.5 h-3.5" /> Competent</label>
+                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-3" checked={sum.final_attempt_3_result === 'not_yet_competent'} onChange={() => trainerCanEdit && sumThirdEditable && handleAssessmentSummaryChange('final_attempt_3_result', 'not_yet_competent')} disabled={!trainerCanEdit || !sumThirdEditable} className="w-3.5 h-3.5" /> Not Yet Competent</label>
                                         </div>
                                       </td>
                                     </tr>
@@ -1884,12 +1929,12 @@ export const InstanceFillPage: React.FC = () => {
                                       <td colSpan={3} className="border border-gray-400 p-1.5">
                                         <p className="text-[10px] text-gray-600 mb-1.5">I declare that I have conducted a fair, valid, reliable, and flexible assessment with this student, and I have provided appropriate feedback</p>
                                         <div className="grid grid-cols-3 gap-4">
-                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_1 ?? null} onChange={(v) => handleAssessmentSummaryChange('trainer_sig_1', v)} disabled={!trainerCanEdit} className="mt-0.5" suggestionFrom={trainerRefSig} onSuggestionClick={trainerRefSig ? () => { handleAssessmentSummaryChange('trainer_sig_1', trainerRefSig); handleAssessmentSummaryChange('trainer_date_1', trainerRefDate || todayIso); } : undefined} /></div>
-                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_2 ?? null} onChange={(v) => handleAssessmentSummaryChange('trainer_sig_2', v)} disabled={!trainerCanEdit} className="mt-0.5" suggestionFrom={sum.trainer_sig_1 ?? undefined} onSuggestionClick={sum.trainer_sig_1 ? () => { handleAssessmentSummaryChange('trainer_sig_2', sum.trainer_sig_1); handleAssessmentSummaryChange('trainer_date_2', sum.trainer_date_1 ?? null); } : undefined} /></div>
-                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_3 ?? null} onChange={(v) => handleAssessmentSummaryChange('trainer_sig_3', v)} disabled={!trainerCanEdit} className="mt-0.5" suggestionFrom={sum.trainer_sig_1 ?? undefined} onSuggestionClick={sum.trainer_sig_1 ? () => { handleAssessmentSummaryChange('trainer_sig_3', sum.trainer_sig_1); handleAssessmentSummaryChange('trainer_date_3', sum.trainer_date_1 ?? null); } : undefined} /></div>
-                                          <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_1 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_1', v || null)} disabled={!trainerCanEdit} compact placement="above" className="w-full" /></div>
-                                          <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_2 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_2', v || null)} disabled={!trainerCanEdit} compact placement="above" className="w-full" /></div>
-                                          <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_3 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_3', v || null)} disabled={!trainerCanEdit} compact placement="above" className="w-full" /></div>
+                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_1 ?? null} onChange={(v) => handleAssessmentSummaryChange('trainer_sig_1', v)} disabled={!trainerCanEdit || !sumFirstEditable} className="mt-0.5" suggestionFrom={trainerRefSig} onSuggestionClick={trainerRefSig ? () => { handleAssessmentSummaryChange('trainer_sig_1', trainerRefSig); handleAssessmentSummaryChange('trainer_date_1', trainerRefDate || todayIso); } : undefined} /></div>
+                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_2 ?? null} onChange={(v) => handleAssessmentSummaryChange('trainer_sig_2', v)} disabled={!trainerCanEdit || !sumSecondEditable} className="mt-0.5" suggestionFrom={sum.trainer_sig_1 ?? undefined} onSuggestionClick={sum.trainer_sig_1 ? () => { handleAssessmentSummaryChange('trainer_sig_2', sum.trainer_sig_1); handleAssessmentSummaryChange('trainer_date_2', sum.trainer_date_1 ?? null); } : undefined} /></div>
+                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_3 ?? null} onChange={(v) => handleAssessmentSummaryChange('trainer_sig_3', v)} disabled={!trainerCanEdit || !sumThirdEditable} className="mt-0.5" suggestionFrom={sum.trainer_sig_1 ?? undefined} onSuggestionClick={sum.trainer_sig_1 ? () => { handleAssessmentSummaryChange('trainer_sig_3', sum.trainer_sig_1); handleAssessmentSummaryChange('trainer_date_3', sum.trainer_date_1 ?? null); } : undefined} /></div>
+                                          <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_1 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_1', v || null)} disabled={!trainerCanEdit || !sumFirstEditable} compact placement="above" className="w-full" minDate={minSumTrainerDate1} /></div>
+                                          <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_2 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_2', v || null)} disabled={!trainerCanEdit || !sumSecondEditable} compact placement="above" className="w-full" minDate={minSumTrainerDate2} /></div>
+                                          <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_3 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_3', v || null)} disabled={!trainerCanEdit || !sumThirdEditable} compact placement="above" className="w-full" minDate={minSumTrainerDate3} /></div>
                                         </div>
                                       </td>
                                     </tr>
@@ -1898,12 +1943,12 @@ export const InstanceFillPage: React.FC = () => {
                                       <td colSpan={3} className="border border-gray-400 p-1.5">
                                         <p className="text-[10px] text-gray-600 mb-1.5">I declare that I have been assessed in this unit, and I have been advised of my result. I also am aware of my appeal rights.</p>
                                         <div className="grid grid-cols-3 gap-4">
-                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_1 ?? null} onChange={(v) => handleAssessmentSummaryChange('student_sig_1', v)} disabled={!studentCanEdit} className="mt-0.5" suggestionFrom={studentRefSig} onSuggestionClick={studentRefSig ? () => { handleAssessmentSummaryChange('student_sig_1', studentRefSig); handleAssessmentSummaryChange('student_date_1', studentRefDate); } : undefined} /></div>
-                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_2 ?? null} onChange={(v) => handleAssessmentSummaryChange('student_sig_2', v)} disabled={!studentCanEdit} className="mt-0.5" suggestionFrom={sum.student_sig_1 ?? undefined} onSuggestionClick={sum.student_sig_1 ? () => { handleAssessmentSummaryChange('student_sig_2', sum.student_sig_1); handleAssessmentSummaryChange('student_date_2', sum.student_date_1 ?? null); } : undefined} /></div>
-                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_3 ?? null} onChange={(v) => handleAssessmentSummaryChange('student_sig_3', v)} disabled={!studentCanEdit} className="mt-0.5" suggestionFrom={sum.student_sig_1 ?? undefined} onSuggestionClick={sum.student_sig_1 ? () => { handleAssessmentSummaryChange('student_sig_3', sum.student_sig_1); handleAssessmentSummaryChange('student_date_3', sum.student_date_1 ?? null); } : undefined} /></div>
-                                          <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_1 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_1', v || null)} disabled={!studentCanEdit} compact placement="above" className="w-full" /></div>
-                                          <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_2 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_2', v || null)} disabled={!studentCanEdit} compact placement="above" className="w-full" /></div>
-                                          <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_3 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_3', v || null)} disabled={!studentCanEdit} compact placement="above" className="w-full" /></div>
+                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_1 ?? null} onChange={(v) => handleAssessmentSummaryChange('student_sig_1', v)} disabled={!studentCanEdit || !sumFirstEditable} className="mt-0.5" suggestionFrom={studentRefSig} onSuggestionClick={studentRefSig ? () => { handleAssessmentSummaryChange('student_sig_1', studentRefSig); handleAssessmentSummaryChange('student_date_1', studentRefDate); } : undefined} /></div>
+                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_2 ?? null} onChange={(v) => handleAssessmentSummaryChange('student_sig_2', v)} disabled={!studentCanEdit || !sumSecondEditable} className="mt-0.5" suggestionFrom={sum.student_sig_1 ?? undefined} onSuggestionClick={sum.student_sig_1 ? () => { handleAssessmentSummaryChange('student_sig_2', sum.student_sig_1); handleAssessmentSummaryChange('student_date_2', sum.student_date_1 ?? null); } : undefined} /></div>
+                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_3 ?? null} onChange={(v) => handleAssessmentSummaryChange('student_sig_3', v)} disabled={!studentCanEdit || !sumThirdEditable} className="mt-0.5" suggestionFrom={sum.student_sig_1 ?? undefined} onSuggestionClick={sum.student_sig_1 ? () => { handleAssessmentSummaryChange('student_sig_3', sum.student_sig_1); handleAssessmentSummaryChange('student_date_3', sum.student_date_1 ?? null); } : undefined} /></div>
+                                          <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_1 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_1', v || null)} disabled={!studentCanEdit || !sumFirstEditable} compact placement="above" className="w-full" /></div>
+                                          <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_2 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_2', v || null)} disabled={!studentCanEdit || !sumSecondEditable} compact placement="above" className="w-full" /></div>
+                                          <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_3 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_3', v || null)} disabled={!studentCanEdit || !sumThirdEditable} compact placement="above" className="w-full" /></div>
                                         </div>
                                       </td>
                                     </tr>
@@ -2236,7 +2281,7 @@ export const InstanceFillPage: React.FC = () => {
                     size="sm"
                     className="w-full"
                     onClick={() => {
-                      window.open(`${PDF_BASE}/pdf/${id}?t=${pdfCacheBust}#toolbar=0`, '_blank', 'width=800,height=600');
+                      window.open(`${PDF_BASE}/pdf/${id}?role=${role}&t=${pdfCacheBust}#toolbar=0`, '_blank', 'width=800,height=600');
                     }}
                   >
                     Preview PDF
@@ -2253,7 +2298,7 @@ export const InstanceFillPage: React.FC = () => {
                     Refresh PDF
                   </Button>
                   <a
-                    href={`${PDF_BASE}/pdf/${id}?download=1&t=${pdfCacheBust}`}
+                    href={`${PDF_BASE}/pdf/${id}?role=${role}&download=1&t=${pdfCacheBust}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="block"
@@ -2272,7 +2317,7 @@ export const InstanceFillPage: React.FC = () => {
                   )}
                   <iframe
                     key={pdfCacheBust}
-                    src={`${PDF_BASE}/pdf/${id}?t=${pdfCacheBust}#toolbar=0`}
+                    src={`${PDF_BASE}/pdf/${id}?role=${role}&t=${pdfCacheBust}#toolbar=0`}
                     title="PDF Preview"
                     className="w-full h-96 border-0 rounded-lg"
                     onLoad={() => setPdfLoading(false)}

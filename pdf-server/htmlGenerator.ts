@@ -229,31 +229,31 @@ export function buildHtml(data: {
   <style>
     @page { size: A4; margin: 190px 15mm 70px 15mm; }
     @page :first { margin: 0; }
-    body { font-family: 'Calibri', 'Calibri Light', Arial, Helvetica, sans-serif; font-size: 11pt; margin: 0; padding: 0; color: #000000; box-sizing: border-box; min-height: 100%; }
+    body { font-family: 'Calibri', 'Calibri Light', Arial, Helvetica, sans-serif; font-size: 12pt; margin: 0; padding: 0; color: #000000; box-sizing: border-box; min-height: 100%; }
     .header { position: fixed; top: 0; left: 15mm; right: 15mm; width: calc(100% - 30mm); z-index: 1000; background: #fff; padding: 16px 0 16px 0; display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; border-bottom: 1px solid #9ca3af; box-sizing: border-box; overflow: visible; }
     .header-inner { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; width: 100%; gap: 16px; overflow: visible; }
     .header img { max-height: 110px; max-width: 220px; flex-shrink: 0; }
     .header-address { text-align: right; font-size: 8pt; color: #374151; line-height: 1.35; flex-shrink: 0; overflow: visible; padding-left: 12px; }
     .header-address a { color: #2563eb; text-decoration: underline; }
     .divider { height: 1px; background: #9ca3af; margin: 8px 0 14px 0; }
-    h2 { font-size: 13pt; font-weight: bold; margin: 0 0 12px 0; color: #000000; border-left: 4px solid #9ca3af; padding-left: 8px; }
-    h3 { font-size: 10pt; font-weight: bold; margin: 12px 0 6px 0; color: #000000; }
-    .step-page:not(.intro-page) h3 { color: #595959; font-size: 14pt; font-weight: bold; margin: 12px 0 6px 0; }
-    .section-table { width: 100%; border-collapse: collapse; font-size: 11pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; margin: 0 0 12px 0; border: 1px solid #000; border-left: 1px solid #000 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    h2 { font-family: 'Calibri', 'Calibri Light', Arial, Helvetica, sans-serif; font-size: 16pt; font-weight: bold; margin: 0 0 12px 0; color: #000000; border-left: 4px solid #9ca3af; padding-left: 8px; }
+    h3 { font-family: 'Calibri', 'Calibri Light', Arial, Helvetica, sans-serif; font-size: 16pt; font-weight: bold; margin: 12px 0 6px 0; color: #000000; }
+    .step-page:not(.intro-page) h3 { color: #595959; font-size: 16pt; font-weight: bold; margin: 12px 0 6px 0; }
+    .section-table { width: 100%; border-collapse: collapse; font-size: 12pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; margin: 0 0 12px 0; border: 1px solid #000; border-left: 1px solid #000 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .section-table th, .section-table td { border: 1px solid #000; padding: 10px 12px; vertical-align: middle; line-height: 1.35; overflow: visible; }
     .section-table td:first-child, .section-table th:first-child { border-left: 1px solid #000 !important; }
     .section-table tbody tr { page-break-inside: avoid; break-inside: avoid; }
-    .sub-section-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 10pt;font-family:'Calibri','Calibri Light',Arial,sans-serif; padding: 10px 12px; vertical-align: middle; }
+    .sub-section-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 16pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 10px 12px; vertical-align: middle; }
     .label-cell { width: 35%; background: #F0F4FA; font-weight: 600; color: #374151; }
     .value-cell { width: 65%; color: #000000; background: #F0F4FA; }
     .section-table .label-cell, .section-table .row-alt .label-cell, .section-table .row-normal .label-cell { background: #fff !important; font-weight: normal; color: #000;font-family:'Calibri','Calibri Light',Arial,sans-serif; }
-    .section-table .value-cell, .section-table .row-alt .value-cell, .section-table .row-normal .value-cell { background: #fff !important; color: #000; font-size: 10pt;font-family:'Calibri','Calibri Light',Arial,sans-serif; }
+    .section-table .value-cell, .section-table .row-alt .value-cell, .section-table .row-normal .value-cell { background: #fff !important; color: #000; font-size: 12pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; }
     .row-alt .label-cell { color: #000000; background: #F0F4FA; }
     .row-alt .value-cell { color: #000000; background: #F0F4FA; }
     .row-normal .label-cell, .row-normal .value-cell { background: #F0F4FA; }
     .question { margin: 12px 0; overflow: visible; page-break-inside: avoid; break-inside: avoid; }
     .question-label { font-weight: bold; margin-bottom: 4px; overflow: visible; line-height: 1.4; white-space: pre-line; }
-    .decl-heading-bar { font-size: 10pt; font-weight: bold; margin: 12px 0 6px 0; color: #000000; border-left: 4px solid #9ca3af; padding-left: 8px; }
+    .decl-heading-bar { font-family: 'Calibri', 'Calibri Light', Arial, Helvetica, sans-serif; font-size: 16pt; font-weight: bold; margin: 12px 0 6px 0; color: #000000; border-left: 4px solid #9ca3af; padding-left: 8px; }
     .declarations-section { border: 1px solid #000; border-left: 1px solid #000 !important; padding: 12px; background: #fff; margin-bottom: 12px; }
     .declarations-section.declarations-section-no-border { border: none !important; padding: 0; background: transparent; }
     .declarations-section .question { margin: 10px 0; }
@@ -276,7 +276,7 @@ export function buildHtml(data: {
     .assessment-submission-other-block .other-underline { display: block; margin: 0 auto; border: none; border-bottom: 1px solid #333; min-width: 200px; min-height: 18px; background: transparent; }
     .assessment-submission-hint { text-align: center; font-size: 8pt; font-style: italic; color: #6b7280; margin-top: 4px; }
     .reasonable-adjustment-section { border: 1px solid #000; margin-bottom: 12px; }
-    .reasonable-adjustment-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 9pt; padding: 10px 12px; display: flex; align-items: center; gap: 8px; }
+    .reasonable-adjustment-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 16pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 10px 12px; display: flex; align-items: center; gap: 8px; }
     .reasonable-adjustment-arrow { font-size: 10pt; }
     .reasonable-adjustment-body { padding: 12px; background: #fff; }
     .reasonable-adjustment-radio { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
@@ -297,8 +297,8 @@ export function buildHtml(data: {
     .appendix-b-table-b-wrapper { page-break-before: always !important; page-break-inside: avoid; }
     .appendix-b-table-c-wrapper { page-break-before: always !important; page-break-inside: avoid; }
     .learner-eval-grey-bar { width: 100%; height: 40px; background: #595959 !important; margin-top: 20px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .appendix-a-title-bar { background: #595959 !important; color: #ffffff !important; font-weight: bold; font-size: 11pt; padding: 10px 12px; margin: 0 0 8px 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .appendix-section-bar { background: #595959 !important; color: #ffffff !important; font-weight: bold; font-size: 9pt; padding: 8px 12px; margin: 12px 0 6px 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .appendix-a-title-bar { background: #595959 !important; color: #ffffff !important; font-weight: bold; font-size: 16pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 10px 12px; margin: 0 0 8px 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .appendix-section-bar { background: #595959 !important; color: #ffffff !important; font-weight: bold; font-size: 16pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 8px 12px; margin: 12px 0 6px 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .appendix-matrix-table { width: 100%; border-collapse: collapse; font-size: 8pt; margin: 0 0 10px 0; border: 1px solid #000; }
     .appendix-matrix-table th, .appendix-matrix-table td { border: 1px solid #000; padding: 6px 8px; vertical-align: top; line-height: 1.3; }
     .appendix-matrix-table th { background: #595959 !important; color: #ffffff !important; font-weight: bold; }
@@ -307,23 +307,23 @@ export function buildHtml(data: {
     .appendix-matrix-table .appendix-cell-item { display: flex; align-items: flex-start; gap: 4px; margin: 2px 0; }
     .appendix-declaration-box { border: 1px solid #333; padding: 12px; font-style: italic; margin: 12px 0; line-height: 1.4; background: #fff; }
     .appendix-footer-bar { font-size: 8pt; color: #374151; margin-bottom: 8px; padding: 6px 12px; background: #d9d9d9 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .task-instructions-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 14pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 12px 16px; margin: 16px 0 0 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .task-instructions-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 16pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 12px 16px; margin: 16px 0 0 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .task-questions-page { page-break-before: always; }
-    .task-questions-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 14pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 12px 16px; margin: 16px 0 0 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .task-questions-subheader { font-size: 10pt; color: #000; margin: 0 0 12px 0; padding: 0; background: transparent !important; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; }
-    .task-questions-instruction-label { font-size: 9pt; color: #000000; margin: 0 0 8px 0; padding: 0; background: transparent !important; }
-    .task-instructions-student-label { font-size: 11pt; font-weight: bold; color: #000000; margin: 8px 0 4px 0; padding: 0; background: transparent !important; }
-    .task-instructions-subheader { font-size: 9pt; color: #000000; margin: 0 0 8px 0; padding: 0; background: transparent !important; }
+    .task-questions-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 16pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 12px 16px; margin: 16px 0 0 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .task-questions-subheader { font-size: 12pt; color: #000; margin: 0 0 12px 0; padding: 0; background: transparent !important; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; }
+    .task-questions-instruction-label { font-size: 12pt; color: #000000; margin: 0 0 8px 0; padding: 0; background: transparent !important; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; }
+    .task-instructions-student-label { font-size: 12pt; font-weight: bold; color: #000000; margin: 8px 0 4px 0; padding: 0; background: transparent !important; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; }
+    .task-instructions-subheader { font-size: 12pt; color: #000000; margin: 0 0 8px 0; padding: 0; background: transparent !important; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; }
     .task-instructions-block { margin: 12px 0; }
-    .task-instructions-block-title { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 9pt; padding: 8px 12px; }
+    .task-instructions-block-title { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 16pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 8px 12px; }
     .task-instructions-block-content { padding: 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-top: none; line-height: 1.5; }
     .task-instructions-block-content ul { margin: 8px 0; padding-left: 20px; }
     .task-instructions-block-content p { margin: 6px 0; }
     .result-sheet-page { page-break-before: always; }
-    .task-results-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 10pt; padding: 12px 16px; margin: 16px 0 0 0; }
+    .task-results-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 16pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 12px 16px; margin: 16px 0 0 0; }
     .task-results-outcome { margin: 12px 0; }
     .task-results-outcome-title { font-weight: bold; margin-bottom: 6px; }
-    .result-sheet-table { width: 100%; border-collapse: collapse; font-size: 9pt; margin: 0 0 12px 0; border: 1px solid #000; }
+    .result-sheet-table { width: 100%; border-collapse: collapse; font-size: 12pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; margin: 0 0 12px 0; border: 1px solid #000; }
     .result-sheet-table td { border: 1px solid #000; padding: 10px 12px; vertical-align: top; line-height: 1.35; }
     .result-sheet-table .result-label { width: 25%; background: #595959 !important; color: #ffffff; font-weight: 600; }
     .result-sheet-table .result-label.decl-office-label { background: #fae6d2 !important;color: #000000;}
@@ -339,7 +339,7 @@ export function buildHtml(data: {
     .result-sheet-table .result-value-declaration ul:last-of-type { margin-bottom: 4px !important; }
     .result-sheet-table .result-value-declaration p:last-child { margin-bottom: 0 !important; }
     .assessment-summary-page { page-break-before: always; page-break-after: always; page-break-inside: avoid; }
-    .assessment-summary-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 11pt; padding: 10px 12px; text-align: center; margin: 0; border: 1px solid #000; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .assessment-summary-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 16pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 10px 12px; text-align: center; margin: 0; border: 1px solid #000; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .assessment-summary-intro { background: #fff !important; color: #374151 !important; font-size: 8.5pt; padding: 8px 12px; margin: 0; line-height: 1.4; border: 1px solid #000; border-top: none; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .assessment-summary-intro .intro-main { font-size: 9pt; font-weight: 600; margin-bottom: 4px; }
     .assessment-summary-table { width: 100%; border-collapse: collapse; font-size: 8pt; margin: 0 0 8px 0; border: 1px solid #000; -webkit-print-color-adjust: exact; print-color-adjust: exact; }

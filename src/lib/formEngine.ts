@@ -2247,6 +2247,7 @@ const STUDENT_ONLY = { student: true, trainer: false, office: false };
 const TRAINER_OFFICE_VISIBLE = { student: false, trainer: true, office: true };
 const TRAINER_ONLY_EDIT = { student: false, trainer: true, office: false };
 const TRAINER_OFFICE_EDIT = { student: false, trainer: true, office: true };
+const ALL_CAN_EDIT = { student: true, trainer: true, office: true };
 
 interface AssessmentTaskInput {
   task1_label: string;
@@ -2434,10 +2435,10 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
     if (raSection) {
       const raSecId = (raSection as { id: number }).id;
       await supabase.from('skyline_form_questions').insert([
-        { section_id: raSecId, type: 'short_text', code: 'reasonable_adjustment_appendix.task', label: 'Write (task name and number) where reasonable adjustments have been applied', sort_order: 0, role_visibility: READ_ONLY_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
-        { section_id: raSecId, type: 'long_text', code: 'reasonable_adjustment_appendix.explanation', label: 'Explanation of reasonable adjustments strategy used', sort_order: 1, role_visibility: READ_ONLY_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
-        { section_id: raSecId, type: 'short_text', code: 'reasonable_adjustment_appendix.matrix', label: 'Reasonable Adjustment Strategies Matrix (select as applicable)', sort_order: 2, role_visibility: READ_ONLY_VISIBLE, role_editability: TRAINER_ONLY_EDIT, pdf_meta: { appendixMatrix: true } },
-        { section_id: raSecId, type: 'signature', code: 'trainer.reasonableAdjustmentAppendixSignature', label: 'Trainer/Assessor Signature', sort_order: 3, role_visibility: READ_ONLY_VISIBLE, role_editability: TRAINER_ONLY_EDIT, pdf_meta: { showNameField: true, showDateField: true } },
+        { section_id: raSecId, type: 'short_text', code: 'reasonable_adjustment_appendix.task', label: 'Write (task name and number) where reasonable adjustments have been applied', sort_order: 0, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_OFFICE_EDIT },
+        { section_id: raSecId, type: 'long_text', code: 'reasonable_adjustment_appendix.explanation', label: 'Explanation of reasonable adjustments strategy used', sort_order: 1, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_OFFICE_EDIT },
+        { section_id: raSecId, type: 'short_text', code: 'reasonable_adjustment_appendix.matrix', label: 'Reasonable Adjustment Strategies Matrix (select as applicable)', sort_order: 2, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_OFFICE_EDIT, pdf_meta: { appendixMatrix: true } },
+        { section_id: raSecId, type: 'signature', code: 'trainer.reasonableAdjustmentAppendixSignature', label: 'Trainer/Assessor Signature', sort_order: 3, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_OFFICE_EDIT, pdf_meta: { showNameField: true, showDateField: true } },
       ]);
     }
   }
@@ -2478,7 +2479,7 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
     if (logisticsSec) {
       const lSecId = (logisticsSec as { id: number }).id;
       const logisticsQ = await supabase.from('skyline_form_questions')
-        .insert({ section_id: lSecId, type: 'likert_5', code: 'evaluation.logistics', label: 'Logistics and Support Evaluation', sort_order: 0, role_visibility: READ_ONLY_VISIBLE, role_editability: STUDENT_ONLY })
+        .insert({ section_id: lSecId, type: 'likert_5', code: 'evaluation.logistics', label: 'Logistics and Support Evaluation', sort_order: 0, role_visibility: READ_ONLY_VISIBLE, role_editability: ALL_CAN_EDIT })
         .select('id')
         .single();
       if (logisticsQ.data) {
@@ -2491,7 +2492,7 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
         ]);
       }
       await supabase.from('skyline_form_questions').insert({
-        section_id: lSecId, type: 'long_text', code: 'evaluation.logisticsComments', label: 'Additional Comments on Logistics and Support', sort_order: 1, role_visibility: READ_ONLY_VISIBLE, role_editability: STUDENT_ONLY
+        section_id: lSecId, type: 'long_text', code: 'evaluation.logisticsComments', label: 'Additional Comments on Logistics and Support', sort_order: 1, role_visibility: READ_ONLY_VISIBLE, role_editability: ALL_CAN_EDIT
       });
     }
 
@@ -2504,7 +2505,7 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
     if (trainerSec) {
       const tSecId = (trainerSec as { id: number }).id;
       const trainerQ = await supabase.from('skyline_form_questions')
-        .insert({ section_id: tSecId, type: 'likert_5', code: 'evaluation.trainer', label: 'Trainer/Assessor Evaluation', sort_order: 0, role_visibility: READ_ONLY_VISIBLE, role_editability: STUDENT_ONLY })
+        .insert({ section_id: tSecId, type: 'likert_5', code: 'evaluation.trainer', label: 'Trainer/Assessor Evaluation', sort_order: 0, role_visibility: READ_ONLY_VISIBLE, role_editability: ALL_CAN_EDIT })
         .select('id')
         .single();
       if (trainerQ.data) {
@@ -2520,7 +2521,7 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
         ]);
       }
       await supabase.from('skyline_form_questions').insert({
-        section_id: tSecId, type: 'long_text', code: 'evaluation.trainerComments', label: 'Additional Comments on Training', sort_order: 1, role_visibility: READ_ONLY_VISIBLE, role_editability: STUDENT_ONLY
+        section_id: tSecId, type: 'long_text', code: 'evaluation.trainerComments', label: 'Additional Comments on Training', sort_order: 1, role_visibility: READ_ONLY_VISIBLE, role_editability: ALL_CAN_EDIT
       });
     }
 
@@ -2533,7 +2534,7 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
     if (learningSec) {
       const learnSecId = (learningSec as { id: number }).id;
       const learningQ = await supabase.from('skyline_form_questions')
-        .insert({ section_id: learnSecId, type: 'likert_5', code: 'evaluation.learning', label: 'Learning Evaluation', sort_order: 0, role_visibility: READ_ONLY_VISIBLE, role_editability: STUDENT_ONLY })
+        .insert({ section_id: learnSecId, type: 'likert_5', code: 'evaluation.learning', label: 'Learning Evaluation', sort_order: 0, role_visibility: READ_ONLY_VISIBLE, role_editability: ALL_CAN_EDIT })
         .select('id')
         .single();
       if (learningQ.data) {
@@ -2549,7 +2550,7 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
         ]);
       }
       await supabase.from('skyline_form_questions').insert({
-        section_id: learnSecId, type: 'long_text', code: 'evaluation.learningComments', label: 'Additional Comments on Learning Evaluation', sort_order: 1, role_visibility: READ_ONLY_VISIBLE, role_editability: STUDENT_ONLY
+        section_id: learnSecId, type: 'long_text', code: 'evaluation.learningComments', label: 'Additional Comments on Learning Evaluation', sort_order: 1, role_visibility: READ_ONLY_VISIBLE, role_editability: ALL_CAN_EDIT
       });
     }
   }

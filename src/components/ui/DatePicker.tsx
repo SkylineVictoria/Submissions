@@ -29,6 +29,10 @@ interface DatePickerProps {
   toYear?: number;
   /** Disable selecting future dates */
   disableFuture?: boolean;
+  /** Minimum selectable date (ISO yyyy-MM-dd) */
+  minDate?: string;
+  /** Maximum selectable date (ISO yyyy-MM-dd) */
+  maxDate?: string;
 }
 
 export const DatePicker: React.FC<DatePickerProps> = ({
@@ -46,6 +50,8 @@ export const DatePicker: React.FC<DatePickerProps> = ({
   fromYear = 1900,
   toYear = new Date().getFullYear() + 10,
   disableFuture = false,
+  minDate,
+  maxDate,
 }) => {
   const [open, setOpen] = useState(false);
   const [inputValue, setInputValue] = useState('');
@@ -61,6 +67,8 @@ export const DatePicker: React.FC<DatePickerProps> = ({
     isValidDate ? (parsedDate as Date) : new Date()
   );
   const today = new Date();
+  const minDateObj = minDate && isValid(parse(minDate, ISO_FORMAT, new Date())) ? parse(minDate, ISO_FORMAT, new Date()) : undefined;
+  const maxDateObj = maxDate && isValid(parse(maxDate, ISO_FORMAT, new Date())) ? parse(maxDate, ISO_FORMAT, new Date()) : undefined;
 
   useEffect(() => {
     if (value && isValid(parse(value, ISO_FORMAT, new Date()))) {
@@ -228,8 +236,22 @@ export const DatePicker: React.FC<DatePickerProps> = ({
               month={activeMonth}
               onMonthChange={setActiveMonth}
               selected={isValidDate ? parsedDate : undefined}
-              onSelect={(date) => { if (date) handleSelect(date); }}
-              disabled={disableFuture ? { after: today } : undefined}
+              onSelect={(date) => {
+                if (!date) return;
+                if (minDateObj && date < minDateObj) return;
+                if (maxDateObj && date > maxDateObj) return;
+                if (disableFuture && date > today) return;
+                handleSelect(date);
+              }}
+              disabled={[
+                ...(disableFuture ? [{ after: today }] : []),
+                ...(minDateObj ? [{ before: minDateObj }] : []),
+                ...(maxDateObj ? [{ after: maxDateObj }] : []),
+              ].length > 0 ? [
+                ...(disableFuture ? [{ after: today }] : []),
+                ...(minDateObj ? [{ before: minDateObj }] : []),
+                ...(maxDateObj ? [{ after: maxDateObj }] : []),
+              ] : undefined}
               styles={{
                 caption: { display: 'none' },
                 nav: { display: 'none' },
@@ -308,8 +330,18 @@ export const DatePicker: React.FC<DatePickerProps> = ({
             </button>
             <button
               type="button"
-              onClick={() => handleSelect(new Date())}
-              className="text-sm font-medium text-[var(--brand)] hover:underline"
+              onClick={() => {
+                const d = new Date();
+                if (minDateObj && d < minDateObj) return;
+                if (maxDateObj && d > maxDateObj) return;
+                if (disableFuture && d > today) return;
+                handleSelect(d);
+              }}
+              disabled={
+                (minDateObj != null && today < minDateObj) ||
+                (maxDateObj != null && today > maxDateObj)
+              }
+              className="text-sm font-medium text-[var(--brand)] hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Today
             </button>
