@@ -96,7 +96,11 @@ function renderSignatureHtml(val: string | null | undefined | Record<string, unk
     s = String(v.signature ?? v.imageDataUrl ?? v.typedText ?? '').trim() || null;
   }
   if (!s) return '';
-  if (s.startsWith('data:')) return '<img src="' + s.replace(/"/g, '&quot;') + '" alt="Signature" style="max-height:36px;max-width:140px" />';
+  if (s.startsWith('data:')) {
+    // Strip whitespace/newlines - they break img src in HTML and prevent PDF rendering
+    const clean = s.replace(/\s+/g, '');
+    return '<img src="' + clean.replace(/"/g, '&quot;') + '" alt="Signature" style="max-height:36px;max-width:140px" loading="eager" />';
+  }
   const escaped = s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   return '<span style="color:#dc2626;font-style:italic;font-family:serif">' + escaped + '</span>';
 }
@@ -340,10 +344,6 @@ function heightFromWordLimit(wordLimit: number | null | undefined): number {
   return Math.min(3000, Math.max(36, lines * 24));
 }
 
-/* Inline SVG for check/X - avoids font glyph issues in PDF on Linux servers */
-const SVG_CHECK = '<svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle"><path d="M5 13l4 4L19 7"/></svg>';
-const SVG_X = '<svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle"><path d="M6 18L18 6M6 6l12 12"/></svg>';
-
 function buildHtml(data: {
   form: { name: string; version: string | null; unit_code: string | null; header_asset_url: string | null; cover_asset_url?: string | null };
   steps: Array<{
@@ -499,22 +499,24 @@ function buildHtml(data: {
     .appendix-matrix-table .appendix-cell-item { display: flex; align-items: flex-start; gap: 4px; margin: 2px 0; }
     .appendix-declaration-box { border: 1px solid #333; padding: 12px; font-style: italic; margin: 12px 0; line-height: 1.4; background: #fff; }
     .appendix-footer-bar { font-size: 8pt; color: #374151; margin-bottom: 8px; padding: 6px 12px; background: #d9d9d9 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .task-instructions-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 16pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 12px 16px; margin: 16px 0 0 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .task-instructions-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 16pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 12px 16px; margin: 16px 0 0 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; white-space: normal; max-width: 100%; box-sizing: border-box; }
     .task-questions-page { page-break-before: always; }
-    .task-questions-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 16pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 12px 16px; margin: 16px 0 0 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .task-questions-subheader { font-size: 12pt; color: #000; margin: 0 0 12px 0; padding: 0; background: transparent !important; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; }
+    .task-questions-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 16pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 12px 16px; margin: 16px 0 0 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; page-break-after: avoid; break-after: avoid; }
+    .task-questions-subheader { font-size: 12pt; color: #000; margin: 0 0 12px 0; padding: 0; background: transparent !important; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; white-space: normal; page-break-after: avoid; break-after: avoid; }
     .task-questions-instruction-label { font-size: 12pt; color: #000000; margin: 0 0 8px 0; padding: 0; background: transparent !important; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; }
-    .task-instructions-student-label { font-size: 12pt; font-weight: bold; color: #000000; margin: 8px 0 4px 0; padding: 0; background: transparent !important; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; }
-    .task-instructions-subheader { font-size: 12pt; color: #000000; margin: 0 0 8px 0; padding: 0; background: transparent !important; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; }
-    .task-instructions-block { margin: 12px 0; }
-    .task-instructions-block-title { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 16pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 8px 12px; }
-    .task-instructions-block-content { padding: 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-top: none; line-height: 1.5; }
+    .task-instructions-student-label { font-size: 12pt; font-weight: bold; color: #000000; margin: 8px 0 4px 0; padding: 0; background: transparent !important; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; white-space: normal; }
+    .task-instructions-subheader { font-size: 12pt; color: #000000; margin: 0 0 8px 0; padding: 0; background: transparent !important; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; white-space: normal; max-width: 100%; }
+    .task-instructions-block { margin: 12px 0; max-width: 100%; box-sizing: border-box; }
+    .task-instructions-block-title { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 16pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 8px 12px; overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; white-space: normal; max-width: 100%; box-sizing: border-box; }
+    .task-instructions-block-content { padding: 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-top: none; line-height: 1.5; overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; white-space: normal; max-width: 100%; box-sizing: border-box; }
+    .task-instructions-block-content ul, .task-instructions-block-content li, .task-instructions-block-content p { overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; white-space: normal; }
     .task-instructions-block-content ul { margin: 8px 0; padding-left: 20px; }
     .task-instructions-block-content p { margin: 6px 0; }
     .task-instructions-table { width: 100%; table-layout: fixed; border: 1px solid #000; border-collapse: collapse; }
-    .task-instructions-table td { vertical-align: top; overflow-wrap: anywhere; word-break: break-word; }
+    .task-instructions-table td, .task-instructions-table th { vertical-align: top; overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; white-space: normal; }
     .task-instructions-table .label-cell { width: 24% !important; }
     .task-instructions-table td:last-child { border-right: 1px solid #000 !important; }
+    .task-instructions-wrapper { max-width: 100%; overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; box-sizing: border-box; }
     .result-sheet-page { page-break-before: always; }
     .result-sheet-main { page-break-inside: avoid; break-inside: avoid; }
     .result-sheet-office { page-break-before: auto; }
@@ -613,6 +615,7 @@ function buildHtml(data: {
     .written-evidence-table .we-radio .radio-circle.filled { background: #000; border-color: #000; }
     .written-evidence-page { page-break-before: always; }
     .task-q-question-box { border: 1px solid #595959; margin-bottom: 20px; page-break-inside: avoid; break-inside: avoid; }
+    .task-q-question-box.task-q-first-question { page-break-before: avoid; break-before: avoid; }
     .task-q-question-box:last-child { margin-bottom: 0; }
     .task-q-question-box .task-questions-table th,
     .task-q-question-box .task-questions-table td,
@@ -1192,6 +1195,7 @@ function buildHtml(data: {
         const row = rowId ? taskRowsMap.get(rowId) : null;
         const instr = row?.row_meta?.instructions as Record<string, string | string[] | undefined> | undefined;
         const assessmentType = instr?.assessment_type ? String(instr.assessment_type).replace(/<[^>]*>/g, '').trim() || 'Assessment' : 'Assessment';
+        html += '<div class="task-instructions-wrapper">';
         html += `<div class="task-instructions-header">${row?.row_label || section.title} – ${assessmentType}</div>`;
         html += `<div class="task-instructions-student-label">Student Instructions</div>`;
         html += `<div class="task-instructions-subheader">Assessment method-based instructions and guidelines: ${row?.row_help || ''}</div>`;
@@ -1256,6 +1260,7 @@ function buildHtml(data: {
           }
           }
         }
+        html += '</div>'; /* close task-instructions-wrapper */
       } else if (section.pdf_render_mode === 'task_questions') {
         const rowId = (section as { assessment_task_row_id?: number | null }).assessment_task_row_id;
         const row = rowId ? taskRowsMap.get(rowId) : null;
@@ -1282,10 +1287,11 @@ function buildHtml(data: {
           const satYes = sat === 'yes';
           const satNo = sat === 'no';
           const isGridTable = question.type === 'grid_table' && rows.length > 0;
-          const boxClass = 'task-q-question-box' + (nextIsPageBreak ? ' page-break-after' : '');
+          const isFirstQuestion = qNum === 1;
+          const boxClass = 'task-q-question-box' + (isFirstQuestion ? ' task-q-first-question' : '') + (nextIsPageBreak ? ' page-break-after' : '');
           html += `<div class="${boxClass}">`;
           if (useTopRightSatisfactory) {
-            html += `<div class="task-q-satisfactory-above"><span style="font-weight:600;margin-right:8px">Satisfactory response:</span><span class="grid-status-cb${satYes ? ' checked' : ''}">${SVG_CHECK}</span> Yes <span style="margin-left:12px" class="grid-status-cb${satNo ? ' checked' : ''}">${SVG_X}</span> No</div>`;
+            html += `<div class="task-q-satisfactory-above"><span style="font-weight:600;margin-right:8px">Satisfactory response:</span><span class="grid-status-cb${satYes ? ' checked' : ''}"></span> Yes <span style="margin-left:12px" class="grid-status-cb${satNo ? ' checked' : ''}"></span> No</div>`;
           }
           if (isAssessment2Plus) {
             html += `<div class="task-q-question-label" style="font-weight:bold;margin-bottom:8px">${question.label}</div>`;
@@ -1348,7 +1354,7 @@ function buildHtml(data: {
                 html += '</tr>';
               }
               html += '</tbody></table>';
-              if (!useTopRightSatisfactory) html += '<div class="mt-3" style="margin-top:10px"><span style="font-weight:600;margin-right:8px">Satisfactory response:</span><span class="grid-status-cb' + (satYes ? ' checked' : '') + '">' + SVG_CHECK + '</span> Yes <span style="margin-left:12px" class="grid-status-cb' + (satNo ? ' checked' : '') + '">' + SVG_X + '</span> No</div>';
+              if (!useTopRightSatisfactory) html += '<div class="mt-3" style="margin-top:10px"><span style="font-weight:600;margin-right:8px">Satisfactory response:</span><span class="grid-status-cb' + (satYes ? ' checked' : '') + '"></span> Yes <span style="margin-left:12px" class="grid-status-cb' + (satNo ? ' checked' : '') + '"></span> No</div>';
             } else {
               const key = rows[0] ? `q-${question.id}-${rows[0].id}` : `q-${question.id}`;
               const val = answers.get(key);
@@ -1357,7 +1363,7 @@ function buildHtml(data: {
               const blockClass = question.type === 'long_text' ? 'task-q-answer-block task-q-answer-large' : 'task-q-answer-block';
               const blockStyle = qWordLimit ? `min-height:${heightFromWordLimit(qWordLimit)}px;max-height:${heightFromWordLimit(qWordLimit)}px;height:${heightFromWordLimit(qWordLimit)}px;` : '';
               html += `<div class="${blockClass}"${blockStyle ? ` style="${blockStyle}"` : ''}>${val ?? ''}</div>`;
-              if (!useTopRightSatisfactory) html += '<div class="mt-3" style="margin-top:10px"><span style="font-weight:600;margin-right:8px">Satisfactory response:</span><span class="grid-status-cb' + (satYes ? ' checked' : '') + '">' + SVG_CHECK + '</span> Yes <span style="margin-left:12px" class="grid-status-cb' + (satNo ? ' checked' : '') + '">' + SVG_X + '</span> No</div>';
+              if (!useTopRightSatisfactory) html += '<div class="mt-3" style="margin-top:10px"><span style="font-weight:600;margin-right:8px">Satisfactory response:</span><span class="grid-status-cb' + (satYes ? ' checked' : '') + '"></span> Yes <span style="margin-left:12px" class="grid-status-cb' + (satNo ? ' checked' : '') + '"></span> No</div>';
             }
             const legacyAb = pmTop?.additionalBlock as Record<string, unknown> | undefined;
             const contentBlocks: Array<{ type: string; content?: string; questionId?: number; headerText?: string }> = Array.isArray(pmTop?.contentBlocks)
@@ -1421,7 +1427,7 @@ function buildHtml(data: {
                   const cColumnWordLimits = (Array.isArray(cqPm.columnWordLimits) ? cqPm.columnWordLimits : []).map((v: unknown) => (typeof v === 'number' && v > 0 ? v : null)) as (number | null)[];
                   html += `<div class="task-q-content-block mt-3">${blockHeaderHtml(block.headerText)}`;
                   html += useTopRightSatisfactory
-                    ? `<div class="task-q-additional-grid"><div class="task-q-satisfactory-above"><span style="font-weight:600;margin-right:8px">Satisfactory response:</span><span class="grid-status-cb${cqSatYes ? ' checked' : ''}">${SVG_CHECK}</span> Yes <span style="margin-left:12px" class="grid-status-cb${cqSatNo ? ' checked' : ''}">${SVG_X}</span> No</div><table class="section-table grid-table-no-border task-q-inner-table">`
+                    ? `<div class="task-q-additional-grid"><div class="task-q-satisfactory-above"><span style="font-weight:600;margin-right:8px">Satisfactory response:</span><span class="grid-status-cb${cqSatYes ? ' checked' : ''}"></span> Yes <span style="margin-left:12px" class="grid-status-cb${cqSatNo ? ' checked' : ''}"></span> No</div><table class="section-table grid-table-no-border task-q-inner-table">`
                     : '<div class="task-q-additional-grid"><table class="section-table grid-table-no-border task-q-inner-table">';
                   if (cLayout !== 'no_image_no_header') {
                     html += '<thead><tr>';
@@ -1455,7 +1461,7 @@ function buildHtml(data: {
                     html += '</tr>';
                   }
                   if (!useTopRightSatisfactory) {
-                    html += '</tbody></table><div class="mt-3" style="margin-top:10px"><span style="font-weight:600;margin-right:8px">Satisfactory response:</span><span class="grid-status-cb' + (cqSatYes ? ' checked' : '') + '">' + SVG_CHECK + '</span> Yes <span style="margin-left:12px" class="grid-status-cb' + (cqSatNo ? ' checked' : '') + '">' + SVG_X + '</span> No</div></div></div>';
+                    html += '</tbody></table><div class="mt-3" style="margin-top:10px"><span style="font-weight:600;margin-right:8px">Satisfactory response:</span><span class="grid-status-cb' + (cqSatYes ? ' checked' : '') + '"></span> Yes <span style="margin-left:12px" class="grid-status-cb' + (cqSatNo ? ' checked' : '') + '"></span> No</div></div></div>';
                   } else {
                     html += '</tbody></table></div></div>';
                   }
@@ -2290,6 +2296,21 @@ app.get('/pdf/:instanceId', async (req, res) => {
     const page = await browser.newPage();
     const { coverHtml, restHtml } = splitCoverAndRestHtml(html);
     await page.setContent(coverHtml, { waitUntil: 'networkidle' });
+    await page.waitForLoadState('domcontentloaded');
+    await page.evaluate(() => {
+      return Promise.all(
+        Array.from(document.images).map(
+          (img) =>
+            new Promise<void>((resolve) => {
+              if (img.complete) resolve();
+              else {
+                img.onload = () => resolve();
+                img.onerror = () => resolve();
+              }
+            })
+        )
+      );
+    });
 
     // Cover page (page 1): no footer - hide version, unit code, page number
     const coverPdf = await page.pdf({
@@ -2301,6 +2322,21 @@ app.get('/pdf/:instanceId', async (req, res) => {
 
     let pdf: Buffer;
     await page.setContent(restHtml, { waitUntil: 'networkidle' });
+    await page.waitForLoadState('domcontentloaded');
+    await page.evaluate(() => {
+      return Promise.all(
+        Array.from(document.images).map(
+          (img) =>
+            new Promise<void>((resolve) => {
+              if (img.complete) resolve();
+              else {
+                img.onload = () => resolve();
+                img.onerror = () => resolve();
+              }
+            })
+        )
+      );
+    });
     const restPdf = await page.pdf({
       format: 'A4',
       printBackground: true,
@@ -2425,6 +2461,21 @@ app.get('/pdf/preview/form/:formId', async (req, res) => {
     const page = await browser.newPage();
     const { coverHtml, restHtml } = splitCoverAndRestHtml(html);
     await page.setContent(coverHtml, { waitUntil: 'networkidle' });
+    await page.waitForLoadState('domcontentloaded');
+    await page.evaluate(() => {
+      return Promise.all(
+        Array.from(document.images).map(
+          (img) =>
+            new Promise<void>((resolve) => {
+              if (img.complete) resolve();
+              else {
+                img.onload = () => resolve();
+                img.onerror = () => resolve();
+              }
+            })
+        )
+      );
+    });
 
     const coverPdf = await page.pdf({
       format: 'A4',
@@ -2435,6 +2486,21 @@ app.get('/pdf/preview/form/:formId', async (req, res) => {
 
     let pdf: Buffer;
     await page.setContent(restHtml, { waitUntil: 'networkidle' });
+    await page.waitForLoadState('domcontentloaded');
+    await page.evaluate(() => {
+      return Promise.all(
+        Array.from(document.images).map(
+          (img) =>
+            new Promise<void>((resolve) => {
+              if (img.complete) resolve();
+              else {
+                img.onload = () => resolve();
+                img.onerror = () => resolve();
+              }
+            })
+        )
+      );
+    });
     const restPdf = await page.pdf({
       format: 'A4',
       printBackground: true,

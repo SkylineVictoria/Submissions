@@ -1355,7 +1355,26 @@ export const AdminFormBuilderPage: React.FC = () => {
       updateQuestion(parentQuestion.id, { pdf_meta: { ...parentPm, contentBlocks: reverted } as unknown as Json });
       return;
     }
-    await loadData();
+    // Optimistic update: merge new question into local state so section/question stay selected (no loadData refetch)
+    const newQuestion = newQ as FormQuestion;
+    setSteps((prev) =>
+      prev.map((step) => {
+        if (step.id !== selectedStepId) return step;
+        return {
+          ...step,
+          sections: step.sections.map((sec) => {
+            if (sec.id !== selectedSectionId) return sec;
+            const questions = [...sec.questions, newQuestion].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+            return {
+              ...sec,
+              questions: questions.map((q) =>
+                q.id === parentQuestion.id ? { ...q, pdf_meta: { ...parentPm, contentBlocks: nextBlocks } as unknown as Json } : q
+              ),
+            };
+          }),
+        };
+      })
+    );
   };
 
   const flushQuestionSave = useCallback((questionId: number): Promise<void> => {
@@ -1518,7 +1537,7 @@ export const AdminFormBuilderPage: React.FC = () => {
               <input
                 ref={coverInputRef}
                 type="file"
-                accept="image/jpeg,image/png,image/webp,image/gif"
+                accept="image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif"
                 className="hidden"
                 onChange={handleCoverUpload}
               />
@@ -2287,17 +2306,55 @@ export const AdminFormBuilderPage: React.FC = () => {
                                     if (!childQ) return <p className="text-sm text-amber-600">Creating... Please wait.</p>;
                                     const childPm = (childQ.pdf_meta as Record<string, unknown>) || {};
                                     const childColumns = getGridColumnsMeta(childPm);
+                                    const childColumnWordLimits = childColumns.map((_, idx) =>
+                                      normalizeWordLimit(Array.isArray(childPm.columnWordLimits) ? (childPm.columnWordLimits as unknown[])[idx] : null)
+                                    );
                                     return (
                                       <div className="space-y-2">
                                         <TableLayoutSelect value={(childPm.layout as string) || 'no_image'} onChange={(v) => updateQuestion(childQ.id, { pdf_meta: { ...childPm, layout: v } })} />
                                         <div className="space-y-2">
                                           {childColumns.map((col, colIdx) => (
                                             <div key={colIdx} className="grid grid-cols-12 gap-2 items-end">
-                                              <div className="col-span-8">
-                                                <Input label={`Column ${colIdx + 1}`} value={col.label} onChange={(e) => { const next = [...childColumns]; next[colIdx] = { ...next[colIdx], label: e.target.value }; updateQuestion(childQ.id, { pdf_meta: withGridColumnsMeta(childPm, next) }); }} />
+                                              <div className="col-span-5">
+                                                <Input label={`Column ${colIdx + 1}`} value={col.label} onChange={(e) => { const next = [...childColumns]; next[colIdx] = { ...next[colIdx], label: e.target.value }; updateQuestion(childQ.id, { pdf_meta: withGridColumnsMeta(childPm, next) }); }} placeholder="e.g. Terms, Explanation" />
                                               </div>
-                                              <div className="col-span-4">
-                                                <button type="button" className="text-xs text-red-600 hover:text-red-700" onClick={() => { const next = childColumns.filter((_, i) => i !== colIdx); updateQuestion(childQ.id, { pdf_meta: withGridColumnsMeta(childPm, next) }); }}>Remove</button>
+                                              <div className="col-span-3">
+                                                <Select
+                                                  label="Type"
+                                                  value={col.type}
+                                                  onChange={(v) => {
+                                                    const next = [...childColumns];
+                                                    next[colIdx] = { ...next[colIdx], type: normalizeGridColumnType(v) };
+                                                    updateQuestion(childQ.id, { pdf_meta: withGridColumnsMeta(childPm, next) });
+                                                  }}
+                                                  options={GRID_COLUMN_TYPE_OPTIONS}
+                                                />
+                                              </div>
+                                              <div className="col-span-3">
+                                                <Input
+                                                  label="Word limit (optional)"
+                                                  type="number"
+                                                  min={1}
+                                                  value={childColumnWordLimits[colIdx] ?? ''}
+                                                  disabled={col.type !== 'answer'}
+                                                  onChange={(e) => {
+                                                    const nextLimits = [...childColumnWordLimits];
+                                                    nextLimits[colIdx] = normalizeWordLimit(e.target.value);
+                                                    updateQuestion(childQ.id, {
+                                                      pdf_meta: { ...(withGridColumnsMeta(childPm, childColumns) as Record<string, unknown>), columnWordLimits: nextLimits } as Json,
+                                                    });
+                                                  }}
+                                                  placeholder={col.type === 'answer' ? 'e.g. 20' : 'N/A'}
+                                                />
+                                              </div>
+                                              <div className="col-span-1 flex justify-end">
+                                                <button
+                                                  type="button"
+                                                  className="text-xs text-red-600 hover:text-red-700 pb-2"
+                                                  onClick={() => { const next = childColumns.filter((_, i) => i !== colIdx); updateQuestion(childQ.id, { pdf_meta: withGridColumnsMeta(childPm, next) }); }}
+                                                >
+                                                  Remove
+                                                </button>
                                               </div>
                                             </div>
                                           ))}

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Plus, Mail, Phone, Pencil, Shield, UserRound, Building2 } from 'lucide-react';
 import { listUsersPaged, createUser, updateUser, adminSetPassword, listBatchesPaged } from '../lib/formEngine';
+import { buildUserEmail, buildUserEmailFromLocal, getUserEmailLocalPart, STAFF_DOMAIN } from '../lib/emailUtils';
 import type { UserRow } from '../lib/formEngine';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -48,8 +49,9 @@ export const AdminUsersPage: React.FC = () => {
   const [savingEdit, setSavingEdit] = useState(false);
 
   const [draft, setDraft] = useState({
-    full_name: '',
-    email: '',
+    first_name: '',
+    last_name: '',
+    email_local: '',
     phone: '',
     status: 'active',
     role: 'trainer' as 'admin' | 'trainer' | 'office',
@@ -57,13 +59,17 @@ export const AdminUsersPage: React.FC = () => {
   });
 
   const [editDraft, setEditDraft] = useState<{
-    full_name: string;
-    email: string;
+    first_name: string;
+    last_name: string;
+    email_local: string;
     phone: string;
     status: string;
     role: string;
     newPassword: string;
   } | null>(null);
+
+  const userFullName = `${draft.first_name} ${draft.last_name}`.trim();
+  const userEmailSuggested = buildUserEmail(userFullName);
   const [batches, setBatches] = useState<{ id: number; name: string; trainer_id: number }[]>([]);
 
   useEffect(() => {
@@ -73,13 +79,14 @@ export const AdminUsersPage: React.FC = () => {
   const digitsOnly = (val: string) => val.replace(/\D/g, '');
 
   const validateUserForm = (
-    form: { full_name: string; email: string; phone: string; status: string; role: string },
+    form: { first_name: string; last_name: string; email_local: string; phone: string; status: string; role: string },
     requirePassword = false,
     password?: string
   ): string | null => {
-    if (!form.full_name.trim()) return 'Full name is required.';
-    if (!form.email.trim()) return 'Email is required.';
-    if (!/^\S+@\S+\.\S+$/.test(form.email.trim())) return 'Enter a valid email address.';
+    const fullName = `${(form.first_name || '').trim()} ${(form.last_name || '').trim()}`.trim();
+    if (!fullName) return 'First name and last name are required.';
+    const email = buildUserEmailFromLocal(form.email_local?.trim() || '') || buildUserEmail(fullName);
+    if (!email) return 'Email local part is required.';
     if (!form.phone.trim()) return 'Phone is required.';
     if (!/^\d{10}$/.test(form.phone.trim())) return 'Phone must be exactly 10 digits.';
     if (!form.status.trim()) return 'Status is required.';
@@ -101,7 +108,10 @@ export const AdminUsersPage: React.FC = () => {
   }, [currentPage, searchTerm, roleFilter, statusFilter]);
 
   const createError = useMemo(() => validateUserForm(draft, true, draft.password), [draft]);
-  const editError = useMemo(() => (editDraft ? validateUserForm(editDraft, false, editDraft.newPassword || undefined) : null), [editDraft]);
+  const editError = useMemo(
+    () => (editDraft ? validateUserForm(editDraft, false, editDraft.newPassword || undefined) : null),
+    [editDraft]
+  );
 
   const handleCreate = async () => {
     const err = validateUserForm(draft, true, draft.password);
@@ -110,9 +120,11 @@ export const AdminUsersPage: React.FC = () => {
       return;
     }
     setCreating(true);
+    const fullName = `${draft.first_name.trim()} ${draft.last_name.trim()}`.trim();
+    const email = buildUserEmailFromLocal(draft.email_local?.trim() || '') || buildUserEmail(fullName);
     const created = await createUser({
-      full_name: draft.full_name,
-      email: draft.email,
+      full_name: fullName,
+      email,
       phone: draft.phone,
       status: draft.status,
       role: draft.role,
@@ -127,7 +139,7 @@ export const AdminUsersPage: React.FC = () => {
     const res = await listUsersPaged(1, PAGE_SIZE, searchTerm, roleFilter || undefined, statusFilter || undefined);
     setUsers(res.data);
     setTotalUsers(res.total);
-    setDraft({ full_name: '', email: '', phone: '', status: 'active', role: 'trainer', password: '' });
+    setDraft({ first_name: '', last_name: '', email_local: '', phone: '', status: 'active', role: 'trainer', password: '' });
     setIsCreateOpen(false);
     toast.success('User added');
   };
@@ -139,9 +151,13 @@ export const AdminUsersPage: React.FC = () => {
       setEditDraft(null);
       return;
     }
+    const parts = (editingUser.full_name ?? '').trim().split(/\s+/);
+    const first_name = parts[0] ?? '';
+    const last_name = parts.slice(1).join(' ') ?? '';
     setEditDraft({
-      full_name: editingUser.full_name,
-      email: editingUser.email,
+      first_name,
+      last_name,
+      email_local: getUserEmailLocalPart(editingUser.email ?? ''),
       phone: editingUser.phone ?? '',
       status: editingUser.status ?? 'active',
       role: editingUser.role ?? 'trainer',
@@ -157,9 +173,11 @@ export const AdminUsersPage: React.FC = () => {
       return;
     }
     setSavingEdit(true);
+    const fullName = `${editDraft.first_name.trim()} ${editDraft.last_name.trim()}`.trim();
+    const email = buildUserEmailFromLocal(editDraft.email_local?.trim() || '');
     const updated = await updateUser(editingId, {
-      full_name: editDraft.full_name,
-      email: editDraft.email,
+      full_name: fullName,
+      email,
       phone: editDraft.phone,
       status: editDraft.status,
       role: editDraft.role as 'admin' | 'trainer' | 'office',
@@ -370,19 +388,50 @@ export const AdminUsersPage: React.FC = () => {
 
       <Modal isOpen={isCreateOpen} onClose={() => setIsCreateOpen(false)} title="Add User" size="md">
         <div className="space-y-3">
-          <Input
-            value={draft.full_name}
-            onChange={(e) => setDraft((p) => ({ ...p, full_name: e.target.value }))}
-            placeholder="Full name *"
-            required
-          />
-          <Input
-            value={draft.email}
-            onChange={(e) => setDraft((p) => ({ ...p, email: e.target.value }))}
-            placeholder="Email *"
-            type="email"
-            required
-          />
+          <div className="grid grid-cols-2 gap-2">
+            <Input
+              value={draft.first_name}
+              onChange={(e) => {
+                const fn = e.target.value;
+                setDraft((p) => {
+                  const fullName = `${fn} ${p.last_name}`.trim();
+                  const prevSuggested = buildUserEmail(`${p.first_name} ${p.last_name}`.trim());
+                  const suggested = buildUserEmail(fullName);
+                  const syncEmail = !p.email_local || buildUserEmailFromLocal(p.email_local) === prevSuggested;
+                  return { ...p, first_name: fn, email_local: syncEmail ? (suggested ? getUserEmailLocalPart(suggested) : p.email_local) : p.email_local };
+                });
+              }}
+              placeholder="First name *"
+              required
+            />
+            <Input
+              value={draft.last_name}
+              onChange={(e) => {
+                const ln = e.target.value;
+                setDraft((p) => {
+                  const fullName = `${p.first_name} ${ln}`.trim();
+                  const prevSuggested = buildUserEmail(`${p.first_name} ${p.last_name}`.trim());
+                  const suggested = buildUserEmail(fullName);
+                  const syncEmail = !p.email_local || buildUserEmailFromLocal(p.email_local) === prevSuggested;
+                  return { ...p, last_name: ln, email_local: syncEmail ? (suggested ? getUserEmailLocalPart(suggested) : p.email_local) : p.email_local };
+                });
+              }}
+              placeholder="Last name *"
+              required
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="block text-xs font-medium text-gray-600">Email (editable, @{STAFF_DOMAIN.slice(1)} fixed)</label>
+            <div className="flex items-center gap-1 rounded border border-[var(--border)] overflow-hidden">
+              <Input
+                value={draft.email_local || getUserEmailLocalPart(userEmailSuggested)}
+                onChange={(e) => setDraft((p) => ({ ...p, email_local: e.target.value.replace(/\s/g, '').toLowerCase() }))}
+                placeholder="e.g. firstname.lastname"
+                className="border-0 rounded-none focus:ring-0"
+              />
+              <span className="px-3 py-2 bg-gray-100 text-gray-600 text-sm shrink-0">@{STAFF_DOMAIN.slice(1)}</span>
+            </div>
+          </div>
           <Input
             value={draft.phone}
             onChange={(e) => setDraft((p) => ({ ...p, phone: digitsOnly(e.target.value).slice(0, 10) }))}
@@ -431,19 +480,32 @@ export const AdminUsersPage: React.FC = () => {
       {editingId && editDraft && (
         <Modal isOpen={!!editingId} onClose={() => setEditingId(null)} title="Edit User" size="md">
           <div className="space-y-3">
-            <Input
-              value={editDraft.full_name}
-              onChange={(e) => setEditDraft((p) => (p ? { ...p, full_name: e.target.value } : p))}
-              placeholder="Full name *"
-              required
-            />
-            <Input
-              value={editDraft.email}
-              onChange={(e) => setEditDraft((p) => (p ? { ...p, email: e.target.value } : p))}
-              placeholder="Email *"
-              type="email"
-              required
-            />
+            <div className="grid grid-cols-2 gap-2">
+              <Input
+                value={editDraft.first_name}
+                onChange={(e) => setEditDraft((p) => (p ? { ...p, first_name: e.target.value } : p))}
+                placeholder="First name *"
+                required
+              />
+              <Input
+                value={editDraft.last_name}
+                onChange={(e) => setEditDraft((p) => (p ? { ...p, last_name: e.target.value } : p))}
+                placeholder="Last name *"
+                required
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="block text-xs font-medium text-gray-600">Email (editable, @{STAFF_DOMAIN.slice(1)} fixed)</label>
+              <div className="flex items-center gap-1 rounded border border-[var(--border)] overflow-hidden">
+                <Input
+                  value={editDraft.email_local}
+                  onChange={(e) => setEditDraft((p) => (p ? { ...p, email_local: e.target.value.replace(/\s/g, '').toLowerCase() } : p))}
+                  placeholder="e.g. firstname.lastname"
+                  className="border-0 rounded-none focus:ring-0"
+                />
+                <span className="px-3 py-2 bg-gray-100 text-gray-600 text-sm shrink-0">@{STAFF_DOMAIN.slice(1)}</span>
+              </div>
+            </div>
             <Input
               value={editDraft.phone}
               onChange={(e) => setEditDraft((p) => (p ? { ...p, phone: digitsOnly(e.target.value).slice(0, 10) } : p))}

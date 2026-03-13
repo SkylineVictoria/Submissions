@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { Plus, Send, Mail, Phone, Pencil, Key, Link } from 'lucide-react';
 import { listStudentsPaged, createStudent, updateStudent, createFormInstance, getInstanceForStudentAndForm, listForms, listBatchesPaged, listStudentsInBatch, setStudentPassword, listCoursesPaged, getFormsForCourse, listFormsPaged } from '../lib/formEngine';
+import { buildStudentEmailFromLocal, getStudentEmailLocalPart, STUDENT_DOMAIN } from '../lib/emailUtils';
 import type { Student } from '../lib/formEngine';
 import type { Form } from '../types/database';
 import { Card } from '../components/ui/Card';
@@ -38,20 +39,18 @@ export const AdminStudentsPage: React.FC = () => {
     student_id: '',
     first_name: '',
     last_name: '',
-    email: '',
+    email_local: '',
     phone: '',
     batch_id: '',
     password: '',
   });
 
   const digitsOnly = (val: string) => val.replace(/\D/g, '');
-  const buildStudentEmail = (studentId: string) => `${studentId.trim().toLowerCase()}@student.slit.edu.au`;
-
   const validateCreateStudentForm = (form: {
     student_id: string;
     first_name: string;
     last_name: string;
-    email?: string;
+    email_local: string;
     phone: string;
     batch_id?: string;
     password?: string;
@@ -67,8 +66,8 @@ export const AdminStudentsPage: React.FC = () => {
     for (const [key, label] of requiredFields) {
       if (!String((form as Record<string, unknown>)[key] ?? '').trim()) return `${label} is required.`;
     }
-    const email = (form.email || '').trim() || buildStudentEmail(form.student_id);
-    if (!/^\S+@\S+\.\S+$/.test(email)) return 'Please enter a valid email address.';
+    const email = buildStudentEmailFromLocal(form.email_local?.trim() || form.student_id);
+    if (!email) return 'Email local part (or Student ID) is required.';
     if (/\s/.test(form.student_id.trim())) return 'Student ID cannot contain spaces.';
     if (!/^\d{10}$/.test(form.phone.trim())) return 'Phone must be exactly 10 digits.';
     if (form.password && form.password.length < 6) return 'Password must be at least 6 characters.';
@@ -156,11 +155,6 @@ export const AdminStudentsPage: React.FC = () => {
     });
   }, [displayForms, students]);
 
-  const defaultEmail = useMemo(() => {
-    const id = studentDraft.student_id.trim();
-    return id ? buildStudentEmail(id) : '';
-  }, [studentDraft.student_id]);
-
   const handleCreate = async () => {
     const formError = validateCreateStudentForm(studentDraft);
     if (formError) {
@@ -173,7 +167,7 @@ export const AdminStudentsPage: React.FC = () => {
       toast.error('Select a batch');
       return;
     }
-    const email = (studentDraft.email || '').trim() || buildStudentEmail(studentDraft.student_id);
+    const email = buildStudentEmailFromLocal(studentDraft.email_local?.trim() || studentDraft.student_id);
     const created = await createStudent({
       student_id: studentDraft.student_id,
       first_name: studentDraft.first_name,
@@ -194,7 +188,7 @@ export const AdminStudentsPage: React.FC = () => {
         student_id: '',
         first_name: '',
         last_name: '',
-        email: '',
+        email_local: '',
         phone: '',
         batch_id: '',
         password: '',
@@ -289,7 +283,7 @@ export const AdminStudentsPage: React.FC = () => {
     student_id: string;
     first_name: string;
     last_name: string;
-    email: string;
+    email_local: string;
     phone: string;
     batch_id: string;
   } | null>(null);
@@ -300,7 +294,7 @@ export const AdminStudentsPage: React.FC = () => {
         student_id: editingStudent.student_id ?? '',
         first_name: editingStudent.first_name ?? '',
         last_name: editingStudent.last_name ?? '',
-        email: (editingStudent.email || '').trim() || buildStudentEmail(editingStudent.student_id || ''),
+        email_local: getStudentEmailLocalPart(editingStudent.email || editingStudent.student_id || ''),
         phone: editingStudent.phone ?? '',
         batch_id: editingStudent.batch_id != null ? String(editingStudent.batch_id) : '',
       });
@@ -322,12 +316,13 @@ export const AdminStudentsPage: React.FC = () => {
       return;
     }
     setSavingEdit(true);
+    const email = buildStudentEmailFromLocal(editForm.email_local?.trim() || editForm.student_id);
     const updated = await updateStudent(editingId, {
       student_id: editForm.student_id,
       first_name: editForm.first_name,
       last_name: editForm.last_name,
       phone: editForm.phone,
-      email: editForm.email.trim(),
+      email,
       batch_id: batchId,
     });
     setSavingEdit(false);
@@ -346,15 +341,14 @@ export const AdminStudentsPage: React.FC = () => {
     student_id: string;
     first_name: string;
     last_name: string;
-    email: string;
+    email_local: string;
     phone: string;
     batch_id?: string;
   }): string | null => {
     if (!form.student_id?.trim()) return 'Student ID is required.';
     if (!form.first_name?.trim()) return 'First name is required.';
     if (!form.last_name?.trim()) return 'Last name is required.';
-    if (!form.email?.trim()) return 'Email is required.';
-    if (!/^\S+@\S+\.\S+$/.test(form.email.trim())) return 'Please enter a valid email address.';
+    if (!buildStudentEmailFromLocal(form.email_local?.trim() || form.student_id)) return 'Email local part is required.';
     if (!form.phone?.trim()) return 'Phone is required.';
     if (!/^\d{10}$/.test(form.phone.trim())) return 'Phone must be exactly 10 digits.';
     if (!form.batch_id) return 'Batch is required.';
@@ -603,7 +597,13 @@ export const AdminStudentsPage: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
             <Input
               value={studentDraft.student_id}
-              onChange={(e) => setStudentDraft((p) => ({ ...p, student_id: e.target.value }))}
+              onChange={(e) => {
+                const v = e.target.value;
+                setStudentDraft((p) => {
+                  const syncEmail = !p.email_local || p.email_local === p.student_id;
+                  return { ...p, student_id: v, email_local: syncEmail ? v : p.email_local };
+                });
+              }}
               placeholder="Student ID *"
               required
             />
@@ -619,13 +619,18 @@ export const AdminStudentsPage: React.FC = () => {
               placeholder="Last name"
               required
             />
-            <Input
-              value={studentDraft.email || defaultEmail}
-              onChange={(e) => setStudentDraft((p) => ({ ...p, email: e.target.value }))}
-              placeholder="Email (editable, default: studentID@student.slit.edu.au)"
-              type="email"
-              autoComplete="email"
-            />
+            <div className="space-y-1 md:col-span-2">
+              <label className="block text-xs font-medium text-gray-600">Email (editable, @{STUDENT_DOMAIN.slice(1)} fixed)</label>
+              <div className="flex items-center gap-1 rounded border border-[var(--border)] overflow-hidden">
+                <Input
+                  value={studentDraft.email_local || studentDraft.student_id}
+                  onChange={(e) => setStudentDraft((p) => ({ ...p, email_local: e.target.value.replace(/\s/g, '').toLowerCase() }))}
+                  placeholder="Student ID or e.g. firstname.lastname"
+                  className="border-0 rounded-none focus:ring-0"
+                />
+                <span className="px-3 py-2 bg-gray-100 text-gray-600 text-sm shrink-0">@{STUDENT_DOMAIN.slice(1)}</span>
+              </div>
+            </div>
             <Input
               value={studentDraft.phone}
               onChange={(e) => setStudentDraft((p) => ({ ...p, phone: digitsOnly(e.target.value).slice(0, 10) }))}
@@ -695,13 +700,18 @@ export const AdminStudentsPage: React.FC = () => {
                 placeholder="Last name"
                 required
               />
-              <Input
-                value={editForm.email}
-                onChange={(e) => setEditForm((p) => p ? { ...p, email: e.target.value } : p)}
-                placeholder="Email (editable)"
-                type="email"
-                autoComplete="email"
-              />
+              <div className="space-y-1 md:col-span-2">
+                <label className="block text-xs font-medium text-gray-600">Email (editable, @{STUDENT_DOMAIN.slice(1)} fixed)</label>
+                <div className="flex items-center gap-1 rounded border border-[var(--border)] overflow-hidden">
+                  <Input
+                    value={editForm?.email_local ?? ''}
+                    onChange={(e) => setEditForm((p) => p ? { ...p, email_local: e.target.value.replace(/\s/g, '').toLowerCase() } : p)}
+                    placeholder="Student ID or e.g. firstname.lastname"
+                    className="border-0 rounded-none focus:ring-0"
+                  />
+                  <span className="px-3 py-2 bg-gray-100 text-gray-600 text-sm shrink-0">@{STUDENT_DOMAIN.slice(1)}</span>
+                </div>
+              </div>
               <Input
                 value={editForm.phone}
                 onChange={(e) => setEditForm((p) => p ? { ...p, phone: digitsOnly(e.target.value).slice(0, 10) } : p)}

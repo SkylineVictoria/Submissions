@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { fetchForm, studentLoginForForm } from '../lib/formEngine';
+import { isValidInstitutionalEmail } from '../lib/emailUtils';
 import type { Form } from '../types/database';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -31,11 +32,18 @@ export const StudentAccessPage: React.FC = () => {
     }
   }, [formIdNum]);
 
+  const emailValid = isValidInstitutionalEmail(email);
+  const canSubmit = !!email.trim() && !!password && emailValid;
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formIdNum || !Number.isFinite(formIdNum) || !form) return;
     if (!email.trim() || !password) {
       toast.error('Please enter your email and password.');
+      return;
+    }
+    if (!emailValid) {
+      toast.error('Only @student.slit.edu.au or @slit.edu.au emails can access forms.');
       return;
     }
     setSubmitting(true);
@@ -72,15 +80,21 @@ export const StudentAccessPage: React.FC = () => {
           Enter your email and password to access your assessment form.
         </p>
         <form onSubmit={handleSubmit} className="space-y-4">
-          <Input
-            type="email"
-            label="Email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="your.email@example.com"
-            autoComplete="email"
-            required
-          />
+          <div>
+            <Input
+              type="email"
+              label="Email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="firstname.lastname@student.slit.edu.au"
+              autoComplete="email"
+              required
+              className={email.trim() && !emailValid ? 'border-amber-500' : ''}
+            />
+            {email.trim() && !emailValid && (
+              <p className="mt-1.5 text-sm text-amber-600">Only @student.slit.edu.au or @slit.edu.au emails can access forms.</p>
+            )}
+          </div>
           <Input
             type="password"
             label="Password"
@@ -90,7 +104,7 @@ export const StudentAccessPage: React.FC = () => {
             autoComplete="current-password"
             required
           />
-          <Button type="submit" disabled={submitting} className="w-full">
+          <Button type="submit" disabled={submitting || !canSubmit} className="w-full">
             {submitting ? 'Signing in...' : 'Access Form'}
           </Button>
         </form>

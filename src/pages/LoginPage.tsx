@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { loginWithEmailPassword } from '../lib/formEngine';
 import { useAuth } from '../contexts/AuthContext';
+import { isValidInstitutionalEmail } from '../lib/emailUtils';
 import { Navigate } from 'react-router-dom';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
@@ -23,10 +24,17 @@ export const LoginPage: React.FC = () => {
     return <Navigate to={from} replace />;
   }
 
+  const emailValid = isValidInstitutionalEmail(email);
+  const canSubmit = email.trim() && password && emailValid;
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email.trim() || !password) {
       toast.error('Email and password are required');
+      return;
+    }
+    if (!emailValid) {
+      toast.error('Only @slit.edu.au emails are allowed');
       return;
     }
     setLoading(true);
@@ -90,7 +98,7 @@ export const LoginPage: React.FC = () => {
           <div className="bg-white rounded-2xl shadow-xl border border-[var(--border)] p-8 sm:p-10">
             <div className="text-center mb-8">
               <h1 className="text-2xl font-bold text-[var(--text)]">Welcome back</h1>
-              <p className="text-gray-600 mt-2">Sign in to access the app</p>
+              <p className="text-gray-600 mt-2">Sign in with your Skyline email to access the app</p>
             </div>
             <form onSubmit={handleSubmit} className="space-y-5">
               <div>
@@ -102,11 +110,14 @@ export const LoginPage: React.FC = () => {
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@example.com"
+                  placeholder="name@slit.edu.au or name@student.slit.edu.au"
                   required
                   autoComplete="email"
-                  className="h-12"
+                  className={`h-12 ${email.trim() && !emailValid ? 'border-amber-500 focus:ring-amber-500' : ''}`}
                 />
+                {email.trim() && !emailValid && (
+                  <p className="mt-1.5 text-sm text-amber-600">Only @slit.edu.au or @student.slit.edu.au emails can sign in.</p>
+                )}
               </div>
               <div>
                 <label htmlFor="login-password" className="block text-sm font-medium text-gray-700 mb-1.5">
@@ -125,7 +136,7 @@ export const LoginPage: React.FC = () => {
               </div>
               <Button
                 type="submit"
-                disabled={loading}
+                disabled={loading || !canSubmit}
                 className="w-full h-12 text-base font-semibold"
               >
                 {loading ? (
