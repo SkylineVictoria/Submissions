@@ -462,8 +462,8 @@ function buildHtml(data: {
     .declaration-checkbox { display: inline-flex; align-items: flex-start; gap: 10px; }
     .declaration-checkbox .cb { width: 18px; height: 18px; border: 1px solid #d1d5db; border-radius: 3px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; color: #000000; background: #fff; }
     .declaration-checkbox .cb.checked { color: #000000; }
-    /* Assessment Submission Method (point 4): label + content on own page via .assessment-submission-page wrapper */
-    .assessment-submission-page { page-break-before: always; page-break-inside: avoid; }
+    /* Assessment Submission Method (point 4): flow after Assessment Tasks when there's room; avoid blank page gap */
+    .assessment-submission-page { page-break-before: auto; page-break-inside: avoid; }
     .assessment-submission-section { border: 1px solid #000; padding: 12px; background: #fff; margin-bottom: 12px; }
     .assessment-submission-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 24px; }
     .assessment-submission-item { display: inline-flex; align-items: center; gap: 8px; }
