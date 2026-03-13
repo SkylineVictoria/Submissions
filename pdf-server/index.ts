@@ -105,6 +105,14 @@ function renderSignatureHtml(val: string | null | undefined | Record<string, unk
   return '<span style="color:#dc2626;font-style:italic;font-family:serif">' + escaped + '</span>';
 }
 
+/** Escapes HTML and converts newlines to <br> so line breaks in question labels display correctly in PDF */
+function labelToHtml(s: string | null | undefined): string {
+  if (s == null) return '';
+  const str = String(s);
+  const escaped = str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return escaped.replace(/\n/g, '<br>');
+}
+
 async function getTemplateForInstance(instanceId: number) {
   const { data: instance } = await supabase
     .from('skyline_form_instances')
@@ -1294,10 +1302,10 @@ function buildHtml(data: {
             html += `<div class="task-q-satisfactory-above"><span style="font-weight:600;margin-right:8px">Satisfactory response:</span><span class="grid-status-cb${satYes ? ' checked' : ''}"></span> Yes <span style="margin-left:12px" class="grid-status-cb${satNo ? ' checked' : ''}"></span> No</div>`;
           }
           if (isAssessment2Plus) {
-            html += `<div class="task-q-question-label" style="font-weight:bold;margin-bottom:8px">${question.label}</div>`;
+            html += `<div class="task-q-question-label" style="font-weight:bold;margin-bottom:8px">${labelToHtml(question.label)}</div>`;
             const pmTop = (question.pdf_meta as Record<string, unknown>) || {};
             const textAboveHeader = String(pmTop.textAboveHeader ?? '').trim();
-            if (textAboveHeader) html += `<div class="task-q-text-above-header">${textAboveHeader}</div>`;
+            if (textAboveHeader) html += `<div class="task-q-text-above-header">${labelToHtml(textAboveHeader)}</div>`;
             if (isGridTable) {
               const pm = (question.pdf_meta as Record<string, unknown>) || {};
               const columnsMeta = getGridColumnsMeta(pm);
@@ -1369,7 +1377,7 @@ function buildHtml(data: {
             const contentBlocks: Array<{ type: string; content?: string; questionId?: number; headerText?: string }> = Array.isArray(pmTop?.contentBlocks)
               ? (pmTop.contentBlocks as Array<{ type: string; content?: string; questionId?: number; headerText?: string }>)
               : legacyAb ? [{ type: String(legacyAb.type ?? 'instruction_block'), content: legacyAb.content as string, questionId: legacyAb.questionId as number }] : [];
-            const blockHeaderHtml = (ht: string | undefined) => (ht ? `<div class="task-q-text-above-header">${ht}</div>` : '');
+            const blockHeaderHtml = (ht: string | undefined) => (ht ? `<div class="task-q-text-above-header">${labelToHtml(ht)}</div>` : '');
             for (const block of contentBlocks) {
               if (block.type === 'instruction_block' && ((block.content as string) || (block as { imageUrl?: string }).imageUrl)) {
                 const blockContent = block.content as string;
@@ -1397,7 +1405,7 @@ function buildHtml(data: {
                   const cqLayout = (cqPm?.imageLayout as string) || 'side_by_side';
                   const cqPct = Math.max(20, Math.min(80, (cqPm?.imageWidthPercent as number) || 50));
                   const cqImgTag = cqImgUrl ? `<img src="${cqImgUrl}" alt="" style="max-width:100%;max-height:280px;object-fit:contain;border:1px solid #ddd;border-radius:4px" />` : '';
-                  let labelHtml = `<div class="task-q-question-label">${cq.label}</div>`;
+                  let labelHtml = `<div class="task-q-question-label">${labelToHtml(cq.label)}</div>`;
                   if (cqImgTag) {
                     if (cqLayout === 'above') labelHtml = `<div style="margin-bottom:8px">${cqImgTag}</div>${labelHtml}`;
                     else if (cqLayout === 'below') labelHtml += `<div style="margin-top:8px">${cqImgTag}</div>`;
@@ -1476,7 +1484,7 @@ function buildHtml(data: {
           html += '<td class="task-q-question-label-cell">';
           const pmTop = (question.pdf_meta as Record<string, unknown>) || {};
           const textAboveHeader = String(pmTop.textAboveHeader ?? '').trim();
-          let labelCellContent = `<div class="task-q-question-label">${question.label}</div>` + (textAboveHeader ? `<div class="task-q-text-above-header">${textAboveHeader}</div>` : '');
+          let labelCellContent = `<div class="task-q-question-label">${labelToHtml(question.label)}</div>` + (textAboveHeader ? `<div class="task-q-text-above-header">${labelToHtml(textAboveHeader)}</div>` : '');
           const qImgUrl = pmTop?.imageUrl as string | undefined;
           const qLayout = (pmTop?.imageLayout as string) || 'side_by_side';
           const qPct = Math.max(20, Math.min(80, (pmTop?.imageWidthPercent as number) || 50));
@@ -1567,7 +1575,7 @@ function buildHtml(data: {
           const contentBlocks: Array<{ type: string; content?: string; questionId?: number; headerText?: string }> = Array.isArray(pmTop?.contentBlocks)
             ? (pmTop.contentBlocks as Array<{ type: string; content?: string; questionId?: number; headerText?: string }>)
             : legacyAb ? [{ type: String(legacyAb.type ?? 'instruction_block'), content: legacyAb.content as string, questionId: legacyAb.questionId as number }] : [];
-          const blockHeaderHtml = (ht: string | undefined) => (ht ? `<div class="task-q-text-above-header">${ht}</div>` : '');
+          const blockHeaderHtml = (ht: string | undefined) => (ht ? `<div class="task-q-text-above-header">${labelToHtml(ht)}</div>` : '');
           for (const block of contentBlocks) {
             if (block.type === 'instruction_block' && ((block.content as string) || (block as { imageUrl?: string }).imageUrl)) {
               const blockContent = block.content as string;
@@ -1597,7 +1605,7 @@ function buildHtml(data: {
                 const cqLayout = (cqPm?.imageLayout as string) || 'side_by_side';
                 const cqPct = Math.max(20, Math.min(80, (cqPm?.imageWidthPercent as number) || 50));
                 const cqImgTag = cqImgUrl ? `<img src="${cqImgUrl}" alt="" style="max-width:100%;max-height:280px;object-fit:contain;border:1px solid #ddd;border-radius:4px" />` : '';
-                let labelHtml = `<div class="task-q-question-label">${cq.label}</div>`;
+                let labelHtml = `<div class="task-q-question-label">${labelToHtml(cq.label)}</div>`;
                 if (cqImgTag) {
                   if (cqLayout === 'above') labelHtml = `<div style="margin-bottom:8px">${cqImgTag}</div>${labelHtml}`;
                   else if (cqLayout === 'below') labelHtml += `<div style="margin-top:8px">${cqImgTag}</div>`;

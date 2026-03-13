@@ -61,6 +61,14 @@ function renderSignatureHtml(val: string | null | undefined): string {
   return '<span style="color:#dc2626;font-style:italic;font-family:serif">' + escaped + '</span>';
 }
 
+/** Escapes HTML and converts newlines to <br> so line breaks in question labels display correctly in PDF */
+function labelToHtml(s: string | null | undefined): string {
+  if (s == null) return '';
+  const str = String(s);
+  const escaped = str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return escaped.replace(/\n/g, '<br>');
+}
+
 export async function getTemplateForInstance(supabase: SupabaseClient, instanceId: number) {
   const { data: instance } = await supabase
     .from('skyline_form_instances')
@@ -982,10 +990,10 @@ export function buildHtml(data: {
           html += '<tr class="task-q-row-top">';
           html += `<td class="task-q-num-cell">Q${qNum}:</td>`;
           html += '<td class="task-q-question-label-cell">';
-          html += `<div class="task-q-question-label">${question.label}</div>`;
+          html += `<div class="task-q-question-label">${labelToHtml(question.label)}</div>`;
           const pmTop = (question.pdf_meta as Record<string, unknown>) || {};
           const textAboveHeader = String(pmTop.textAboveHeader ?? '').trim();
-          if (textAboveHeader) html += `<div class="task-q-text-above-header">${textAboveHeader}</div>`;
+          if (textAboveHeader) html += `<div class="task-q-text-above-header">${labelToHtml(textAboveHeader)}</div>`;
           html += '</td>';
           html += '<td class="task-q-satisfactory-cell">';
           html += '<div class="task-q-satisfactory-header">Satisfactory response</div>';
@@ -1050,7 +1058,7 @@ export function buildHtml(data: {
           const contentBlocks: Array<{ type: string; content?: string; questionId?: number; headerText?: string }> = Array.isArray(pmTop?.contentBlocks)
             ? (pmTop.contentBlocks as Array<{ type: string; content?: string; questionId?: number; headerText?: string }>)
             : legacyAb ? [{ type: String(legacyAb.type ?? 'instruction_block'), content: legacyAb.content as string, questionId: legacyAb.questionId as number }] : [];
-          const blockHeaderHtml = (ht: string | undefined) => (ht ? `<div class="task-q-text-above-header">${ht}</div>` : '');
+          const blockHeaderHtml = (ht: string | undefined) => (ht ? `<div class="task-q-text-above-header">${labelToHtml(ht)}</div>` : '');
           for (const block of contentBlocks) {
             if (block.type === 'instruction_block' && (block.content as string)) {
               html += `<div class="task-q-content-block mt-3">${blockHeaderHtml(block.headerText)}<div class="task-q-additional-instruction">${block.content as string}</div></div>`;
@@ -1066,7 +1074,7 @@ export function buildHtml(data: {
                 const qWordLimit = typeof cqPm?.wordLimit === 'number' && cqPm.wordLimit > 0 ? cqPm.wordLimit : null;
                 const blockClass = block.type === 'long_text' ? 'task-q-answer-block task-q-answer-large' : 'task-q-answer-block';
                 const blockStyle = qWordLimit ? `min-height:${heightFromWordLimit(qWordLimit)}px;max-height:${heightFromWordLimit(qWordLimit)}px;height:${heightFromWordLimit(qWordLimit)}px;` : '';
-                html += `<div class="task-q-content-block mt-3">${blockHeaderHtml(block.headerText)}<div class="task-q-question-label">${cq.label}</div><div class="${blockClass}"${blockStyle ? ` style="${blockStyle}"` : ''}>${val ?? ''}</div></div>`;
+                html += `<div class="task-q-content-block mt-3">${blockHeaderHtml(block.headerText)}<div class="task-q-question-label">${labelToHtml(cq.label)}</div><div class="${blockClass}"${blockStyle ? ` style="${blockStyle}"` : ''}>${val ?? ''}</div></div>`;
               }
               continue;
             }
