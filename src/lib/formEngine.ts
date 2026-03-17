@@ -46,7 +46,9 @@ export async function fetchForm(formId: number): Promise<Form | null> {
 }
 
 export async function updateForm(formId: number, updates: Partial<Pick<Form, 'name' | 'version' | 'unit_code' | 'unit_name' | 'qualification_code' | 'qualification_name' | 'header_asset_url' | 'cover_asset_url' | 'start_date' | 'end_date'>>): Promise<{ error: Error | null }> {
-  const { error } = await supabase.from('skyline_forms').update(updates).eq('id', formId);
+  const { updated_by } = getAuditFields();
+  const payload = { ...updates, updated_by };
+  const { error } = await supabase.from('skyline_forms').update(payload).eq('id', formId);
   return { error: error ? new Error(error.message) : null };
 }
 
@@ -577,7 +579,8 @@ export async function saveAnswer(
     ? await q.is('row_id', null).maybeSingle()
     : await q.eq('row_id', rowId).maybeSingle();
 
-  const payload = {
+  const { created_by, updated_by } = getAuditFields();
+  const payload: Record<string, unknown> = {
     value_text: value.text ?? null,
     value_number: value.number ?? null,
     value_json: value.json ?? null,
@@ -585,6 +588,7 @@ export async function saveAnswer(
   };
 
   if (existing) {
+    payload.updated_by = updated_by;
     await supabase.from('skyline_form_answers').update(payload).eq('id', existing.id);
   } else {
     await supabase.from('skyline_form_answers').insert({
@@ -592,6 +596,7 @@ export async function saveAnswer(
       question_id: questionId,
       row_id: rowId,
       ...payload,
+      created_by,
     });
   }
 }
@@ -617,7 +622,8 @@ export async function createFormInstance(
   roleContext: string,
   studentId?: number | null
 ): Promise<FormInstance | null> {
-  const insert: Record<string, unknown> = { form_id: formId, role_context: roleContext };
+  const { created_by } = getAuditFields();
+  const insert: Record<string, unknown> = { form_id: formId, role_context: roleContext, created_by };
   if (studentId != null) insert.student_id = studentId;
   const { data, error } = await supabase
     .from('skyline_form_instances')
@@ -925,7 +931,8 @@ export async function extendInstanceAccessTokensToDate(
 
 /** Allow student resubmission: set instance back to draft, role to student, and re-enable student link. For 2nd/3rd attempts. */
 export async function allowStudentResubmission(instanceId: number): Promise<void> {
-  await supabase.from('skyline_form_instances').update({ status: 'draft', role_context: 'student' }).eq('id', instanceId);
+  const { updated_by } = getAuditFields();
+  await supabase.from('skyline_form_instances').update({ status: 'draft', role_context: 'student', updated_by }).eq('id', instanceId);
   await extendInstanceAccessTokens(instanceId, 'student', 30);
 }
 
@@ -1146,6 +1153,13 @@ export function setStoredUser(user: AppUser | null): void {
   } else {
     localStorage.removeItem(AUTH_STORAGE_KEY);
   }
+}
+
+/** Audit fields for created_by / updated_by (current user). Use for insert/update. */
+function getAuditFields(): { created_by: number | null; updated_by: number | null } {
+  const u = getStoredUser();
+  const id = u?.id ?? null;
+  return { created_by: id, updated_by: id };
 }
 
 /** Request OTP for staff login. Uses Edge Function so OTP is created and email sent server-side (never exposed in network). */
@@ -1411,6 +1425,7 @@ export async function updateUser(id: number, input: UpdateUserInput): Promise<Us
   if (input.phone !== undefined) payload.phone = input.phone?.trim() || null;
   if (input.status !== undefined) payload.status = input.status?.trim() || null;
   if (input.role !== undefined) payload.role = input.role;
+  payload.updated_by = getAuditFields().updated_by;
   const { data, error } = await supabase
     .from('skyline_users')
     .update(payload)
@@ -2090,11 +2105,13 @@ function mapBatchRow(row: Record<string, unknown>, trainerName: string | null): 
 }
 
 export async function createBatch(input: CreateBatchInput): Promise<Batch | null> {
+  const { created_by } = getAuditFields();
   const { data, error } = await supabase
     .from('skyline_batches')
     .insert({
       name: input.name.trim(),
       trainer_id: input.trainer_id,
+      created_by,
     })
     .select('id, name, trainer_id, created_at')
     .single();
@@ -2119,6 +2136,7 @@ export async function updateBatch(id: number, input: UpdateBatchInput): Promise<
   const payload: Record<string, unknown> = {};
   if (input.name !== undefined) payload.name = input.name.trim();
   if (input.trainer_id !== undefined) payload.trainer_id = input.trainer_id;
+  payload.updated_by = getAuditFields().updated_by;
   const { data, error } = await supabase
     .from('skyline_batches')
     .update(payload)
@@ -2142,11 +2160,12 @@ export async function updateBatch(id: number, input: UpdateBatchInput): Promise<
 
 export async function updateBatchStudentAssignments(batchId: number, studentIds: number[]): Promise<boolean> {
   try {
-    await supabase.from('skyline_students').update({ batch_id: null }).eq('batch_id', batchId);
+    const { updated_by } = getAuditFields();
+    await supabase.from('skyline_students').update({ batch_id: null, updated_by }).eq('batch_id', batchId);
     if (studentIds.length > 0) {
       const { error } = await supabase
         .from('skyline_students')
-        .update({ batch_id: batchId })
+        .update({ batch_id: batchId, updated_by })
         .in('id', studentIds);
       if (error) {
         console.error('updateBatchStudentAssignments assign error', error);
@@ -2184,6 +2203,7 @@ export async function createStudent(input: CreateStudentInput): Promise<Student 
   const first = input.first_name.trim();
   const last = (input.last_name ?? '').trim();
   const fullName = [first, last].filter(Boolean).join(' ');
+  const { created_by } = getAuditFields();
   const { data, error } = await supabase
     .from('skyline_students')
     .insert({
@@ -2205,6 +2225,7 @@ export async function createStudent(input: CreateStudentInput): Promise<Student 
       guardian_phone: input.guardian_phone?.trim() || null,
       notes: input.notes?.trim() || null,
       status: input.status?.trim() || 'active',
+      created_by,
     })
     .select('*')
     .single();
@@ -2267,6 +2288,7 @@ export async function updateStudent(id: number, input: UpdateStudentInput): Prom
   if (input.guardian_phone !== undefined) payload.guardian_phone = input.guardian_phone?.trim() || null;
   if (input.notes !== undefined) payload.notes = input.notes?.trim() || null;
   if (input.status !== undefined) payload.status = input.status?.trim() || null;
+  payload.updated_by = getAuditFields().updated_by;
   const { data, error } = await supabase
     .from('skyline_students')
     .update(payload)
@@ -2696,6 +2718,7 @@ export async function createForm(input: CreateFormInput): Promise<Form | null> {
   const defaults = getDefaultFormDates();
   const start_date = (inputStart && inputStart.trim()) ? inputStart.trim() : defaults.start_date;
   const end_date = (inputEnd && inputEnd.trim()) ? inputEnd.trim() : defaults.end_date;
+  const { created_by } = getAuditFields();
   const { data, error } = await supabase
     .from('skyline_forms')
     .insert({
@@ -2708,6 +2731,7 @@ export async function createForm(input: CreateFormInput): Promise<Form | null> {
       status: 'published',
       start_date,
       end_date,
+      created_by,
     })
     .select('*')
     .single();
@@ -2838,9 +2862,10 @@ export async function listCoursesPaged(
 export async function createCourse(name: string): Promise<Course | null> {
   const trimmed = name.trim();
   if (!trimmed) return null;
+  const { created_by } = getAuditFields();
   const { data, error } = await supabase
     .from('skyline_courses')
-    .insert({ name: trimmed })
+    .insert({ name: trimmed, created_by })
     .select('*')
     .single();
   if (error) {
@@ -2854,6 +2879,7 @@ export async function updateCourse(id: number, input: { name?: string; sort_orde
   const payload: Record<string, unknown> = {};
   if (input.name !== undefined) payload.name = input.name.trim();
   if (input.sort_order !== undefined) payload.sort_order = input.sort_order;
+  payload.updated_by = getAuditFields().updated_by;
   const { data, error } = await supabase
     .from('skyline_courses')
     .update(payload)
@@ -3003,6 +3029,7 @@ export async function duplicateForm(formId: number): Promise<Form | null> {
   const newName = `${form.name} (Copy)`;
 
   const { start_date: defStart, end_date: defEnd } = getDefaultFormDates();
+  const { created_by } = getAuditFields();
   const { data: newFormData, error: formErr } = await supabase
     .from('skyline_forms')
     .insert({
@@ -3017,6 +3044,7 @@ export async function duplicateForm(formId: number): Promise<Form | null> {
       cover_asset_url: form.cover_asset_url,
       start_date: form.start_date ?? defStart,
       end_date: form.end_date ?? defEnd,
+      created_by,
     })
     .select('*')
     .single();
@@ -3199,14 +3227,15 @@ export async function duplicateForm(formId: number): Promise<Form | null> {
 }
 
 export async function updateInstanceRole(instanceId: number, roleContext: string): Promise<void> {
-  await supabase.from('skyline_form_instances').update({ role_context: roleContext }).eq('id', instanceId);
+  const { updated_by } = getAuditFields();
+  await supabase.from('skyline_form_instances').update({ role_context: roleContext, updated_by }).eq('id', instanceId);
 }
 
 export type InstanceWorkflowStatus = 'draft' | 'waiting_trainer' | 'waiting_office' | 'completed';
 
 export async function updateInstanceWorkflowStatus(instanceId: number, workflowStatus: InstanceWorkflowStatus): Promise<void> {
   const nowIso = new Date().toISOString();
-  const payload: Record<string, unknown> = {};
+  const payload: Record<string, unknown> = { updated_by: getAuditFields().updated_by };
   // Use legacy status fields only, so this works even without workflow_status migration.
   if (workflowStatus === 'draft') payload.status = 'draft';
   if (workflowStatus === 'waiting_trainer' || workflowStatus === 'waiting_office') payload.status = 'submitted';
