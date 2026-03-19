@@ -750,7 +750,7 @@ export function buildHtml(data: {
         html += `<h3>${headerNum}. ${section.title}</h3>`;
         headerNum++;
         if (section.description) html += `<p>${section.description}</p>`;
-      } else if (section.pdf_render_mode !== 'declarations' && section.pdf_render_mode !== 'reasonable_adjustment' && section.pdf_render_mode !== 'task_instructions' && section.pdf_render_mode !== 'task_results' && section.pdf_render_mode !== 'task_questions' && section.pdf_render_mode !== 'assessment_summary' && section.title !== 'Assessment Summary Sheet' && !isLearnerEvaluation) {
+      } else if (section.pdf_render_mode !== 'declarations' && section.pdf_render_mode !== 'reasonable_adjustment' && section.pdf_render_mode !== 'task_instructions' && section.pdf_render_mode !== 'task_results' && section.pdf_render_mode !== 'task_questions' && section.pdf_render_mode !== 'task_written_evidence_checklist' && section.pdf_render_mode !== 'assessment_summary' && section.title !== 'Assessment Summary Sheet' && !isLearnerEvaluation) {
         html += `<h3>${headerNum}. ${section.title}</h3>`;
         headerNum++;
         if (section.description) html += `<p>${section.description}</p>`;

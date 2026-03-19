@@ -352,6 +352,11 @@ function heightFromWordLimit(wordLimit: number | null | undefined): number {
   return Math.min(3000, Math.max(36, lines * 24));
 }
 
+/** Normalize non-breaking spaces to normal spaces so prose wraps naturally in PDF. */
+function normalizeNbspProse(s: string): string {
+  return String(s || '').replace(/&nbsp;/gi, ' ').replace(/\u00A0/g, ' ');
+}
+
 function buildHtml(data: {
   form: { name: string; version: string | null; unit_code: string | null; header_asset_url: string | null; cover_asset_url?: string | null };
   steps: Array<{
@@ -516,14 +521,48 @@ function buildHtml(data: {
     .task-instructions-subheader { font-size: 12pt; color: #000000; margin: 0 0 8px 0; padding: 0; background: transparent !important; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; white-space: normal; max-width: 100%; }
     .task-instructions-block { margin: 12px 0; max-width: 100%; box-sizing: border-box; }
     .task-instructions-block-title { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 16pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 8px 12px; overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; white-space: normal; max-width: 100%; box-sizing: border-box; }
-    .task-instructions-block-content { padding: 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-top: none; line-height: 1.5; overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; white-space: normal; max-width: 100%; box-sizing: border-box; }
+    .task-instructions-block-content { padding: 12px; background: transparent !important; border: 1px solid #e5e7eb; border-top: none; line-height: 1.5; overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; white-space: normal; max-width: 100%; box-sizing: border-box; }
     .task-instructions-block-content ul, .task-instructions-block-content li, .task-instructions-block-content p { overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; white-space: normal; }
     .task-instructions-block-content ul { margin: 8px 0; padding-left: 20px; }
     .task-instructions-block-content p { margin: 6px 0; }
     .task-instructions-table { width: 100%; table-layout: fixed; border: 1px solid #000; border-collapse: collapse; }
     .task-instructions-table td, .task-instructions-table th { vertical-align: top; overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; white-space: normal; }
+    .task-instructions-table .value-cell { min-width: 0; max-width: 100%; box-sizing: border-box; word-break: normal; overflow-wrap: normal; word-wrap: normal; hyphens: none; overflow: visible; text-align: left; }
     .task-instructions-table .label-cell { width: 24% !important; }
     .task-instructions-table td:last-child { border-right: 1px solid #000 !important; }
+    /* Assessment Instructions: pasted rich-text sometimes carries inline nowrap/pre/hidden styles
+       which prevents normal wrapping and can clip at the right edge. Override only within the TABLE value cell. */
+    .task-instructions-table td.value-cell [style*="white-space: nowrap"],
+    .task-instructions-table td.value-cell [style*="white-space: pre-wrap"],
+    .task-instructions-table td.value-cell [style*="white-space: pre"],
+    .task-instructions-table td.value-cell [style*="white-space: pre-line"] {
+      white-space: normal !important;
+      overflow: visible !important;
+      max-width: 100% !important;
+      min-width: 0 !important;
+    }
+    .task-instructions-table td.value-cell [style*="overflow: hidden"],
+    .task-instructions-table td.value-cell [style*="overflow:hidden"] {
+      overflow: visible !important;
+    }
+    .task-instructions-table td.value-cell [style*="width: max-content"],
+    .task-instructions-table td.value-cell [style*="width:max-content"] {
+      width: auto !important;
+      max-width: 100% !important;
+      min-width: 0 !important;
+    }
+    .task-instructions-table td.value-cell [style*="word-break: break-all"],
+    .task-instructions-table td.value-cell [style*="word-break: break-word"],
+    .task-instructions-table td.value-cell [style*="overflow-wrap: break-word"],
+    .task-instructions-table td.value-cell [style*="overflow-wrap:anywhere"],
+    .task-instructions-table td.value-cell [style*="word-wrap: break-word"],
+    .task-instructions-table td.value-cell [style*="word-wrap:anywhere"],
+    .task-instructions-table td.value-cell [style*="hyphens: auto"] {
+      word-break: normal !important;
+      overflow-wrap: normal !important;
+      word-wrap: normal !important;
+      hyphens: none !important;
+    }
     .task-instructions-wrapper { max-width: 100%; overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; box-sizing: border-box; }
     .result-sheet-page { page-break-before: always; }
     .result-sheet-main { page-break-inside: avoid; break-inside: avoid; }
@@ -1140,7 +1179,7 @@ function buildHtml(data: {
           let rowIdx = 0;
           for (const row of taskQuestion.rows) {
             const rowClass = rowIdx++ % 2 === 0 ? 'row-normal' : 'row-alt';
-            const methodText = (row.row_help || '').replace(/\n/g, '<br/>');
+            const methodText = normalizeNbspProse((row.row_help || '').replace(/\n/g, '<br/>'));
             html += `<tr class="${rowClass}"><td class="label-cell">${row.row_label}</td><td class="value-cell">${methodText}</td></tr>`;
           }
           html += '</tbody></table>';
@@ -1206,7 +1245,7 @@ function buildHtml(data: {
         html += '<div class="task-instructions-wrapper">';
         html += `<div class="task-instructions-header">${row?.row_label || section.title} – ${assessmentType}</div>`;
         html += `<div class="task-instructions-student-label">Student Instructions</div>`;
-        html += `<div class="task-instructions-subheader">Assessment method-based instructions and guidelines: ${row?.row_help || ''}</div>`;
+        html += `<div class="task-instructions-subheader">Assessment method-based instructions and guidelines: ${normalizeNbspProse(row?.row_help || '')}</div>`;
         if (instr) {
           const customBlocks = Array.isArray((instr as { blocks?: unknown[] }).blocks)
             ? ((instr as { blocks?: Array<{ id?: string; type?: string; heading?: string; content?: string; columnHeaders?: string[]; rows?: Array<{ heading?: string; content?: string; cells?: string[] }> }> }).blocks || [])
@@ -1232,31 +1271,31 @@ function buildHtml(data: {
                     if (Array.isArray(cells) && cells.length > 0) {
                       html += '<tr>';
                       for (const c of cells) {
-                        html += `<td class="value-cell" style="border:1px solid #000;padding:6px 8px">${String(c ?? '')}</td>`;
+                        html += `<td class="value-cell" style="border:1px solid #000;padding:6px 8px">${normalizeNbspProse(String(c ?? ''))}</td>`;
                       }
                       html += '</tr>';
                     } else {
                       html += '<tr>';
                       html += `<td class="label-cell" style="width:35%;font-weight:700;border:1px solid #000;padding:6px 8px">${String(r.heading || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</td>`;
-                      html += `<td class="value-cell" style="border:1px solid #000;padding:6px 8px">${String(r.content || '')}</td>`;
+                      html += `<td class="value-cell" style="border:1px solid #000;padding:6px 8px">${normalizeNbspProse(String(r.content || ''))}</td>`;
                       html += '</tr>';
                     }
                   }
                   html += '</tbody></table>';
                 }
               } else if (String(b.content || '').replace(/<[^>]*>/g, '').trim()) {
-                html += `<div class="task-instructions-block-content">${String(b.content || '')}</div>`;
+                html += `<div class="task-instructions-block-content">${normalizeNbspProse(String(b.content || ''))}</div>`;
               }
             }
           } else {
           const blocks: { title: string; content: string }[] = [
-            { title: 'Assessment type', content: String(instr.assessment_type || '') },
-            { title: 'Instructions provided to the student:', content: String(instr.task_description || '') },
-            { title: 'Applicable conditions:', content: String(instr.applicable_conditions || '') },
-            { title: 'Resubmissions and reattempts:', content: String(instr.resubmissions || '') },
-            { title: 'Location:', content: (instr.location_intro || '') + (Array.isArray(instr.location_options) ? '<ul><li>' + instr.location_options.map((o: string) => o).join('</li><li>') + '</li></ul>' : '') + (instr.location_note || '') },
-            { title: 'Instructions for answering the written questions:', content: String(instr.answering_instructions || '') },
-            { title: 'Purpose of the assessment', content: String(instr.purpose_intro || '') + String(instr.purpose_bullets || '') },
+            { title: 'Assessment type', content: normalizeNbspProse(String(instr.assessment_type || '')) },
+            { title: 'Instructions provided to the student:', content: normalizeNbspProse(String(instr.task_description || '')) },
+            { title: 'Applicable conditions:', content: normalizeNbspProse(String(instr.applicable_conditions || '')) },
+            { title: 'Resubmissions and reattempts:', content: normalizeNbspProse(String(instr.resubmissions || '')) },
+            { title: 'Location:', content: normalizeNbspProse(String(instr.location_intro || '')) + (Array.isArray(instr.location_options) ? '<ul><li>' + instr.location_options.map((o: string) => normalizeNbspProse(o)).join('</li><li>') + '</li></ul>' : '') + normalizeNbspProse(String(instr.location_note || '')) },
+            { title: 'Instructions for answering the written questions:', content: normalizeNbspProse(String(instr.answering_instructions || '')) },
+            { title: 'Purpose of the assessment', content: normalizeNbspProse(String(instr.purpose_intro || '') + String(instr.purpose_bullets || '')) },
           ];
           for (const b of blocks) {
             if (b.content && b.content.replace(/<[^>]*>/g, '').trim()) {
@@ -1264,7 +1303,7 @@ function buildHtml(data: {
             }
           }
           if (instr.task_instructions && String(instr.task_instructions).replace(/<[^>]*>/g, '').trim()) {
-            html += `<div class="task-instructions-block"><div class="task-instructions-block-title">Task instructions</div><div class="task-instructions-block-content">${instr.task_instructions}</div></div>`;
+            html += `<div class="task-instructions-block"><div class="task-instructions-block-title">Task instructions</div><div class="task-instructions-block-content">${normalizeNbspProse(String(instr.task_instructions))}</div></div>`;
           }
           }
         }
@@ -2293,10 +2332,10 @@ app.get('/pdf/:instanceId', async (req, res) => {
       role,
     });
     const footerHtml = `
-      <div style="font-size: 9pt; color: #374151; width: 100%; height: 50px; display: flex; justify-content: space-between; align-items: center; padding: 0 15mm; box-sizing: border-box; page-break-inside: avoid;">
+      <div style="font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; font-size: 11pt; color: #000000; width: 100%; height: 50px; display: flex; justify-content: space-between; align-items: center; padding: 0 15mm; box-sizing: border-box; page-break-inside: avoid;  border-bottom: 1px solid #d1d5db; -webkit-print-color-adjust: exact; print-color-adjust: exact;">
         <span>Version Number: ${version}</span>
         <span>Unit Code: ${unitCode || ''}</span>
-        <span>Page <span class="pageNumber"></span> of <span class="totalPages"></span></span>
+        <span>Page <strong><span class="pageNumber"></span></strong> of <strong><span class="totalPages"></span></strong></span>
       </div>
     `;
 
@@ -2319,11 +2358,13 @@ app.get('/pdf/:instanceId', async (req, res) => {
         )
       );
     });
+    await page.evaluate(() => document.fonts.ready);
 
     // Cover page (page 1): no footer - hide version, unit code, page number
     const coverPdf = await page.pdf({
       format: 'A4',
       printBackground: true,
+      preferCSSPageSize: true,
       margin: { top: 0, right: 0, bottom: 0, left: 0 },
       displayHeaderFooter: false,
     });
@@ -2345,9 +2386,11 @@ app.get('/pdf/:instanceId', async (req, res) => {
         )
       );
     });
+    await page.evaluate(() => document.fonts.ready);
     const restPdf = await page.pdf({
       format: 'A4',
       printBackground: true,
+      preferCSSPageSize: true,
       margin: { top: '190px', right: '15mm', bottom: '70px', left: '15mm' },
       displayHeaderFooter: true,
       headerTemplate: headerHtml,
@@ -2458,10 +2501,10 @@ app.get('/pdf/preview/form/:formId', async (req, res) => {
       assessmentSummaryData: {},
     });
     const footerHtml = `
-      <div style="font-size: 9pt; color: #374151; width: 100%; height: 50px; display: flex; justify-content: space-between; align-items: center; padding: 0 15mm; box-sizing: border-box; page-break-inside: avoid;">
+      <div style="font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; font-size: 11pt; color: #000000; width: 100%; height: 50px; display: flex; justify-content: space-between; align-items: center; padding: 0 15mm; box-sizing: border-box; page-break-inside: avoid; background: #e5e7eb; border-bottom: 1px solid #d1d5db; -webkit-print-color-adjust: exact; print-color-adjust: exact;">
         <span>Version Number: ${version}</span>
         <span>Unit Code: ${unitCode || ''}</span>
-        <span>Page <span class="pageNumber"></span> of <span class="totalPages"></span></span>
+        <span>Page <strong><span class="pageNumber"></span></strong> of <strong><span class="totalPages"></span></strong></span>
       </div>
     `;
 
@@ -2484,10 +2527,12 @@ app.get('/pdf/preview/form/:formId', async (req, res) => {
         )
       );
     });
+    await page.evaluate(() => document.fonts.ready);
 
     const coverPdf = await page.pdf({
       format: 'A4',
       printBackground: true,
+      preferCSSPageSize: true,
       margin: { top: 0, right: 0, bottom: 0, left: 0 },
       displayHeaderFooter: false,
     });
@@ -2509,9 +2554,11 @@ app.get('/pdf/preview/form/:formId', async (req, res) => {
         )
       );
     });
+    await page.evaluate(() => document.fonts.ready);
     const restPdf = await page.pdf({
       format: 'A4',
       printBackground: true,
+      preferCSSPageSize: true,
       margin: { top: '190px', right: '15mm', bottom: '70px', left: '15mm' },
       displayHeaderFooter: true,
       headerTemplate: headerHtml,

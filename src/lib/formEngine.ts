@@ -88,10 +88,39 @@ async function migrateTaskSectionsToSteps(formId: number, introStepId: number): 
       .single();
     if (!taskStep) continue;
     const taskStepId = (taskStep as { id: number }).id;
-    const orderMap: Record<string, number> = { task_instructions: 0, task_questions: 1, task_results: 2 };
+    const orderMap: Record<string, number> = { task_instructions: 0, task_questions: 1, task_written_evidence_checklist: 2, task_results: 3 };
     for (const sec of secs) {
       await supabase.from('skyline_form_sections').update({ step_id: taskStepId, sort_order: orderMap[sec.pdf_render_mode] ?? sec.sort_order }).eq('id', sec.id);
     }
+    // Add Written Evidence Checklist section (migrated forms only had 3 sections)
+    const { data: wecSection } = await supabase
+      .from('skyline_form_sections')
+      .insert({ step_id: taskStepId, title: 'Written Evidence Checklist', pdf_render_mode: 'task_written_evidence_checklist', assessment_task_row_id: rowId, sort_order: 2 })
+      .select('id')
+      .single();
+    if (wecSection) {
+      const { data: writtenQ } = await supabase
+        .from('skyline_form_questions')
+        .insert({
+          section_id: (wecSection as { id: number }).id,
+          type: 'single_choice',
+          code: 'written.evidence.checklist',
+          label: 'Written Evidence Checklist',
+          sort_order: 0,
+          role_visibility: TRAINER_OFFICE_VISIBLE,
+          role_editability: TRAINER_ONLY_EDIT,
+        })
+        .select('id')
+        .single();
+      if (writtenQ) {
+        await supabase.from('skyline_form_question_options').insert([
+          { question_id: (writtenQ as { id: number }).id, value: 'yes', label: 'Yes', sort_order: 0 },
+          { question_id: (writtenQ as { id: number }).id, value: 'no', label: 'No', sort_order: 1 },
+        ]);
+      }
+    }
+    // Update task_results sort_order to 3
+    await supabase.from('skyline_form_sections').update({ sort_order: 3 }).eq('step_id', taskStepId).eq('pdf_render_mode', 'task_results');
     migrated++;
   }
   return migrated;
@@ -157,8 +186,36 @@ export async function ensureTaskSectionsForForm(formId: number): Promise<{ creat
       await supabase.from('skyline_form_sections').insert([
         { step_id: taskStepId, title: 'Student Instructions', pdf_render_mode: 'task_instructions', assessment_task_row_id: row.id, sort_order: 0 },
         { step_id: taskStepId, title: 'Questions', pdf_render_mode: 'task_questions', assessment_task_row_id: row.id, sort_order: 1 },
-        { step_id: taskStepId, title: 'Results', pdf_render_mode: 'task_results', assessment_task_row_id: row.id, sort_order: 2 },
+        { step_id: taskStepId, title: 'Written Evidence Checklist', pdf_render_mode: 'task_written_evidence_checklist', assessment_task_row_id: row.id, sort_order: 2 },
+        { step_id: taskStepId, title: 'Results', pdf_render_mode: 'task_results', assessment_task_row_id: row.id, sort_order: 3 },
       ]);
+      const { data: wecSection } = await supabase
+        .from('skyline_form_sections')
+        .select('id')
+        .eq('step_id', taskStepId)
+        .eq('pdf_render_mode', 'task_written_evidence_checklist')
+        .single();
+      if (wecSection) {
+        const { data: writtenQ } = await supabase
+          .from('skyline_form_questions')
+          .insert({
+            section_id: (wecSection as { id: number }).id,
+            type: 'single_choice',
+            code: 'written.evidence.checklist',
+            label: 'Written Evidence Checklist',
+            sort_order: 0,
+            role_visibility: TRAINER_OFFICE_VISIBLE,
+            role_editability: TRAINER_ONLY_EDIT,
+          })
+          .select('id')
+          .single();
+        if (writtenQ) {
+          await supabase.from('skyline_form_question_options').insert([
+            { question_id: (writtenQ as { id: number }).id, value: 'yes', label: 'Yes', sort_order: 0 },
+            { question_id: (writtenQ as { id: number }).id, value: 'no', label: 'No', sort_order: 1 },
+          ]);
+        }
+      }
       created += 1;
     }
   }
@@ -2491,8 +2548,36 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
       await supabase.from('skyline_form_sections').insert([
         { step_id: taskStepId, title: 'Student Instructions', pdf_render_mode: 'task_instructions', assessment_task_row_id: row.id, sort_order: 0 },
         { step_id: taskStepId, title: 'Questions', pdf_render_mode: 'task_questions', assessment_task_row_id: row.id, sort_order: 1 },
-        { step_id: taskStepId, title: 'Results', pdf_render_mode: 'task_results', assessment_task_row_id: row.id, sort_order: 2 },
+        { step_id: taskStepId, title: 'Written Evidence Checklist', pdf_render_mode: 'task_written_evidence_checklist', assessment_task_row_id: row.id, sort_order: 2 },
+        { step_id: taskStepId, title: 'Results', pdf_render_mode: 'task_results', assessment_task_row_id: row.id, sort_order: 3 },
       ]);
+      const { data: wecSection } = await supabase
+        .from('skyline_form_sections')
+        .select('id')
+        .eq('step_id', taskStepId)
+        .eq('pdf_render_mode', 'task_written_evidence_checklist')
+        .single();
+      if (wecSection) {
+        const { data: writtenQ } = await supabase
+          .from('skyline_form_questions')
+          .insert({
+            section_id: (wecSection as { id: number }).id,
+            type: 'single_choice',
+            code: 'written.evidence.checklist',
+            label: 'Written Evidence Checklist',
+            sort_order: 0,
+            role_visibility: TRAINER_OFFICE_VISIBLE,
+            role_editability: TRAINER_ONLY_EDIT,
+          })
+          .select('id')
+          .single();
+        if (writtenQ) {
+          await supabase.from('skyline_form_question_options').insert([
+            { question_id: (writtenQ as { id: number }).id, value: 'yes', label: 'Yes', sort_order: 0 },
+            { question_id: (writtenQ as { id: number }).id, value: 'no', label: 'No', sort_order: 1 },
+          ]);
+        }
+      }
     }
   }
 
@@ -2644,45 +2729,7 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
     }
   }
 
-  // Written Evidence Checklist (trainer editable) - keep this as the final step
-  const { data: writtenStep } = await supabase
-    .from('skyline_form_steps')
-    .insert({ form_id: formId, title: 'Written Evidence Checklist', subtitle: 'Trainer checklist for evidence submission', sort_order: taskStepOrder++ })
-    .select('id')
-    .single();
-  if (writtenStep) {
-    const writtenStepId = (writtenStep as { id: number }).id;
-    // Use safe pdf_render_mode ('normal') for compatibility with existing DB constraints.
-    const { data: writtenSec } = await supabase
-      .from('skyline_form_sections')
-      .insert({ step_id: writtenStepId, title: 'Written Evidence Checklist', pdf_render_mode: 'normal', sort_order: 0 })
-      .select('id')
-      .single();
-    if (writtenSec) {
-      const sectionId = (writtenSec as { id: number }).id;
-      const { data: writtenQ } = await supabase
-        .from('skyline_form_questions')
-        .insert({
-          section_id: sectionId,
-          type: 'single_choice',
-          code: 'written.evidence.checklist',
-          label: 'Written Evidence Checklist',
-          sort_order: 0,
-          role_visibility: TRAINER_OFFICE_VISIBLE,
-          role_editability: TRAINER_ONLY_EDIT,
-        })
-        .select('id')
-        .single();
-      if (writtenQ) {
-        const qId = (writtenQ as { id: number }).id;
-        await supabase.from('skyline_form_question_options').insert([
-          { question_id: qId, value: 'yes', label: 'Yes', sort_order: 0 },
-          { question_id: qId, value: 'no', label: 'No', sort_order: 1 },
-        ]);
-        // No default rows: trainer adds checklist rows via form builder
-      }
-    }
-  }
+  // Written Evidence Checklist is now inside each assessment task (between Questions and Results)
 }
 
 export interface CreateFormInput {

@@ -59,30 +59,35 @@ export const LoginPage: React.FC = () => {
 
   return (
     <div className="min-h-screen flex">
-      {/* Left: Branded panel with crest */}
-      <div className="hidden lg:flex lg:w-1/2 bg-gradient-to-br from-[#F47A1F] via-[#ea580c] to-[#c2410c] flex-col items-center justify-center p-12 relative overflow-hidden">
+      {/* Left: Branded panel with crest in circle */}
+      <div className="hidden lg:flex lg:w-1/2 bg-gradient-to-br from-[#F47A1F] via-[#ea580c] to-[#c2410c] items-start justify-center pt-16 p-12 relative overflow-hidden">
         <div className="absolute inset-0 opacity-10">
-          <div className="absolute top-20 left-20 w-64 h-64 rounded-full bg-white" />
           <div className="absolute bottom-32 right-20 w-48 h-48 rounded-full bg-white" />
         </div>
-        {!logoError ? (
-          <img
-            src="/logo-crest.png"
-            alt="Skyline"
-            className="relative z-10 h-32 w-auto object-contain drop-shadow-lg"
-            onError={() => setLogoError(true)}
-          />
-        ) : (
-          <div className="relative z-10 flex items-center justify-center h-32 w-32 rounded-full bg-white/20">
-            <span className="text-2xl font-bold text-white">SKYLINE</span>
+        <div className="relative z-10 flex flex-row items-center gap-8">
+          {/* Logo inside top-left circle */}
+          <div className="shrink-0 w-64 h-64 rounded-full bg-white/20 flex items-center justify-center p-6 drop-shadow-lg">
+            {!logoError ? (
+              <img
+                src="/logo-crest.png"
+                alt="Skyline"
+                className="w-full h-full object-contain"
+                onError={() => setLogoError(true)}
+              />
+            ) : (
+              <span className="text-2xl font-bold text-white">SKYLINE</span>
+            )}
           </div>
-        )}
-        <h2 className="relative z-10 mt-6 text-2xl font-bold text-white tracking-tight">
-          SignFlow
-        </h2>
-        <p className="relative z-10 mt-2 text-white/90 text-center max-w-xs">
-          Assessment management for trainers and assessors
-        </p>
+          {/* Text beside the circle */}
+          <div className="flex flex-col gap-1">
+            <h2 className="text-2xl font-bold text-white tracking-tight">
+              Skyline Submissions
+            </h2>
+            <p className="text-white/90 max-w-xs">
+              Manage Assessments Smartly
+            </p>
+          </div>
+        </div>
       </div>
 
       {/* Right: Login form */}

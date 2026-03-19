@@ -718,7 +718,7 @@ export const InstanceFillPage: React.FC = () => {
                   const hasInteractive = section.questions.some(
                     (q) => q.type !== 'instruction_block' && isRoleVisible((q.role_visibility as Record<string, boolean>) || {}, role)
                   );
-                  return hasInteractive || section.pdf_render_mode === 'assessment_tasks' || section.pdf_render_mode === 'assessment_submission' || section.pdf_render_mode === 'reasonable_adjustment' || section.pdf_render_mode === 'reasonable_adjustment_indicator' || section.pdf_render_mode === 'task_instructions' || section.pdf_render_mode === 'task_questions' || section.pdf_render_mode === 'task_results' || section.pdf_render_mode === 'assessment_summary';
+                  return hasInteractive || section.pdf_render_mode === 'assessment_tasks' || section.pdf_render_mode === 'assessment_submission' || section.pdf_render_mode === 'reasonable_adjustment' || section.pdf_render_mode === 'reasonable_adjustment_indicator' || section.pdf_render_mode === 'task_instructions' || section.pdf_render_mode === 'task_questions' || section.pdf_render_mode === 'task_written_evidence_checklist' || section.pdf_render_mode === 'task_results' || section.pdf_render_mode === 'assessment_summary';
                 });
                 if (filteredSections.length === 0) return null;
                 return (
@@ -728,7 +728,7 @@ export const InstanceFillPage: React.FC = () => {
                 </h2>
                 {filteredSections.map((section) => (
                   <div key={section.id} className="mb-8 last:mb-0">
-                    {section.pdf_render_mode !== 'likert_table' && section.pdf_render_mode !== 'reasonable_adjustment' && section.pdf_render_mode !== 'reasonable_adjustment_indicator' && section.pdf_render_mode !== 'task_instructions' && section.pdf_render_mode !== 'task_questions' && section.pdf_render_mode !== 'task_results' && section.pdf_render_mode !== 'assessment_summary' && (
+                    {section.pdf_render_mode !== 'likert_table' && section.pdf_render_mode !== 'reasonable_adjustment' && section.pdf_render_mode !== 'reasonable_adjustment_indicator' && section.pdf_render_mode !== 'task_instructions' && section.pdf_render_mode !== 'task_questions' && section.pdf_render_mode !== 'task_written_evidence_checklist' && section.pdf_render_mode !== 'task_results' && section.pdf_render_mode !== 'assessment_summary' && (
                       <h3 className="text-lg font-semibold text-gray-700 mb-2">{section.title}</h3>
                     )}
                     <div className={section.pdf_render_mode === 'declarations' || section.pdf_render_mode === 'assessment_submission' ? 'border border-gray-200 rounded-lg p-4 bg-white space-y-4' : 'space-y-4'}>

@@ -110,11 +110,12 @@ export const Select: React.FC<SelectProps> = ({
           createPortal(
             <div
               data-select-dropdown
-              className="fixed z-[9999] max-h-60 overflow-auto bg-white border-2 border-gray-200 rounded-lg shadow-lg py-1"
+              className="fixed z-[9999] max-h-60 overflow-auto bg-white border border-gray-200 rounded-lg py-1 shadow-xl ring-1 ring-black/5"
               style={{
                 top: dropdownStyle.top,
                 left: dropdownStyle.left,
-                minWidth: dropdownStyle.minWidth,
+                minWidth: 180,
+                maxWidth: 260,
               }}
             >
               {options.map((option) => (
@@ -140,7 +141,7 @@ export const Select: React.FC<SelectProps> = ({
           )
         }
         {!portal && isOpen && (
-          <div className="absolute z-[100] left-1/2 -translate-x-1/2 mt-1 min-w-full bg-white border-2 border-gray-200 rounded-lg shadow-lg max-h-60 overflow-auto">
+          <div className="absolute z-[100] left-1/2 -translate-x-1/2 mt-1 min-w-full bg-white border border-gray-200 rounded-lg max-h-60 overflow-auto shadow-xl ring-1 ring-black/5">
             {options.map((option) => (
               <button
                 key={option.value}

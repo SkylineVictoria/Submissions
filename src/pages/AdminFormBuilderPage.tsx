@@ -337,6 +337,7 @@ const PDF_RENDER_MODES = [
   { value: 'declarations', label: 'Declarations' },
   { value: 'task_instructions', label: 'Task Instructions' },
   { value: 'task_questions', label: 'Task Questions' },
+  { value: 'task_written_evidence_checklist', label: 'Written Evidence Checklist' },
   { value: 'task_results', label: 'Task Results' },
   { value: 'assessment_summary', label: 'Assessment Summary Sheet' },
 ];
@@ -435,13 +436,15 @@ function SortableSectionItem({
               value={section.pdf_render_mode}
               onChange={onPdfModeChange}
               options={PDF_RENDER_MODES}
+              portal
             />
-            {(section.pdf_render_mode === 'task_instructions' || section.pdf_render_mode === 'task_questions' || section.pdf_render_mode === 'task_results') && assessmentTaskRows.length > 0 && (
+            {(section.pdf_render_mode === 'task_instructions' || section.pdf_render_mode === 'task_questions' || section.pdf_render_mode === 'task_written_evidence_checklist' || section.pdf_render_mode === 'task_results') && assessmentTaskRows.length > 0 && (
               <Select
                 label="Link to task"
                 value={String((section as { assessment_task_row_id?: number | null }).assessment_task_row_id ?? '')}
                 onChange={(v) => onAssessmentTaskRowChange?.(v ? Number(v) : null)}
                 options={[{ value: '', label: '— Select task —' }, ...assessmentTaskRows.map((r) => ({ value: String(r.id), label: r.row_label }))]}
+                portal
               />
             )}
           </div>
@@ -503,6 +506,8 @@ function SortableSectionItem({
 
 function SortableQuestionItem({
   question,
+  index,
+  totalCount,
   isSelected,
   onSelect,
   onRemove,
@@ -513,6 +518,8 @@ function SortableQuestionItem({
   menuRef,
 }: {
   question: FormQuestion;
+  index: number;
+  totalCount: number;
   isSelected: boolean;
   onSelect: () => void;
   onRemove: () => void;
@@ -550,8 +557,8 @@ function SortableQuestionItem({
       >
         <GripVertical className="w-4 h-4 text-gray-500" />
       </button>
-      <div className="flex-1 min-w-0 truncate">
-        {question.label || question.type}
+      <div className="flex-1 min-w-0 truncate" title={`Question ${index + 1} of ${totalCount}`}>
+        {index + 1}. {question.label || question.type}
       </div>
       <div ref={menuRef} className="relative shrink-0">
         <button
@@ -814,7 +821,7 @@ export const AdminFormBuilderPage: React.FC = () => {
     if (updates.title != null) {
       const nextTitle = updates.title;
       const step = steps.find((s) => s.id === stepId);
-      const taskLinkedModes = ['task_instructions', 'task_questions', 'task_results'];
+      const taskLinkedModes = ['task_instructions', 'task_questions', 'task_written_evidence_checklist', 'task_results'];
       const firstTaskSec = step?.sections.find((sec) => taskLinkedModes.includes(sec.pdf_render_mode));
       const rowId = firstTaskSec ? (firstTaskSec as FormSection & { assessment_task_row_id?: number | null }).assessment_task_row_id : null;
       if (rowId != null) {
@@ -909,7 +916,7 @@ export const AdminFormBuilderPage: React.FC = () => {
     if (!step) return;
     const stepIndex = steps.findIndex((s) => s.id === stepId);
     const newSortOrder = step.sort_order + 1;
-    const taskLinkedModes = ['task_instructions', 'task_questions', 'task_results'];
+    const taskLinkedModes = ['task_instructions', 'task_questions', 'task_written_evidence_checklist', 'task_results'];
     const isTaskStep = step.sections.some((sec) => taskLinkedModes.includes(sec.pdf_render_mode));
     let newStepTitle = `${step.title} (Copy)`;
     if (isTaskStep && assessmentTasksGridQuestionId != null) {
@@ -1656,7 +1663,7 @@ export const AdminFormBuilderPage: React.FC = () => {
         </div>
 
         {/* Middle: Sections */}
-        <div className="w-64 min-w-[14rem] border-r border-[var(--border)] bg-white p-4 overflow-y-auto">
+        <div className="w-72 min-w-[16rem] border-r border-[var(--border)] bg-white p-4 overflow-y-auto">
           <div className="flex justify-between items-center mb-3">
             <h2 className="font-semibold text-sm">Sections</h2>
             <Button
@@ -1711,13 +1718,15 @@ export const AdminFormBuilderPage: React.FC = () => {
                   ? 'Instructions'
                   : selectedSection?.pdf_render_mode === 'task_questions'
                     ? 'Questions to answer'
-                    : selectedSection?.pdf_render_mode === 'task_results'
-                      ? 'Results'
-                      : selectedSection?.pdf_render_mode === 'assessment_summary' || selectedSection?.title === 'Assessment Summary Sheet'
-                        ? 'Assessment Summary Sheet'
-                        : 'Questions'}
+                    : selectedSection?.pdf_render_mode === 'task_written_evidence_checklist'
+                      ? 'Written Evidence Checklist'
+                      : selectedSection?.pdf_render_mode === 'task_results'
+                        ? 'Results'
+                        : selectedSection?.pdf_render_mode === 'assessment_summary' || selectedSection?.title === 'Assessment Summary Sheet'
+                          ? 'Assessment Summary Sheet'
+                          : 'Questions'}
               </h2>
-              {(selectedSection?.pdf_render_mode === 'task_questions' || (!['task_instructions', 'task_questions', 'task_results', 'assessment_summary'].includes(selectedSection?.pdf_render_mode || '') && selectedSection?.title !== 'Assessment Summary Sheet')) && (
+              {(selectedSection?.pdf_render_mode === 'task_questions' || (!['task_instructions', 'task_questions', 'task_written_evidence_checklist', 'task_results', 'assessment_summary'].includes(selectedSection?.pdf_render_mode || '') && selectedSection?.title !== 'Assessment Summary Sheet')) && (
                 <Button
                   variant="outline"
                   size="sm"
@@ -1743,14 +1752,17 @@ export const AdminFormBuilderPage: React.FC = () => {
                 </p>
               ) : (
                 <DndContext sensors={questionSensors} collisionDetection={closestCenter} onDragEnd={handleQuestionsDragEnd}>
-                  <SortableContext items={selectedSection.questions.filter((q) => !(q.pdf_meta as Record<string, unknown>)?.isAdditionalBlockOf).map((q) => `question-${q.id}`)} strategy={verticalListSortingStrategy}>
+                  {(() => {
+                    const visibleQuestions = selectedSection.questions.filter((q) => !(q.pdf_meta as Record<string, unknown>)?.isAdditionalBlockOf);
+                    return (
+                  <SortableContext items={visibleQuestions.map((q) => `question-${q.id}`)} strategy={verticalListSortingStrategy}>
                     <div className="space-y-1">
-                      {selectedSection.questions
-                        .filter((q) => !(q.pdf_meta as Record<string, unknown>)?.isAdditionalBlockOf)
-                        .map((q) => (
+                      {visibleQuestions.map((q, idx) => (
                         <SortableQuestionItem
                           key={q.id}
                           question={q}
+                          index={idx}
+                          totalCount={visibleQuestions.length}
                           isSelected={editingQuestionId === q.id}
                           onSelect={() => setEditingQuestionId(q.id)}
                           onRemove={() => removeQuestion(q.id)}
@@ -1763,6 +1775,8 @@ export const AdminFormBuilderPage: React.FC = () => {
                       ))}
                     </div>
                   </SortableContext>
+                    );
+                  })()}
                 </DndContext>
               )
             ) : (
@@ -2630,8 +2644,27 @@ function QuestionRowsEditor({ questionId, sectionPdfMode, formId, steps, onSteps
           await supabase.from('skyline_form_sections').insert([
             { step_id: taskStepId, title: 'Student Instructions', pdf_render_mode: 'task_instructions', assessment_task_row_id: row.id, sort_order: 0 },
             { step_id: taskStepId, title: 'Questions', pdf_render_mode: 'task_questions', assessment_task_row_id: row.id, sort_order: 1 },
-            { step_id: taskStepId, title: 'Results', pdf_render_mode: 'task_results', assessment_task_row_id: row.id, sort_order: 2 },
+            { step_id: taskStepId, title: 'Written Evidence Checklist', pdf_render_mode: 'task_written_evidence_checklist', assessment_task_row_id: row.id, sort_order: 2 },
+            { step_id: taskStepId, title: 'Results', pdf_render_mode: 'task_results', assessment_task_row_id: row.id, sort_order: 3 },
           ]);
+          const { data: wecSection } = await supabase.from('skyline_form_sections').select('id').eq('step_id', taskStepId).eq('pdf_render_mode', 'task_written_evidence_checklist').single();
+          if (wecSection) {
+            const { data: writtenQ } = await supabase.from('skyline_form_questions').insert({
+              section_id: (wecSection as { id: number }).id,
+              type: 'single_choice',
+              code: 'written.evidence.checklist',
+              label: 'Written Evidence Checklist',
+              sort_order: 0,
+              role_visibility: { student: false, trainer: true, office: true },
+              role_editability: { student: false, trainer: true, office: true },
+            }).select('id').single();
+            if (writtenQ) {
+              await supabase.from('skyline_form_question_options').insert([
+                { question_id: (writtenQ as { id: number }).id, value: 'yes', label: 'Yes', sort_order: 0 },
+                { question_id: (writtenQ as { id: number }).id, value: 'no', label: 'No', sort_order: 1 },
+              ]);
+            }
+          }
           onStepsCreated();
         }
       }
