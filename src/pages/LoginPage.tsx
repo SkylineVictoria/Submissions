@@ -139,7 +139,7 @@ export const LoginPage: React.FC = () => {
                 {!otpSent ? (
                   <>
                     <p className="text-sm text-gray-600">
-                      Request a one-time code sent to your email. Valid for 10 minutes.
+                      Request a one-time code sent to your email.
                     </p>
                     <Button
                       type="button"
