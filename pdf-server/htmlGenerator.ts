@@ -348,7 +348,8 @@ export function buildHtml(data: {
     .result-sheet-table .result-value-declaration { padding-bottom: 8px !important; }
     .result-sheet-table .result-value-declaration ul:last-of-type { margin-bottom: 4px !important; }
     .result-sheet-table .result-value-declaration p:last-child { margin-bottom: 0 !important; }
-    .assessment-summary-page { page-break-before: always; page-break-after: always; page-break-inside: avoid; }
+    .assessment-summary-page { page-break-before: always; page-break-after: always; page-break-inside: avoid; break-inside: avoid; }
+    .assessment-summary-wrapper { page-break-inside: avoid; break-inside: avoid; }
     .assessment-summary-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 16pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 10px 12px; text-align: center; margin: 0; border: 1px solid #000; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .assessment-summary-intro { background: #fff !important; color: #374151 !important; font-size: 8.5pt; padding: 8px 12px; margin: 0; line-height: 1.4; border: 1px solid #000; border-top: none; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .assessment-summary-intro .intro-main { font-size: 9pt; font-weight: 600; margin-bottom: 4px; }
@@ -393,9 +394,9 @@ export function buildHtml(data: {
     .likert-header { background: #595959 !important; color: #fff !important; font-weight: bold; }
     .likert-no { width: 4%; text-align: center; font-weight: 600; vertical-align: middle; font-size: 11pt; }
     .likert-criteria { width: 50%; font-weight: 600; vertical-align: middle; font-size: 11pt; word-wrap: break-word; }
-    .likert-scale { width: 9.2%; height: 100px; padding: 6px 3px; overflow: visible; font-size: 9pt; box-sizing: border-box; vertical-align: middle; }
+    .likert-scale { width: 9.2%; height: 100px; padding: 6px 3px; overflow: visible; font-size: 8pt; box-sizing: border-box; vertical-align: middle; }
     .likert-scale-inner { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 100%; overflow: visible; }
-    .likert-scale-inner span { display: inline-block; transform: rotate(-90deg); transform-origin: center center; white-space: nowrap; line-height: 1.2; }
+    .likert-scale-inner span { display: inline-block; transform: rotate(-90deg); transform-origin: center center; white-space: normal; line-height: 1.15; text-align: center; }
     .likert-section-row td { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 11pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; }
     /* Keep likert table and its comments box on same page */
     .likert-table-with-comments { page-break-inside: avoid; }
@@ -803,7 +804,7 @@ export function buildHtml(data: {
           }
           html += `<div class="${wrapperClass}" style="${inlineStyle}">`;
         }
-        const scaleLabels = ['Strongly Disagree', 'Disagree', 'Neutral', 'Agree', 'Strongly Agree'];
+        const scaleLabels = ['Strongly<br/>Disagree', 'Disagree', 'Neutral', 'Agree', 'Strongly<br/>Agree'];
         html += '<div class="likert-table-with-comments">';
         html += '<table class="likert-table"><thead><tr>';
         html += '<th class="likert-header likert-no">No.</th><th class="likert-header likert-criteria">Criteria/Question</th>';
@@ -1213,7 +1214,8 @@ export function buildHtml(data: {
         const studentName = String(codeToValue.get('student.fullName') ?? '');
         const studentId = String(codeToValue.get('student.id') ?? '');
         const unitCodeName = [String(codeToValue.get('unit.code') ?? ''), String(codeToValue.get('unit.name') ?? '')].filter(Boolean).join(' ');
-        html += '<div class="assessment-summary-page"><div class="assessment-summary-header">ASSESSMENT SUMMARY SHEET</div>';
+        html += '<div class="assessment-summary-page"><div class="assessment-summary-wrapper">';
+        html += '<div class="assessment-summary-header">ASSESSMENT SUMMARY SHEET</div>';
         html += '<div class="assessment-summary-intro"><div class="intro-main">This form is to be completed by the assessor and used as a final record of student competency.</div>';
         html += 'All student submissions including any associated checklists (outlined below) are to be attached to this cover sheet before placing on the student\'s file.<br/>';
         html += 'Student results are not to be entered onto the Student Database unless all relevant paperwork is completed and attached to this form.</div>';
@@ -1270,7 +1272,7 @@ export function buildHtml(data: {
         html += '<td style="width:33%;border:none;padding:4px 0 4px 8px;vertical-align:top"><div><span style="font-weight:600">Signature:</span></div><div class="summary-date-line" style="min-width:100%;display:block">' + renderSignatureHtml(sum.student_sig_3 ?? '') + '</div><div style="margin-top:4px"><span style="font-weight:600">Date:</span> <span class="summary-date-line">' + (sum.student_date_3 ?? '') + '</span></div></td></tr></table></td></tr>';
         html += '<tr><td class="summary-label">Student overall Feedback:</td><td colspan="3" class="summary-value"><div class="answer-box answer-box-large" style="min-height:80px;background:#fff">' + (sum.student_overall_feedback ?? '') + '</div></td></tr>';
         html += '<tr><td class="summary-label summary-office" colspan="2">Administrative use only - Entered onto Student Management Database</td><td class="summary-label summary-office">Initials</td><td class="summary-value summary-office"><span class="summary-date-line" style="min-width:60px">' + (sum.admin_initials ?? '') + '</span></td></tr>';
-        html += '</tbody></table></div>';
+        html += '</tbody></table></div></div>';
       } else if (section.pdf_render_mode === 'reasonable_adjustment') {
         const stepTitle = (step?.title || '').trim();
         const isAppendixA = /Appendix\s*A/i.test(stepTitle);
