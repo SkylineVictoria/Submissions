@@ -587,11 +587,14 @@ function buildHtml(data: {
     .result-sheet-table .result-value-declaration p:last-child { margin-bottom: 0 !important; }
     .assessment-summary-page { page-break-before: always; page-break-after: always; page-break-inside: avoid; break-inside: avoid; }
     .assessment-summary-wrapper { page-break-inside: avoid; break-inside: avoid; }
+    .assessment-summary-tables-wrap { page-break-inside: avoid; break-inside: avoid; }
+    .assessment-summary-table.assessment-summary-info { page-break-after: avoid; break-after: avoid; margin-bottom: 4px; }
+    .assessment-summary-table.assessment-summary-result { page-break-before: avoid; break-before: avoid; margin-bottom: 0; }
     .assessment-summary-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 16pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 10px 12px; text-align: center; margin: 0; border: 1px solid #000; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .assessment-summary-intro { background: #fff !important; color: #374151 !important; font-size: 8.5pt; padding: 8px 12px; margin: 0; line-height: 1.4; border: 1px solid #000; border-top: none; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .assessment-summary-intro { background: #fff !important; color: #374151 !important; font-size: 8pt; padding: 6px 10px; margin: 0; line-height: 1.35; border: 1px solid #000; border-top: none; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .assessment-summary-intro .intro-main { font-size: 9pt; font-weight: 600; margin-bottom: 4px; }
-    .assessment-summary-table { width: 100%; border-collapse: collapse; font-size: 8pt; margin: 0 0 8px 0; border: 1px solid #000; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .assessment-summary-table th, .assessment-summary-table td { border: 1px solid #000; padding: 5px 8px; vertical-align: top; line-height: 1.25; }
+    .assessment-summary-table { width: 100%; border-collapse: collapse; font-size: 8pt; margin: 0; border: 1px solid #000; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .assessment-summary-table th, .assessment-summary-table td { border: 1px solid #000; padding: 4px 6px; vertical-align: top; line-height: 1.2; }
     .assessment-summary-table .summary-label { width: 25%; background: #595959 !important; color: #fff !important; font-weight: 600; }
     .assessment-summary-table tbody tr { page-break-inside: avoid; break-inside: avoid; }
     .assessment-summary-table .summary-value { background: #fff !important; color: #000000; white-space: pre-line; }
@@ -617,7 +620,7 @@ function buildHtml(data: {
     .decl-sig-inline .decl-sig-label { font-weight: normal; margin-right: 8px; }
     .decl-sig-inline .decl-sig-line { display: inline-block; border: none; border-bottom: 1px solid #000; min-width: 280px; min-height: 18px; background: transparent; vertical-align: bottom; padding: 0 2px 2px 0; }
     .assessment-summary-page .answer-box { min-height: 18px; padding: 4px 6px; font-size: 8pt; }
-    .assessment-summary-page .answer-box.answer-box-large { min-height: 48px; }
+    .assessment-summary-page .answer-box.answer-box-large { min-height: 40px; }
     .answer-box { border: 1px solid #333; min-height: 24px; padding: 6px 8px; overflow: visible; background: #fff; box-sizing: border-box; overflow-wrap: anywhere; word-break: break-word; white-space: pre-line; }
     .answer-box.answer-box-large { min-height: 80px; }
     table { width: 100%; border-collapse: collapse; font-size: 8pt; margin-bottom: 12px; }
@@ -1814,13 +1817,14 @@ function buildHtml(data: {
         html += '<div class="assessment-summary-intro"><div class="intro-main">This form is to be completed by the assessor and used as a final record of student competency.</div>';
         html += 'All student submissions including any associated checklists (outlined below) are to be attached to this cover sheet before placing on the student\'s file.<br/>';
         html += 'Student results are not to be entered onto the Student Database unless all relevant paperwork is completed and attached to this form.</div>';
-        html += '<table class="assessment-summary-table"><tbody>';
+        html += '<div class="assessment-summary-tables-wrap">';
+        html += '<table class="assessment-summary-table assessment-summary-info"><tbody>';
         html += '<tr><td class="summary-label" style="width:25%">Student Name:</td><td class="summary-value" colspan="3">' + studentName + '</td></tr>';
         html += '<tr><td class="summary-label">Student ID:</td><td class="summary-value" colspan="3">' + studentId + '</td></tr>';
         html += '<tr><td class="summary-label">Start date:</td><td class="summary-value"><span class="summary-date-line">' + (sum.start_date ?? '') + '</span></td><td class="summary-label" style="text-align:right;width:15%">End Date:</td><td class="summary-value"><span class="summary-date-line">' + (sum.end_date ?? '') + '</span></td></tr>';
         html += '<tr><td class="summary-label">Unit Code & Name:</td><td class="summary-value" colspan="3">' + unitCodeName + '</td></tr>';
         html += '</tbody></table>';
-        html += '<table class="assessment-summary-table"><thead><tr><th class="summary-label">Please attach the following evidence to this form</th><th colspan="3" class="summary-result-header">Result</th></tr>';
+        html += '<table class="assessment-summary-table assessment-summary-result"><thead><tr><th class="summary-label">Please attach the following evidence to this form</th><th colspan="3" class="summary-result-header">Result</th></tr>';
         html += '<tr><th class="summary-label"></th><th class="summary-result-header summary-attempt-col">1st Attempt</th><th class="summary-result-header summary-attempt-col">2nd Attempt</th><th class="summary-result-header summary-attempt-col">3rd Attempt</th></tr></thead><tbody>';
         if (taskRowsOrdered.length === 0) {
           // Default placeholder rows so new forms always show full table structure (match reference image)
@@ -1865,9 +1869,9 @@ function buildHtml(data: {
         html += '<table style="width:100%;border:none;font-size:9pt"><tr><td style="width:33%;border:none;padding:4px 8px 4px 0;vertical-align:top"><div><span style="font-weight:600">Signature:</span></div><div class="summary-date-line" style="min-width:100%;display:block">' + renderSignatureHtml(sum.student_sig_1 ?? '') + '</div><div style="margin-top:4px"><span style="font-weight:600">Date:</span> <span class="summary-date-line">' + (sum.student_date_1 ?? '') + '</span></div></td>';
         html += '<td style="width:33%;border:none;padding:4px 8px;vertical-align:top"><div><span style="font-weight:600">Signature:</span></div><div class="summary-date-line" style="min-width:100%;display:block">' + renderSignatureHtml(sum.student_sig_2 ?? '') + '</div><div style="margin-top:4px"><span style="font-weight:600">Date:</span> <span class="summary-date-line">' + (sum.student_date_2 ?? '') + '</span></div></td>';
         html += '<td style="width:33%;border:none;padding:4px 0 4px 8px;vertical-align:top"><div><span style="font-weight:600">Signature:</span></div><div class="summary-date-line" style="min-width:100%;display:block">' + renderSignatureHtml(sum.student_sig_3 ?? '') + '</div><div style="margin-top:4px"><span style="font-weight:600">Date:</span> <span class="summary-date-line">' + (sum.student_date_3 ?? '') + '</span></div></td></tr></table></td></tr>';
-        html += '<tr><td class="summary-label">Student overall Feedback:</td><td colspan="3" class="summary-value"><div class="answer-box answer-box-large" style="min-height:80px;background:#fff">' + (sum.student_overall_feedback ?? '') + '</div></td></tr>';
+        html += '<tr><td class="summary-label">Student overall Feedback:</td><td colspan="3" class="summary-value"><div class="answer-box answer-box-large" style="min-height:50px;background:#fff">' + (sum.student_overall_feedback ?? '') + '</div></td></tr>';
         html += '<tr><td class="summary-label summary-office" colspan="2">Administrative use only - Entered onto Student Management Database</td><td class="summary-label summary-office">Initials</td><td class="summary-value summary-office"><span class="summary-date-line" style="min-width:60px">' + (sum.admin_initials ?? '') + '</span></td></tr>';
-        html += '</tbody></table></div></div>';
+        html += '</tbody></table></div></div></div>';
       } else if (section.pdf_render_mode === 'reasonable_adjustment') {
         const stepTitle = (step?.title || '').trim();
         const isAppendixA = /Appendix\s*A/i.test(stepTitle);
