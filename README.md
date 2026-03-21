@@ -276,6 +276,22 @@ To scale:
 - PDF will automatically generate all pages
 - UI will render all pages (consider pagination UI for 100+ pages)
 
+## Troubleshooting
+
+### Student Access: "Could not find the function skyline_request_student_otp(p_email) in the schema cache"
+
+This error occurs when the Student OTP database functions have not been applied to your Supabase project. Fix it by running the migration:
+
+1. Open **Supabase Dashboard** → **SQL Editor**.
+2. Copy the contents of `scripts/fix-student-otp.sql` and paste into the editor.
+3. Click **Run**.
+
+**Prerequisites:** The `skyline_otps` and `skyline_students` tables must exist (if staff OTP login works, you have them). Ensure you've run the migrations in `supabase/migrations/` in date order, including `20260313000001_otp_and_master_admin.sql` and `20260313000003_student_otp.sql`.
+
+### Power Automate OTP for students
+
+For students to receive OTP emails, you must configure the Power Automate flow and set the `POWER_AUTOMATE_OTP_URL` secret. See `docs/POWER_AUTOMATE_OTP_PAYLOAD.md`.
+
 ## Future Enhancements
 
 - [ ] Form validation with Zod schemas

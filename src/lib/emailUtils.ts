@@ -69,4 +69,34 @@ export function buildUserEmailFromLocal(localPart: string): string {
   return local ? `${local}${STAFF_DOMAIN}` : '';
 }
 
+/** Build email from local part and selected domain */
+export function buildEmailFromLocalAndDomain(
+  localPart: string,
+  domain: typeof STUDENT_DOMAIN | typeof STAFF_DOMAIN
+): string {
+  const local = (localPart || '').trim().toLowerCase().replace(/\s+/g, '');
+  return local ? `${local}${domain}` : '';
+}
+
+/** Get institutional domain from email (for edit forms) */
+export function getInstitutionalDomainFromEmail(
+  email: string
+): typeof STUDENT_DOMAIN | typeof STAFF_DOMAIN | null {
+  const e = (email || '').trim().toLowerCase();
+  if (e.endsWith(STUDENT_DOMAIN)) return STUDENT_DOMAIN;
+  if (e.endsWith(STAFF_DOMAIN)) return STAFF_DOMAIN;
+  return null;
+}
+
+/** Extract local part from any institutional email (handles both domains) */
+export function getEmailLocalPartForEdit(email: string): string {
+  const e = (email || '').trim();
+  if (e.toLowerCase().endsWith(STUDENT_DOMAIN)) return e.slice(0, -STUDENT_DOMAIN.length).trim();
+  if (e.toLowerCase().endsWith(STAFF_DOMAIN)) return e.slice(0, -STAFF_DOMAIN.length).trim();
+  return e.includes('@') ? e.split('@')[0] : e;
+}
+
+/** Union type for institutional email domains */
+export type InstitutionalDomain = typeof STUDENT_DOMAIN | typeof STAFF_DOMAIN;
+
 export { STUDENT_DOMAIN, STAFF_DOMAIN };

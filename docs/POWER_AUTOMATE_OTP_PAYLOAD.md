@@ -13,9 +13,11 @@
 
 ## Edge Function secret
 
-Set the Power Automate HTTP trigger URL as a Supabase secret so the Edge Function can call it:
+Set the Power Automate HTTP trigger URL as a Supabase secret so the Edge Function can call it. The Edge Function checks both variable names:
 
 ```bash
+supabase secrets set SKYLINE_POWER_AUTOMATE_OTP_URL="https://your-power-automate-trigger-url"
+# or
 supabase secrets set POWER_AUTOMATE_OTP_URL="https://your-power-automate-trigger-url"
 ```
 

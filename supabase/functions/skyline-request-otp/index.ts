@@ -35,7 +35,7 @@ Deno.serve(async (req) => {
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL');
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
-  const powerAutomateUrl = Deno.env.get('POWER_AUTOMATE_OTP_URL');
+  const powerAutomateUrl = Deno.env.get('SKYLINE_POWER_AUTOMATE_OTP_URL') || Deno.env.get('POWER_AUTOMATE_OTP_URL');
 
   if (!supabaseUrl || !serviceRoleKey) {
     console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');

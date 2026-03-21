@@ -1,12 +1,21 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Plus, Mail, Phone, Pencil, Shield, UserRound, Building2 } from 'lucide-react';
 import { listUsersPaged, createUser, updateUser, listBatchesPaged } from '../lib/formEngine';
-import { buildUserEmail, buildUserEmailFromLocal, getUserEmailLocalPart, STAFF_DOMAIN } from '../lib/emailUtils';
+import {
+  buildUserEmail,
+  buildEmailFromLocalAndDomain,
+  getEmailLocalPartForEdit,
+  getUserEmailLocalPart,
+  getInstitutionalDomainFromEmail,
+  type InstitutionalDomain,
+  STAFF_DOMAIN,
+} from '../lib/emailUtils';
 import type { UserRow } from '../lib/formEngine';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Select } from '../components/ui/Select';
+import { EmailWithDomainPicker } from '../components/ui/EmailWithDomainPicker';
 import { Modal } from '../components/ui/Modal';
 import { Loader } from '../components/ui/Loader';
 import { toast } from '../utils/toast';
@@ -52,6 +61,7 @@ export const AdminUsersPage: React.FC = () => {
     first_name: '',
     last_name: '',
     email_local: '',
+    email_domain: STAFF_DOMAIN as InstitutionalDomain,
     phone: '',
     status: 'active',
     role: 'trainer' as 'admin' | 'trainer' | 'office',
@@ -61,6 +71,7 @@ export const AdminUsersPage: React.FC = () => {
     first_name: string;
     last_name: string;
     email_local: string;
+    email_domain: InstitutionalDomain;
     phone: string;
     status: string;
     role: string;
@@ -81,7 +92,9 @@ export const AdminUsersPage: React.FC = () => {
   ): string | null => {
     const fullName = `${(form.first_name || '').trim()} ${(form.last_name || '').trim()}`.trim();
     if (!fullName) return 'First name and last name are required.';
-    const email = buildUserEmailFromLocal(form.email_local?.trim() || '') || buildUserEmail(fullName);
+    const email =
+      buildEmailFromLocalAndDomain(form.email_local?.trim() || '', (form as { email_domain?: typeof STAFF_DOMAIN }).email_domain ?? STAFF_DOMAIN) ||
+      buildUserEmail(fullName);
     if (!email) return 'Email local part is required.';
     if (!form.phone.trim()) return 'Phone is required.';
     if (!/^\d{10}$/.test(form.phone.trim())) return 'Phone must be exactly 10 digits.';
@@ -112,7 +125,9 @@ export const AdminUsersPage: React.FC = () => {
     }
     setCreating(true);
     const fullName = `${draft.first_name.trim()} ${draft.last_name.trim()}`.trim();
-    const email = buildUserEmailFromLocal(draft.email_local?.trim() || '') || buildUserEmail(fullName);
+    const email =
+      buildEmailFromLocalAndDomain(draft.email_local?.trim() || '', draft.email_domain) ||
+      buildUserEmail(fullName);
     const created = await createUser({
       full_name: fullName,
       email,
@@ -129,7 +144,15 @@ export const AdminUsersPage: React.FC = () => {
     const res = await listUsersPaged(1, PAGE_SIZE, searchTerm, roleFilter || undefined, statusFilter || undefined);
     setUsers(res.data);
     setTotalUsers(res.total);
-    setDraft({ first_name: '', last_name: '', email_local: '', phone: '', status: 'active', role: 'trainer' });
+    setDraft({
+      first_name: '',
+      last_name: '',
+      email_local: '',
+      email_domain: STAFF_DOMAIN,
+      phone: '',
+      status: 'active',
+      role: 'trainer',
+    });
     setIsCreateOpen(false);
     toast.success('User added');
   };
@@ -144,10 +167,13 @@ export const AdminUsersPage: React.FC = () => {
     const parts = (editingUser.full_name ?? '').trim().split(/\s+/);
     const first_name = parts[0] ?? '';
     const last_name = parts.slice(1).join(' ') ?? '';
+    const email = editingUser.email ?? '';
+    const domain = getInstitutionalDomainFromEmail(email) ?? STAFF_DOMAIN;
     setEditDraft({
       first_name,
       last_name,
-      email_local: getUserEmailLocalPart(editingUser.email ?? ''),
+      email_local: getEmailLocalPartForEdit(email),
+      email_domain: domain,
       phone: editingUser.phone ?? '',
       status: editingUser.status ?? 'active',
       role: editingUser.role ?? 'trainer',
@@ -163,7 +189,7 @@ export const AdminUsersPage: React.FC = () => {
     }
     setSavingEdit(true);
     const fullName = `${editDraft.first_name.trim()} ${editDraft.last_name.trim()}`.trim();
-    const email = buildUserEmailFromLocal(editDraft.email_local?.trim() || '');
+    const email = buildEmailFromLocalAndDomain(editDraft.email_local?.trim() || '', editDraft.email_domain);
     const updated = await updateUser(editingId, {
       full_name: fullName,
       email,
@@ -378,8 +404,9 @@ export const AdminUsersPage: React.FC = () => {
                   const fullName = `${fn} ${p.last_name}`.trim();
                   const prevSuggested = buildUserEmail(`${p.first_name} ${p.last_name}`.trim());
                   const suggested = buildUserEmail(fullName);
-                  const syncEmail = !p.email_local || buildUserEmailFromLocal(p.email_local) === prevSuggested;
-                  return { ...p, first_name: fn, email_local: syncEmail ? (suggested ? getUserEmailLocalPart(suggested) : p.email_local) : p.email_local };
+                  const prevLocal = getUserEmailLocalPart(prevSuggested);
+                  const syncEmail = !p.email_local || p.email_local === prevLocal;
+                  return { ...p, first_name: fn, email_local: syncEmail && suggested ? getUserEmailLocalPart(suggested) : p.email_local };
                 });
               }}
               placeholder="First name *"
@@ -393,26 +420,23 @@ export const AdminUsersPage: React.FC = () => {
                   const fullName = `${p.first_name} ${ln}`.trim();
                   const prevSuggested = buildUserEmail(`${p.first_name} ${p.last_name}`.trim());
                   const suggested = buildUserEmail(fullName);
-                  const syncEmail = !p.email_local || buildUserEmailFromLocal(p.email_local) === prevSuggested;
-                  return { ...p, last_name: ln, email_local: syncEmail ? (suggested ? getUserEmailLocalPart(suggested) : p.email_local) : p.email_local };
+                  const prevLocal = getUserEmailLocalPart(prevSuggested);
+                  const syncEmail = !p.email_local || p.email_local === prevLocal;
+                  return { ...p, last_name: ln, email_local: syncEmail && suggested ? getUserEmailLocalPart(suggested) : p.email_local };
                 });
               }}
               placeholder="Last name *"
               required
             />
           </div>
-          <div className="space-y-1">
-            <label className="block text-xs font-medium text-gray-600">Email (editable, @{STAFF_DOMAIN.slice(1)} fixed)</label>
-            <div className="flex items-center gap-1 rounded border border-[var(--border)] overflow-hidden">
-              <Input
-                value={draft.email_local || getUserEmailLocalPart(userEmailSuggested)}
-                onChange={(e) => setDraft((p) => ({ ...p, email_local: e.target.value.replace(/\s/g, '').toLowerCase() }))}
-                placeholder="e.g. firstname.lastname"
-                className="border-0 rounded-none focus:ring-0"
-              />
-              <span className="px-3 py-2 bg-gray-100 text-gray-600 text-sm shrink-0">@{STAFF_DOMAIN.slice(1)}</span>
-            </div>
-          </div>
+          <EmailWithDomainPicker
+            label="Email"
+            localPart={draft.email_local || getUserEmailLocalPart(userEmailSuggested)}
+            onLocalPartChange={(v) => setDraft((p) => ({ ...p, email_local: v }))}
+            domain={draft.email_domain}
+            onDomainChange={(d) => setDraft((p) => ({ ...p, email_domain: d }))}
+            placeholder="e.g. firstname.lastname"
+          />
           <Input
             value={draft.phone}
             onChange={(e) => setDraft((p) => ({ ...p, phone: digitsOnly(e.target.value).slice(0, 10) }))}
@@ -469,18 +493,14 @@ export const AdminUsersPage: React.FC = () => {
                 required
               />
             </div>
-            <div className="space-y-1">
-              <label className="block text-xs font-medium text-gray-600">Email (editable, @{STAFF_DOMAIN.slice(1)} fixed)</label>
-              <div className="flex items-center gap-1 rounded border border-[var(--border)] overflow-hidden">
-                <Input
-                  value={editDraft.email_local}
-                  onChange={(e) => setEditDraft((p) => (p ? { ...p, email_local: e.target.value.replace(/\s/g, '').toLowerCase() } : p))}
-                  placeholder="e.g. firstname.lastname"
-                  className="border-0 rounded-none focus:ring-0"
-                />
-                <span className="px-3 py-2 bg-gray-100 text-gray-600 text-sm shrink-0">@{STAFF_DOMAIN.slice(1)}</span>
-              </div>
-            </div>
+            <EmailWithDomainPicker
+              label="Email"
+              localPart={editDraft.email_local}
+              onLocalPartChange={(v) => setEditDraft((p) => (p ? { ...p, email_local: v } : p))}
+              domain={editDraft.email_domain}
+              onDomainChange={(d) => setEditDraft((p) => (p ? { ...p, email_domain: d } : p))}
+              placeholder="e.g. firstname.lastname"
+            />
             <Input
               value={editDraft.phone}
               onChange={(e) => setEditDraft((p) => (p ? { ...p, phone: digitsOnly(e.target.value).slice(0, 10) } : p))}
