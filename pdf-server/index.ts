@@ -512,7 +512,7 @@ function buildHtml(data: {
     .appendix-matrix-table .appendix-cell-item { display: flex; align-items: flex-start; gap: 4px; margin: 2px 0; }
     .appendix-declaration-box { border: 1px solid #333; padding: 12px; font-style: italic; margin: 12px 0; line-height: 1.4; background: #fff; }
     .appendix-footer-bar { font-size: 8pt; color: #374151; margin-bottom: 8px; padding: 6px 12px; background: #d9d9d9 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .task-instructions-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 16pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 12px 16px; margin: 16px 0 0 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; white-space: normal; max-width: 100%; box-sizing: border-box; }
+    .task-instructions-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 16pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 12px 16px; margin: 16px 0 0 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; white-space: normal; max-width: 100%; box-sizing: border-box; page-break-after: avoid; break-after: avoid; }
     .task-questions-page { page-break-before: always; }
     .task-questions-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 16pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 12px 16px; margin: 16px 0 0 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; page-break-after: avoid; break-after: avoid; }
     .task-questions-subheader { font-size: 12pt; color: #000; margin: 0 0 12px 0; padding: 0; background: transparent !important; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; white-space: normal; page-break-after: avoid; break-after: avoid; }
@@ -520,12 +520,14 @@ function buildHtml(data: {
     .task-instructions-student-label { font-size: 12pt; font-weight: bold; color: #000000; margin: 8px 0 4px 0; padding: 0; background: transparent !important; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; white-space: normal; }
     .task-instructions-subheader { font-size: 12pt; color: #000000; margin: 0 0 8px 0; padding: 0; background: transparent !important; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; white-space: normal; max-width: 100%; }
     .task-instructions-block { margin: 12px 0; max-width: 100%; box-sizing: border-box; }
-    .task-instructions-block-title { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 16pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 8px 12px; overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; white-space: normal; max-width: 100%; box-sizing: border-box; }
+    .task-instructions-block-title { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 16pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 8px 12px; overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; white-space: normal; max-width: 100%; box-sizing: border-box; page-break-after: avoid; break-after: avoid; }
     .task-instructions-block-content { padding: 12px; background: transparent !important; border: 1px solid #e5e7eb; border-top: none; line-height: 1.5; overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; white-space: normal; max-width: 100%; box-sizing: border-box; }
     .task-instructions-block-content ul, .task-instructions-block-content li, .task-instructions-block-content p { overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; white-space: normal; }
     .task-instructions-block-content ul { margin: 8px 0; padding-left: 20px; }
     .task-instructions-block-content p { margin: 6px 0; }
     .task-instructions-table { width: 100%; table-layout: fixed; border: 1px solid #000; border-collapse: collapse; }
+    .task-instructions-table thead { display: table-header-group; }
+    .task-instructions-table thead tr { page-break-after: avoid; break-after: avoid; }
     .task-instructions-table td, .task-instructions-table th { vertical-align: top; overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; white-space: normal; }
     .task-instructions-table .value-cell { min-width: 0; max-width: 100%; box-sizing: border-box; word-break: normal; overflow-wrap: normal; word-wrap: normal; hyphens: none; overflow: visible; text-align: left; }
     .task-instructions-table .label-cell { width: 24% !important; }
@@ -658,13 +660,16 @@ function buildHtml(data: {
     .written-evidence-table { width: 100%; border-collapse: collapse; font-size: 10pt; margin: 0 0 12px 0; border: 1px solid #000; }
     .written-evidence-table th, .written-evidence-table td { border: 1px solid #000; padding: 8px 10px; vertical-align: middle; line-height: 1.25; color: #000; }
     .written-evidence-table th { background: #595959 !important; color: #fff !important; font-weight: 700; text-align: center; }
+    .written-evidence-table thead { display: table-header-group; }
+    .written-evidence-table thead tr { page-break-after: avoid; break-after: avoid; }
     .written-evidence-table .we-left { text-align: left; }
     .written-evidence-table .we-index { width: 28px; text-align: center; }
     .written-evidence-table .we-yn { width: 56px; text-align: center; }
     .written-evidence-table .we-radio { display: inline-flex; align-items: center; justify-content: center; }
     .written-evidence-table .we-radio .radio-circle { width: 12px; height: 12px; border: 1.5px solid #374151; border-radius: 50%; display: inline-block; }
     .written-evidence-table .we-radio .radio-circle.filled { background: #000; border-color: #000; }
-    .written-evidence-page { page-break-before: always; }
+    .written-evidence-wrapper { page-break-inside: avoid; break-inside: avoid; }
+    .written-evidence-wrapper .written-evidence-checklist-heading { page-break-after: avoid; break-after: avoid; margin: 0 0 12px 0; font-size: 11pt; font-weight: 700; }
     .task-q-question-box { border: 1px solid #595959; margin-bottom: 20px; page-break-inside: avoid; break-inside: avoid; }
     .task-q-question-box.task-q-first-question { page-break-before: avoid; break-before: avoid; }
     .task-q-question-box:last-child { margin-bottom: 0; }
@@ -1018,7 +1023,7 @@ function buildHtml(data: {
         html += `<h3>${headerNum}. ${section.title}</h3>`;
         headerNum++;
         if (section.description) html += `<p>${section.description}</p>`;
-      } else if (section.pdf_render_mode !== 'declarations' && section.pdf_render_mode !== 'reasonable_adjustment' && section.pdf_render_mode !== 'task_instructions' && section.pdf_render_mode !== 'task_results' && section.pdf_render_mode !== 'task_questions' && section.pdf_render_mode !== 'assessment_summary' && section.title !== 'Assessment Summary Sheet' && !isLearnerEvaluation) {
+      } else if (section.pdf_render_mode !== 'declarations' && section.pdf_render_mode !== 'reasonable_adjustment' && section.pdf_render_mode !== 'task_instructions' && section.pdf_render_mode !== 'task_results' && section.pdf_render_mode !== 'task_questions' && section.pdf_render_mode !== 'assessment_summary' && section.title !== 'Assessment Summary Sheet' && !isLearnerEvaluation && !questions.some((q) => q.question.code === 'written.evidence.checklist')) {
         html += `<h3>${headerNum}. ${section.title}</h3>`;
         headerNum++;
         if (section.description) html += `<p>${section.description}</p>`;
@@ -1191,8 +1196,9 @@ function buildHtml(data: {
       } else if (questions.some((q) => q.question.code === 'written.evidence.checklist')) {
         const checklistQ = questions.find((q) => q.question.code === 'written.evidence.checklist' && q.question.type === 'single_choice' && q.rows.length > 0);
         if (checklistQ) {
-          html += '<div class="written-evidence-page" style="page-break-inside:avoid;">';
-          html += '<h3 class="written-evidence-checklist-label" style="margin:0 0 12px 0;font-size:11pt;font-weight:700;page-break-after:avoid;">Written Evidence Checklist</h3>';
+          const weTitle = section.title || 'Written Evidence Checklist';
+          html += '<div class="written-evidence-wrapper">';
+          html += `<h3 class="written-evidence-checklist-heading">${weTitle}</h3>`;
           html += '<table class="written-evidence-table">';
           html += '<thead>';
           html += '<tr><th rowspan="2" class="we-index"></th><th rowspan="2" class="we-left">Written Evidence</th><th colspan="2">Submitted</th></tr>';
@@ -1264,14 +1270,15 @@ function buildHtml(data: {
                 const rows = Array.isArray(b.rows) ? b.rows : [];
                 const columnHeaders = Array.isArray(b.columnHeaders) ? b.columnHeaders : [];
                 if (rows.length > 0) {
-                  html += '<table class="section-table task-instructions-table"><tbody>';
+                  html += '<table class="section-table task-instructions-table">';
                   if (columnHeaders.length > 0) {
-                    html += '<tr>';
+                    html += '<thead><tr>';
                     for (const h of columnHeaders) {
                       html += `<th class="label-cell" style="font-weight:700;border:1px solid #000;padding:6px 8px;text-align:left">${String(h).replace(/</g, '&lt;').replace(/>/g, '&gt;')}</th>`;
                     }
-                    html += '</tr>';
+                    html += '</tr></thead>';
                   }
+                  html += '<tbody>';
                   for (const r of rows) {
                     const cells = r.cells;
                     if (Array.isArray(cells) && cells.length > 0) {

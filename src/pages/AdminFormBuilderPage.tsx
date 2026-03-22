@@ -833,9 +833,18 @@ export const AdminFormBuilderPage: React.FC = () => {
 
   const addSection = async () => {
     if (!selectedStepId) return;
+    const taskLinkedModes = ['task_instructions', 'task_questions', 'task_written_evidence_checklist', 'task_results'];
+    const firstTaskSec = selectedStep?.sections.find((sec) => taskLinkedModes.includes(sec.pdf_render_mode));
+    const defaultRowId = firstTaskSec ? (firstTaskSec as FormSection & { assessment_task_row_id?: number | null }).assessment_task_row_id ?? null : null;
+    const insertPayload: Record<string, unknown> = {
+      step_id: selectedStepId,
+      title: `Section ${(selectedStep?.sections.length || 0) + 1}`,
+      sort_order: selectedStep?.sections.length || 0,
+    };
+    if (defaultRowId != null) insertPayload.assessment_task_row_id = defaultRowId;
     const { data } = await supabase
       .from('skyline_form_sections')
-      .insert({ step_id: selectedStepId, title: `Section ${(selectedStep?.sections.length || 0) + 1}`, sort_order: selectedStep?.sections.length || 0 })
+      .insert(insertPayload)
       .select('*')
       .single();
     if (data) {
