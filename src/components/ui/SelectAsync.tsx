@@ -126,7 +126,7 @@ export const SelectAsync: React.FC<SelectAsyncProps> = ({
       setDropdownStyle({
         top: rect.bottom + 4,
         left: rect.left,
-        minWidth: rect.width,
+        minWidth: Math.max(rect.width, 320),
       });
     } else {
       setDropdownStyle(null);
@@ -229,7 +229,7 @@ export const SelectAsync: React.FC<SelectAsyncProps> = ({
                           setIsOpen(false);
                         }}
                         className={cn(
-                          'w-full px-4 py-2.5 text-left text-sm transition-colors whitespace-nowrap overflow-hidden text-ellipsis',
+                          'w-full px-4 py-2.5 text-left text-sm transition-colors break-words',
                           'hover:bg-[var(--brand)] hover:text-white',
                           value === option.value && 'bg-orange-50 text-[var(--brand)] font-semibold'
                         )}

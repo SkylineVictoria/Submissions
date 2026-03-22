@@ -670,6 +670,27 @@ function buildHtml(data: {
     .written-evidence-table .we-radio .radio-circle.filled { background: #000; border-color: #000; }
     .written-evidence-wrapper { page-break-inside: avoid; break-inside: avoid; }
     .written-evidence-wrapper .written-evidence-checklist-heading { page-break-after: avoid; break-after: avoid; margin: 0 0 12px 0; font-size: 11pt; font-weight: 700; }
+    .assessment-marking-checklist-wrapper { page-break-inside: avoid; break-inside: avoid; margin-bottom: 16px; }
+    .assessment-marking-checklist-header { text-align: center; font-weight: 700; font-size: 12pt; margin: 0 0 6px 0; }
+    .assessment-marking-checklist-subheader { text-align: center; font-weight: 700; font-size: 11pt; margin: 0 0 12px 0; }
+    .assessment-marking-meta-table { width: 100%; border-collapse: collapse; font-size: 10pt; margin: 0 0 12px 0; border: 1px solid #000; }
+    .assessment-marking-meta-table td { border: 1px solid #000; padding: 8px 10px; }
+    .assessment-marking-meta-table .amc-label { background: #e5e7eb !important; font-weight: 600; width: 35%; }
+    .assessment-marking-meta-table .amc-value { background: #fff; }
+    .amc-outcome-section { margin-top: 16px; }
+    .amc-outcome-header { background: #595959 !important; color: #fff !important; font-weight: 700; text-align: center; padding: 8px 10px; border: 1px solid #000; font-size: 10pt; }
+    .amc-outcome-question { font-weight: 700; padding: 8px 10px; border: 1px solid #000; border-top: none; font-size: 10pt; }
+    .assessment-marking-table { width: 100%; border-collapse: collapse; font-size: 10pt; margin: 0; border: 1px solid #000; }
+    .assessment-marking-table th, .assessment-marking-table td { border: 1px solid #000; padding: 8px 10px; vertical-align: middle; line-height: 1.25; color: #000; }
+    .assessment-marking-table th { background: #595959 !important; color: #fff !important; font-weight: 700; text-align: center; }
+    .assessment-marking-table thead { display: table-header-group; }
+    .assessment-marking-table thead tr { page-break-after: avoid; break-after: avoid; }
+    .assessment-marking-table .amc-criteria { text-align: left; }
+    .assessment-marking-table .amc-index { width: 28px; text-align: center; }
+    .assessment-marking-table .amc-yn { width: 56px; text-align: center; }
+    .assessment-marking-table .amc-radio { display: inline-flex; align-items: center; justify-content: center; }
+    .assessment-marking-table .amc-radio .radio-circle { width: 12px; height: 12px; border: 1.5px solid #374151; border-radius: 50%; display: inline-block; }
+    .assessment-marking-table .amc-radio .radio-circle.filled { background: #000; border-color: #000; }
     .task-q-question-box { border: 1px solid #595959; margin-bottom: 20px; page-break-inside: avoid; break-inside: avoid; }
     .task-q-question-box.task-q-first-question { page-break-before: avoid; break-before: avoid; }
     .task-q-question-box:last-child { margin-bottom: 0; }
@@ -1002,6 +1023,14 @@ function buildHtml(data: {
         const checklistQ = questions.find((q) => q.question.code === 'written.evidence.checklist' && q.question.type === 'single_choice' && q.rows.length > 0);
         if (!checklistQ) continue;
       }
+      /* Skip Assessment Marking Checklist when both Evidence and Performance outcome have no rows */
+      if (section.pdf_render_mode === 'task_marking_checklist') {
+        const evidenceQ = questions.find((q) => q.question.code === 'assessment.marking.evidence_outcome' && q.question.type === 'single_choice');
+        const perfQ = questions.find((q) => q.question.code === 'assessment.marking.performance_outcome' && q.question.type === 'single_choice');
+        const evidenceRows = evidenceQ?.rows?.length ?? 0;
+        const perfRows = perfQ?.rows?.length ?? 0;
+        if (evidenceRows === 0 && perfRows === 0) continue;
+      }
       if (isLearnerEvaluation && !learnerEvalIntroShown) {
         html += '<div class="appendix-b-page">';
         html += '<div class="appendix-b-content-wrapper">';
@@ -1023,7 +1052,7 @@ function buildHtml(data: {
         html += `<h3>${headerNum}. ${section.title}</h3>`;
         headerNum++;
         if (section.description) html += `<p>${section.description}</p>`;
-      } else if (section.pdf_render_mode !== 'declarations' && section.pdf_render_mode !== 'reasonable_adjustment' && section.pdf_render_mode !== 'task_instructions' && section.pdf_render_mode !== 'task_results' && section.pdf_render_mode !== 'task_questions' && section.pdf_render_mode !== 'assessment_summary' && section.title !== 'Assessment Summary Sheet' && !isLearnerEvaluation && !questions.some((q) => q.question.code === 'written.evidence.checklist')) {
+      } else if (section.pdf_render_mode !== 'declarations' && section.pdf_render_mode !== 'reasonable_adjustment' && section.pdf_render_mode !== 'task_instructions' && section.pdf_render_mode !== 'task_results' && section.pdf_render_mode !== 'task_questions' && section.pdf_render_mode !== 'task_written_evidence_checklist' && section.pdf_render_mode !== 'task_marking_checklist' && section.pdf_render_mode !== 'assessment_summary' && section.title !== 'Assessment Summary Sheet' && !isLearnerEvaluation && !questions.some((q) => q.question.code === 'written.evidence.checklist')) {
         html += `<h3>${headerNum}. ${section.title}</h3>`;
         headerNum++;
         if (section.description) html += `<p>${section.description}</p>`;
@@ -1218,6 +1247,56 @@ function buildHtml(data: {
             html += '</tr>';
           }
           html += '</tbody></table></div>';
+        }
+      } else if (section.pdf_render_mode === 'task_marking_checklist') {
+        const evidenceQ = questions.find((q) => q.question.code === 'assessment.marking.evidence_outcome' && q.question.type === 'single_choice' && (q.rows?.length ?? 0) > 0);
+        const perfQ = questions.find((q) => q.question.code === 'assessment.marking.performance_outcome' && q.question.type === 'single_choice' && (q.rows?.length ?? 0) > 0);
+        if (evidenceQ || perfQ) {
+          const rowId = section.assessment_task_row_id;
+          const row = rowId ? taskRowsMap.get(rowId) : null;
+          const taskLabel = row?.row_label || 'Assessment Task';
+          const taskMethod = row?.row_help || '';
+          const subheader = taskMethod ? `${taskLabel} – ${taskMethod}` : taskLabel;
+          const candidateQ = questions.find((q) => q.question.code === 'assessment.marking.candidateName');
+          const assessorQ = questions.find((q) => q.question.code === 'assessment.marking.assessorName');
+          const dateQ = questions.find((q) => q.question.code === 'assessment.marking.assessmentDate');
+          const candidateVal = candidateQ ? String(answers.get(`q-${candidateQ.question.id}`) ?? '') : '';
+          const assessorVal = assessorQ ? String(answers.get(`q-${assessorQ.question.id}`) ?? '') : '';
+          const dateVal = dateQ ? String(answers.get(`q-${dateQ.question.id}`) ?? '') : '';
+          html += '<div class="assessment-marking-checklist-wrapper">';
+          html += '<div class="assessment-marking-checklist-header">ASSESSMENT MARKING CHECKLIST</div>';
+          html += `<div class="assessment-marking-checklist-subheader">${labelToHtml(subheader)}</div>`;
+          html += '<table class="assessment-marking-meta-table"><tbody>';
+          html += `<tr><td class="amc-label">Candidate Name</td><td class="amc-value">${labelToHtml(candidateVal)}</td></tr>`;
+          html += `<tr><td class="amc-label">Assessor Name</td><td class="amc-value">${labelToHtml(assessorVal)}</td></tr>`;
+          html += `<tr><td class="amc-label">Assessment date/s</td><td class="amc-value">${labelToHtml(dateVal)}</td></tr>`;
+          html += '</tbody></table>';
+          const renderChecklistTable = (checklistQ: { question: { id: number }; rows: FormQuestionRow[] }, title: string, questionText: string) => {
+            if (!checklistQ || !checklistQ.rows?.length) return '';
+            let t = `<div class="amc-outcome-section"><div class="amc-outcome-header">${title}</div>`;
+            t += `<div class="amc-outcome-question">${labelToHtml(questionText)}</div>`;
+            t += '<table class="assessment-marking-table">';
+            t += '<thead><tr><th rowspan="2" class="amc-index"></th><th rowspan="2" class="amc-criteria">Criteria</th><th colspan="2">SATISFACTORY</th></tr>';
+            t += '<tr><th class="amc-yn">Yes</th><th class="amc-yn">No</th></tr></thead><tbody>';
+            for (let i = 0; i < checklistQ.rows.length; i++) {
+              const r = checklistQ.rows[i];
+              const key = `q-${checklistQ.question.id}-${r.id}`;
+              const val = String(answers.get(key) ?? '');
+              const yes = val === 'yes';
+              const no = val === 'no';
+              t += '<tr>';
+              t += `<td class="amc-index">${i + 1}</td>`;
+              t += `<td class="amc-criteria">${labelToHtml(r.row_label || '')}</td>`;
+              t += `<td class="amc-yn"><span class="amc-radio"><span class="radio-circle${yes ? ' filled' : ''}"></span></span></td>`;
+              t += `<td class="amc-yn"><span class="amc-radio"><span class="radio-circle${no ? ' filled' : ''}"></span></span></td>`;
+              t += '</tr>';
+            }
+            t += '</tbody></table></div>';
+            return t;
+          };
+          if (evidenceQ) html += renderChecklistTable(evidenceQ, 'EVIDENCE OUTCOME', 'Did the candidate complete and submit the following while being observed?');
+          if (perfQ) html += renderChecklistTable(perfQ, 'PERFORMANCE OUTCOME', 'Did the candidate provide answers to the following questions with the required length and breadth consistently applying knowledge of vocational environment?');
+          html += '</div>';
         }
       } else if (section.pdf_render_mode === 'assessment_submission') {
         const multiChoice = questions.find((q) => q.question.type === 'multi_choice');

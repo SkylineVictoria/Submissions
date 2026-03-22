@@ -21,7 +21,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { supabase } from '../lib/supabase';
 import { fetchForm, fetchFormSteps, updateForm, ensureTaskSectionsForForm, formNameExists } from '../lib/formEngine';
 import { uploadFormCoverImage, uploadRowImage, uploadQuestionImage } from '../lib/storage';
-import type { Form, FormStep, FormSection, FormQuestion, Json } from '../types/database';
+import type { Form, FormStep, FormSection, FormQuestion, FormQuestionOption, FormQuestionRow, Json } from '../types/database';
 import { Card } from '../components/ui/Card';
 import { Loader } from '../components/ui/Loader';
 import { Button } from '../components/ui/Button';
@@ -338,6 +338,7 @@ const PDF_RENDER_MODES = [
   { value: 'task_instructions', label: 'Task Instructions' },
   { value: 'task_questions', label: 'Task Questions' },
   { value: 'task_written_evidence_checklist', label: 'Written Evidence Checklist' },
+  { value: 'task_marking_checklist', label: 'Assessment Marking Checklist' },
   { value: 'task_results', label: 'Task Results' },
   { value: 'assessment_summary', label: 'Assessment Summary Sheet' },
 ];
@@ -438,7 +439,7 @@ function SortableSectionItem({
               options={PDF_RENDER_MODES}
               portal
             />
-            {(section.pdf_render_mode === 'task_instructions' || section.pdf_render_mode === 'task_questions' || section.pdf_render_mode === 'task_written_evidence_checklist' || section.pdf_render_mode === 'task_results') && assessmentTaskRows.length > 0 && (
+            {(section.pdf_render_mode === 'task_instructions' || section.pdf_render_mode === 'task_questions' || section.pdf_render_mode === 'task_written_evidence_checklist' || section.pdf_render_mode === 'task_marking_checklist' || section.pdf_render_mode === 'task_results') && assessmentTaskRows.length > 0 && (
               <Select
                 label="Link to task"
                 value={String((section as { assessment_task_row_id?: number | null }).assessment_task_row_id ?? '')}
@@ -628,6 +629,7 @@ export const AdminFormBuilderPage: React.FC = () => {
   const [openQuestionMenuId, setOpenQuestionMenuId] = useState<number | null>(null);
   const [duplicatingStepId, setDuplicatingStepId] = useState<number | null>(null);
   const [duplicatingSectionId, setDuplicatingSectionId] = useState<number | null>(null);
+  const [loadingSectionTypeChange, setLoadingSectionTypeChange] = useState<number | null>(null);
   const stepMenuRef = useRef<HTMLDivElement | null>(null);
   const sectionMenuRef = useRef<HTMLDivElement | null>(null);
   const questionMenuRef = useRef<HTMLDivElement | null>(null);
@@ -737,7 +739,7 @@ export const AdminFormBuilderPage: React.FC = () => {
   const loadData = useCallback(async () => {
     if (!formId) return;
     await ensureTaskSectionsForForm(Number(formId));
-    const f = await fetchForm(Number(formId));
+    const f = await fetchForm(Number(formId), { allowInactiveForAdmin: true });
     setForm(f || null);
     if (f) lastSavedFormNameRef.current = f.name || '';
     const stepList = await fetchFormSteps(Number(formId));
@@ -821,7 +823,7 @@ export const AdminFormBuilderPage: React.FC = () => {
     if (updates.title != null) {
       const nextTitle = updates.title;
       const step = steps.find((s) => s.id === stepId);
-      const taskLinkedModes = ['task_instructions', 'task_questions', 'task_written_evidence_checklist', 'task_results'];
+      const taskLinkedModes = ['task_instructions', 'task_questions', 'task_written_evidence_checklist', 'task_marking_checklist', 'task_results'];
       const firstTaskSec = step?.sections.find((sec) => taskLinkedModes.includes(sec.pdf_render_mode));
       const rowId = firstTaskSec ? (firstTaskSec as FormSection & { assessment_task_row_id?: number | null }).assessment_task_row_id : null;
       if (rowId != null) {
@@ -833,7 +835,7 @@ export const AdminFormBuilderPage: React.FC = () => {
 
   const addSection = async () => {
     if (!selectedStepId) return;
-    const taskLinkedModes = ['task_instructions', 'task_questions', 'task_written_evidence_checklist', 'task_results'];
+    const taskLinkedModes = ['task_instructions', 'task_questions', 'task_written_evidence_checklist', 'task_marking_checklist', 'task_results'];
     const firstTaskSec = selectedStep?.sections.find((sec) => taskLinkedModes.includes(sec.pdf_render_mode));
     const defaultRowId = firstTaskSec ? (firstTaskSec as FormSection & { assessment_task_row_id?: number | null }).assessment_task_row_id ?? null : null;
     const insertPayload: Record<string, unknown> = {
@@ -869,6 +871,122 @@ export const AdminFormBuilderPage: React.FC = () => {
         ),
       }))
     );
+  };
+
+  const ensureWrittenEvidenceChecklistQuestion = async (sectionId: number) => {
+    const section = steps.flatMap((s) => s.sections).find((sec) => sec.id === sectionId);
+    if (!section) return;
+    const hasChecklistQ = section.questions?.some((q) => q.code === 'written.evidence.checklist');
+    if (hasChecklistQ) return;
+    const { data: writtenQ } = await supabase
+      .from('skyline_form_questions')
+      .insert({
+        section_id: sectionId,
+        type: 'single_choice',
+        code: 'written.evidence.checklist',
+        label: 'Written Evidence Checklist',
+        sort_order: 0,
+        role_visibility: { student: false, trainer: true, office: true },
+        role_editability: { student: false, trainer: true, office: true },
+      })
+      .select('*')
+      .single();
+    if (!writtenQ) return;
+    await supabase.from('skyline_form_question_options').insert([
+      { question_id: (writtenQ as FormQuestion).id, value: 'yes', label: 'Yes', sort_order: 0 },
+      { question_id: (writtenQ as FormQuestion).id, value: 'no', label: 'No', sort_order: 1 },
+    ]);
+    const { data: opts } = await supabase.from('skyline_form_question_options').select('*').eq('question_id', (writtenQ as FormQuestion).id).order('sort_order');
+    const questionWithOptions = {
+      ...writtenQ,
+      options: (opts as FormQuestionOption[]) ?? [],
+      rows: [] as FormQuestionRow[],
+    };
+    setSteps((prev) =>
+      prev.map((s) => ({
+        ...s,
+        sections: s.sections.map((sec) =>
+          sec.id === sectionId
+            ? { ...sec, questions: [...(sec.questions || []), questionWithOptions] }
+            : sec
+        ),
+      }))
+    );
+    setEditingQuestionId((writtenQ as FormQuestion).id);
+  };
+
+  const refreshSectionInState = useCallback(async (sectionId: number) => {
+    const { data: qs } = await supabase.from('skyline_form_questions').select('*').eq('section_id', sectionId).order('sort_order');
+    if (!qs || qs.length === 0) return;
+    const questionIds = (qs as FormQuestion[]).map((q) => q.id);
+    const [optsRes, rowsRes] = await Promise.all([
+      supabase.from('skyline_form_question_options').select('*').in('question_id', questionIds).order('sort_order'),
+      supabase.from('skyline_form_question_rows').select('*').in('question_id', questionIds).order('sort_order'),
+    ]);
+    const opts = (optsRes.data as FormQuestionOption[]) || [];
+    const rows = (rowsRes.data as FormQuestionRow[]) || [];
+    const questionsWithExtras: (FormQuestion & { options?: FormQuestionOption[]; rows?: FormQuestionRow[] })[] = (qs as FormQuestion[]).map((q) => ({
+      ...q,
+      options: opts.filter((o) => o.question_id === q.id),
+      rows: rows.filter((r) => r.question_id === q.id),
+    }));
+    setSteps((prev) =>
+      prev.map((s) => ({
+        ...s,
+        sections: s.sections.map((sec) =>
+          sec.id === sectionId ? { ...sec, questions: questionsWithExtras } : sec
+        ),
+      }))
+    );
+  }, []);
+
+  const ensureMarkingChecklistQuestions = async (sectionId: number) => {
+    const section = steps.flatMap((s) => s.sections).find((sec) => sec.id === sectionId);
+    if (!section) return;
+    const hasCandidate = section.questions?.some((q) => q.code === 'assessment.marking.candidateName');
+    if (hasCandidate) return;
+    await supabase.from('skyline_form_questions').insert([
+      { section_id: sectionId, type: 'short_text', code: 'assessment.marking.candidateName', label: 'Candidate Name', sort_order: 0, role_visibility: { student: false, trainer: true, office: true }, role_editability: { student: false, trainer: true, office: false } },
+      { section_id: sectionId, type: 'short_text', code: 'assessment.marking.assessorName', label: 'Assessor Name', sort_order: 1, role_visibility: { student: false, trainer: true, office: true }, role_editability: { student: false, trainer: true, office: false } },
+      { section_id: sectionId, type: 'date', code: 'assessment.marking.assessmentDate', label: 'Assessment date/s', sort_order: 2, role_visibility: { student: false, trainer: true, office: true }, role_editability: { student: false, trainer: true, office: false } },
+    ]);
+    const { data: evidenceQ } = await supabase.from('skyline_form_questions').insert({
+      section_id: sectionId, type: 'single_choice', code: 'assessment.marking.evidence_outcome', label: 'Evidence Outcome', sort_order: 3,
+      role_visibility: { student: false, trainer: true, office: true }, role_editability: { student: false, trainer: true, office: false },
+    }).select('id').single();
+    if (evidenceQ) {
+      const evId = (evidenceQ as { id: number }).id;
+      await supabase.from('skyline_form_question_options').insert([
+        { question_id: evId, value: 'yes', label: 'Yes', sort_order: 0 },
+        { question_id: evId, value: 'no', label: 'No', sort_order: 1 },
+      ]);
+    }
+    const { data: perfQ } = await supabase.from('skyline_form_questions').insert({
+      section_id: sectionId, type: 'single_choice', code: 'assessment.marking.performance_outcome', label: 'Performance Outcome', sort_order: 4,
+      role_visibility: { student: false, trainer: true, office: true }, role_editability: { student: false, trainer: true, office: false },
+    }).select('id').single();
+    if (perfQ) {
+      await supabase.from('skyline_form_question_options').insert([
+        { question_id: (perfQ as { id: number }).id, value: 'yes', label: 'Yes', sort_order: 0 },
+        { question_id: (perfQ as { id: number }).id, value: 'no', label: 'No', sort_order: 1 },
+      ]);
+    }
+    await refreshSectionInState(sectionId);
+  };
+
+  const handlePdfModeChange = async (sectionId: number, mode: string) => {
+    const needsLoading = mode === 'task_written_evidence_checklist' || mode === 'task_marking_checklist';
+    if (needsLoading) setLoadingSectionTypeChange(sectionId);
+    try {
+      await updateSection(sectionId, { pdf_render_mode: mode });
+      if (mode === 'task_written_evidence_checklist') {
+        await ensureWrittenEvidenceChecklistQuestion(sectionId);
+      } else if (mode === 'task_marking_checklist') {
+        await ensureMarkingChecklistQuestions(sectionId);
+      }
+    } finally {
+      if (needsLoading) setLoadingSectionTypeChange(null);
+    }
   };
 
   const removeStep = (stepId: number) => {
@@ -925,7 +1043,7 @@ export const AdminFormBuilderPage: React.FC = () => {
     if (!step) return;
     const stepIndex = steps.findIndex((s) => s.id === stepId);
     const newSortOrder = step.sort_order + 1;
-    const taskLinkedModes = ['task_instructions', 'task_questions', 'task_written_evidence_checklist', 'task_results'];
+    const taskLinkedModes = ['task_instructions', 'task_questions', 'task_written_evidence_checklist', 'task_marking_checklist', 'task_results'];
     const isTaskStep = step.sections.some((sec) => taskLinkedModes.includes(sec.pdf_render_mode));
     let newStepTitle = `${step.title} (Copy)`;
     if (isTaskStep && assessmentTasksGridQuestionId != null) {
@@ -1064,7 +1182,7 @@ export const AdminFormBuilderPage: React.FC = () => {
     const secIndex = step.sections.findIndex((s) => s.id === sectionId);
     const secWithRow = section as FormSection & { assessment_task_row_id?: number | null };
     // Task-linked sections: do not inherit the original task link when duplicating, so the user explicitly selects the correct task
-    const isTaskLinked = ['task_results', 'task_instructions', 'task_questions'].includes(section.pdf_render_mode);
+    const isTaskLinked = ['task_results', 'task_instructions', 'task_questions', 'task_written_evidence_checklist', 'task_marking_checklist'].includes(section.pdf_render_mode);
     const newRowId = isTaskLinked ? null : (secWithRow.assessment_task_row_id ?? null);
     const { data: newSec } = await supabase
       .from('skyline_form_sections')
@@ -1695,7 +1813,7 @@ export const AdminFormBuilderPage: React.FC = () => {
                       isSelected={sec.id === selectedSectionId}
                       onSelect={() => setSelectedSectionId(sec.id)}
                       onUpdate={(title) => updateSection(sec.id, { title })}
-                      onPdfModeChange={(mode) => updateSection(sec.id, { pdf_render_mode: mode })}
+                      onPdfModeChange={(mode) => handlePdfModeChange(sec.id, mode)}
                       onAssessmentTaskRowChange={(rowId) => updateSection(sec.id, { assessment_task_row_id: rowId })}
                       assessmentTaskRows={assessmentTaskRows}
                       onRemove={() => removeSection(sec.id)}
@@ -1729,13 +1847,15 @@ export const AdminFormBuilderPage: React.FC = () => {
                     ? 'Questions to answer'
                     : selectedSection?.pdf_render_mode === 'task_written_evidence_checklist'
                       ? 'Written Evidence Checklist'
-                      : selectedSection?.pdf_render_mode === 'task_results'
-                        ? 'Results'
-                        : selectedSection?.pdf_render_mode === 'assessment_summary' || selectedSection?.title === 'Assessment Summary Sheet'
-                          ? 'Assessment Summary Sheet'
-                          : 'Questions'}
+                      : selectedSection?.pdf_render_mode === 'task_marking_checklist'
+                        ? 'Assessment Marking Checklist'
+                        : selectedSection?.pdf_render_mode === 'task_results'
+                          ? 'Results'
+                          : selectedSection?.pdf_render_mode === 'assessment_summary' || selectedSection?.title === 'Assessment Summary Sheet'
+                            ? 'Assessment Summary Sheet'
+                            : 'Questions'}
               </h2>
-              {(selectedSection?.pdf_render_mode === 'task_questions' || (!['task_instructions', 'task_questions', 'task_written_evidence_checklist', 'task_results', 'assessment_summary'].includes(selectedSection?.pdf_render_mode || '') && selectedSection?.title !== 'Assessment Summary Sheet')) && (
+              {(selectedSection?.pdf_render_mode === 'task_questions' || (!['task_instructions', 'task_questions', 'task_written_evidence_checklist', 'task_marking_checklist', 'task_results', 'assessment_summary'].includes(selectedSection?.pdf_render_mode || '') && selectedSection?.title !== 'Assessment Summary Sheet')) && (
                 <Button
                   variant="outline"
                   size="sm"
@@ -1751,6 +1871,39 @@ export const AdminFormBuilderPage: React.FC = () => {
                 <p className="text-sm text-gray-600">
                   Instructions students will read before answering. Use the editor on the right to add content.
                 </p>
+              ) : loadingSectionTypeChange === selectedSection.id ? (
+                <div className="flex items-center gap-2 py-4 text-sm text-gray-600">
+                  <Loader className="w-5 h-5 shrink-0" />
+                  <span>Creating checklist questions…</span>
+                </div>
+              ) : selectedSection.pdf_render_mode === 'task_marking_checklist' ? (
+                <DndContext sensors={questionSensors} collisionDetection={closestCenter} onDragEnd={handleQuestionsDragEnd}>
+                  {(() => {
+                    const visibleQuestions = selectedSection.questions.filter((q) => !(q.pdf_meta as Record<string, unknown>)?.isAdditionalBlockOf);
+                    return (
+                  <SortableContext items={visibleQuestions.map((q) => `question-${q.id}`)} strategy={verticalListSortingStrategy}>
+                    <div className="space-y-1">
+                      {visibleQuestions.map((q, idx) => (
+                        <SortableQuestionItem
+                          key={q.id}
+                          question={q}
+                          index={idx}
+                          totalCount={visibleQuestions.length}
+                          isSelected={editingQuestionId === q.id}
+                          onSelect={() => setEditingQuestionId(q.id)}
+                          onRemove={() => removeQuestion(q.id)}
+                          onDuplicate={() => duplicateQuestion(q.id)}
+                          canDelete={!isPrebuiltQuestion(q)}
+                          menuOpen={openQuestionMenuId === q.id}
+                          onMenuToggle={() => setOpenQuestionMenuId(openQuestionMenuId === q.id ? null : q.id)}
+                          menuRef={questionMenuRef}
+                        />
+                      ))}
+                    </div>
+                  </SortableContext>
+                    );
+                  })()}
+                </DndContext>
               ) : selectedSection.pdf_render_mode === 'task_results' ? (
                 <p className="text-sm text-gray-600">
                   Results sheet for trainer/assessor to record outcomes.
@@ -2116,10 +2269,12 @@ export const AdminFormBuilderPage: React.FC = () => {
                         </div>
                       </div>
                     )}
-                    {(q.type === 'likert_5' || q.type === 'grid_table' || (q.type === 'single_choice' && q.code === 'written.evidence.checklist')) && (
+                    {(q.type === 'likert_5' || q.type === 'grid_table' || (q.type === 'single_choice' && (q.code === 'written.evidence.checklist' || q.code === 'assessment.marking.evidence_outcome' || q.code === 'assessment.marking.performance_outcome'))) && (
                       <>
                         {q.type === 'grid_table' && <div className="text-sm font-semibold text-gray-700 mb-2">2. Table rows</div>}
                         {q.type === 'single_choice' && q.code === 'written.evidence.checklist' && <div className="text-sm font-semibold text-gray-700 mb-2">Checklist rows</div>}
+                        {q.type === 'single_choice' && q.code === 'assessment.marking.evidence_outcome' && <div className="text-sm font-semibold text-gray-700 mb-2">Evidence Outcome rows</div>}
+                        {q.type === 'single_choice' && q.code === 'assessment.marking.performance_outcome' && <div className="text-sm font-semibold text-gray-700 mb-2">Performance Outcome rows</div>}
                         <QuestionRowsEditor
                           questionId={q.id}
                           sectionPdfMode={selectedSection?.pdf_render_mode}
@@ -2127,7 +2282,7 @@ export const AdminFormBuilderPage: React.FC = () => {
                           steps={steps}
                           onStepsCreated={loadData}
                           gridTableLayout={q.type === 'grid_table' ? ((q.pdf_meta as Record<string, unknown>)?.layout as string) : undefined}
-                          simpleLabelsOnly={q.type === 'single_choice' && q.code === 'written.evidence.checklist'}
+                          simpleLabelsOnly={q.type === 'single_choice' && (q.code === 'written.evidence.checklist' || q.code === 'assessment.marking.evidence_outcome' || q.code === 'assessment.marking.performance_outcome')}
                         />
                       </>
                     )}
@@ -2654,7 +2809,8 @@ function QuestionRowsEditor({ questionId, sectionPdfMode, formId, steps, onSteps
             { step_id: taskStepId, title: 'Student Instructions', pdf_render_mode: 'task_instructions', assessment_task_row_id: row.id, sort_order: 0 },
             { step_id: taskStepId, title: 'Questions', pdf_render_mode: 'task_questions', assessment_task_row_id: row.id, sort_order: 1 },
             { step_id: taskStepId, title: 'Written Evidence Checklist', pdf_render_mode: 'task_written_evidence_checklist', assessment_task_row_id: row.id, sort_order: 2 },
-            { step_id: taskStepId, title: 'Results', pdf_render_mode: 'task_results', assessment_task_row_id: row.id, sort_order: 3 },
+            { step_id: taskStepId, title: 'Assessment Marking Checklist', pdf_render_mode: 'task_marking_checklist', assessment_task_row_id: row.id, sort_order: 3 },
+            { step_id: taskStepId, title: 'Results', pdf_render_mode: 'task_results', assessment_task_row_id: row.id, sort_order: 4 },
           ]);
           const { data: wecSection } = await supabase.from('skyline_form_sections').select('id').eq('step_id', taskStepId).eq('pdf_render_mode', 'task_written_evidence_checklist').single();
           if (wecSection) {
@@ -2671,6 +2827,35 @@ function QuestionRowsEditor({ questionId, sectionPdfMode, formId, steps, onSteps
               await supabase.from('skyline_form_question_options').insert([
                 { question_id: (writtenQ as { id: number }).id, value: 'yes', label: 'Yes', sort_order: 0 },
                 { question_id: (writtenQ as { id: number }).id, value: 'no', label: 'No', sort_order: 1 },
+              ]);
+            }
+          }
+          const { data: mcSection } = await supabase.from('skyline_form_sections').select('id').eq('step_id', taskStepId).eq('pdf_render_mode', 'task_marking_checklist').single();
+          if (mcSection) {
+            const mcSecId = (mcSection as { id: number }).id;
+            await supabase.from('skyline_form_questions').insert([
+              { section_id: mcSecId, type: 'short_text', code: 'assessment.marking.candidateName', label: 'Candidate Name', sort_order: 0, role_visibility: { student: false, trainer: true, office: true }, role_editability: { student: false, trainer: true, office: false } },
+              { section_id: mcSecId, type: 'short_text', code: 'assessment.marking.assessorName', label: 'Assessor Name', sort_order: 1, role_visibility: { student: false, trainer: true, office: true }, role_editability: { student: false, trainer: true, office: false } },
+              { section_id: mcSecId, type: 'date', code: 'assessment.marking.assessmentDate', label: 'Assessment date/s', sort_order: 2, role_visibility: { student: false, trainer: true, office: true }, role_editability: { student: false, trainer: true, office: false } },
+            ]);
+            const { data: evidenceQ } = await supabase.from('skyline_form_questions').insert({
+              section_id: mcSecId, type: 'single_choice', code: 'assessment.marking.evidence_outcome', label: 'Evidence Outcome', sort_order: 3,
+              role_visibility: { student: false, trainer: true, office: true }, role_editability: { student: false, trainer: true, office: false },
+            }).select('id').single();
+            if (evidenceQ) {
+              await supabase.from('skyline_form_question_options').insert([
+                { question_id: (evidenceQ as { id: number }).id, value: 'yes', label: 'Yes', sort_order: 0 },
+                { question_id: (evidenceQ as { id: number }).id, value: 'no', label: 'No', sort_order: 1 },
+              ]);
+            }
+            const { data: perfQ } = await supabase.from('skyline_form_questions').insert({
+              section_id: mcSecId, type: 'single_choice', code: 'assessment.marking.performance_outcome', label: 'Performance Outcome', sort_order: 4,
+              role_visibility: { student: false, trainer: true, office: true }, role_editability: { student: false, trainer: true, office: false },
+            }).select('id').single();
+            if (perfQ) {
+              await supabase.from('skyline_form_question_options').insert([
+                { question_id: (perfQ as { id: number }).id, value: 'yes', label: 'Yes', sort_order: 0 },
+                { question_id: (perfQ as { id: number }).id, value: 'no', label: 'No', sort_order: 1 },
               ]);
             }
           }

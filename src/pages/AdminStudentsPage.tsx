@@ -79,7 +79,7 @@ export const AdminStudentsPage: React.FC = () => {
   };
 
   useEffect(() => {
-    listForms('published').then((f) => setForms(f));
+    listForms('published', { asAdmin: false }).then((f) => setForms(f));
   }, []);
   useEffect(() => {
     listBatchesPaged(1, 1).then((res) => setHasBatches(res.total > 0));
@@ -92,7 +92,7 @@ export const AdminStudentsPage: React.FC = () => {
     }
     const cid = Number(courseFilter);
     if (!Number.isFinite(cid)) return;
-    getFormsForCourse(cid).then((f) => setFilteredForms(f.filter((form) => form.status === 'published')));
+    getFormsForCourse(cid, { asAdmin: false }).then((f) => setFilteredForms(f.filter((form) => form.status === 'published')));
   }, [courseFilter]);
 
   const displayForms = courseFilter ? filteredForms : forms;
@@ -117,7 +117,7 @@ export const AdminStudentsPage: React.FC = () => {
       if (courseFilter) {
         const cid = Number(courseFilter);
         if (!Number.isFinite(cid)) return { options: [], hasMore: false };
-        const formsForCourse = await getFormsForCourse(cid);
+        const formsForCourse = await getFormsForCourse(cid, { asAdmin: false });
         const published = formsForCourse.filter((f) => f.status === 'published');
         const filtered = search?.trim()
           ? published.filter((f) => f.name.toLowerCase().includes(search.toLowerCase()))
@@ -127,7 +127,7 @@ export const AdminStudentsPage: React.FC = () => {
           hasMore: false,
         };
       }
-      const res = await listFormsPaged(page, 20, 'published', undefined, search || undefined);
+      const res = await listFormsPaged(page, 20, 'published', undefined, search || undefined, { asAdmin: false });
       return {
         options: res.data.map((f) => ({ value: String(f.id), label: `${f.name} (${f.version ?? '1.0.0'})` })),
         hasMore: page * 20 < res.total,

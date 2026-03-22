@@ -36,8 +36,15 @@ export interface InstanceWithAnswers {
 }
 
 
-export async function fetchForm(formId: number): Promise<Form | null> {
-  const { data, error } = await supabase.from('skyline_forms').select('*').eq('id', formId).single();
+export async function fetchForm(
+  formId: number,
+  options?: { allowInactiveForAdmin?: boolean }
+): Promise<Form | null> {
+  let query = supabase.from('skyline_forms').select('*').eq('id', formId);
+  if (!options?.allowInactiveForAdmin) {
+    query = query.eq('active', true);
+  }
+  const { data, error } = await query.single();
   if (error) {
     console.error('fetchForm error', error);
     return null;
@@ -45,7 +52,7 @@ export async function fetchForm(formId: number): Promise<Form | null> {
   return data as Form;
 }
 
-export async function updateForm(formId: number, updates: Partial<Pick<Form, 'name' | 'version' | 'unit_code' | 'unit_name' | 'qualification_code' | 'qualification_name' | 'header_asset_url' | 'cover_asset_url' | 'start_date' | 'end_date'>>): Promise<{ error: Error | null }> {
+export async function updateForm(formId: number, updates: Partial<Pick<Form, 'name' | 'version' | 'unit_code' | 'unit_name' | 'qualification_code' | 'qualification_name' | 'header_asset_url' | 'cover_asset_url' | 'start_date' | 'end_date' | 'active'>>): Promise<{ error: Error | null }> {
   const { updated_by } = getAuditFields();
   const payload = { ...updates, updated_by };
   const { error } = await supabase.from('skyline_forms').update(payload).eq('id', formId);
@@ -88,7 +95,7 @@ async function migrateTaskSectionsToSteps(formId: number, introStepId: number): 
       .single();
     if (!taskStep) continue;
     const taskStepId = (taskStep as { id: number }).id;
-    const orderMap: Record<string, number> = { task_instructions: 0, task_questions: 1, task_written_evidence_checklist: 2, task_results: 3 };
+    const orderMap: Record<string, number> = { task_instructions: 0, task_questions: 1, task_written_evidence_checklist: 2, task_marking_checklist: 3, task_results: 4 };
     for (const sec of secs) {
       await supabase.from('skyline_form_sections').update({ step_id: taskStepId, sort_order: orderMap[sec.pdf_render_mode] ?? sec.sort_order }).eq('id', sec.id);
     }
@@ -119,8 +126,42 @@ async function migrateTaskSectionsToSteps(formId: number, introStepId: number): 
         ]);
       }
     }
-    // Update task_results sort_order to 3
-    await supabase.from('skyline_form_sections').update({ sort_order: 3 }).eq('step_id', taskStepId).eq('pdf_render_mode', 'task_results');
+    // Add Assessment Marking Checklist section
+    const { data: mcSection } = await supabase
+      .from('skyline_form_sections')
+      .insert({ step_id: taskStepId, title: 'Assessment Marking Checklist', pdf_render_mode: 'task_marking_checklist', assessment_task_row_id: rowId, sort_order: 3 })
+      .select('id')
+      .single();
+    if (mcSection) {
+      const mcSecId = (mcSection as { id: number }).id;
+      await supabase.from('skyline_form_questions').insert([
+        { section_id: mcSecId, type: 'short_text', code: 'assessment.marking.candidateName', label: 'Candidate Name', sort_order: 0, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
+        { section_id: mcSecId, type: 'short_text', code: 'assessment.marking.assessorName', label: 'Assessor Name', sort_order: 1, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
+        { section_id: mcSecId, type: 'date', code: 'assessment.marking.assessmentDate', label: 'Assessment date/s', sort_order: 2, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
+      ]);
+      const { data: evidenceQ } = await supabase.from('skyline_form_questions').insert({
+        section_id: mcSecId, type: 'single_choice', code: 'assessment.marking.evidence_outcome', label: 'Evidence Outcome', sort_order: 3,
+        role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT,
+      }).select('id').single();
+      if (evidenceQ) {
+        await supabase.from('skyline_form_question_options').insert([
+          { question_id: (evidenceQ as { id: number }).id, value: 'yes', label: 'Yes', sort_order: 0 },
+          { question_id: (evidenceQ as { id: number }).id, value: 'no', label: 'No', sort_order: 1 },
+        ]);
+      }
+      const { data: perfQ } = await supabase.from('skyline_form_questions').insert({
+        section_id: mcSecId, type: 'single_choice', code: 'assessment.marking.performance_outcome', label: 'Performance Outcome', sort_order: 4,
+        role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT,
+      }).select('id').single();
+      if (perfQ) {
+        await supabase.from('skyline_form_question_options').insert([
+          { question_id: (perfQ as { id: number }).id, value: 'yes', label: 'Yes', sort_order: 0 },
+          { question_id: (perfQ as { id: number }).id, value: 'no', label: 'No', sort_order: 1 },
+        ]);
+      }
+    }
+    // Update task_results sort_order to 4
+    await supabase.from('skyline_form_sections').update({ sort_order: 4 }).eq('step_id', taskStepId).eq('pdf_render_mode', 'task_results');
     migrated++;
   }
   return migrated;
@@ -187,7 +228,8 @@ export async function ensureTaskSectionsForForm(formId: number): Promise<{ creat
         { step_id: taskStepId, title: 'Student Instructions', pdf_render_mode: 'task_instructions', assessment_task_row_id: row.id, sort_order: 0 },
         { step_id: taskStepId, title: 'Questions', pdf_render_mode: 'task_questions', assessment_task_row_id: row.id, sort_order: 1 },
         { step_id: taskStepId, title: 'Written Evidence Checklist', pdf_render_mode: 'task_written_evidence_checklist', assessment_task_row_id: row.id, sort_order: 2 },
-        { step_id: taskStepId, title: 'Results', pdf_render_mode: 'task_results', assessment_task_row_id: row.id, sort_order: 3 },
+        { step_id: taskStepId, title: 'Assessment Marking Checklist', pdf_render_mode: 'task_marking_checklist', assessment_task_row_id: row.id, sort_order: 3 },
+        { step_id: taskStepId, title: 'Results', pdf_render_mode: 'task_results', assessment_task_row_id: row.id, sort_order: 4 },
       ]);
       const { data: wecSection } = await supabase
         .from('skyline_form_sections')
@@ -216,9 +258,96 @@ export async function ensureTaskSectionsForForm(formId: number): Promise<{ creat
           ]);
         }
       }
+      const { data: mcSection } = await supabase.from('skyline_form_sections').select('id').eq('step_id', taskStepId).eq('pdf_render_mode', 'task_marking_checklist').single();
+      if (mcSection) {
+        const mcSecId = (mcSection as { id: number }).id;
+        await supabase.from('skyline_form_questions').insert([
+          { section_id: mcSecId, type: 'short_text', code: 'assessment.marking.candidateName', label: 'Candidate Name', sort_order: 0, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
+          { section_id: mcSecId, type: 'short_text', code: 'assessment.marking.assessorName', label: 'Assessor Name', sort_order: 1, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
+          { section_id: mcSecId, type: 'date', code: 'assessment.marking.assessmentDate', label: 'Assessment date/s', sort_order: 2, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
+        ]);
+        const { data: evidenceQ } = await supabase.from('skyline_form_questions').insert({
+          section_id: mcSecId, type: 'single_choice', code: 'assessment.marking.evidence_outcome', label: 'Evidence Outcome', sort_order: 3,
+          role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT,
+        }).select('id').single();
+        if (evidenceQ) {
+          await supabase.from('skyline_form_question_options').insert([
+            { question_id: (evidenceQ as { id: number }).id, value: 'yes', label: 'Yes', sort_order: 0 },
+            { question_id: (evidenceQ as { id: number }).id, value: 'no', label: 'No', sort_order: 1 },
+          ]);
+        }
+        const { data: perfQ } = await supabase.from('skyline_form_questions').insert({
+          section_id: mcSecId, type: 'single_choice', code: 'assessment.marking.performance_outcome', label: 'Performance Outcome', sort_order: 4,
+          role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT,
+        }).select('id').single();
+        if (perfQ) {
+          await supabase.from('skyline_form_question_options').insert([
+            { question_id: (perfQ as { id: number }).id, value: 'yes', label: 'Yes', sort_order: 0 },
+            { question_id: (perfQ as { id: number }).id, value: 'no', label: 'No', sort_order: 1 },
+          ]);
+        }
+      }
       created += 1;
     }
   }
+
+  // Backfill Assessment Marking Checklist for existing task steps that don't have it
+  const formStepIds = (steps as { id: number }[]).map((s) => s.id);
+  if (formStepIds.length === 0) return { created };
+  const { data: allTaskSections } = await supabase
+    .from('skyline_form_sections')
+    .select('step_id, pdf_render_mode, assessment_task_row_id')
+    .in('step_id', formStepIds)
+    .in('pdf_render_mode', ['task_written_evidence_checklist', 'task_results', 'task_marking_checklist']);
+  const byStep = new Map<number, { hasWritten: boolean; hasResults: boolean; hasMarking: boolean; rowId: number | null }>();
+  for (const s of (allTaskSections || []) as { step_id: number; pdf_render_mode: string; assessment_task_row_id: number | null }[]) {
+    let entry = byStep.get(s.step_id);
+    if (!entry) entry = { hasWritten: false, hasResults: false, hasMarking: false, rowId: s.assessment_task_row_id };
+    if (s.pdf_render_mode === 'task_written_evidence_checklist') entry.hasWritten = true;
+    if (s.pdf_render_mode === 'task_results') entry.hasResults = true;
+    if (s.pdf_render_mode === 'task_marking_checklist') entry.hasMarking = true;
+    if (s.assessment_task_row_id) entry.rowId = s.assessment_task_row_id;
+    byStep.set(s.step_id, entry);
+  }
+  for (const [stepId, entry] of byStep.entries()) {
+    if (entry.hasWritten && entry.hasResults && !entry.hasMarking && entry.rowId) {
+      await supabase.from('skyline_form_sections').update({ sort_order: 4 }).eq('step_id', stepId).eq('pdf_render_mode', 'task_results');
+      const { data: mcSection } = await supabase.from('skyline_form_sections').insert({
+        step_id: stepId, title: 'Assessment Marking Checklist', pdf_render_mode: 'task_marking_checklist',
+        assessment_task_row_id: entry.rowId, sort_order: 3,
+      }).select('id').single();
+      if (mcSection) {
+        const mcSecId = (mcSection as { id: number }).id;
+        await supabase.from('skyline_form_questions').insert([
+          { section_id: mcSecId, type: 'short_text', code: 'assessment.marking.candidateName', label: 'Candidate Name', sort_order: 0, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
+          { section_id: mcSecId, type: 'short_text', code: 'assessment.marking.assessorName', label: 'Assessor Name', sort_order: 1, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
+          { section_id: mcSecId, type: 'date', code: 'assessment.marking.assessmentDate', label: 'Assessment date/s', sort_order: 2, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
+        ]);
+        const { data: evidenceQ } = await supabase.from('skyline_form_questions').insert({
+          section_id: mcSecId, type: 'single_choice', code: 'assessment.marking.evidence_outcome', label: 'Evidence Outcome', sort_order: 3,
+          role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT,
+        }).select('id').single();
+        if (evidenceQ) {
+          await supabase.from('skyline_form_question_options').insert([
+            { question_id: (evidenceQ as { id: number }).id, value: 'yes', label: 'Yes', sort_order: 0 },
+            { question_id: (evidenceQ as { id: number }).id, value: 'no', label: 'No', sort_order: 1 },
+          ]);
+        }
+        const { data: perfQ } = await supabase.from('skyline_form_questions').insert({
+          section_id: mcSecId, type: 'single_choice', code: 'assessment.marking.performance_outcome', label: 'Performance Outcome', sort_order: 4,
+          role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT,
+        }).select('id').single();
+        if (perfQ) {
+          await supabase.from('skyline_form_question_options').insert([
+            { question_id: (perfQ as { id: number }).id, value: 'yes', label: 'Yes', sort_order: 0 },
+            { question_id: (perfQ as { id: number }).id, value: 'no', label: 'No', sort_order: 1 },
+          ]);
+        }
+        created += 1;
+      }
+    }
+  }
+
   return { created };
 }
 
@@ -308,8 +437,11 @@ export async function fetchTemplateForInstance(instanceId: number): Promise<Form
   return { form, steps: stepsWithSections };
 }
 
-export async function fetchTemplateForForm(formId: number): Promise<FormTemplate | null> {
-  const form = await fetchForm(formId);
+export async function fetchTemplateForForm(
+  formId: number,
+  options?: { allowInactiveForAdmin?: boolean }
+): Promise<FormTemplate | null> {
+  const form = await fetchForm(formId, options);
   if (!form) return null;
 
   const steps = await fetchFormSteps(formId);
@@ -2549,7 +2681,8 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
         { step_id: taskStepId, title: 'Student Instructions', pdf_render_mode: 'task_instructions', assessment_task_row_id: row.id, sort_order: 0 },
         { step_id: taskStepId, title: 'Questions', pdf_render_mode: 'task_questions', assessment_task_row_id: row.id, sort_order: 1 },
         { step_id: taskStepId, title: 'Written Evidence Checklist', pdf_render_mode: 'task_written_evidence_checklist', assessment_task_row_id: row.id, sort_order: 2 },
-        { step_id: taskStepId, title: 'Results', pdf_render_mode: 'task_results', assessment_task_row_id: row.id, sort_order: 3 },
+        { step_id: taskStepId, title: 'Assessment Marking Checklist', pdf_render_mode: 'task_marking_checklist', assessment_task_row_id: row.id, sort_order: 3 },
+        { step_id: taskStepId, title: 'Results', pdf_render_mode: 'task_results', assessment_task_row_id: row.id, sort_order: 4 },
       ]);
       const { data: wecSection } = await supabase
         .from('skyline_form_sections')
@@ -2575,6 +2708,35 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
           await supabase.from('skyline_form_question_options').insert([
             { question_id: (writtenQ as { id: number }).id, value: 'yes', label: 'Yes', sort_order: 0 },
             { question_id: (writtenQ as { id: number }).id, value: 'no', label: 'No', sort_order: 1 },
+          ]);
+        }
+      }
+      const { data: mcSection } = await supabase.from('skyline_form_sections').select('id').eq('step_id', taskStepId).eq('pdf_render_mode', 'task_marking_checklist').single();
+      if (mcSection) {
+        const mcSecId = (mcSection as { id: number }).id;
+        await supabase.from('skyline_form_questions').insert([
+          { section_id: mcSecId, type: 'short_text', code: 'assessment.marking.candidateName', label: 'Candidate Name', sort_order: 0, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
+          { section_id: mcSecId, type: 'short_text', code: 'assessment.marking.assessorName', label: 'Assessor Name', sort_order: 1, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
+          { section_id: mcSecId, type: 'date', code: 'assessment.marking.assessmentDate', label: 'Assessment date/s', sort_order: 2, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
+        ]);
+        const { data: evidenceQ } = await supabase.from('skyline_form_questions').insert({
+          section_id: mcSecId, type: 'single_choice', code: 'assessment.marking.evidence_outcome', label: 'Evidence Outcome', sort_order: 3,
+          role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT,
+        }).select('id').single();
+        if (evidenceQ) {
+          await supabase.from('skyline_form_question_options').insert([
+            { question_id: (evidenceQ as { id: number }).id, value: 'yes', label: 'Yes', sort_order: 0 },
+            { question_id: (evidenceQ as { id: number }).id, value: 'no', label: 'No', sort_order: 1 },
+          ]);
+        }
+        const { data: perfQ } = await supabase.from('skyline_form_questions').insert({
+          section_id: mcSecId, type: 'single_choice', code: 'assessment.marking.performance_outcome', label: 'Performance Outcome', sort_order: 4,
+          role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT,
+        }).select('id').single();
+        if (perfQ) {
+          await supabase.from('skyline_form_question_options').insert([
+            { question_id: (perfQ as { id: number }).id, value: 'yes', label: 'Yes', sort_order: 0 },
+            { question_id: (perfQ as { id: number }).id, value: 'no', label: 'No', sort_order: 1 },
           ]);
         }
       }
@@ -2806,9 +2968,13 @@ export async function createForm(input: CreateFormInput): Promise<Form | null> {
   return form;
 }
 
-export async function listForms(status?: string): Promise<Form[]> {
+export async function listForms(
+  status?: string,
+  options?: { asAdmin?: boolean }
+): Promise<Form[]> {
   let query = supabase.from('skyline_forms').select('*').order('created_at', { ascending: false });
   if (status) query = query.eq('status', status);
+  if (!options?.asAdmin) query = query.eq('active', true);
   const { data, error } = await query;
   if (error) {
     console.error('listForms error', error);
@@ -2822,7 +2988,8 @@ export async function listFormsPaged(
   pageSize = 20,
   status?: string,
   courseId?: number,
-  search?: string
+  search?: string,
+  options?: { asAdmin?: boolean }
 ): Promise<PaginatedResult<Form>> {
   const from = Math.max(0, (page - 1) * pageSize);
   const to = from + pageSize - 1;
@@ -2831,6 +2998,7 @@ export async function listFormsPaged(
     .select('*', { count: 'exact' })
     .order('created_at', { ascending: false });
   if (status) query = query.eq('status', status);
+  if (!options?.asAdmin) query = query.eq('active', true);
   if (search && search.trim()) {
     query = query.ilike('name', `%${search.trim()}%`);
   }
@@ -2950,18 +3118,23 @@ export async function deleteCourse(id: number): Promise<boolean> {
 }
 
 /** Forms assigned to this course. */
-export async function getFormsForCourse(courseId: number): Promise<Form[]> {
+export async function getFormsForCourse(
+  courseId: number,
+  options?: { asAdmin?: boolean }
+): Promise<Form[]> {
   const { data: links, error: linkErr } = await supabase
     .from('skyline_course_forms')
     .select('form_id')
     .eq('course_id', courseId);
   if (linkErr || !links?.length) return [];
   const formIds = (links as { form_id: number }[]).map((r) => r.form_id);
-  const { data: forms, error } = await supabase
+  let query = supabase
     .from('skyline_forms')
     .select('*')
     .in('id', formIds)
     .order('name');
+  if (!options?.asAdmin) query = query.eq('active', true);
+  const { data: forms, error } = await query;
   if (error) {
     console.error('getFormsForCourse error', error);
     return [];
@@ -3057,7 +3230,7 @@ export async function setCourseForms(courseId: number, formIds: number[]): Promi
 export async function formNameExists(name: string, excludeFormId?: number): Promise<boolean> {
   const trimmed = name.trim();
   if (!trimmed) return false;
-  const forms = await listForms();
+  const forms = await listForms(undefined, { asAdmin: true });
   return forms.some((f) => f.id !== excludeFormId && f.name.trim().toLowerCase() === trimmed.toLowerCase());
 }
 
@@ -3069,7 +3242,7 @@ function nextVersion(version: string | null): string {
 }
 
 export async function duplicateForm(formId: number): Promise<Form | null> {
-  const form = await fetchForm(formId);
+  const form = await fetchForm(formId, { allowInactiveForAdmin: true });
   if (!form) return null;
 
   const newVersion = nextVersion(form.version);

@@ -24,7 +24,7 @@ export const AdminFormPreviewPage: React.FC = () => {
       setLoading(false);
       return;
     }
-    fetchTemplateForForm(id).then((t) => {
+    fetchTemplateForForm(id, { allowInactiveForAdmin: true }).then((t) => {
       setTemplate(t || null);
       setLoading(false);
     });

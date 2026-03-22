@@ -113,7 +113,7 @@ export const InstanceFillPage: React.FC = () => {
       fetchAssessmentSummaryData(id).catch(() => null),
     ]);
     if (!tpl || !inst) {
-      setAccessDenied('Instance not found or unavailable.');
+      setAccessDenied('Form not found or unavailable.');
       setLoading(false);
       return;
     }
@@ -715,10 +715,18 @@ export const InstanceFillPage: React.FC = () => {
                     const checklistQ = section.questions.find((q) => q.code === 'written.evidence.checklist' && q.type === 'single_choice');
                     if (checklistQ && checklistQ.rows.length === 0) return false;
                   }
+                  /* Hide Assessment Marking Checklist section when it has no rows in either Evidence or Performance outcome */
+                  if (section.pdf_render_mode === 'task_marking_checklist') {
+                    const evidenceQ = section.questions.find((q) => q.code === 'assessment.marking.evidence_outcome' && q.type === 'single_choice');
+                    const perfQ = section.questions.find((q) => q.code === 'assessment.marking.performance_outcome' && q.type === 'single_choice');
+                    const evidenceRows = evidenceQ?.rows?.length ?? 0;
+                    const perfRows = perfQ?.rows?.length ?? 0;
+                    if (evidenceRows === 0 && perfRows === 0) return false;
+                  }
                   const hasInteractive = section.questions.some(
                     (q) => q.type !== 'instruction_block' && isRoleVisible((q.role_visibility as Record<string, boolean>) || {}, role)
                   );
-                  return hasInteractive || section.pdf_render_mode === 'assessment_tasks' || section.pdf_render_mode === 'assessment_submission' || section.pdf_render_mode === 'reasonable_adjustment' || section.pdf_render_mode === 'reasonable_adjustment_indicator' || section.pdf_render_mode === 'task_instructions' || section.pdf_render_mode === 'task_questions' || section.pdf_render_mode === 'task_written_evidence_checklist' || section.pdf_render_mode === 'task_results' || section.pdf_render_mode === 'assessment_summary';
+                  return hasInteractive || section.pdf_render_mode === 'assessment_tasks' || section.pdf_render_mode === 'assessment_submission' || section.pdf_render_mode === 'reasonable_adjustment' || section.pdf_render_mode === 'reasonable_adjustment_indicator' || section.pdf_render_mode === 'task_instructions' || section.pdf_render_mode === 'task_questions' || section.pdf_render_mode === 'task_written_evidence_checklist' || section.pdf_render_mode === 'task_marking_checklist' || section.pdf_render_mode === 'task_results' || section.pdf_render_mode === 'assessment_summary';
                 });
                 if (filteredSections.length === 0) return null;
                 return (
@@ -728,7 +736,7 @@ export const InstanceFillPage: React.FC = () => {
                 </h2>
                 {filteredSections.map((section) => (
                   <div key={section.id} className="mb-8 last:mb-0">
-                    {section.pdf_render_mode !== 'likert_table' && section.pdf_render_mode !== 'reasonable_adjustment' && section.pdf_render_mode !== 'reasonable_adjustment_indicator' && section.pdf_render_mode !== 'task_instructions' && section.pdf_render_mode !== 'task_questions' && section.pdf_render_mode !== 'task_written_evidence_checklist' && section.pdf_render_mode !== 'task_results' && section.pdf_render_mode !== 'assessment_summary' && (
+                    {section.pdf_render_mode !== 'likert_table' && section.pdf_render_mode !== 'reasonable_adjustment' && section.pdf_render_mode !== 'reasonable_adjustment_indicator' && section.pdf_render_mode !== 'task_instructions' && section.pdf_render_mode !== 'task_questions' && section.pdf_render_mode !== 'task_written_evidence_checklist' && section.pdf_render_mode !== 'task_marking_checklist' && section.pdf_render_mode !== 'task_results' && section.pdf_render_mode !== 'assessment_summary' && (
                       <h3 className="text-lg font-semibold text-gray-700 mb-2">{section.title}</h3>
                     )}
                     <div className={section.pdf_render_mode === 'declarations' || section.pdf_render_mode === 'assessment_submission' ? 'border border-gray-200 rounded-lg p-4 bg-white space-y-4' : 'space-y-4'}>
@@ -973,6 +981,97 @@ export const InstanceFillPage: React.FC = () => {
                                   })}
                                 </tbody>
                               </table>
+                            </div>
+                          );
+                        })()
+                      ) : section.pdf_render_mode === 'task_marking_checklist' ? (
+                        (() => {
+                          const evidenceQ = section.questions.find((q) => q.code === 'assessment.marking.evidence_outcome' && q.type === 'single_choice' && (q.rows?.length ?? 0) > 0);
+                          const perfQ = section.questions.find((q) => q.code === 'assessment.marking.performance_outcome' && q.type === 'single_choice' && (q.rows?.length ?? 0) > 0);
+                          if (!evidenceQ && !perfQ) return null;
+                          const candidateQ = section.questions.find((q) => q.code === 'assessment.marking.candidateName');
+                          const assessorQ = section.questions.find((q) => q.code === 'assessment.marking.assessorName');
+                          const dateQ = section.questions.find((q) => q.code === 'assessment.marking.assessmentDate');
+                          const re = { student: false, trainer: true, office: false };
+                          const editable = isRoleEditable(re, role) && canRoleEditCurrentWorkflow;
+                          const renderChecklistTable = (checklistQ: typeof evidenceQ, title: string, questionText: string) => {
+                            if (!checklistQ || !checklistQ.rows?.length) return null;
+                            return (
+                              <div key={checklistQ.id} className="mt-6 overflow-x-auto">
+                                <div className="bg-[#5E5E5E] text-white font-bold px-4 py-2">{title}</div>
+                                <p className="text-sm text-gray-700 py-2">{questionText}</p>
+                                <table className="w-full border-collapse border border-black text-sm">
+                                  <thead>
+                                    <tr>
+                                      <th className="bg-[#5E5E5E] text-white font-bold p-2 text-center border border-black w-[48px]" rowSpan={2}></th>
+                                      <th className="bg-[#5E5E5E] text-white font-bold p-2 text-left border border-black" rowSpan={2}>Criteria</th>
+                                      <th className="bg-[#5E5E5E] text-white font-bold p-2 text-center border border-black" colSpan={2}>SATISFACTORY</th>
+                                    </tr>
+                                    <tr>
+                                      <th className="bg-[#5E5E5E] text-white font-bold p-2 text-center border border-black w-[70px]">Yes</th>
+                                      <th className="bg-[#5E5E5E] text-white font-bold p-2 text-center border border-black w-[70px]">No</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {checklistQ.rows.map((row, idx) => {
+                                      const key = getAnswerKey(checklistQ.id, row.id);
+                                      const raw = answers[key];
+                                      const val = typeof raw === 'string' ? raw : '';
+                                      const yes = val === 'yes';
+                                      const no = val === 'no';
+                                      return (
+                                        <tr key={row.id}>
+                                          <td className="p-2 text-center border border-black">{idx + 1}</td>
+                                          <td className="p-2 border border-black">{row.row_label}</td>
+                                          <td className="p-2 text-center border border-black">
+                                            <input type="radio" name={`marking-${checklistQ.id}-${row.id}`} checked={yes} onChange={() => handleAnswerChange(checklistQ.id, row.id, yes ? '' : 'yes')} disabled={!editable} className="w-4 h-4 accent-black" />
+                                          </td>
+                                          <td className="p-2 text-center border border-black">
+                                            <input type="radio" name={`marking-${checklistQ.id}-${row.id}`} checked={no} onChange={() => handleAnswerChange(checklistQ.id, row.id, no ? '' : 'no')} disabled={!editable} className="w-4 h-4 accent-black" />
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              </div>
+                            );
+                          };
+                          return (
+                            <div className="border border-gray-300 rounded-lg overflow-hidden bg-white">
+                              <div className="bg-[#5E5E5E] text-white font-bold px-4 py-3">ASSESSMENT MARKING CHECKLIST</div>
+                              <div className="p-4 space-y-4">
+                                <table className="w-full border-collapse border border-gray-300 text-sm">
+                                  <tbody>
+                                    {candidateQ && (
+                                      <tr>
+                                        <td className="bg-gray-100 font-semibold text-gray-700 p-2 border border-gray-300 w-1/3">Candidate Name</td>
+                                        <td className="p-2 border border-gray-300">
+                                          <input type="text" value={(answers[getAnswerKey(candidateQ.id, null)] as string) ?? ''} onChange={(e) => handleAnswerChange(candidateQ.id, null, e.target.value)} disabled={!editable} className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm disabled:bg-gray-50" placeholder="Enter candidate name" />
+                                        </td>
+                                      </tr>
+                                    )}
+                                    {assessorQ && (
+                                      <tr>
+                                        <td className="bg-gray-100 font-semibold text-gray-700 p-2 border border-gray-300">Assessor Name</td>
+                                        <td className="p-2 border border-gray-300">
+                                          <input type="text" value={(answers[getAnswerKey(assessorQ.id, null)] as string) ?? ''} onChange={(e) => handleAnswerChange(assessorQ.id, null, e.target.value)} disabled={!editable} className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm disabled:bg-gray-50" placeholder="Enter assessor name" />
+                                        </td>
+                                      </tr>
+                                    )}
+                                    {dateQ && (
+                                      <tr>
+                                        <td className="bg-gray-100 font-semibold text-gray-700 p-2 border border-gray-300">Assessment date/s</td>
+                                        <td className="p-2 border border-gray-300">
+                                          <DatePicker value={(answers[getAnswerKey(dateQ.id, null)] as string) ?? ''} onChange={(v) => handleAnswerChange(dateQ.id, null, v)} disabled={!editable} compact placement="above" className="min-w-[140px]" />
+                                        </td>
+                                      </tr>
+                                    )}
+                                  </tbody>
+                                </table>
+                                {evidenceQ && renderChecklistTable(evidenceQ, 'EVIDENCE OUTCOME', 'Did the candidate complete and submit the following while being observed?')}
+                                {perfQ && renderChecklistTable(perfQ, 'PERFORMANCE OUTCOME', 'Did the candidate provide answers to the following questions with the required length and breadth consistently applying knowledge of vocational environment?')}
+                              </div>
                             </div>
                           );
                         })()

@@ -46,7 +46,7 @@ export const AdminCoursesPage: React.FC = () => {
   }, [currentPage, loadCourses]);
 
   const loadFormsOptions = useCallback(async (page: number, search: string) => {
-    const res = await listFormsPaged(page, 20, undefined, undefined, search || undefined);
+    const res = await listFormsPaged(page, 20, undefined, undefined, search || undefined, { asAdmin: true });
     return {
       options: res.data.map((f) => ({
         value: f.id,
@@ -82,7 +82,7 @@ export const AdminCoursesPage: React.FC = () => {
       setEditDraft(null);
       return;
     }
-    getFormsForCourse(editingCourse.id).then((courseForms) => {
+    getFormsForCourse(editingCourse.id, { asAdmin: true }).then((courseForms) => {
       setEditDraft({
         name: editingCourse.name,
         form_ids: courseForms.map((f) => f.id),
@@ -126,7 +126,7 @@ export const AdminCoursesPage: React.FC = () => {
   const [formCountMap, setFormCountMap] = useState<Record<number, number>>({});
   useEffect(() => {
     if (courses.length === 0) return;
-    Promise.all(courses.map(async (c) => [c.id, (await getFormsForCourse(c.id)).length] as const)).then((pairs) => {
+    Promise.all(courses.map(async (c) => [c.id, (await getFormsForCourse(c.id, { asAdmin: true })).length] as const)).then((pairs) => {
       setFormCountMap(Object.fromEntries(pairs));
     });
   }, [courses]);

@@ -9,6 +9,7 @@ export interface Database {
           name: string;
           version: string | null;
           status: string;
+          active: boolean;
           unit_code: string | null;
           unit_name: string | null;
           qualification_code: string | null;
@@ -24,6 +25,7 @@ export interface Database {
           name: string;
           version?: string | null;
           status?: string;
+          active?: boolean;
           unit_code?: string | null;
           unit_name?: string | null;
           qualification_code?: string | null;
