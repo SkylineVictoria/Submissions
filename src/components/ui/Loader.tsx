@@ -38,6 +38,7 @@ export const Loader: React.FC<LoaderProps> = ({
   const loader = (
     <div
       className={cn(
+        'select-none cursor-wait',
         inline ? 'flex flex-row items-center gap-1.5' : 'flex flex-col items-center justify-center gap-4',
         className
       )}
@@ -91,7 +92,7 @@ export const Loader: React.FC<LoaderProps> = ({
 
   if (fullPage) {
     return (
-      <div className="min-h-screen bg-[var(--bg)] flex items-center justify-center">
+      <div className="min-h-screen bg-[var(--bg)] flex items-center justify-center select-none cursor-wait">
         {loader}
       </div>
     );

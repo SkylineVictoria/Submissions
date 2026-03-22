@@ -170,13 +170,13 @@ export const AdminFormsListPage: React.FC = () => {
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <h2 className="text-lg font-bold text-[var(--text)]">All Forms</h2>
               <div className="flex flex-wrap items-center gap-3">
-                <div className="relative flex-1 sm:flex-initial sm:min-w-[200px]">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                <div className="relative flex-1 sm:flex-initial sm:min-w-[240px]">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none shrink-0" />
                   <Input
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                     placeholder="Search forms..."
-                    className="pl-10"
+                    className="!pl-10 min-w-0"
                   />
                 </div>
                 <div className="w-48 sm:w-56">

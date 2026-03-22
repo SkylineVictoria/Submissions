@@ -157,7 +157,7 @@ export const AdminFormPreviewPage: React.FC = () => {
               </div>
               <div className="mt-4 relative min-h-96 bg-gray-50 border border-[var(--border)] rounded-lg overflow-hidden">
                 {pdfLoading && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-white/80 z-10">
+                  <div className="absolute inset-0 flex items-center justify-center bg-white/80 z-10 select-none cursor-wait">
                     <Loader variant="spinner" size="lg" />
                   </div>
                 )}
