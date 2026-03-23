@@ -1257,20 +1257,9 @@ function buildHtml(data: {
           const taskLabel = row?.row_label || 'Assessment Task';
           const taskMethod = row?.row_help || '';
           const subheader = taskMethod ? `${taskLabel} – ${taskMethod}` : taskLabel;
-          const candidateQ = questions.find((q) => q.question.code === 'assessment.marking.candidateName');
-          const assessorQ = questions.find((q) => q.question.code === 'assessment.marking.assessorName');
-          const dateQ = questions.find((q) => q.question.code === 'assessment.marking.assessmentDate');
-          const candidateVal = candidateQ ? String(answers.get(`q-${candidateQ.question.id}`) ?? '') : '';
-          const assessorVal = assessorQ ? String(answers.get(`q-${assessorQ.question.id}`) ?? '') : '';
-          const dateVal = dateQ ? String(answers.get(`q-${dateQ.question.id}`) ?? '') : '';
           html += '<div class="assessment-marking-checklist-wrapper">';
           html += '<div class="assessment-marking-checklist-header">ASSESSMENT MARKING CHECKLIST</div>';
           html += `<div class="assessment-marking-checklist-subheader">${labelToHtml(subheader)}</div>`;
-          html += '<table class="assessment-marking-meta-table"><tbody>';
-          html += `<tr><td class="amc-label">Candidate Name</td><td class="amc-value">${labelToHtml(candidateVal)}</td></tr>`;
-          html += `<tr><td class="amc-label">Assessor Name</td><td class="amc-value">${labelToHtml(assessorVal)}</td></tr>`;
-          html += `<tr><td class="amc-label">Assessment date/s</td><td class="amc-value">${labelToHtml(dateVal)}</td></tr>`;
-          html += '</tbody></table>';
           const renderChecklistTable = (checklistQ: { question: { id: number }; rows: FormQuestionRow[] }, title: string, questionText: string) => {
             if (!checklistQ || !checklistQ.rows?.length) return '';
             let t = `<div class="amc-outcome-section"><div class="amc-outcome-header">${title}</div>`;

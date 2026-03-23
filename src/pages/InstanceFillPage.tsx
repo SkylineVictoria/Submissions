@@ -369,57 +369,6 @@ export const InstanceFillPage: React.FC = () => {
     });
   }, [template, answers, resultsData, assessmentSummary, id]);
 
-  // Auto-populate Assessment Marking Checklist: candidate name, assessor name, assessment date (like results sheet)
-  useEffect(() => {
-    if (!template || !id) return;
-    const studentNameQ = template.steps?.flatMap((st) => st.sections).flatMap((s) => s.questions).find((q) => q.code === 'student.fullName');
-    const trainerNameQ = template.steps?.flatMap((st) => st.sections).flatMap((s) => s.questions).find((q) => q.code === 'trainer.fullName');
-    const studentName = studentNameQ ? String(answers[getAnswerKey(studentNameQ.id, null)] ?? '').trim() : '';
-    const trainerName = trainerNameQ ? String(answers[getAnswerKey(trainerNameQ.id, null)] ?? '').trim() : '';
-    const taskResultSections = template.steps?.flatMap((st) => st.sections).filter((s) => s.pdf_render_mode === 'task_results') ?? [];
-    const rowIdToResultsSection = new Map<number, number>();
-    for (const sec of taskResultSections) {
-      const rowId = (sec as { assessment_task_row_id?: number }).assessment_task_row_id;
-      if (rowId) rowIdToResultsSection.set(rowId, sec.id);
-    }
-    const today = new Date().toISOString().split('T')[0];
-    const mcSections = template.steps?.flatMap((st) => st.sections).filter((s) => s.pdf_render_mode === 'task_marking_checklist') ?? [];
-    const updates: { questionId: number; value: string }[] = [];
-    for (const sec of mcSections) {
-      const rowId = (sec as { assessment_task_row_id?: number }).assessment_task_row_id;
-      const resultsSecId = rowId ? rowIdToResultsSection.get(rowId) : null;
-      const rd = resultsSecId ? resultsData[resultsSecId] : null;
-      const assessmentDateSource = rd?.first_attempt_date ?? rd?.trainer_date ?? today;
-      const candidateQ = sec.questions.find((q) => q.code === 'assessment.marking.candidateName');
-      const assessorQ = sec.questions.find((q) => q.code === 'assessment.marking.assessorName');
-      const dateQ = sec.questions.find((q) => q.code === 'assessment.marking.assessmentDate');
-      if (candidateQ && studentName) {
-        const current = String(answers[getAnswerKey(candidateQ.id, null)] ?? '').trim();
-        if (!current) updates.push({ questionId: candidateQ.id, value: studentName });
-      }
-      if (assessorQ && trainerName) {
-        const current = String(answers[getAnswerKey(assessorQ.id, null)] ?? '').trim();
-        if (!current) updates.push({ questionId: assessorQ.id, value: trainerName });
-      }
-      if (dateQ && assessmentDateSource) {
-        const current = String(answers[getAnswerKey(dateQ.id, null)] ?? '').trim();
-        if (!current) updates.push({ questionId: dateQ.id, value: assessmentDateSource });
-      }
-    }
-    if (updates.length === 0) return;
-    setAnswers((prev) => {
-      const next = { ...prev };
-      for (const u of updates) {
-        next[getAnswerKey(u.questionId, null)] = u.value;
-      }
-      return next;
-    });
-    for (const u of updates) {
-      saveAnswer(id, u.questionId, null, { text: u.value });
-    }
-    setPdfRefresh((r) => r + 1);
-  }, [template, answers, resultsData, id]);
-
   const valueToSavePayload = (value: string | number | boolean | Record<string, unknown> | string[]) => {
     let text: string | undefined;
     let num: number | undefined;
@@ -1040,9 +989,6 @@ export const InstanceFillPage: React.FC = () => {
                           const evidenceQ = section.questions.find((q) => q.code === 'assessment.marking.evidence_outcome' && q.type === 'single_choice' && (q.rows?.length ?? 0) > 0);
                           const perfQ = section.questions.find((q) => q.code === 'assessment.marking.performance_outcome' && q.type === 'single_choice' && (q.rows?.length ?? 0) > 0);
                           if (!evidenceQ && !perfQ) return null;
-                          const candidateQ = section.questions.find((q) => q.code === 'assessment.marking.candidateName');
-                          const assessorQ = section.questions.find((q) => q.code === 'assessment.marking.assessorName');
-                          const dateQ = section.questions.find((q) => q.code === 'assessment.marking.assessmentDate');
                           const re = { student: false, trainer: true, office: true };
                           const editable = isRoleEditable(re, role) && canRoleEditCurrentWorkflow;
                           const renderChecklistTable = (checklistQ: typeof evidenceQ, title: string, questionText: string) => {
@@ -1092,34 +1038,6 @@ export const InstanceFillPage: React.FC = () => {
                             <div className="border border-gray-300 rounded-lg overflow-hidden bg-white">
                               <div className="bg-[#5E5E5E] text-white font-bold px-4 py-3">ASSESSMENT MARKING CHECKLIST</div>
                               <div className="p-4 space-y-4">
-                                <table className="w-full border-collapse border border-gray-300 text-sm">
-                                  <tbody>
-                                    {candidateQ && (
-                                      <tr>
-                                        <td className="bg-gray-100 font-semibold text-gray-700 p-2 border border-gray-300 w-1/3">Candidate Name</td>
-                                        <td className="p-2 border border-gray-300">
-                                          <input type="text" value={(answers[getAnswerKey(candidateQ.id, null)] as string) ?? ''} onChange={(e) => handleAnswerChange(candidateQ.id, null, e.target.value)} disabled={!editable} className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm disabled:bg-gray-50" placeholder="Enter candidate name" />
-                                        </td>
-                                      </tr>
-                                    )}
-                                    {assessorQ && (
-                                      <tr>
-                                        <td className="bg-gray-100 font-semibold text-gray-700 p-2 border border-gray-300">Assessor Name</td>
-                                        <td className="p-2 border border-gray-300">
-                                          <input type="text" value={(answers[getAnswerKey(assessorQ.id, null)] as string) ?? ''} onChange={(e) => handleAnswerChange(assessorQ.id, null, e.target.value)} disabled={!editable} className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm disabled:bg-gray-50" placeholder="Enter assessor name" />
-                                        </td>
-                                      </tr>
-                                    )}
-                                    {dateQ && (
-                                      <tr>
-                                        <td className="bg-gray-100 font-semibold text-gray-700 p-2 border border-gray-300">Assessment date/s</td>
-                                        <td className="p-2 border border-gray-300">
-                                          <DatePicker value={(answers[getAnswerKey(dateQ.id, null)] as string) ?? ''} onChange={(v) => handleAnswerChange(dateQ.id, null, v)} disabled={!editable} compact placement="above" className="min-w-[140px]" />
-                                        </td>
-                                      </tr>
-                                    )}
-                                  </tbody>
-                                </table>
                                 {evidenceQ && renderChecklistTable(evidenceQ, 'EVIDENCE OUTCOME', 'Did the candidate complete and submit the following while being observed?')}
                                 {perfQ && renderChecklistTable(perfQ, 'PERFORMANCE OUTCOME', 'Did the candidate provide answers to the following questions with the required length and breadth consistently applying knowledge of vocational environment?')}
                               </div>
