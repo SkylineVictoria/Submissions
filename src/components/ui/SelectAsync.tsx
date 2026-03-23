@@ -123,7 +123,6 @@ export const SelectAsync: React.FC<SelectAsyncProps> = ({
   useEffect(() => {
     if (isOpen && triggerRef.current) {
       const rect = triggerRef.current.getBoundingClientRect();
-      const desiredW = Math.max(rect.width, 200);
       const maxAllowed = window.innerWidth - rect.left - 16;
       const maxW = Math.min(360, maxAllowed);
       setDropdownStyle({
