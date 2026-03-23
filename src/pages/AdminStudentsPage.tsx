@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
-import { Plus, Send, Mail, Phone, Pencil, Link } from 'lucide-react';
+import { Plus, Send, Mail, Phone, Pencil, Link, Upload, Trash2 } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { listStudentsPaged, createStudent, updateStudent, createFormInstance, getInstanceForStudentAndForm, listForms, listBatchesPaged, listStudentsInBatch, listCoursesPaged, getFormsForCourse, listFormsPaged } from '../lib/formEngine';
 import {
   buildEmailFromLocalAndDomain,
@@ -48,6 +49,11 @@ export const AdminStudentsPage: React.FC = () => {
     phone: '',
     batch_id: '',
   });
+  const [isImportOpen, setIsImportOpen] = useState(false);
+  const [importBatchId, setImportBatchId] = useState('');
+  const [importRows, setImportRows] = useState<Array<{ first_name: string; last_name: string; email: string; phone: string; student_id?: string }>>([]);
+  const [importFileName, setImportFileName] = useState('');
+  const [importing, setImporting] = useState(false);
 
   const digitsOnly = (val: string) => val.replace(/\D/g, '');
   const validateCreateStudentForm = (form: {
@@ -103,6 +109,13 @@ export const AdminStudentsPage: React.FC = () => {
       options: res.data.map((b) => ({ value: String(b.id), label: b.name })),
       hasMore: page * 20 < res.total,
     };
+  }, []);
+
+  const loadBatchesOptionsWithNone = useCallback(async (page: number, search: string) => {
+    const res = await listBatchesPaged(page, 20, search || undefined);
+    const opts = res.data.map((b) => ({ value: String(b.id), label: b.name }));
+    const withNone = page === 1 && !search?.trim() ? [{ value: '', label: 'No batch' }, ...opts] : opts;
+    return { options: withNone, hasMore: page * 20 < res.total };
   }, []);
 
   const loadCoursesOptions = useCallback(async (page: number, search: string) => {
@@ -203,6 +216,140 @@ export const AdminStudentsPage: React.FC = () => {
       toast.error('Failed to add student');
     }
     setCreating(false);
+  };
+
+  const normalizeCol = (s: string) => String(s ?? '').trim().toLowerCase().replace(/[\s_-]+/g, ' ');
+  const colMatch = (h: string, ...aliases: string[]) =>
+    aliases.some((a) => normalizeCol(h).includes(normalizeCol(a)) || normalizeCol(a).includes(normalizeCol(h)));
+
+  const parseImportFile = (file: File): Promise<Array<{ first_name: string; last_name: string; email: string; phone: string; student_id?: string }>> => {
+    return new Promise((resolve, reject) => {
+      const isCsv = file.name.toLowerCase().endsWith('.csv');
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = e.target?.result;
+          if (!data) {
+            reject(new Error('Could not read file'));
+            return;
+          }
+          const wb = XLSX.read(data, { type: isCsv ? 'binary' : 'array' });
+          const firstSheet = wb.SheetNames[0];
+          if (!firstSheet) {
+            reject(new Error('No sheets found'));
+            return;
+          }
+          const ws = wb.Sheets[firstSheet];
+          const rows = XLSX.utils.sheet_to_json(ws, { header: 1 }) as unknown[][];
+          if (rows.length < 2) {
+            resolve([]);
+            return;
+          }
+          const headers = (rows[0] ?? []).map((h) => String(h ?? '').trim());
+          const fnIdx = headers.findIndex((h) => colMatch(h, 'first name', 'firstname'));
+          const lnIdx = headers.findIndex((h) => colMatch(h, 'last name', 'lastname'));
+          const emIdx = headers.findIndex((h) => colMatch(h, 'email'));
+          const phIdx = headers.findIndex((h) => colMatch(h, 'phone'));
+          const sidIdx = headers.findIndex((h) => colMatch(h, 'student id', 'studentid'));
+          if (fnIdx < 0 || emIdx < 0) {
+            reject(new Error('Required columns: First Name, Email. Found: ' + headers.join(', ')));
+            return;
+          }
+          const result: Array<{ first_name: string; last_name: string; email: string; phone: string; student_id?: string }> = [];
+          for (let i = 1; i < rows.length; i++) {
+            const row = rows[i] as unknown[];
+            const first = String(row[fnIdx] ?? '').trim();
+            const last = lnIdx >= 0 ? String(row[lnIdx] ?? '').trim() : '';
+            const email = String(row[emIdx] ?? '').trim();
+            const phone = phIdx >= 0 ? digitsOnly(String(row[phIdx] ?? '')).slice(0, 10) : '';
+            const studentId = sidIdx >= 0 ? String(row[sidIdx] ?? '').trim() : undefined;
+            if (!first && !email) continue;
+            result.push({ first_name: first, last_name: last, email, phone, student_id: studentId || undefined });
+          }
+          resolve(result);
+        } catch (err) {
+          reject(err instanceof Error ? err : new Error('Parse failed'));
+        }
+      };
+      reader.onerror = () => reject(new Error('File read failed'));
+      if (isCsv) {
+        reader.readAsBinaryString(file);
+      } else {
+        reader.readAsArrayBuffer(file);
+      }
+    });
+  };
+
+  const handleImportFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const ext = file.name.toLowerCase();
+    if (!ext.endsWith('.csv') && !ext.endsWith('.xlsx') && !ext.endsWith('.xls')) {
+      toast.error('Please upload a CSV or XLSX file.');
+      return;
+    }
+    try {
+      const rows = await parseImportFile(file);
+      setImportRows(rows);
+      setImportFileName(file.name);
+      if (rows.length === 0) toast.info('No valid rows found. Expected columns: First Name, Last Name, Email, Phone.');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to parse file');
+    }
+    e.target.value = '';
+  };
+
+  const updateImportRow = (index: number, field: keyof typeof importRows[0], value: string) => {
+    setImportRows((prev) =>
+      prev.map((r, i) => (i === index ? { ...r, [field]: field === 'phone' ? digitsOnly(value).slice(0, 10) : value } : r))
+    );
+  };
+
+  const removeImportRow = (index: number) => {
+    setImportRows((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleBulkImport = async () => {
+    if (importRows.length === 0) {
+      toast.error('Upload a file with student data first');
+      return;
+    }
+    setImporting(true);
+    let success = 0;
+    let failed = 0;
+    for (const row of importRows) {
+      const first = row.first_name?.trim();
+      const email = row.email?.trim();
+      if (!first || !email) {
+        failed++;
+        continue;
+      }
+      const studentId = row.student_id?.trim() || (email.includes('@') ? email.split('@')[0] : `${(first + '.' + row.last_name).toLowerCase().replace(/\s+/g, '.')}`);
+      const batchId = importBatchId ? Number(importBatchId) : null;
+      const created = await createStudent({
+        student_id: studentId.replace(/\s+/g, ''),
+        first_name: first,
+        last_name: row.last_name ?? '',
+        email,
+        phone: row.phone || undefined,
+        batch_id: (batchId && Number.isFinite(batchId)) ? batchId : undefined,
+      });
+      if (created) success++;
+      else failed++;
+    }
+    setImporting(false);
+    if (success > 0) {
+      setCurrentPage(1);
+      const res = await listStudentsPaged(1, PAGE_SIZE, searchTerm);
+      setStudents(res.data);
+      setTotalStudents(res.total);
+      setImportRows([]);
+      setImportFileName('');
+      setIsImportOpen(false);
+      toast.success(`${success} student${success !== 1 ? 's' : ''} imported.${failed > 0 ? ` ${failed} failed (may be duplicates).` : ''}`);
+    } else {
+      toast.error(failed > 0 ? `Import failed for all ${failed} rows. Check for duplicate emails or Student IDs.` : 'No valid rows to import.');
+    }
   };
 
   const handleSendForm = async (studentId: number) => {
@@ -378,6 +525,10 @@ export const AdminStudentsPage: React.FC = () => {
               <Button onClick={() => setIsCreateOpen(true)} className="min-w-[160px]" disabled={!hasBatches}>
                 <Plus className="w-4 h-4 mr-2 inline" />
                 Add Student
+              </Button>
+              <Button variant="outline" onClick={() => { setIsImportOpen(true); setImportRows([]); setImportFileName(''); }} className="min-w-[160px]" disabled={!hasBatches}>
+                <Upload className="w-4 h-4 mr-2 inline" />
+                Import Students
               </Button>
             </div>
           </div>
@@ -649,6 +800,126 @@ export const AdminStudentsPage: React.FC = () => {
               )}
             </Button>
           </div>
+        </div>
+      </Modal>
+
+      <Modal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} title="Import Students" size="lg">
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">
+            Upload a CSV or XLSX file with columns: <strong>First Name</strong>, <strong>Last Name</strong>, <strong>Email</strong>, <strong>Phone</strong>. Optional: <strong>Student ID</strong>.
+          </p>
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="cursor-pointer inline-flex">
+              <input
+                type="file"
+                accept=".csv,.xlsx,.xls"
+                onChange={handleImportFileChange}
+                className="sr-only"
+              />
+              <span className="inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-semibold rounded-lg border-2 border-[var(--border)] bg-white text-gray-700 hover:bg-gray-50 min-h-[40px]">
+                <Upload className="w-4 h-4" />
+                Choose file
+              </span>
+            </label>
+            {importFileName && (
+              <span className="text-sm text-gray-600">{importFileName} — {importRows.length} row{importRows.length !== 1 ? 's' : ''}</span>
+            )}
+          </div>
+          {importRows.length > 0 && (
+            <>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Assign to batch (optional)</label>
+                <SelectAsync
+                  value={importBatchId}
+                  onChange={(v) => setImportBatchId(v)}
+                  loadOptions={loadBatchesOptionsWithNone}
+                  placeholder="Select batch (optional)"
+                  className="w-full max-w-[300px]"
+                />
+              </div>
+              <p className="text-xs text-gray-500">Edit records before importing. Remove rows you don&apos;t want.</p>
+              <div className="max-h-[280px] overflow-x-auto overflow-y-auto border border-gray-200 rounded-lg">
+                <table className="w-full text-sm min-w-[520px]">
+                  <thead className="bg-gray-50 sticky top-0">
+                    <tr>
+                      <th className="text-left px-2 py-2 font-semibold w-[22%]">First Name</th>
+                      <th className="text-left px-2 py-2 font-semibold w-[22%]">Last Name</th>
+                      <th className="text-left px-2 py-2 font-semibold w-[36%]">Email</th>
+                      <th className="text-left px-2 py-2 font-semibold w-[12%]">Phone</th>
+                      <th className="w-10 px-2 py-2"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {importRows.map((r, i) => (
+                      <tr key={i} className="border-t border-gray-100 hover:bg-gray-50/50">
+                        <td className="px-2 py-1.5">
+                          <Input
+                            value={r.first_name}
+                            onChange={(e) => updateImportRow(i, 'first_name', e.target.value)}
+                            placeholder="First name"
+                            className="text-sm py-1.5 min-h-0"
+                          />
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <Input
+                            value={r.last_name}
+                            onChange={(e) => updateImportRow(i, 'last_name', e.target.value)}
+                            placeholder="Last name"
+                            className="text-sm py-1.5 min-h-0"
+                          />
+                        </td>
+                        <td className="px-2 py-1.5 min-w-[140px]">
+                          <Input
+                            value={r.email}
+                            onChange={(e) => updateImportRow(i, 'email', e.target.value)}
+                            placeholder="Email"
+                            className="text-sm py-1.5 min-h-0 w-full min-w-0"
+                          />
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <Input
+                            value={r.phone}
+                            onChange={(e) => updateImportRow(i, 'phone', e.target.value)}
+                            placeholder="Phone"
+                            className="text-sm py-1.5 min-h-0"
+                          />
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <button
+                            type="button"
+                            onClick={() => removeImportRow(i)}
+                            className="p-1.5 text-gray-400 hover:text-red-600 rounded"
+                            title="Remove row"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <Button variant="outline" onClick={() => setIsImportOpen(false)}>Cancel</Button>
+                <Button
+                  onClick={handleBulkImport}
+                  disabled={importing}
+                >
+                  {importing ? (
+                    <>
+                      <Loader variant="dots" size="sm" inline className="mr-2" />
+                      Importing...
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="w-4 h-4 mr-2 inline" />
+                      Import {importRows.length} student{importRows.length !== 1 ? 's' : ''}
+                    </>
+                  )}
+                </Button>
+              </div>
+            </>
+          )}
         </div>
       </Modal>
 

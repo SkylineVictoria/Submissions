@@ -46,7 +46,7 @@ export const SelectAsync: React.FC<SelectAsyncProps> = ({
   const selectRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const [dropdownStyle, setDropdownStyle] = useState<{ top: number; left: number; minWidth: number } | null>(null);
+  const [dropdownStyle, setDropdownStyle] = useState<{ top: number; left: number; minWidth: number; maxWidth: number } | null>(null);
   const [options, setOptions] = useState<SelectAsyncOption[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -123,10 +123,14 @@ export const SelectAsync: React.FC<SelectAsyncProps> = ({
   useEffect(() => {
     if (isOpen && triggerRef.current) {
       const rect = triggerRef.current.getBoundingClientRect();
+      const desiredW = Math.max(rect.width, 200);
+      const maxAllowed = window.innerWidth - rect.left - 16;
+      const maxW = Math.min(360, maxAllowed);
       setDropdownStyle({
         top: rect.bottom + 4,
         left: rect.left,
-        minWidth: Math.max(rect.width, 320),
+        minWidth: Math.min(rect.width, maxW),
+        maxWidth: maxW,
       });
     } else {
       setDropdownStyle(null);
@@ -194,7 +198,8 @@ export const SelectAsync: React.FC<SelectAsyncProps> = ({
               style={{
                 top: dropdownStyle.top,
                 left: dropdownStyle.left,
-                minWidth: dropdownStyle.minWidth,
+                width: dropdownStyle.minWidth,
+                maxWidth: dropdownStyle.maxWidth,
               }}
             >
               <div className="p-2 border-b border-gray-100">

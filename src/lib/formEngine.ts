@@ -2361,7 +2361,7 @@ export interface CreateStudentInput {
   last_name?: string;
   email: string;
   phone?: string;
-  batch_id: number;
+  batch_id?: number | null;
   date_of_birth?: string;
   address_line_1?: string;
   address_line_2?: string;
@@ -2389,7 +2389,7 @@ export async function createStudent(input: CreateStudentInput): Promise<Student 
       last_name: last || null,
       email: input.email.trim(),
       phone: input.phone?.trim() || null,
-      batch_id: input.batch_id,
+      batch_id: input.batch_id ?? null,
       date_of_birth: input.date_of_birth?.trim() || null,
       address_line_1: input.address_line_1?.trim() || null,
       address_line_2: input.address_line_2?.trim() || null,
