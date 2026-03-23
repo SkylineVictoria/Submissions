@@ -115,7 +115,7 @@ async function migrateTaskSectionsToSteps(formId: number, introStepId: number): 
           label: 'Written Evidence Checklist',
           sort_order: 0,
           role_visibility: TRAINER_OFFICE_VISIBLE,
-          role_editability: TRAINER_ONLY_EDIT,
+          role_editability: TRAINER_OFFICE_EDIT,
         })
         .select('id')
         .single();
@@ -135,13 +135,13 @@ async function migrateTaskSectionsToSteps(formId: number, introStepId: number): 
     if (mcSection) {
       const mcSecId = (mcSection as { id: number }).id;
       await supabase.from('skyline_form_questions').insert([
-        { section_id: mcSecId, type: 'short_text', code: 'assessment.marking.candidateName', label: 'Candidate Name', sort_order: 0, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
-        { section_id: mcSecId, type: 'short_text', code: 'assessment.marking.assessorName', label: 'Assessor Name', sort_order: 1, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
-        { section_id: mcSecId, type: 'date', code: 'assessment.marking.assessmentDate', label: 'Assessment date/s', sort_order: 2, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
+        { section_id: mcSecId, type: 'short_text', code: 'assessment.marking.candidateName', label: 'Candidate Name', sort_order: 0, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_OFFICE_EDIT },
+        { section_id: mcSecId, type: 'short_text', code: 'assessment.marking.assessorName', label: 'Assessor Name', sort_order: 1, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_OFFICE_EDIT },
+        { section_id: mcSecId, type: 'date', code: 'assessment.marking.assessmentDate', label: 'Assessment date/s', sort_order: 2, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_OFFICE_EDIT },
       ]);
       const { data: evidenceQ } = await supabase.from('skyline_form_questions').insert({
         section_id: mcSecId, type: 'single_choice', code: 'assessment.marking.evidence_outcome', label: 'Evidence Outcome', sort_order: 3,
-        role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT,
+        role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_OFFICE_EDIT,
       }).select('id').single();
       if (evidenceQ) {
         await supabase.from('skyline_form_question_options').insert([
@@ -151,7 +151,7 @@ async function migrateTaskSectionsToSteps(formId: number, introStepId: number): 
       }
       const { data: perfQ } = await supabase.from('skyline_form_questions').insert({
         section_id: mcSecId, type: 'single_choice', code: 'assessment.marking.performance_outcome', label: 'Performance Outcome', sort_order: 4,
-        role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT,
+        role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_OFFICE_EDIT,
       }).select('id').single();
       if (perfQ) {
         await supabase.from('skyline_form_question_options').insert([
@@ -247,7 +247,7 @@ export async function ensureTaskSectionsForForm(formId: number): Promise<{ creat
             label: 'Written Evidence Checklist',
             sort_order: 0,
             role_visibility: TRAINER_OFFICE_VISIBLE,
-            role_editability: TRAINER_ONLY_EDIT,
+            role_editability: TRAINER_OFFICE_EDIT,
           })
           .select('id')
           .single();
@@ -262,13 +262,13 @@ export async function ensureTaskSectionsForForm(formId: number): Promise<{ creat
       if (mcSection) {
         const mcSecId = (mcSection as { id: number }).id;
         await supabase.from('skyline_form_questions').insert([
-          { section_id: mcSecId, type: 'short_text', code: 'assessment.marking.candidateName', label: 'Candidate Name', sort_order: 0, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
-          { section_id: mcSecId, type: 'short_text', code: 'assessment.marking.assessorName', label: 'Assessor Name', sort_order: 1, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
-          { section_id: mcSecId, type: 'date', code: 'assessment.marking.assessmentDate', label: 'Assessment date/s', sort_order: 2, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
+          { section_id: mcSecId, type: 'short_text', code: 'assessment.marking.candidateName', label: 'Candidate Name', sort_order: 0, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_OFFICE_EDIT },
+          { section_id: mcSecId, type: 'short_text', code: 'assessment.marking.assessorName', label: 'Assessor Name', sort_order: 1, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_OFFICE_EDIT },
+          { section_id: mcSecId, type: 'date', code: 'assessment.marking.assessmentDate', label: 'Assessment date/s', sort_order: 2, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_OFFICE_EDIT },
         ]);
         const { data: evidenceQ } = await supabase.from('skyline_form_questions').insert({
           section_id: mcSecId, type: 'single_choice', code: 'assessment.marking.evidence_outcome', label: 'Evidence Outcome', sort_order: 3,
-          role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT,
+          role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_OFFICE_EDIT,
         }).select('id').single();
         if (evidenceQ) {
           await supabase.from('skyline_form_question_options').insert([
@@ -278,7 +278,7 @@ export async function ensureTaskSectionsForForm(formId: number): Promise<{ creat
         }
         const { data: perfQ } = await supabase.from('skyline_form_questions').insert({
           section_id: mcSecId, type: 'single_choice', code: 'assessment.marking.performance_outcome', label: 'Performance Outcome', sort_order: 4,
-          role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT,
+          role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_OFFICE_EDIT,
         }).select('id').single();
         if (perfQ) {
           await supabase.from('skyline_form_question_options').insert([
@@ -319,13 +319,13 @@ export async function ensureTaskSectionsForForm(formId: number): Promise<{ creat
       if (mcSection) {
         const mcSecId = (mcSection as { id: number }).id;
         await supabase.from('skyline_form_questions').insert([
-          { section_id: mcSecId, type: 'short_text', code: 'assessment.marking.candidateName', label: 'Candidate Name', sort_order: 0, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
-          { section_id: mcSecId, type: 'short_text', code: 'assessment.marking.assessorName', label: 'Assessor Name', sort_order: 1, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
-          { section_id: mcSecId, type: 'date', code: 'assessment.marking.assessmentDate', label: 'Assessment date/s', sort_order: 2, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
+          { section_id: mcSecId, type: 'short_text', code: 'assessment.marking.candidateName', label: 'Candidate Name', sort_order: 0, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_OFFICE_EDIT },
+          { section_id: mcSecId, type: 'short_text', code: 'assessment.marking.assessorName', label: 'Assessor Name', sort_order: 1, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_OFFICE_EDIT },
+          { section_id: mcSecId, type: 'date', code: 'assessment.marking.assessmentDate', label: 'Assessment date/s', sort_order: 2, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_OFFICE_EDIT },
         ]);
         const { data: evidenceQ } = await supabase.from('skyline_form_questions').insert({
           section_id: mcSecId, type: 'single_choice', code: 'assessment.marking.evidence_outcome', label: 'Evidence Outcome', sort_order: 3,
-          role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT,
+          role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_OFFICE_EDIT,
         }).select('id').single();
         if (evidenceQ) {
           await supabase.from('skyline_form_question_options').insert([
@@ -335,7 +335,7 @@ export async function ensureTaskSectionsForForm(formId: number): Promise<{ creat
         }
         const { data: perfQ } = await supabase.from('skyline_form_questions').insert({
           section_id: mcSecId, type: 'single_choice', code: 'assessment.marking.performance_outcome', label: 'Performance Outcome', sort_order: 4,
-          role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT,
+          role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_OFFICE_EDIT,
         }).select('id').single();
         if (perfQ) {
           await supabase.from('skyline_form_question_options').insert([
@@ -380,6 +380,7 @@ export async function fetchTemplateForInstance(instanceId: number): Promise<Form
   const form = await fetchForm(instance.form_id);
   if (!form) return null;
 
+  await ensureTaskSectionsForForm(instance.form_id);
   const steps = await fetchFormSteps(instance.form_id);
   const stepsWithSections: FormStepWithSections[] = [];
 
@@ -444,6 +445,7 @@ export async function fetchTemplateForForm(
   const form = await fetchForm(formId, options);
   if (!form) return null;
 
+  await ensureTaskSectionsForForm(formId);
   const steps = await fetchFormSteps(formId);
   const stepsWithSections: FormStepWithSections[] = [];
 
@@ -2700,7 +2702,7 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
             label: 'Written Evidence Checklist',
             sort_order: 0,
             role_visibility: TRAINER_OFFICE_VISIBLE,
-            role_editability: TRAINER_ONLY_EDIT,
+            role_editability: TRAINER_OFFICE_EDIT,
           })
           .select('id')
           .single();
@@ -2715,13 +2717,13 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
       if (mcSection) {
         const mcSecId = (mcSection as { id: number }).id;
         await supabase.from('skyline_form_questions').insert([
-          { section_id: mcSecId, type: 'short_text', code: 'assessment.marking.candidateName', label: 'Candidate Name', sort_order: 0, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
-          { section_id: mcSecId, type: 'short_text', code: 'assessment.marking.assessorName', label: 'Assessor Name', sort_order: 1, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
-          { section_id: mcSecId, type: 'date', code: 'assessment.marking.assessmentDate', label: 'Assessment date/s', sort_order: 2, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT },
+          { section_id: mcSecId, type: 'short_text', code: 'assessment.marking.candidateName', label: 'Candidate Name', sort_order: 0, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_OFFICE_EDIT },
+          { section_id: mcSecId, type: 'short_text', code: 'assessment.marking.assessorName', label: 'Assessor Name', sort_order: 1, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_OFFICE_EDIT },
+          { section_id: mcSecId, type: 'date', code: 'assessment.marking.assessmentDate', label: 'Assessment date/s', sort_order: 2, role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_OFFICE_EDIT },
         ]);
         const { data: evidenceQ } = await supabase.from('skyline_form_questions').insert({
           section_id: mcSecId, type: 'single_choice', code: 'assessment.marking.evidence_outcome', label: 'Evidence Outcome', sort_order: 3,
-          role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT,
+          role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_OFFICE_EDIT,
         }).select('id').single();
         if (evidenceQ) {
           await supabase.from('skyline_form_question_options').insert([
@@ -2731,7 +2733,7 @@ async function createCompulsoryFormStructure(formId: number, assessmentTasks?: A
         }
         const { data: perfQ } = await supabase.from('skyline_form_questions').insert({
           section_id: mcSecId, type: 'single_choice', code: 'assessment.marking.performance_outcome', label: 'Performance Outcome', sort_order: 4,
-          role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_ONLY_EDIT,
+          role_visibility: TRAINER_OFFICE_VISIBLE, role_editability: TRAINER_OFFICE_EDIT,
         }).select('id').single();
         if (perfQ) {
           await supabase.from('skyline_form_question_options').insert([

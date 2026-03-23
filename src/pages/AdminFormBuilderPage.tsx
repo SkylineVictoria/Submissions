@@ -946,13 +946,13 @@ export const AdminFormBuilderPage: React.FC = () => {
     const hasCandidate = section.questions?.some((q) => q.code === 'assessment.marking.candidateName');
     if (hasCandidate) return;
     await supabase.from('skyline_form_questions').insert([
-      { section_id: sectionId, type: 'short_text', code: 'assessment.marking.candidateName', label: 'Candidate Name', sort_order: 0, role_visibility: { student: false, trainer: true, office: true }, role_editability: { student: false, trainer: true, office: false } },
-      { section_id: sectionId, type: 'short_text', code: 'assessment.marking.assessorName', label: 'Assessor Name', sort_order: 1, role_visibility: { student: false, trainer: true, office: true }, role_editability: { student: false, trainer: true, office: false } },
-      { section_id: sectionId, type: 'date', code: 'assessment.marking.assessmentDate', label: 'Assessment date/s', sort_order: 2, role_visibility: { student: false, trainer: true, office: true }, role_editability: { student: false, trainer: true, office: false } },
+      { section_id: sectionId, type: 'short_text', code: 'assessment.marking.candidateName', label: 'Candidate Name', sort_order: 0, role_visibility: { student: false, trainer: true, office: true }, role_editability: { student: false, trainer: true, office: true } },
+      { section_id: sectionId, type: 'short_text', code: 'assessment.marking.assessorName', label: 'Assessor Name', sort_order: 1, role_visibility: { student: false, trainer: true, office: true }, role_editability: { student: false, trainer: true, office: true } },
+      { section_id: sectionId, type: 'date', code: 'assessment.marking.assessmentDate', label: 'Assessment date/s', sort_order: 2, role_visibility: { student: false, trainer: true, office: true }, role_editability: { student: false, trainer: true, office: true } },
     ]);
     const { data: evidenceQ } = await supabase.from('skyline_form_questions').insert({
       section_id: sectionId, type: 'single_choice', code: 'assessment.marking.evidence_outcome', label: 'Evidence Outcome', sort_order: 3,
-      role_visibility: { student: false, trainer: true, office: true }, role_editability: { student: false, trainer: true, office: false },
+      role_visibility: { student: false, trainer: true, office: true }, role_editability: { student: false, trainer: true, office: true },
     }).select('id').single();
     if (evidenceQ) {
       const evId = (evidenceQ as { id: number }).id;
@@ -963,7 +963,7 @@ export const AdminFormBuilderPage: React.FC = () => {
     }
     const { data: perfQ } = await supabase.from('skyline_form_questions').insert({
       section_id: sectionId, type: 'single_choice', code: 'assessment.marking.performance_outcome', label: 'Performance Outcome', sort_order: 4,
-      role_visibility: { student: false, trainer: true, office: true }, role_editability: { student: false, trainer: true, office: false },
+      role_visibility: { student: false, trainer: true, office: true }, role_editability: { student: false, trainer: true, office: true },
     }).select('id').single();
     if (perfQ) {
       await supabase.from('skyline_form_question_options').insert([
@@ -2834,13 +2834,13 @@ function QuestionRowsEditor({ questionId, sectionPdfMode, formId, steps, onSteps
           if (mcSection) {
             const mcSecId = (mcSection as { id: number }).id;
             await supabase.from('skyline_form_questions').insert([
-              { section_id: mcSecId, type: 'short_text', code: 'assessment.marking.candidateName', label: 'Candidate Name', sort_order: 0, role_visibility: { student: false, trainer: true, office: true }, role_editability: { student: false, trainer: true, office: false } },
-              { section_id: mcSecId, type: 'short_text', code: 'assessment.marking.assessorName', label: 'Assessor Name', sort_order: 1, role_visibility: { student: false, trainer: true, office: true }, role_editability: { student: false, trainer: true, office: false } },
-              { section_id: mcSecId, type: 'date', code: 'assessment.marking.assessmentDate', label: 'Assessment date/s', sort_order: 2, role_visibility: { student: false, trainer: true, office: true }, role_editability: { student: false, trainer: true, office: false } },
+              { section_id: mcSecId, type: 'short_text', code: 'assessment.marking.candidateName', label: 'Candidate Name', sort_order: 0, role_visibility: { student: false, trainer: true, office: true }, role_editability: { student: false, trainer: true, office: true } },
+              { section_id: mcSecId, type: 'short_text', code: 'assessment.marking.assessorName', label: 'Assessor Name', sort_order: 1, role_visibility: { student: false, trainer: true, office: true }, role_editability: { student: false, trainer: true, office: true } },
+              { section_id: mcSecId, type: 'date', code: 'assessment.marking.assessmentDate', label: 'Assessment date/s', sort_order: 2, role_visibility: { student: false, trainer: true, office: true }, role_editability: { student: false, trainer: true, office: true } },
             ]);
             const { data: evidenceQ } = await supabase.from('skyline_form_questions').insert({
               section_id: mcSecId, type: 'single_choice', code: 'assessment.marking.evidence_outcome', label: 'Evidence Outcome', sort_order: 3,
-              role_visibility: { student: false, trainer: true, office: true }, role_editability: { student: false, trainer: true, office: false },
+              role_visibility: { student: false, trainer: true, office: true }, role_editability: { student: false, trainer: true, office: true },
             }).select('id').single();
             if (evidenceQ) {
               await supabase.from('skyline_form_question_options').insert([
@@ -2850,7 +2850,7 @@ function QuestionRowsEditor({ questionId, sectionPdfMode, formId, steps, onSteps
             }
             const { data: perfQ } = await supabase.from('skyline_form_questions').insert({
               section_id: mcSecId, type: 'single_choice', code: 'assessment.marking.performance_outcome', label: 'Performance Outcome', sort_order: 4,
-              role_visibility: { student: false, trainer: true, office: true }, role_editability: { student: false, trainer: true, office: false },
+              role_visibility: { student: false, trainer: true, office: true }, role_editability: { student: false, trainer: true, office: true },
             }).select('id').single();
             if (perfQ) {
               await supabase.from('skyline_form_question_options').insert([
