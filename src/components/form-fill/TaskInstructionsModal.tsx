@@ -787,9 +787,15 @@ export function TaskInstructionsModal({
             </div>
           ))}
         </div>
-        <div className="p-4 border-t border-gray-200 flex justify-end gap-2">
+        <div className="shrink-0 border-t border-gray-200 bg-white">
+          <div className="px-4 py-3 grid grid-cols-1 sm:grid-cols-2 gap-2 border-b border-gray-100">
+            <Button variant="outline" onClick={() => addBlock('paragraph')} className="justify-center">+ Add paragraph block</Button>
+            <Button variant="outline" onClick={() => addBlock('table')} className="justify-center">+ Add table block</Button>
+          </div>
+          <div className="p-4 flex justify-end gap-2">
           <Button variant="outline" onClick={onClose}>Cancel</Button>
           <Button variant="primary" onClick={handleSave}>Save instructions</Button>
+          </div>
         </div>
       </div>
     </div>
