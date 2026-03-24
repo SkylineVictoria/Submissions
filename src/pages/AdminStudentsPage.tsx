@@ -64,23 +64,15 @@ export const AdminStudentsPage: React.FC = () => {
     phone: string;
     batch_id?: string;
   }): string | null => {
-    const requiredFields: Array<[string, string]> = [
-      ['student_id', 'Student ID'],
-      ['first_name', 'First name'],
-      ['last_name', 'Last name'],
-      ['phone', 'Phone'],
-      ['batch_id', 'Batch'],
-    ];
-    for (const [key, label] of requiredFields) {
-      if (!String((form as Record<string, unknown>)[key] ?? '').trim()) return `${label} is required.`;
-    }
+    if (!String(form.student_id ?? '').trim()) return 'Student ID is required.';
+    if (!String(form.first_name ?? '').trim()) return 'First name is required.';
     const email = buildEmailFromLocalAndDomain(
       form.email_local?.trim() || form.student_id,
       (form as { email_domain?: typeof STUDENT_DOMAIN }).email_domain ?? STUDENT_DOMAIN
     );
     if (!email) return 'Email local part (or Student ID) is required.';
     if (/\s/.test(form.student_id.trim())) return 'Student ID cannot contain spaces.';
-    if (!/^\d{10}$/.test(form.phone.trim())) return 'Phone must be exactly 10 digits.';
+    if (form.phone && !/^\d{10}$/.test(form.phone.trim())) return 'Phone must be exactly 10 digits when provided.';
     return null;
   };
 
@@ -179,11 +171,7 @@ export const AdminStudentsPage: React.FC = () => {
       return;
     }
     setCreating(true);
-    const batchId = Number(studentDraft.batch_id);
-    if (!batchId || !Number.isFinite(batchId)) {
-      toast.error('Select a batch');
-      return;
-    }
+    const batchId = studentDraft.batch_id ? (Number(studentDraft.batch_id) || null) : null;
     const email = buildEmailFromLocalAndDomain(
       studentDraft.email_local?.trim() || studentDraft.student_id,
       studentDraft.email_domain
@@ -191,10 +179,10 @@ export const AdminStudentsPage: React.FC = () => {
     const created = await createStudent({
       student_id: studentDraft.student_id,
       first_name: studentDraft.first_name,
-      last_name: studentDraft.last_name,
-      phone: studentDraft.phone,
+      last_name: studentDraft.last_name || undefined,
+      phone: studentDraft.phone || undefined,
       email,
-      batch_id: batchId,
+      batch_id: batchId ?? undefined,
     });
     if (created) {
       setCurrentPage(1);
@@ -752,7 +740,6 @@ export const AdminStudentsPage: React.FC = () => {
               value={studentDraft.last_name}
               onChange={(e) => setStudentDraft((p) => ({ ...p, last_name: e.target.value }))}
               placeholder="Last name"
-              required
             />
             <div className="md:col-span-2">
               <EmailWithDomainPicker
@@ -768,10 +755,9 @@ export const AdminStudentsPage: React.FC = () => {
               value={studentDraft.phone}
               onChange={(e) => setStudentDraft((p) => ({ ...p, phone: digitsOnly(e.target.value).slice(0, 10) }))}
               placeholder="Phone"
-              required
             />
             <div className="md:col-span-2">
-              <label className="block text-xs font-medium text-gray-600 mb-1">Batch *</label>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Batch</label>
               <SelectAsync
                 value={studentDraft.batch_id}
                 onChange={(v) => setStudentDraft((p) => ({ ...p, batch_id: v }))}
@@ -786,7 +772,7 @@ export const AdminStudentsPage: React.FC = () => {
             <Button variant="outline" size="sm" onClick={() => setIsCreateOpen(false)}>
               Cancel
             </Button>
-            <Button size="sm" onClick={handleCreate} disabled={creating || !!createFormError || !studentDraft.batch_id}>
+            <Button size="sm" onClick={handleCreate} disabled={creating || !!createFormError}>
               {creating ? (
                 <>
                   <Loader variant="dots" size="sm" inline className="mr-2" />
