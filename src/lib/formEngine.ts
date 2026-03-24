@@ -1008,8 +1008,21 @@ export async function validateInstanceAccessToken(
   }
 
   if (role === 'student') {
-    const { data: inst } = await supabase.from('skyline_form_instances').select('form_id').eq('id', instanceId).single();
+    const { data: inst } = await supabase.from('skyline_form_instances').select('form_id, student_id').eq('id', instanceId).single();
     if (inst) {
+      const studentId = (inst as { student_id?: number | null }).student_id;
+      if (studentId != null) {
+        const { data: student } = await supabase.from('skyline_students').select('status').eq('id', studentId).maybeSingle();
+        const status = (student as { status?: string | null } | null)?.status;
+        if (status === 'inactive') {
+          return {
+            valid: false,
+            role_context: null,
+            tokenId: Number(row.id ?? 0) || null,
+            reason: 'Your account is inactive. Contact your administrator to restore access.',
+          };
+        }
+      }
       const { data: form } = await supabase.from('skyline_forms').select('start_date, end_date').eq('id', (inst as { form_id: number }).form_id).single();
       const startDate = (form as { start_date?: string | null } | null)?.start_date ?? null;
       const endDate = (form as { end_date?: string | null } | null)?.end_date ?? null;
@@ -1152,6 +1165,14 @@ export async function requestStudentOtp(email: string): Promise<{ success: boole
 }
 
 async function studentFormAccessFromId(formId: number, studentId: number): Promise<StudentLoginResult> {
+  const { data: student } = await supabase.from('skyline_students').select('status').eq('id', studentId).maybeSingle();
+  const studentStatus = (student as { status?: string | null } | null)?.status;
+  if (studentStatus === 'inactive') {
+    return {
+      success: false,
+      error: 'Your account is inactive. Contact your administrator to restore access.',
+    };
+  }
   const instance = await getInstanceForStudentAndForm(formId, studentId);
   if (!instance) {
     return {
@@ -1169,9 +1190,9 @@ async function studentFormAccessFromId(formId: number, studentId: number): Promi
     .select('status, submitted_at')
     .eq('id', instance.id)
     .single();
-  const status = (instRow as { status?: string } | null)?.status ?? 'draft';
+  const instStatus = (instRow as { status?: string } | null)?.status ?? 'draft';
   const hasSubmittedBefore = !!(instRow as { submitted_at?: string } | null)?.submitted_at;
-  const isResubmission = hasSubmittedBefore && status === 'draft';
+  const isResubmission = hasSubmittedBefore && instStatus === 'draft';
 
   const formWindowOpen = isWithinFormWindowMelbourne(startDate, endDate);
   let hasAdminExtendedAccess = false;
@@ -1202,7 +1223,7 @@ async function studentFormAccessFromId(formId: number, studentId: number): Promi
 
   const useExtendedExpiry = isResubmission || hasAdminExtendedAccess;
 
-  if (hasSubmittedBefore && status !== 'draft') {
+  if (hasSubmittedBefore && instStatus !== 'draft') {
     const { data: allTokens } = await supabase
       .from('skyline_instance_access_tokens')
       .select('expires_at, revoked_at')
@@ -1742,7 +1763,8 @@ export async function listStudents(): Promise<Student[]> {
 export async function listStudentsPaged(
   page = 1,
   pageSize = 20,
-  search?: string
+  search?: string,
+  statusFilter?: '' | 'active' | 'inactive'
 ): Promise<PaginatedResult<Student>> {
   const from = Math.max(0, (page - 1) * pageSize);
   const to = from + pageSize - 1;
@@ -1757,6 +1779,7 @@ export async function listStudentsPaged(
       `student_id.ilike.%${escaped}%,first_name.ilike.%${escaped}%,last_name.ilike.%${escaped}%,name.ilike.%${escaped}%,email.ilike.%${escaped}%,phone.ilike.%${escaped}%,city.ilike.%${escaped}%`
     );
   }
+  if (statusFilter) query = query.eq('status', statusFilter);
   const { data, error, count } = await query.range(from, to);
   if (error) {
     console.error('listStudentsPaged error', error);

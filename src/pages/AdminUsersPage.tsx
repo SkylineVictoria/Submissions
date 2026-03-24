@@ -227,44 +227,46 @@ export const AdminUsersPage: React.FC = () => {
               Manage user directory. Add Admin, Trainer, or Office Use. Batches are assigned to trainers on the Batches page.
             </p>
           </div>
-          <div className="flex flex-nowrap items-center gap-3 mt-4">
-            <div className="flex items-center gap-2 shrink-0">
-              <span className="text-sm text-gray-600">Role:</span>
-              <Select
-                value={roleFilter}
-                onChange={(v) => {
-                  setRoleFilter(v as '' | 'admin' | 'trainer' | 'office');
+          <div className="flex flex-nowrap items-center gap-3 mt-4 overflow-x-auto">
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-600 shrink-0">Role:</span>
+                <Select
+                  value={roleFilter}
+                  onChange={(v) => {
+                    setRoleFilter(v as '' | 'admin' | 'trainer' | 'office');
+                    setCurrentPage(1);
+                  }}
+                  options={ROLE_FILTER_OPTIONS}
+                  className="min-w-[120px]"
+                  portal
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-600 shrink-0">Status:</span>
+                <Select
+                  value={statusFilter}
+                  onChange={(v) => {
+                    setStatusFilter(v as '' | 'active' | 'inactive');
+                    setCurrentPage(1);
+                  }}
+                  options={STATUS_FILTER_OPTIONS}
+                  className="min-w-[120px]"
+                  portal
+                />
+              </div>
+              <Input
+                value={searchTerm}
+                onChange={(e) => {
+                  setSearchTerm(e.target.value);
                   setCurrentPage(1);
                 }}
-                options={ROLE_FILTER_OPTIONS}
-                className="min-w-[120px]"
+                placeholder="Search..."
+                className="w-48 shrink-0"
               />
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <span className="text-sm text-gray-600">Status:</span>
-              <Select
-                value={statusFilter}
-                onChange={(v) => {
-                  setStatusFilter(v as '' | 'active' | 'inactive');
-                  setCurrentPage(1);
-                }}
-                options={STATUS_FILTER_OPTIONS}
-                className="min-w-[120px]"
-              />
-            </div>
-            <Input
-              value={searchTerm}
-              onChange={(e) => {
-                setSearchTerm(e.target.value);
-                setCurrentPage(1);
-              }}
-              placeholder="Search by name, email, phone..."
-              className="flex-1 min-w-0"
-            />
-            <Button onClick={() => setIsCreateOpen(true)} className="shrink-0">
-              <Plus className="w-4 h-4 mr-2 inline" />
-              Add User
-            </Button>
+              <Button onClick={() => setIsCreateOpen(true)} className="shrink-0">
+                <Plus className="w-4 h-4 mr-2 inline" />
+                Add User
+              </Button>
           </div>
         </Card>
 

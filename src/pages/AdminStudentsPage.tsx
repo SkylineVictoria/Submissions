@@ -15,10 +15,21 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { EmailWithDomainPicker } from '../components/ui/EmailWithDomainPicker';
+import { Select } from '../components/ui/Select';
 import { SelectAsync } from '../components/ui/SelectAsync';
 import { Modal } from '../components/ui/Modal';
 import { Loader } from '../components/ui/Loader';
 import { toast } from '../utils/toast';
+
+const STATUS_OPTIONS = [
+  { value: 'active', label: 'Active' },
+  { value: 'inactive', label: 'Inactive' },
+];
+
+const STATUS_FILTER_OPTIONS = [
+  { value: '', label: 'All statuses' },
+  ...STATUS_OPTIONS,
+];
 
 export const AdminStudentsPage: React.FC = () => {
   const PAGE_SIZE = 20;
@@ -30,6 +41,7 @@ export const AdminStudentsPage: React.FC = () => {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'' | 'active' | 'inactive'>('');
   const [currentPage, setCurrentPage] = useState(1);
   const [totalStudents, setTotalStudents] = useState(0);
   const [rowFormMap, setRowFormMap] = useState<Record<number, string>>({});
@@ -48,6 +60,7 @@ export const AdminStudentsPage: React.FC = () => {
     email_domain: STUDENT_DOMAIN as InstitutionalDomain,
     phone: '',
     batch_id: '',
+    status: 'active' as 'active' | 'inactive',
   });
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [importBatchId, setImportBatchId] = useState('');
@@ -144,13 +157,13 @@ export const AdminStudentsPage: React.FC = () => {
   useEffect(() => {
     const t = setTimeout(async () => {
       setLoading(true);
-      const res = await listStudentsPaged(currentPage, PAGE_SIZE, searchTerm);
+      const res = await listStudentsPaged(currentPage, PAGE_SIZE, searchTerm, statusFilter || undefined);
       setStudents(res.data);
       setTotalStudents(res.total);
       setLoading(false);
     }, 250);
     return () => clearTimeout(t);
-  }, [currentPage, searchTerm]);
+  }, [currentPage, searchTerm, statusFilter]);
 
   useEffect(() => {
     if (displayForms.length === 0 || students.length === 0) return;
@@ -183,10 +196,11 @@ export const AdminStudentsPage: React.FC = () => {
       phone: studentDraft.phone || undefined,
       email,
       batch_id: batchId ?? undefined,
+      status: studentDraft.status,
     });
     if (created) {
       setCurrentPage(1);
-      const res = await listStudentsPaged(1, PAGE_SIZE, searchTerm);
+      const res = await listStudentsPaged(1, PAGE_SIZE, searchTerm, statusFilter || undefined);
       setStudents(res.data);
       setTotalStudents(res.total);
       setStudentDraft({
@@ -197,6 +211,7 @@ export const AdminStudentsPage: React.FC = () => {
         email_domain: STUDENT_DOMAIN,
         phone: '',
         batch_id: '',
+        status: 'active',
       });
       setIsCreateOpen(false);
       toast.success('Student added');
@@ -328,7 +343,7 @@ export const AdminStudentsPage: React.FC = () => {
     setImporting(false);
     if (success > 0) {
       setCurrentPage(1);
-      const res = await listStudentsPaged(1, PAGE_SIZE, searchTerm);
+      const res = await listStudentsPaged(1, PAGE_SIZE, searchTerm, statusFilter || undefined);
       setStudents(res.data);
       setTotalStudents(res.total);
       setImportRows([]);
@@ -409,6 +424,7 @@ export const AdminStudentsPage: React.FC = () => {
     email_domain: InstitutionalDomain;
     phone: string;
     batch_id: string;
+    status: string;
   } | null>(null);
 
   useEffect(() => {
@@ -423,6 +439,7 @@ export const AdminStudentsPage: React.FC = () => {
         email_domain: domain,
         phone: editingStudent.phone ?? '',
         batch_id: editingStudent.batch_id != null ? String(editingStudent.batch_id) : '',
+        status: editingStudent.status ?? 'active',
       });
     } else {
       setEditForm(null);
@@ -431,16 +448,12 @@ export const AdminStudentsPage: React.FC = () => {
 
   const handleSaveEdit = async () => {
     if (!editingId || !editForm) return;
-    const formError = validateCreateStudentForm(editForm);
+    const formError = validateEditStudentForm(editForm);
     if (formError) {
       toast.error(formError);
       return;
     }
-    const batchId = Number(editForm.batch_id);
-    if (!batchId || !Number.isFinite(batchId)) {
-      toast.error('Select a batch');
-      return;
-    }
+    const batchId = editForm.batch_id ? (Number(editForm.batch_id) || null) : null;
     setSavingEdit(true);
     const email = buildEmailFromLocalAndDomain(
       editForm.email_local?.trim() || editForm.student_id,
@@ -449,14 +462,15 @@ export const AdminStudentsPage: React.FC = () => {
     const updated = await updateStudent(editingId, {
       student_id: editForm.student_id,
       first_name: editForm.first_name,
-      last_name: editForm.last_name,
-      phone: editForm.phone,
+      last_name: editForm.last_name || undefined,
+      phone: editForm.phone || undefined,
       email,
-      batch_id: batchId,
+      batch_id: batchId ?? undefined,
+      status: editForm.status,
     });
     setSavingEdit(false);
     if (updated) {
-      const res = await listStudentsPaged(currentPage, PAGE_SIZE, searchTerm);
+      const res = await listStudentsPaged(currentPage, PAGE_SIZE, searchTerm, statusFilter || undefined);
       setStudents(res.data);
       setTotalStudents(res.total);
       setEditingId(null);
@@ -474,13 +488,15 @@ export const AdminStudentsPage: React.FC = () => {
     phone: string;
     batch_id?: string;
   }): string | null => {
-    if (!form.student_id?.trim()) return 'Student ID is required.';
-    if (!form.first_name?.trim()) return 'First name is required.';
-    if (!form.last_name?.trim()) return 'Last name is required.';
-    if (!buildEmailFromLocalAndDomain(form.email_local?.trim() || form.student_id, (form as { email_domain?: typeof STUDENT_DOMAIN }).email_domain ?? STUDENT_DOMAIN)) return 'Email local part is required.';
-    if (!form.phone?.trim()) return 'Phone is required.';
-    if (!/^\d{10}$/.test(form.phone.trim())) return 'Phone must be exactly 10 digits.';
-    if (!form.batch_id) return 'Batch is required.';
+    if (!String(form.student_id ?? '').trim()) return 'Student ID is required.';
+    if (!String(form.first_name ?? '').trim()) return 'First name is required.';
+    const email = buildEmailFromLocalAndDomain(
+      form.email_local?.trim() || form.student_id,
+      (form as { email_domain?: typeof STUDENT_DOMAIN }).email_domain ?? STUDENT_DOMAIN
+    );
+    if (!email) return 'Email local part (or Student ID) is required.';
+    if (/\s/.test((form.student_id ?? '').trim())) return 'Student ID cannot contain spaces.';
+    if (form.phone && !/^\d{10}$/.test(form.phone.trim())) return 'Phone must be exactly 10 digits when provided.';
     return null;
   };
 
@@ -492,29 +508,40 @@ export const AdminStudentsPage: React.FC = () => {
     <div className="min-h-screen bg-[var(--bg)]">
       <div className="w-full px-4 md:px-6 lg:px-8 py-6">
         <Card className="mb-6">
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
             <div>
               <h2 className="text-lg font-bold text-[var(--text)]">Students</h2>
-              <div className="text-sm text-gray-600 mt-1">
-              <p>Manage learner profiles and send form links. Students must be in a batch.</p>
-              {!hasBatches && <p className="text-amber-600 mt-1">Create batches first (Batches page).</p>}
+              <p className="text-sm text-gray-600 mt-1">Manage learner profiles and send form links. Students must be in a batch.</p>
+              {!hasBatches && <p className="text-amber-600 text-sm mt-1">Create batches first (Batches page).</p>}
             </div>
-            </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-nowrap items-center gap-3 shrink-0 overflow-x-auto">
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-600 shrink-0">Status:</span>
+                <Select
+                  value={statusFilter}
+                  onChange={(v) => {
+                    setStatusFilter(v as '' | 'active' | 'inactive');
+                    setCurrentPage(1);
+                  }}
+                  options={STATUS_FILTER_OPTIONS}
+                  className="min-w-[120px]"
+                  portal
+                />
+              </div>
               <Input
                 value={searchTerm}
                 onChange={(e) => {
                   setSearchTerm(e.target.value);
                   setCurrentPage(1);
                 }}
-                placeholder="Search by name, email, phone, city..."
-                className="w-full md:w-72"
+                placeholder="Search..."
+                className="w-48 shrink-0"
               />
-              <Button onClick={() => setIsCreateOpen(true)} className="min-w-[160px]" disabled={!hasBatches}>
+              <Button onClick={() => setIsCreateOpen(true)} disabled={!hasBatches} className="shrink-0">
                 <Plus className="w-4 h-4 mr-2 inline" />
                 Add Student
               </Button>
-              <Button variant="outline" onClick={() => { setIsImportOpen(true); setImportRows([]); setImportFileName(''); }} className="min-w-[160px]" disabled={!hasBatches}>
+              <Button variant="outline" onClick={() => { setIsImportOpen(true); setImportRows([]); setImportFileName(''); }} disabled={!hasBatches} className="shrink-0">
                 <Upload className="w-4 h-4 mr-2 inline" />
                 Import Students
               </Button>
@@ -527,8 +554,8 @@ export const AdminStudentsPage: React.FC = () => {
           <p className="text-sm text-gray-600 mb-4">
             Send a form to all students in a batch. Students who already have this form are skipped.
           </p>
-          <div className="flex flex-wrap items-end gap-3">
-            <div className="min-w-[200px]">
+          <div className="flex flex-nowrap items-end gap-3 overflow-x-auto">
+            <div className="min-w-[180px] shrink-0">
               <label className="block text-xs font-medium text-gray-600 mb-1">Course</label>
               <SelectAsync
                 value={courseFilter}
@@ -542,7 +569,7 @@ export const AdminStudentsPage: React.FC = () => {
                 className="w-full"
               />
             </div>
-            <div className="min-w-[200px]">
+            <div className="min-w-[180px] shrink-0">
               <label className="block text-xs font-medium text-gray-600 mb-1">Form</label>
               <SelectAsync
                 value={sendToBatchFormId}
@@ -552,7 +579,7 @@ export const AdminStudentsPage: React.FC = () => {
                 className="w-full"
               />
             </div>
-            <div className="min-w-[200px]">
+            <div className="min-w-[180px] shrink-0">
               <label className="block text-xs font-medium text-gray-600 mb-1">Batch</label>
               <SelectAsync
                 value={sendToBatchBatchId}
@@ -565,6 +592,7 @@ export const AdminStudentsPage: React.FC = () => {
             <Button
               onClick={handleSendToBatch}
               disabled={sendingBatch || !sendToBatchFormId || !sendToBatchBatchId || displayForms.length === 0}
+              className="shrink-0"
             >
               {sendingBatch ? (
                 <>
@@ -583,6 +611,7 @@ export const AdminStudentsPage: React.FC = () => {
               onClick={handleCopyGenericLink}
               disabled={displayForms.length === 0}
               title="Copy generic link for students to login with email and OTP"
+              className="shrink-0"
             >
               <Link className="w-4 h-4 mr-2 inline" />
               Copy generic link
@@ -608,6 +637,7 @@ export const AdminStudentsPage: React.FC = () => {
                   <tr>
                     <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Student</th>
                     <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Batch</th>
+                    <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Status</th>
                     <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Contact</th>
                     <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Form</th>
                     <th className="text-right px-4 py-3 font-semibold border-b border-[var(--border)]">Action</th>
@@ -631,6 +661,15 @@ export const AdminStudentsPage: React.FC = () => {
                       </td>
                       <td className="px-4 py-3 border-b border-[var(--border)]">
                         <span className="text-gray-700">{student.batch_name ?? '—'}</span>
+                      </td>
+                      <td className="px-4 py-3 border-b border-[var(--border)]">
+                        <span
+                          className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${
+                            (student.status || 'active') === 'active' ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600'
+                          }`}
+                        >
+                          {student.status || 'active'}
+                        </span>
                       </td>
                       <td className="px-4 py-3 border-b border-[var(--border)]">
                         <div className="space-y-1">
@@ -764,6 +803,14 @@ export const AdminStudentsPage: React.FC = () => {
                 loadOptions={loadBatchesOptions}
                 placeholder="Select batch"
                 className="w-full"
+              />
+            </div>
+            <div className="md:col-span-2">
+              <Select
+                value={studentDraft.status}
+                onChange={(v) => setStudentDraft((p) => ({ ...p, status: v as 'active' | 'inactive' }))}
+                options={STATUS_OPTIONS}
+                label="Status"
               />
             </div>
           </div>
@@ -929,7 +976,6 @@ export const AdminStudentsPage: React.FC = () => {
                 value={editForm.last_name}
                 onChange={(e) => setEditForm((p) => p ? { ...p, last_name: e.target.value } : p)}
                 placeholder="Last name"
-                required
               />
               <div className="md:col-span-2">
                 <EmailWithDomainPicker
@@ -945,17 +991,24 @@ export const AdminStudentsPage: React.FC = () => {
                 value={editForm.phone}
                 onChange={(e) => setEditForm((p) => p ? { ...p, phone: digitsOnly(e.target.value).slice(0, 10) } : p)}
                 placeholder="Phone"
-                required
               />
               <div className="md:col-span-2">
-                <label className="block text-xs font-medium text-gray-600 mb-1">Batch *</label>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Batch</label>
                 <SelectAsync
                   value={editForm.batch_id}
                   onChange={(v) => setEditForm((p) => (p ? { ...p, batch_id: v } : p))}
-                  loadOptions={loadBatchesOptions}
-                  placeholder="Select batch"
+                  loadOptions={loadBatchesOptionsWithNone}
+                  placeholder="Select batch (optional)"
                   selectedLabel={editingStudent?.batch_name ?? undefined}
                   className="w-full"
+                />
+              </div>
+              <div className="md:col-span-2">
+                <Select
+                  value={editForm.status}
+                  onChange={(v) => setEditForm((p) => (p ? { ...p, status: v } : p))}
+                  options={STATUS_OPTIONS}
+                  label="Status"
                 />
               </div>
             </div>
@@ -963,7 +1016,7 @@ export const AdminStudentsPage: React.FC = () => {
               <Button variant="outline" size="sm" onClick={() => setEditingId(null)}>
                 Cancel
               </Button>
-              <Button size="sm" onClick={handleSaveEdit} disabled={savingEdit || !!editFormError || !editForm.batch_id}>
+              <Button size="sm" onClick={handleSaveEdit} disabled={savingEdit || !!editFormError}>
                 {savingEdit ? (
                   <>
                     <Loader variant="dots" size="sm" inline className="mr-2" />
