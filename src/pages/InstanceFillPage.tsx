@@ -1,3 +1,34 @@
+export function normalizeRichTextForPage(html?: string): string {
+  if (!html) return '';
+
+  if (typeof window === 'undefined') {
+    return html
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/\u00A0/g, ' ')
+      .replace(/\u00AD/g, '');
+  }
+
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+
+  const textNodes: Node[] = [];
+  let current: Node | null = walker.nextNode();
+
+  while (current) {
+    textNodes.push(current);
+    current = walker.nextNode();
+  }
+
+  textNodes.forEach((node) => {
+    node.textContent = (node.textContent || '')
+      .replace(/\u00A0/g, ' ')
+      .replace(/\u00AD/g, '');
+  });
+
+  return doc.body.innerHTML;
+}
+
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import {
@@ -19,7 +50,8 @@ import {
   validateInstanceAccessToken,
   revokeRoleAccessTokens,
 } from '../lib/formEngine';
-import type { FormTemplate } from '../lib/formEngine';
+import type { FormTemplate, FormQuestionWithOptionsAndRows, FormSectionWithQuestions } from '../lib/formEngine';
+import { getTaskQuestionDisplayNumbers } from '../lib/taskQuestionsNumbering';
 import type { FormAnswer } from '../types/database';
 import type { FormRole } from '../utils/roleGuard';
 import { isRoleVisible, isRoleEditable } from '../utils/roleGuard';
@@ -41,6 +73,86 @@ const PDF_BASE = import.meta.env.VITE_PDF_API_URL ?? '';
 function getAnswerKey(questionId: number, rowId: number | null): string {
   if (rowId === null) return `q-${questionId}`;
   return `q-${questionId}-${rowId}`;
+}
+
+/** Latest of ISO yyyy-MM-dd strings (for min date on 3rd attempt ≥ 1st and 2nd). */
+function maxIsoDate(...vals: (string | null | undefined)[]): string | undefined {
+  const ok = vals.filter((v): v is string => !!v && String(v).trim() !== '');
+  if (ok.length === 0) return undefined;
+  return ok.reduce((a, b) => (a >= b ? a : b));
+}
+
+type AnswersMap = Record<string, string | number | boolean | Record<string, unknown> | string[]>;
+
+function rowAnswerHasContent(val: string | number | boolean | Record<string, unknown> | string[] | undefined): boolean {
+  if (val == null) return false;
+  if (typeof val === 'object' && !Array.isArray(val)) {
+    return Object.values(val as Record<string, unknown>).some((v) => String(v ?? '').trim());
+  }
+  return String(val).trim() !== '';
+}
+
+function isGridTableFilled(q: FormQuestionWithOptionsAndRows, answers: AnswersMap): boolean {
+  if (q.type !== 'grid_table' || !q.rows?.length) return false;
+  for (const r of q.rows) {
+    const key = getAnswerKey(q.id, r.id);
+    if (!rowAnswerHasContent(answers[key])) return false;
+  }
+  return true;
+}
+
+function isLikertFilled(q: FormQuestionWithOptionsAndRows, answers: AnswersMap): boolean {
+  if (q.type !== 'likert_5' || !q.rows?.length) return false;
+  if (q.rows.length === 1) {
+    const v = answers[getAnswerKey(q.id, q.rows[0].id)];
+    return v != null && String(v).trim() !== '';
+  }
+  for (const r of q.rows) {
+    const v = answers[getAnswerKey(q.id, r.id)];
+    if (v == null || !String(v).trim()) return false;
+  }
+  return true;
+}
+
+/** Parent question with embedded `contentBlocks` answers child question IDs; row-based answers live on children, not `q-{parentId}`. */
+function isRequiredSatisfiedByContentBlocks(
+  q: FormQuestionWithOptionsAndRows,
+  section: FormSectionWithQuestions,
+  answers: AnswersMap
+): boolean | null {
+  const pm = (q.pdf_meta as Record<string, unknown>) || {};
+  const blocks = pm.contentBlocks as Array<{ type: string; questionId?: number }> | undefined;
+  if (!Array.isArray(blocks) || blocks.length === 0) return null;
+  const hasBlockInputs = blocks.some(
+    (b) => b.questionId && (b.type === 'grid_table' || b.type === 'short_text' || b.type === 'long_text')
+  );
+  if (!hasBlockInputs) return null;
+
+  let allGridsOk = true;
+  let anyGridBlock = false;
+  let allTextBlocksOk = true;
+  let anyTextBlock = false;
+
+  for (const b of blocks) {
+    if (!b.questionId) continue;
+    const childQ = section.questions.find((x) => x.id === b.questionId);
+    if (!childQ) continue;
+    if (b.type === 'grid_table' && childQ.rows?.length) {
+      anyGridBlock = true;
+      if (!isGridTableFilled(childQ, answers)) allGridsOk = false;
+    } else if (b.type === 'short_text' || b.type === 'long_text') {
+      anyTextBlock = true;
+      if (childQ.required && !String(answers[getAnswerKey(childQ.id, null)] ?? '').trim()) allTextBlocksOk = false;
+    }
+  }
+
+  const parentKey = getAnswerKey(q.id, null);
+  const parentFilled = String(answers[parentKey] ?? '').trim() !== '';
+
+  if (parentFilled) return true;
+  if (anyGridBlock && !allGridsOk) return false;
+  if (anyTextBlock && !allTextBlocksOk) return false;
+  return (anyGridBlock && allGridsOk) || (anyTextBlock && allTextBlocksOk);
 }
 
 function parseAnswerValue(a: FormAnswer): string | number | boolean | Record<string, unknown> | string[] | null {
@@ -171,12 +283,38 @@ export const InstanceFillPage: React.FC = () => {
     async (sectionId: number, field: keyof import('../lib/formEngine').ResultsDataEntry, value: string | null) => {
       const isSig = field === 'student_signature' || field === 'trainer_signature';
       const normalized = isSig ? normalizeSignatureValue(value) : (value != null ? String(value).trim() || null : null);
+      let rejectReason: string | null = null;
       setResultsData((prev) => {
+        const rd = prev[sectionId];
+        const base = rd ?? ({ section_id: sectionId } as import('../lib/formEngine').ResultsDataEntry);
+        const first = base.first_attempt_date ?? null;
+        const second = base.second_attempt_date ?? null;
+
+        if (field === 'first_attempt_date' && first && normalized !== first) {
+          rejectReason = 'First attempt date cannot be changed once set.';
+          return prev;
+        }
+        if (field === 'second_attempt_date' && normalized && first && normalized < first) {
+          rejectReason = 'Second attempt date cannot be before the first attempt date.';
+          return prev;
+        }
+        if (field === 'third_attempt_date' && normalized) {
+          const minLater = maxIsoDate(first, second);
+          if (minLater && normalized < minLater) {
+            rejectReason = 'Third attempt date cannot be before the first or second attempt date.';
+            return prev;
+          }
+        }
+
         const next = { ...prev };
         if (!next[sectionId]) next[sectionId] = { section_id: sectionId } as import('../lib/formEngine').ResultsDataEntry;
         (next[sectionId] as unknown as Record<string, unknown>)[field] = normalized;
         return next;
       });
+      if (rejectReason) {
+        toast.error(rejectReason);
+        return;
+      }
       await saveResultsData(id, sectionId, { [field]: normalized });
       setPdfRefresh((r) => r + 1);
     },
@@ -297,29 +435,20 @@ export const InstanceFillPage: React.FC = () => {
     const taskResultSectionIds = (template.steps ?? []).flatMap((st) => st.sections).filter((s) => s.pdf_render_mode === 'task_results').map((s) => s.id);
     const firstTaskSectionId = taskResultSectionIds[0];
     const firstTaskRd = firstTaskSectionId ? resultsData[firstTaskSectionId] : null;
-    const studentDeclQ = template.steps?.flatMap((st) => st.sections).flatMap((s) => s.questions).find((q) => q.code === 'student.declarationSignature');
-    const studentDeclVal = studentDeclQ ? answers[getAnswerKey(studentDeclQ.id, null)] : undefined;
-    const studentDeclSigObj = studentDeclVal && typeof studentDeclVal === 'object' && !Array.isArray(studentDeclVal) ? (studentDeclVal as Record<string, unknown>) : null;
-    const studentDeclDate = studentDeclSigObj ? String(studentDeclSigObj.date ?? studentDeclSigObj.signedAtDate ?? '') : '';
-    const studentSubmitDate = studentDeclDate || submittedAt || '';
     const raTrainerQ = template.steps?.flatMap((st) => st.sections).flatMap((s) => s.questions).find((q) => q.code === 'trainer.reasonableAdjustmentSignature');
     const raVal = raTrainerQ ? answers[getAnswerKey(raTrainerQ.id, null)] : undefined;
     const raSigObj = raVal && typeof raVal === 'object' && !Array.isArray(raVal) ? (raVal as Record<string, unknown>) : null;
     const raTrainerDate = raSigObj ? String(raSigObj.date ?? raSigObj.signedAtDate ?? '') : '';
-    const today = new Date().toISOString().split('T')[0];
-    const firstAttemptSource = raTrainerDate || firstTaskRd?.first_attempt_date || studentSubmitDate || today;
-    const updates: { sectionId: number; field: 'trainer_date' | 'first_attempt_date' | 'second_attempt_date' | 'third_attempt_date'; value: string }[] = [];
+    /** Only trainer-entered or copied from first task sheet — never auto-fill from student submit / today. 2nd/3rd attempts stay empty until the trainer records that attempt. */
+    const firstAttemptSource = raTrainerDate || firstTaskRd?.first_attempt_date || '';
+    const updates: { sectionId: number; field: 'trainer_date' | 'first_attempt_date'; value: string }[] = [];
     for (const sectionId of taskResultSectionIds) {
       const rd = resultsData[sectionId];
       const firstTaskData = firstTaskSectionId && firstTaskSectionId !== sectionId ? resultsData[firstTaskSectionId] : null;
-      const trainerDateVal = raTrainerDate || (firstTaskData?.trainer_date ?? today);
+      const trainerDateVal = raTrainerDate || firstTaskData?.trainer_date || '';
       const firstAttemptVal = firstAttemptSource;
-      const secondAttemptVal = rd?.first_attempt_date || (firstTaskData?.second_attempt_date ?? today);
-      const thirdAttemptVal = rd?.second_attempt_date || (firstTaskData?.third_attempt_date ?? today);
       if (!rd?.trainer_date && trainerDateVal) updates.push({ sectionId, field: 'trainer_date', value: trainerDateVal });
       if (!rd?.first_attempt_date && firstAttemptVal) updates.push({ sectionId, field: 'first_attempt_date', value: firstAttemptVal });
-      if (!rd?.second_attempt_date && secondAttemptVal) updates.push({ sectionId, field: 'second_attempt_date', value: secondAttemptVal });
-      if (!rd?.third_attempt_date && thirdAttemptVal) updates.push({ sectionId, field: 'third_attempt_date', value: thirdAttemptVal });
     }
     if (updates.length === 0) return;
     setResultsData((prev) => {
@@ -332,7 +461,7 @@ export const InstanceFillPage: React.FC = () => {
       setPdfRefresh((r) => r + 1);
       return next;
     });
-  }, [template, answers, resultsData, submittedAt, id]);
+  }, [template, answers, resultsData, id]);
 
   useEffect(() => {
     if (!template || !id || !assessmentSummary) return;
@@ -343,8 +472,7 @@ export const InstanceFillPage: React.FC = () => {
     const raVal = raTrainerQ ? answers[getAnswerKey(raTrainerQ.id, null)] : undefined;
     const raSigObj = raVal && typeof raVal === 'object' && !Array.isArray(raVal) ? (raVal as Record<string, unknown>) : null;
     const raTrainerDate = raSigObj ? String(raSigObj.date ?? raSigObj.signedAtDate ?? '') : '';
-    const today = new Date().toISOString().split('T')[0];
-    const trainerRefDate = raTrainerDate || (firstTaskRd?.trainer_date ?? today);
+    const trainerRefDate = raTrainerDate || firstTaskRd?.trainer_date || '';
     const studentDeclQ = template.steps?.flatMap((st) => st.sections).flatMap((s) => s.questions).find((q) => q.code === 'student.declarationSignature');
     const studentDeclVal = studentDeclQ ? answers[getAnswerKey(studentDeclQ.id, null)] : undefined;
     const studentDeclSigObj = studentDeclVal && typeof studentDeclVal === 'object' && !Array.isArray(studentDeclVal) ? (studentDeclVal as Record<string, unknown>) : null;
@@ -352,11 +480,7 @@ export const InstanceFillPage: React.FC = () => {
     const sum = assessmentSummary;
     const updates: { field: keyof import('../lib/formEngine').AssessmentSummaryDataEntry; value: string }[] = [];
     if (!sum.trainer_date_1 && trainerRefDate) updates.push({ field: 'trainer_date_1', value: trainerRefDate });
-    if (!sum.trainer_date_2 && sum.trainer_date_1) updates.push({ field: 'trainer_date_2', value: sum.trainer_date_1 });
-    if (!sum.trainer_date_3 && sum.trainer_date_1) updates.push({ field: 'trainer_date_3', value: sum.trainer_date_1 });
     if (!sum.student_date_1 && studentDeclDate) updates.push({ field: 'student_date_1', value: studentDeclDate });
-    if (!sum.student_date_2 && (studentDeclDate || sum.student_date_1)) updates.push({ field: 'student_date_2', value: studentDeclDate || sum.student_date_1! });
-    if (!sum.student_date_3 && (studentDeclDate || sum.student_date_1)) updates.push({ field: 'student_date_3', value: studentDeclDate || sum.student_date_1! });
     if (updates.length === 0) return;
     setAssessmentSummary((prev) => {
       const next = prev ? { ...prev } : ({} as import('../lib/formEngine').AssessmentSummaryDataEntry);
@@ -473,6 +597,23 @@ export const InstanceFillPage: React.FC = () => {
     return 'Completed';
   }, [workflowStatus]);
 
+  const sanitizeInstructionHtml = useCallback((html: string) => {
+    // Remove common “word split” hints produced by some HTML generators.
+    // This prevents things like "demon strating" and dangling "word-" at line end.
+    return String(html || '')
+      .replace(/\u00ad/g, '') // soft hyphen char
+      .replace(/[\u200B\u200C\u200D\u2060\uFEFF]/g, '') // zero-width spaces/joiners that allow mid-word wraps
+      .replace(/&shy;/gi, '') // soft hyphen entity
+      .replace(/&ZeroWidthSpace;|&#8203;|&#x200B;/gi, '') // zero-width space entities
+      .replace(/<wbr\s*\/?>/gi, '') // word break tag
+      .replace(/-\s*<br\s*\/?>/gi, '') // hyphen + line break
+      .replace(/-\s*\r?\n\s*/g, '') // hyphen + newline
+      // Sometimes the HTML includes explicit breaks inside a word (e.g. "prov<br>ide", "applicat\nion").
+      // Only remove breaks when they are between letters to avoid altering real paragraph/line breaks.
+      .replace(/([A-Za-z])\s*<br\s*\/?>\s*([A-Za-z])/gi, '$1$2')
+      .replace(/([A-Za-z])\s*\r?\n\s*([A-Za-z])/g, '$1$2');
+  }, []);
+
   const runFinalSubmitByRole = useCallback(async () => {
     if (!id) return;
     setWorkflowSubmitting(true);
@@ -536,24 +677,170 @@ export const InstanceFillPage: React.FC = () => {
       if (!stepData) return true;
       const stepErrors: Record<string, string> = {};
       for (const section of stepData.sections) {
+        // `task_results` and `assessment_summary` are rendered from `resultsData` / `assessmentSummary`
+        // state (not from `answers` + `section.questions`). So validate them explicitly here.
+        if (section.pdf_render_mode === 'task_results') {
+          const rd = resultsData[section.id];
+          const trainerCanEdit = role === 'trainer' || role === 'office';
+          const studentCanEdit = role === 'student' || role === 'office';
+
+          if (studentCanEdit) {
+            if (!rowAnswerHasContent(rd?.student_name ?? undefined)) {
+              stepErrors[`task-results-${section.id}-student_name`] = 'Student name is required';
+            }
+            if (!rowAnswerHasContent(rd?.student_signature ?? undefined)) {
+              stepErrors[`task-results-${section.id}-student_signature`] = 'Student signature is required';
+            }
+          }
+
+          if (trainerCanEdit) {
+            if (!rowAnswerHasContent(rd?.trainer_name ?? undefined)) {
+              stepErrors[`task-results-${section.id}-trainer_name`] = 'Trainer name is required';
+            }
+            if (!rowAnswerHasContent(rd?.trainer_signature ?? undefined)) {
+              stepErrors[`task-results-${section.id}-trainer_signature`] = 'Trainer signature is required';
+            }
+            if (!rowAnswerHasContent(rd?.trainer_date ?? undefined)) {
+              stepErrors[`task-results-${section.id}-trainer_date`] = 'Trainer date is required';
+            }
+          }
+
+          // Skip question-based validation for this section type.
+          continue;
+        }
+
+        if (section.pdf_render_mode === 'assessment_summary') {
+          const sum = assessmentSummary || ({} as import('../lib/formEngine').AssessmentSummaryDataEntry);
+
+          const trainerCanEdit = role === 'trainer' || role === 'office';
+          const studentCanEdit = role === 'student' || role === 'office';
+
+          const taskResultSectionIds = (template?.steps || [])
+            .flatMap((st) => st.sections)
+            .filter((s) => s.pdf_render_mode === 'task_results')
+            .map((s) => s.id);
+          const firstTaskSectionId = taskResultSectionIds[0];
+          const firstTaskRd = firstTaskSectionId ? resultsData[firstTaskSectionId] : null;
+
+          const sumFirstComplete = !!(firstTaskRd?.first_attempt_date || firstTaskRd?.first_attempt_satisfactory);
+          const sumSecondOrThirdHasData = !!(
+            firstTaskRd?.second_attempt_date ||
+            firstTaskRd?.second_attempt_satisfactory ||
+            firstTaskRd?.third_attempt_date ||
+            firstTaskRd?.third_attempt_satisfactory
+          );
+          const sumThirdHasData = !!(firstTaskRd?.third_attempt_date || firstTaskRd?.third_attempt_satisfactory);
+          const sumSecondComplete = !!(firstTaskRd?.second_attempt_date || firstTaskRd?.second_attempt_satisfactory);
+
+          const sumFirstEditable = !sumSecondOrThirdHasData;
+          const sumSecondEditable = sumFirstComplete && !sumThirdHasData;
+          const sumThirdEditable = sumSecondComplete;
+
+          if (trainerCanEdit) {
+            if (sumFirstEditable) {
+              if (!rowAnswerHasContent(sum.trainer_sig_1 ?? undefined)) {
+                stepErrors['assessment-summary-trainer_sig_1'] = 'Trainer signature (attempt 1) is required';
+              }
+              if (!rowAnswerHasContent(sum.trainer_date_1 ?? undefined)) {
+                stepErrors['assessment-summary-trainer_date_1'] = 'Trainer date (attempt 1) is required';
+              }
+            }
+            if (sumSecondEditable) {
+              if (!rowAnswerHasContent(sum.trainer_sig_2 ?? undefined)) {
+                stepErrors['assessment-summary-trainer_sig_2'] = 'Trainer signature (attempt 2) is required';
+              }
+              if (!rowAnswerHasContent(sum.trainer_date_2 ?? undefined)) {
+                stepErrors['assessment-summary-trainer_date_2'] = 'Trainer date (attempt 2) is required';
+              }
+            }
+            if (sumThirdEditable) {
+              if (!rowAnswerHasContent(sum.trainer_sig_3 ?? undefined)) {
+                stepErrors['assessment-summary-trainer_sig_3'] = 'Trainer signature (attempt 3) is required';
+              }
+              if (!rowAnswerHasContent(sum.trainer_date_3 ?? undefined)) {
+                stepErrors['assessment-summary-trainer_date_3'] = 'Trainer date (attempt 3) is required';
+              }
+            }
+          }
+
+          if (studentCanEdit) {
+            if (sumFirstEditable) {
+              if (!rowAnswerHasContent(sum.student_sig_1 ?? undefined)) {
+                stepErrors['assessment-summary-student_sig_1'] = 'Student signature (attempt 1) is required';
+              }
+              if (!rowAnswerHasContent(sum.student_date_1 ?? undefined)) {
+                stepErrors['assessment-summary-student_date_1'] = 'Student date (attempt 1) is required';
+              }
+            }
+            if (sumSecondEditable) {
+              if (!rowAnswerHasContent(sum.student_sig_2 ?? undefined)) {
+                stepErrors['assessment-summary-student_sig_2'] = 'Student signature (attempt 2) is required';
+              }
+              if (!rowAnswerHasContent(sum.student_date_2 ?? undefined)) {
+                stepErrors['assessment-summary-student_date_2'] = 'Student date (attempt 2) is required';
+              }
+            }
+            if (sumThirdEditable) {
+              if (!rowAnswerHasContent(sum.student_sig_3 ?? undefined)) {
+                stepErrors['assessment-summary-student_sig_3'] = 'Student signature (attempt 3) is required';
+              }
+              if (!rowAnswerHasContent(sum.student_date_3 ?? undefined)) {
+                stepErrors['assessment-summary-student_date_3'] = 'Student date (attempt 3) is required';
+              }
+            }
+          }
+
+          // Skip question-based validation for this section type.
+          continue;
+        }
+
         for (const q of section.questions) {
           if (q.type === 'instruction_block' || q.type === 'page_break') continue;
+          if ((q.pdf_meta as Record<string, unknown>)?.isAdditionalBlockOf) continue;
           if (!isRoleVisible((q.role_visibility as Record<string, boolean>) || {}, role)) continue;
           const baseEditable = isRoleEditable((q.role_editability as Record<string, boolean>) || {}, role) && canRoleEditCurrentWorkflow;
           const editable = baseEditable && !isQuestionReadOnlyByTrainer(q.id);
           if (!q.required || !editable) continue;
+
+          if (q.type === 'grid_table' && q.rows?.length) {
+            if (!isGridTableFilled(q, answers)) {
+              stepErrors[`q-${q.id}`] = `${q.label} is required`;
+            }
+            continue;
+          }
+          if (q.type === 'likert_5' && q.rows?.length) {
+            if (!isLikertFilled(q, answers)) {
+              stepErrors[`q-${q.id}`] = `${q.label} is required`;
+            }
+            continue;
+          }
+
+          const byBlocks = isRequiredSatisfiedByContentBlocks(q, section, answers);
+          if (byBlocks !== null) {
+            if (!byBlocks) {
+              stepErrors[`q-${q.id}`] = `${q.label} is required`;
+            }
+            continue;
+          }
+
           const key = getAnswerKey(q.id, null);
           const val = answers[key];
-          const strVal = val != null ? String(val).trim() : '';
-          if (!strVal) {
+          // For signatures, `val` is usually an object; `String(val)` becomes "[object Object]"
+          // which incorrectly passes the "required" check. Use content-based validation instead.
+          if (!rowAnswerHasContent(val as AnswersMap[string] | undefined)) {
             stepErrors[`q-${q.id}`] = `${q.label} is required`;
           }
         }
       }
       setErrors(stepErrors);
+      if (Object.keys(stepErrors).length > 0) {
+        // For result/summary fields we don't always render field-specific errors,
+        // so show a clear message to explain why "Next" is blocked.
+        toast.error(Object.values(stepErrors)[0]);
+      }
       return Object.keys(stepErrors).length === 0;
     },
-    [template, role, answers, canRoleEditCurrentWorkflow, isQuestionReadOnlyByTrainer]
+    [template, role, answers, resultsData, assessmentSummary, submittedAt, canRoleEditCurrentWorkflow, isQuestionReadOnlyByTrainer]
   );
 
   if (loading) {
@@ -584,11 +871,13 @@ export const InstanceFillPage: React.FC = () => {
     (role === 'student' && workflowStatus !== 'draft') ||
     (role === 'trainer' && (workflowStatus === 'waiting_office' || workflowStatus === 'completed'));
 
-  const submittedTitle = role === 'student' ? 'Assessment Already Submitted' : 'Trainer Check Already Submitted';
+  const canViewPdfPreview = role === 'office';
+
+  const submittedTitle = 'Thank you';
   const submittedMessage =
     role === 'student'
-      ? 'You have already submitted this assessment. Editing is now locked for student access.'
-      : 'You have already submitted trainer checking for this assessment. Editing is now locked for trainer access.';
+      ? 'Your assessment has been submitted. Editing is now locked and downloading is disabled.'
+      : 'Your trainer checking has been submitted. Editing is now locked and downloading is disabled.';
 
   if (showSubmittedPage) {
     return (
@@ -609,19 +898,6 @@ export const InstanceFillPage: React.FC = () => {
             <Card>
               <h2 className="text-xl font-bold text-[var(--text)] mb-2">{submittedTitle}</h2>
               <p className="text-sm text-gray-600">{submittedMessage}</p>
-              <div className="mt-6 flex flex-wrap gap-2">
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    window.open(`${PDF_BASE}/pdf/${id}?role=${role}&t=${Date.now()}#toolbar=0`, '_blank', 'width=900,height=700');
-                  }}
-                >
-                  Preview PDF
-                </Button>
-                <a href={`${PDF_BASE}/pdf/${id}?role=${role}&download=1&t=${Date.now()}`} target="_blank" rel="noopener noreferrer">
-                  <Button variant="primary">Download PDF</Button>
-                </a>
-              </div>
             </Card>
           </div>
         </div>
@@ -676,7 +952,7 @@ export const InstanceFillPage: React.FC = () => {
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           <form
             ref={formScrollRef}
-            className="lg:col-span-9 space-y-6 overflow-y-auto max-h-[calc(100vh-8rem)] pr-2"
+            className={(canViewPdfPreview ? 'lg:col-span-9' : 'lg:col-span-12') + ' space-y-6 overflow-y-auto max-h-[calc(100vh-8rem)] pr-2'}
             onSubmit={(e) => e.preventDefault()}
           >
             <Card>
@@ -783,12 +1059,12 @@ export const InstanceFillPage: React.FC = () => {
                                   const isExplanationField = q.code === 'reasonable_adjustment_appendix.explanation' || q.code === 'reasonable_adjustment.description';
                                   if (isTaskField) {
                                     return (
-                                      <QuestionRenderer key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!editable} error={errors[`q-${q.id}`]} />
+                                      <QuestionRenderer key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!editable} error={errors[`q-${q.id}`]} highlightAsFill={editable} />
                                     );
                                   }
                                   if (isExplanationField) {
                                     return (
-                                      <QuestionRenderer key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!editable} error={errors[`q-${q.id}`]} />
+                                      <QuestionRenderer key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!editable} error={errors[`q-${q.id}`]} highlightAsFill={editable} />
                                     );
                                   }
                                   if (q.code === 'reasonable_adjustment_appendix.matrix' || (q.pdf_meta as Record<string, unknown>)?.appendixMatrix) {
@@ -804,12 +1080,12 @@ export const InstanceFillPage: React.FC = () => {
                                   }
                                   if (q.type === 'short_text' && !isTaskField) {
                                     return (
-                                      <QuestionRenderer key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!editable} error={errors[`q-${q.id}`]} />
+                                      <QuestionRenderer key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!editable} error={errors[`q-${q.id}`]} highlightAsFill={editable} />
                                     );
                                   }
                                   if (q.type === 'long_text' && !isExplanationField) {
                                     return (
-                                      <QuestionRenderer key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!editable} error={errors[`q-${q.id}`]} />
+                                      <QuestionRenderer key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!editable} error={errors[`q-${q.id}`]} highlightAsFill={editable} />
                                     );
                                   }
                                   if (q.type === 'signature') {
@@ -821,35 +1097,35 @@ export const InstanceFillPage: React.FC = () => {
                                       <div key={q.id} className="flex items-center gap-4 flex-wrap pt-2">
                                         <div className="flex-1 min-w-[200px]">
                                           <div className="text-sm font-semibold text-gray-700 mb-1">{q.label}</div>
-                                          <SignatureField value={(imgVal as string | null) ?? null} onChange={(v) => { const img = typeof v === 'string' ? v : null; const base = (sigObj && typeof sigObj === 'object' ? { ...sigObj } : {}) as Record<string, unknown>; handleAnswerChange(q.id, null, (img != null ? { ...base, signature: img } : { ...base, signature: null }) as string | number | boolean | Record<string, unknown> | string[]); }} disabled={!editable} suggestionFrom={raSigSuggestion} onSuggestionClick={raSigSuggestion && editable ? () => { const base = (sigObj && typeof sigObj === 'object' ? { ...sigObj } : {}) as Record<string, unknown>; handleAnswerChange(q.id, null, { ...base, signature: raSigSuggestion, date: raDateSuggestion } as string | number | boolean | Record<string, unknown> | string[], true); } : undefined} />
+                                          <SignatureField value={(imgVal as string | null) ?? null} onChange={(v) => { const img = typeof v === 'string' ? v : null; const base = (sigObj && typeof sigObj === 'object' ? { ...sigObj } : {}) as Record<string, unknown>; handleAnswerChange(q.id, null, (img != null ? { ...base, signature: img } : { ...base, signature: null }) as string | number | boolean | Record<string, unknown> | string[]); }} disabled={!editable} highlight={(role === 'student' || role === 'trainer') && editable} suggestionFrom={raSigSuggestion} onSuggestionClick={raSigSuggestion && editable ? () => { const base = (sigObj && typeof sigObj === 'object' ? { ...sigObj } : {}) as Record<string, unknown>; handleAnswerChange(q.id, null, { ...base, signature: raSigSuggestion, date: raDateSuggestion } as string | number | boolean | Record<string, unknown> | string[], true); } : undefined} />
                                         </div>
                                         <div className="flex items-center gap-2 min-w-[140px]">
                                           <span className="text-sm font-semibold text-gray-700 shrink-0">Date:</span>
-                                          <DatePicker value={dateVal} onChange={(newDate) => { const base = sigObj || (typeof sigVal === 'string' ? { signature: sigVal } : {}); handleAnswerChange(q.id, null, { ...base, date: newDate } as string | number | boolean | Record<string, unknown> | string[]); }} disabled={!editable} compact placement="above" className="flex-1 min-w-0" />
+                                          <DatePicker value={dateVal} onChange={(newDate) => { const base = sigObj || (typeof sigVal === 'string' ? { signature: sigVal } : {}); handleAnswerChange(q.id, null, { ...base, date: newDate } as string | number | boolean | Record<string, unknown> | string[]); }} disabled={!editable} highlight={(role === 'student' || role === 'trainer') && editable} compact placement="above" className="flex-1 min-w-0" />
                                         </div>
                                       </div>
                                     );
                                   }
                                   if (q.type === 'yes_no') {
                                     return (
-                                      <QuestionRenderer key={q.id} question={q} value={(val as string | number | boolean) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string | number | boolean)} disabled={!editable} error={errors[`q-${q.id}`]} />
+                                      <QuestionRenderer key={q.id} question={q} value={(val as string | number | boolean) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string | number | boolean)} disabled={!editable} error={errors[`q-${q.id}`]} highlightAsFill={editable} />
                                     );
                                   }
                                   return null;
                                 }
                                 if (q.type === 'yes_no') {
                                   return (
-                                    <QuestionRenderer key={q.id} question={q} value={(val as string | number | boolean) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string | number | boolean)} disabled={!editable} error={errors[`q-${q.id}`]} />
+                                    <QuestionRenderer key={q.id} question={q} value={(val as string | number | boolean) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string | number | boolean)} disabled={!editable} error={errors[`q-${q.id}`]} highlightAsFill={editable} />
                                   );
                                 }
                                 if (q.code === 'reasonable_adjustment.task') {
                                   return (
-                                    <QuestionRenderer key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!editable} error={errors[`q-${q.id}`]} />
+                                    <QuestionRenderer key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!editable} error={errors[`q-${q.id}`]} highlightAsFill={editable} />
                                   );
                                 }
                                 if (q.type === 'long_text') {
                                   return (
-                                    <QuestionRenderer key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!editable} error={errors[`q-${q.id}`]} />
+                                    <QuestionRenderer key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!editable} error={errors[`q-${q.id}`]} highlightAsFill={editable} />
                                   );
                                 }
                                 if (q.type === 'signature') {
@@ -870,6 +1146,7 @@ export const InstanceFillPage: React.FC = () => {
                                             handleAnswerChange(q.id, null, merged as string | number | boolean | Record<string, unknown> | string[]);
                                           }}
                                           disabled={!editable}
+                                          highlight={(role === 'student' || role === 'trainer') && editable}
                                           suggestionFrom={raSigSuggestion}
                                           onSuggestionClick={raSigSuggestion && editable ? () => {
                                             const base = (sigObj && typeof sigObj === 'object' ? { ...sigObj } : {}) as Record<string, unknown>;
@@ -886,6 +1163,7 @@ export const InstanceFillPage: React.FC = () => {
                                             handleAnswerChange(q.id, null, { ...base, date: newDate } as string | number | boolean | Record<string, unknown> | string[]);
                                           }}
                                           disabled={!editable}
+                                          highlight={(role === 'student' || role === 'trainer') && editable}
                                           compact
                                           placement="above"
                                           className="flex-1 min-w-0"
@@ -1109,6 +1387,21 @@ export const InstanceFillPage: React.FC = () => {
                           const customBlocks = Array.isArray((instr as { blocks?: unknown[] }).blocks)
                             ? ((instr as { blocks?: Array<{ id?: string; type?: string; heading?: string; content?: string; columnHeaders?: string[]; rows?: Array<{ heading?: string; content?: string; cells?: string[] }> }> }).blocks || [])
                             : [];
+                          const sanitizeInstructionHtml = (html: string) => {
+                            // Normalize HTML that may contain hidden word-break hints (soft hyphens, zero-width spaces, <wbr>, etc.)
+                            // so words wrap cleanly like the PDF output.
+                            return String(html || '')
+                              .replace(/\u00ad/g, '') // soft hyphen char
+                              .replace(/[\u200B\u200C\u200D\u2060\uFEFF]/g, '') // zero-width spaces/joiners
+                              .replace(/&shy;/gi, '') // soft hyphen entity
+                              .replace(/&ZeroWidthSpace;|&#8203;|&#x200B;/gi, '') // zero-width space entities
+                              .replace(/<wbr\s*\/?>/gi, '') // word break tag
+                              .replace(/-\s*<br\s*\/?>/gi, '') // hyphen + line break
+                              .replace(/-\s*\r?\n\s*/g, '') // hyphen + newline
+                              // Remove explicit breaks inside a word, but only when between letters.
+                              .replace(/([A-Za-z])\s*<br\s*\/?>\s*([A-Za-z])/gi, '$1$2')
+                              .replace(/([A-Za-z])\s*\r?\n\s*([A-Za-z])/g, '$1$2');
+                          };
                           if (customBlocks.length > 0) {
                             const instrTyped = instr as { assessment_type?: string };
                             return (
@@ -1129,13 +1422,13 @@ export const InstanceFillPage: React.FC = () => {
                                         <div className="bg-gray-600 text-white font-semibold text-sm px-3 py-2 rounded-t">{String(b.heading)}</div>
                                       )}
                                       {b.type === 'table' ? (
-                                        <div className={`border border-gray-200 ${String(b.heading || '').trim() ? 'border-t-0 rounded-b' : 'rounded'} overflow-x-auto`}>
-                                          <table className="w-full border-collapse text-sm table-fixed">
+                                        <div className={`border border-gray-200 ${String(b.heading || '').trim() ? 'border-t-0 rounded-b' : 'rounded'} overflow-x-hidden`}>
+                                          <table className="w-full table-fixed border-collapse text-sm">
                                             {Array.isArray(b.columnHeaders) && b.columnHeaders.length > 0 && (
                                               <thead>
                                                 <tr className="bg-gray-200">
                                                   {b.columnHeaders.map((h, hi) => (
-                                                    <th key={hi} className="border border-gray-300 p-2 text-left font-semibold text-gray-700 break-words">
+                                                    <th key={hi} className="border border-gray-300 p-2 text-left font-semibold text-gray-700 whitespace-normal break-normal align-top">
                                                       {h}
                                                     </th>
                                                   ))}
@@ -1150,15 +1443,19 @@ export const InstanceFillPage: React.FC = () => {
                                                   <tr key={ri} className={ri % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                                                     {isMultiCol ? (
                                                       cells.map((cell, ci) => (
-                                                        <td key={ci} className="border border-gray-300 p-2 align-top break-words whitespace-normal">
-                                                          <div className="prose prose-sm max-w-none break-words whitespace-normal overflow-visible" dangerouslySetInnerHTML={{ __html: String(cell || '').replace(/\n/g, '<br/>') }} />
+                                                        <td key={ci} className="border border-gray-300 p-2 whitespace-normal break-normal align-top">
+                                                          <div className="[overflow-wrap:break-word]">
+                                                            <div lang="en" className="prose prose-sm max-w-none whitespace-normal break-normal" dangerouslySetInnerHTML={{ __html: normalizeRichTextForPage(sanitizeInstructionHtml(String(cell || '')).replace(/\n/g, '<br/>')) }} />
+                                                          </div>
                                                         </td>
                                                       ))
                                                     ) : (
                                                       <>
-                                                        <td className="border border-gray-300 p-2 align-top font-semibold w-[24%] break-words whitespace-normal">{String(r.heading || '')}</td>
-                                                        <td className="border border-gray-300 border-r p-2 align-top w-[76%]">
-                                                          <div className="prose prose-sm max-w-none break-words whitespace-normal overflow-visible" dangerouslySetInnerHTML={{ __html: String(r.content || '') }} />
+                                                        <td className="border border-gray-300 p-2 align-top font-semibold w-[24%] whitespace-normal break-normal">{String(r.heading || '')}</td>
+                                                        <td className="border border-gray-300 border-r p-2 align-top w-[76%] whitespace-normal break-normal">
+                                                          <div className="[overflow-wrap:break-word]">
+                                                            <div lang="en" className="prose prose-sm max-w-none whitespace-normal break-normal" dangerouslySetInnerHTML={{ __html: normalizeRichTextForPage(sanitizeInstructionHtml(String(r.content || ''))) }} />
+                                                          </div>
                                                         </td>
                                                       </>
                                                     )}
@@ -1169,7 +1466,13 @@ export const InstanceFillPage: React.FC = () => {
                                           </table>
                                         </div>
                                       ) : (
-                                        <div className="prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: String(b.content || '') }} />
+                                        <div className="overflow-x-hidden">
+                                          <div
+                                            lang="en"
+                                            className="prose prose-sm max-w-none whitespace-normal break-normal [word-break:normal] [hyphens:none] [&_table]:w-full [&_table]:table-fixed [&_table]:border-collapse [&_th]:whitespace-normal [&_th]:break-normal [&_th]:align-top [&_th]:[word-break:normal] [&_th]:[hyphens:none] [&_td]:whitespace-normal [&_td]:break-normal [&_td]:align-top [&_td]:[word-break:normal] [&_td]:[hyphens:none] [&_td>div]:[overflow-wrap:break-word] [&_td>p]:[overflow-wrap:break-word] [&_td>span]:[overflow-wrap:break-word]"
+                                            dangerouslySetInnerHTML={{ __html: normalizeRichTextForPage(sanitizeInstructionHtml(String(b.content || ''))) }}
+                                          />
+                                        </div>
                                       )}
                                     </div>
                                   ))}
@@ -1202,7 +1505,15 @@ export const InstanceFillPage: React.FC = () => {
                                 {blocks.filter((b) => b.content.replace(/<[^>]*>/g, '').trim()).map((b, i) => (
                                   <div key={i}>
                                     <div className="bg-gray-600 text-white font-semibold text-sm px-3 py-2 rounded-t">{b.title}</div>
-                                    <div className="border border-gray-200 border-t-0 rounded-b p-3 bg-gray-50 prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: b.content }} />
+                                    <div className="border border-gray-200 border-t-0 rounded-b p-3 bg-gray-50">
+                                      <div className="overflow-x-hidden">
+                                        <div
+                                          lang="en"
+                                          className="prose prose-sm max-w-none whitespace-normal break-normal [word-break:normal] [hyphens:none] [&_table]:w-full [&_table]:table-fixed [&_table]:border-collapse [&_th]:whitespace-normal [&_th]:break-normal [&_th]:align-top [&_th]:[word-break:normal] [&_th]:[hyphens:none] [&_td]:whitespace-normal [&_td]:break-normal [&_td]:align-top [&_td]:[word-break:normal] [&_td]:[hyphens:none] [&_td>div]:[overflow-wrap:break-word] [&_td>p]:[overflow-wrap:break-word] [&_td>span]:[overflow-wrap:break-word]"
+                                          dangerouslySetInnerHTML={{ __html: normalizeRichTextForPage(sanitizeInstructionHtml(b.content)) }}
+                                        />
+                                      </div>
+                                    </div>
                                   </div>
                                 ))}
                               </div>
@@ -1223,6 +1534,7 @@ export const InstanceFillPage: React.FC = () => {
                           const taskRowId = (section as { assessment_task_row_id?: number | null }).assessment_task_row_id;
                           const assessmentTaskIndex = taskRowId ? taskRowsOrderedForQuestions.findIndex((r) => r.id === taskRowId) + 1 : 1;
                           const isAssessment2Plus = assessmentTaskIndex >= 2;
+                          const taskQNumbers = getTaskQuestionDisplayNumbers(section.questions);
 
                           if (isAssessment2Plus) {
                             return (
@@ -1255,7 +1567,14 @@ export const InstanceFillPage: React.FC = () => {
                                       );
                                       const renderBlock = (block: { type: string; content?: string; questionId?: number; headerText?: string; imageUrl?: string; imageLayout?: string; imageWidthPercent?: number }, key: string) => {
                                         if (block.type === 'instruction_block' && (block.content || (block as { imageUrl?: string }).imageUrl)) {
-                                          const content = block.content ? <div className="text-sm text-gray-700 prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: String(block.content) }} /> : null;
+                                            const content = block.content ? (
+                                              <div className="overflow-x-hidden">
+                                                <div
+                                                  className="text-sm text-gray-700 prose prose-sm max-w-none whitespace-normal break-normal [word-break:normal] [hyphens:none] [&_table]:w-full [&_table]:table-fixed [&_table]:border-collapse [&_th]:whitespace-normal [&_th]:break-normal [&_th]:align-top [&_th]:[word-break:normal] [&_th]:[hyphens:none] [&_td]:whitespace-normal [&_td]:break-normal [&_td]:align-top [&_td]:[word-break:normal] [&_td]:[hyphens:none] [&_td>div]:[overflow-wrap:break-word] [&_td>p]:[overflow-wrap:break-word] [&_td>span]:[overflow-wrap:break-word]"
+                                                  dangerouslySetInnerHTML={{ __html: normalizeRichTextForPage(sanitizeInstructionHtml(String(block.content))) }}
+                                                />
+                                              </div>
+                                            ) : null;
                                           const imgUrl = (block as { imageUrl?: string }).imageUrl;
                                           const layout = (block as { imageLayout?: string }).imageLayout || 'side_by_side';
                                           const pct = Math.max(20, Math.min(80, (block as { imageWidthPercent?: number }).imageWidthPercent || 50));
@@ -1307,6 +1626,7 @@ export const InstanceFillPage: React.FC = () => {
                                                 onChange={onGridChange}
                                                 disabled={!editable}
                                                 error={errors[`q-${childQ.id}`]}
+                                                highlightAsFill={editable}
                                                 showRowAssessmentColumn={false}
                                                 studentResubmissionReadOnlyForSatisfactoryRows={isResubmissionAfterTrainer}
                                               />
@@ -1315,7 +1635,7 @@ export const InstanceFillPage: React.FC = () => {
                                         }
                                         if (block.type === 'short_text' || block.type === 'long_text') {
                                           const val = answers[getAnswerKey(childQ.id, null)] as string | undefined;
-                                          return wrapWithHeader(key, block.headerText, <QuestionRenderer question={childQ} value={val ?? null} onChange={(v) => handleAnswerChange(childQ.id, null, v as string | number | boolean | Record<string, unknown> | string[])} disabled={!editable} error={errors[`q-${childQ.id}`]} />);
+                                          return wrapWithHeader(key, block.headerText, <QuestionRenderer question={childQ} value={val ?? null} onChange={(v) => handleAnswerChange(childQ.id, null, v as string | number | boolean | Record<string, unknown> | string[])} disabled={!editable} error={errors[`q-${childQ.id}`]} highlightAsFill={editable} />);
                                         }
                                         return null;
                                       };
@@ -1323,15 +1643,26 @@ export const InstanceFillPage: React.FC = () => {
                                         <div key={q.id} className="border border-gray-200 rounded-lg overflow-hidden">
                                           <div className="bg-gray-100 font-semibold text-gray-800 px-4 py-2 border-b border-gray-200">
                                             {(() => {
-                                              const qPm = (q.pdf_meta as Record<string, unknown>) || {};
-                                              const imgUrl = qPm.imageUrl as string | undefined;
-                                              const layout = (qPm.imageLayout as string) || 'side_by_side';
-                                              const pct = Math.max(20, Math.min(80, (qPm.imageWidthPercent as number) || 50));
-                                              const imgEl = imgUrl ? <img src={imgUrl} alt="" className="max-w-full h-auto object-contain rounded border border-gray-200" style={{ maxHeight: 280 }} /> : null;
-                                              if (!imgEl) return <>{q.label}</>;
-                                              if (layout === 'above') return <><div className="mb-2">{imgEl}</div><div>{q.label}</div></>;
-                                              if (layout === 'below') return <><div>{q.label}</div><div className="mt-2">{imgEl}</div></>;
-                                              return <div className="flex gap-4 items-start"><div className="flex-1 min-w-0">{q.label}</div><div style={{ width: `${pct}%`, flexShrink: 0 }}>{imgEl}</div></div>;
+                                              const qn = taskQNumbers.get(q.id);
+                                              const inner = (() => {
+                                                const qPm = (q.pdf_meta as Record<string, unknown>) || {};
+                                                const imgUrl = qPm.imageUrl as string | undefined;
+                                                const layout = (qPm.imageLayout as string) || 'side_by_side';
+                                                const pct = Math.max(20, Math.min(80, (qPm.imageWidthPercent as number) || 50));
+                                                const imgEl = imgUrl ? <img src={imgUrl} alt="" className="max-w-full h-auto object-contain rounded border border-gray-200" style={{ maxHeight: 280 }} /> : null;
+                                                if (!imgEl) return <>{q.label}</>;
+                                                if (layout === 'above') return <><div className="mb-2">{imgEl}</div><div>{q.label}</div></>;
+                                                if (layout === 'below') return <><div>{q.label}</div><div className="mt-2">{imgEl}</div></>;
+                                                return <div className="flex gap-4 items-start"><div className="flex-1 min-w-0">{q.label}</div><div style={{ width: `${pct}%`, flexShrink: 0 }}>{imgEl}</div></div>;
+                                              })();
+                                              return qn != null ? (
+                                                <div className="flex gap-2 items-start">
+                                                  <span className="font-semibold text-gray-900 shrink-0">Q{qn}:</span>
+                                                  <div className="flex-1 min-w-0 font-semibold text-gray-800">{inner}</div>
+                                                </div>
+                                              ) : (
+                                                inner
+                                              );
                                             })()}
                                           </div>
                                           <div className="p-4">
@@ -1375,8 +1706,10 @@ export const InstanceFillPage: React.FC = () => {
                                                       onChange={onGridChange}
                                                       disabled={!editable}
                                                       error={errors[`q-${q.id}`]}
+                                                      highlightAsFill={editable}
                                                       showRowAssessmentColumn={false}
                                                       studentResubmissionReadOnlyForSatisfactoryRows={isResubmissionAfterTrainer}
+                                                      hideQuestionLabel
                                                     />
                                                   </div>
                                                 );
@@ -1388,7 +1721,7 @@ export const InstanceFillPage: React.FC = () => {
                                                   <button type="button" onClick={() => trainerEditable && handleTrainerAssessmentChange(q.id, 'yes')} disabled={!trainerEditable} title="Satisfactory" className={`p-1.5 rounded border flex items-center justify-center ${trainerAssessments[q.id] === 'yes' ? 'bg-red-50 border-red-600 text-red-600' : 'border-gray-300 text-gray-500 hover:border-gray-500 hover:text-gray-700'}`}><Check className="w-4 h-4" strokeWidth={2.5} /></button>
                                                   <button type="button" onClick={() => trainerEditable && handleTrainerAssessmentChange(q.id, 'no')} disabled={!trainerEditable} title="Not satisfactory" className={`p-1.5 rounded border flex items-center justify-center ${trainerAssessments[q.id] === 'no' ? 'bg-red-100 border-red-600 text-red-700' : 'border-gray-300 text-gray-500 hover:border-gray-500 hover:text-gray-700'}`}><X className="w-4 h-4" strokeWidth={2.5} /></button>
                                                 </div>
-                                                <QuestionRenderer question={q} value={(answers[getAnswerKey(q.id, null)] as string | number | boolean | Record<string, unknown> | string[] | undefined) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string | number | boolean | Record<string, unknown> | string[])} disabled={!editable} error={errors[`q-${q.id}`]} />
+                                                <QuestionRenderer question={q} value={(answers[getAnswerKey(q.id, null)] as string | number | boolean | Record<string, unknown> | string[] | undefined) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string | number | boolean | Record<string, unknown> | string[])} disabled={!editable} error={errors[`q-${q.id}`]} highlightAsFill={editable} />
                                               </div>
                                             )}
                                             {contentBlocks.map((block, bi) => renderBlock(block, String(block.questionId ?? `block-${bi}`)))}
@@ -1454,7 +1787,14 @@ export const InstanceFillPage: React.FC = () => {
                                             );
                                             const renderBlock = (block: { type: string; content?: string; questionId?: number; headerText?: string; imageUrl?: string; imageLayout?: string; imageWidthPercent?: number }, key: string) => {
                                               if (block.type === 'instruction_block' && (block.content || block.imageUrl)) {
-                                                const content = block.content ? <div className="text-sm text-gray-700 prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: String(block.content) }} /> : null;
+                                                const content = block.content ? (
+                                                  <div className="overflow-x-auto">
+                                                    <div
+                                                      className="text-sm text-gray-700 prose prose-sm max-w-none whitespace-normal overflow-visible hyphens-none [&_table]:w-full [&_table]:max-w-full [&_table]:table-fixed [&_th]:break-keep [&_th]:whitespace-normal [&_th]:align-top [&_th]:hyphens-none [&_td]:break-keep [&_td]:whitespace-normal [&_td]:align-top [&_td]:hyphens-none [&_td]:min-w-0 [&_td>*]:min-w-0"
+                                                      dangerouslySetInnerHTML={{ __html: normalizeRichTextForPage(sanitizeInstructionHtml(String(block.content))) }}
+                                                    />
+                                                  </div>
+                                                ) : null;
                                                 const imgUrl = block.imageUrl;
                                                 const layout = block.imageLayout || 'side_by_side';
                                                 const pct = Math.max(20, Math.min(80, block.imageWidthPercent || 50));
@@ -1490,11 +1830,11 @@ export const InstanceFillPage: React.FC = () => {
                                                     handleAnswerChange(childQ.id, rowId, rowData);
                                                   }
                                                 };
-                                                return wrapWithHeader(key, block.headerText, <QuestionRenderer question={childQ} value={Object.keys(merged).length ? merged : null} onChange={onGridChange} disabled={!editable} error={errors[`q-${childQ.id}`]} studentResubmissionReadOnlyForSatisfactoryRows={isResubmissionAfterTrainer} />);
+                                                return wrapWithHeader(key, block.headerText, <QuestionRenderer question={childQ} value={Object.keys(merged).length ? merged : null} onChange={onGridChange} disabled={!editable} error={errors[`q-${childQ.id}`]} studentResubmissionReadOnlyForSatisfactoryRows={isResubmissionAfterTrainer} taskQuestionDisplayNumber={taskQNumbers.get(childQ.id)} highlightAsFill={editable} />);
                                               }
                                               if (block.type === 'short_text' || block.type === 'long_text') {
                                                 const val = answers[getAnswerKey(childQ.id, null)] as string | undefined;
-                                                return wrapWithHeader(key, block.headerText, <QuestionRenderer question={childQ} value={val ?? null} onChange={(v) => handleAnswerChange(childQ.id, null, v as string | number | boolean | Record<string, unknown> | string[])} disabled={!editable} error={errors[`q-${childQ.id}`]} />);
+                                                return wrapWithHeader(key, block.headerText, <QuestionRenderer question={childQ} value={val ?? null} onChange={(v) => handleAnswerChange(childQ.id, null, v as string | number | boolean | Record<string, unknown> | string[])} disabled={!editable} error={errors[`q-${childQ.id}`]} taskQuestionDisplayNumber={taskQNumbers.get(childQ.id)} highlightAsFill={editable} />);
                                               }
                                               return null;
                                             };
@@ -1524,10 +1864,10 @@ export const InstanceFillPage: React.FC = () => {
                                                         handleAnswerChange(q.id, rowId, rowData);
                                                       }
                                                     };
-                                                    return <QuestionRenderer question={q} value={Object.keys(merged).length ? merged : null} onChange={onGridChange} disabled={!editable} error={errors[`q-${q.id}`]} studentResubmissionReadOnlyForSatisfactoryRows={isResubmissionAfterTrainer} />;
+                                                    return <QuestionRenderer question={q} value={Object.keys(merged).length ? merged : null} onChange={onGridChange} disabled={!editable} error={errors[`q-${q.id}`]} studentResubmissionReadOnlyForSatisfactoryRows={isResubmissionAfterTrainer} taskQuestionDisplayNumber={taskQNumbers.get(q.id)} highlightAsFill={editable} />;
                                                   })()
                                                 ) : (
-                                                  <QuestionRenderer question={q} value={(answers[getAnswerKey(q.id, null)] as string | number | boolean | Record<string, unknown> | string[] | undefined) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string | number | boolean | Record<string, unknown> | string[])} disabled={!editable} error={errors[`q-${q.id}`]} />
+                                                  <QuestionRenderer question={q} value={(answers[getAnswerKey(q.id, null)] as string | number | boolean | Record<string, unknown> | string[] | undefined) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string | number | boolean | Record<string, unknown> | string[])} disabled={!editable} error={errors[`q-${q.id}`]} taskQuestionDisplayNumber={taskQNumbers.get(q.id)} highlightAsFill={editable} />
                                                 )}
                                                 {contentBlocks.map((block, bi) => renderBlock(block, String(block.questionId ?? `block-${bi}`)))}
                                               </div>
@@ -1593,7 +1933,7 @@ export const InstanceFillPage: React.FC = () => {
                           const studentSubmitDateForResults = studentDeclDateForResults || submittedAt || '';
                           const minFirstAttempt = studentSubmitDateForResults || undefined;
                           const minSecondAttempt = rd?.first_attempt_date || undefined;
-                          const minThirdAttempt = rd?.second_attempt_date || undefined;
+                          const minThirdAttempt = maxIsoDate(rd?.first_attempt_date, rd?.second_attempt_date);
                           const minTrainerDate = [studentSubmitDateForResults, rd?.first_attempt_date].filter(Boolean).sort().pop() || undefined;
                           const firstAttemptComplete = !!(rd?.first_attempt_date || rd?.first_attempt_satisfactory);
                           const secondOrThirdHasData = !!(rd?.second_attempt_date || rd?.second_attempt_satisfactory || rd?.third_attempt_date || rd?.third_attempt_satisfactory);
@@ -1602,6 +1942,7 @@ export const InstanceFillPage: React.FC = () => {
                           const firstAttemptEditable = trainerCanEdit && !secondOrThirdHasData;
                           const secondAttemptEditable = trainerCanEdit && firstAttemptComplete && !thirdAttemptHasData;
                           const thirdAttemptEditable = trainerCanEdit && secondAttemptComplete;
+                          const firstAttemptDateLocked = trainerCanEdit && !!rd?.first_attempt_date;
                           const studentSuggestionSig = studentDeclSig ?? firstTaskData?.student_signature ?? null;
                           const studentNameQ = template?.steps?.flatMap((st) => st.sections).flatMap((s) => s.questions).find((q) => q.code === 'student.fullName');
                           const trainerNameQ = template?.steps?.flatMap((st) => st.sections).flatMap((s) => s.questions).find((q) => q.code === 'trainer.fullName');
@@ -1650,7 +1991,7 @@ export const InstanceFillPage: React.FC = () => {
                                       <DatePicker
                                         value={rd?.first_attempt_date ?? ''}
                                         onChange={(v) => handleResultsDataChange(section.id, 'first_attempt_date', v || null)}
-                                        disabled={!firstAttemptEditable}
+                                        disabled={!firstAttemptEditable || firstAttemptDateLocked}
                                         compact
                                         placement="above"
                                         className="inline-block min-w-[120px]"
@@ -1794,7 +2135,9 @@ export const InstanceFillPage: React.FC = () => {
                                       onChange={(e) => handleResultsDataChange(section.id, 'student_name', e.target.value || null)}
                                       disabled={!studentCanEdit}
                                       placeholder="Enter student name"
-                                      className="w-full border-b border-gray-400 min-h-[18px] px-1 py-0.5 text-sm bg-transparent focus:outline-none focus:ring-1 focus:ring-gray-400 disabled:bg-gray-100 disabled:cursor-not-allowed"
+                                      className={`w-full border-b border-gray-400 min-h-[18px] px-1 py-0.5 text-sm ${
+                                        studentCanEdit ? 'bg-blue-50/70' : 'bg-transparent'
+                                      } focus:outline-none focus:ring-1 focus:ring-gray-400 disabled:bg-gray-100 disabled:cursor-not-allowed`}
                                     />
                                     {suggestedStudentName && !rd?.student_name && studentCanEdit && (
                                       <button type="button" onClick={() => handleResultsDataChange(section.id, 'student_name', suggestedStudentName)} className="text-xs text-blue-600 hover:underline mt-0.5">Use {suggestedStudentName}</button>
@@ -1808,6 +2151,7 @@ export const InstanceFillPage: React.FC = () => {
                                       value={rd?.student_signature ?? null}
                                       onChange={(v) => handleResultsDataChange(section.id, 'student_signature', v)}
                                       disabled={!studentCanEdit}
+                                      highlight={studentCanEdit}
                                       suggestionFrom={studentSuggestionSig}
                                       onSuggestionClick={studentSuggestionSig ? () => handleResultsDataChange(section.id, 'student_signature', studentSuggestionSig) : undefined}
                                     />
@@ -1822,7 +2166,9 @@ export const InstanceFillPage: React.FC = () => {
                                       onChange={(e) => handleResultsDataChange(section.id, 'trainer_name', e.target.value || null)}
                                       disabled={!trainerCanEdit}
                                       placeholder="Enter trainer name"
-                                      className="w-full border-b border-gray-400 min-h-[18px] px-1 py-0.5 text-sm bg-transparent focus:outline-none focus:ring-1 focus:ring-gray-400 disabled:bg-gray-100 disabled:cursor-not-allowed"
+                                      className={`w-full border-b border-gray-400 min-h-[18px] px-1 py-0.5 text-sm ${
+                                        trainerCanEdit ? 'bg-blue-50/70' : 'bg-transparent'
+                                      } focus:outline-none focus:ring-1 focus:ring-gray-400 disabled:bg-gray-100 disabled:cursor-not-allowed`}
                                     />
                                     {suggestedTrainerName && !rd?.trainer_name && trainerCanEdit && (
                                       <button type="button" onClick={() => handleResultsDataChange(section.id, 'trainer_name', suggestedTrainerName)} className="text-xs text-blue-600 hover:underline mt-0.5">Use {suggestedTrainerName}</button>
@@ -1836,6 +2182,7 @@ export const InstanceFillPage: React.FC = () => {
                                       value={rd?.trainer_signature ?? null}
                                       onChange={(v) => handleResultsDataChange(section.id, 'trainer_signature', v)}
                                       disabled={!trainerCanEdit}
+                                      highlight={trainerCanEdit}
                                       suggestionFrom={trainerSuggestionSig}
                                       onSuggestionClick={trainerSuggestionSig ? () => { handleResultsDataChange(section.id, 'trainer_signature', trainerSuggestionSig); handleResultsDataChange(section.id, 'trainer_date', trainerSuggestionDate || null); } : undefined}
                                     />
@@ -1848,6 +2195,7 @@ export const InstanceFillPage: React.FC = () => {
                                       value={rd?.trainer_date ?? ''}
                                       onChange={(v) => handleResultsDataChange(section.id, 'trainer_date', v || null)}
                                       disabled={!trainerCanEdit}
+                                      highlight={trainerCanEdit}
                                       compact
                                       placement="above"
                                       className="min-w-[120px]"
@@ -2034,12 +2382,12 @@ export const InstanceFillPage: React.FC = () => {
                                       <td colSpan={3} className="border border-gray-400 p-1.5">
                                         <p className="text-[10px] text-gray-600 mb-1.5">I declare that I have conducted a fair, valid, reliable, and flexible assessment with this student, and I have provided appropriate feedback</p>
                                         <div className="grid grid-cols-3 gap-4">
-                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_1 ?? null} onChange={(v) => handleAssessmentSummaryChange('trainer_sig_1', v)} disabled={!trainerCanEdit || !sumFirstEditable} className="mt-0.5" suggestionFrom={trainerRefSig} onSuggestionClick={trainerRefSig ? () => { handleAssessmentSummaryChange('trainer_sig_1', trainerRefSig); handleAssessmentSummaryChange('trainer_date_1', trainerRefDate || todayIso); } : undefined} /></div>
-                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_2 ?? null} onChange={(v) => handleAssessmentSummaryChange('trainer_sig_2', v)} disabled={!trainerCanEdit || !sumSecondEditable} className="mt-0.5" suggestionFrom={sum.trainer_sig_1 ?? undefined} onSuggestionClick={sum.trainer_sig_1 ? () => { handleAssessmentSummaryChange('trainer_sig_2', sum.trainer_sig_1); handleAssessmentSummaryChange('trainer_date_2', sum.trainer_date_1 ?? null); } : undefined} /></div>
-                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_3 ?? null} onChange={(v) => handleAssessmentSummaryChange('trainer_sig_3', v)} disabled={!trainerCanEdit || !sumThirdEditable} className="mt-0.5" suggestionFrom={sum.trainer_sig_1 ?? undefined} onSuggestionClick={sum.trainer_sig_1 ? () => { handleAssessmentSummaryChange('trainer_sig_3', sum.trainer_sig_1); handleAssessmentSummaryChange('trainer_date_3', sum.trainer_date_1 ?? null); } : undefined} /></div>
-                                          <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_1 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_1', v || null)} disabled={!trainerCanEdit || !sumFirstEditable} compact placement="above" className="w-full" minDate={minSumTrainerDate1} /></div>
-                                          <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_2 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_2', v || null)} disabled={!trainerCanEdit || !sumSecondEditable} compact placement="above" className="w-full" minDate={minSumTrainerDate2} /></div>
-                                          <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_3 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_3', v || null)} disabled={!trainerCanEdit || !sumThirdEditable} compact placement="above" className="w-full" minDate={minSumTrainerDate3} /></div>
+                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_1 ?? null} onChange={(v) => handleAssessmentSummaryChange('trainer_sig_1', v)} disabled={!trainerCanEdit || !sumFirstEditable} className="mt-0.5" highlight={role === 'trainer' && sumFirstEditable} suggestionFrom={trainerRefSig} onSuggestionClick={trainerRefSig ? () => { handleAssessmentSummaryChange('trainer_sig_1', trainerRefSig); handleAssessmentSummaryChange('trainer_date_1', trainerRefDate || todayIso); } : undefined} /></div>
+                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_2 ?? null} onChange={(v) => handleAssessmentSummaryChange('trainer_sig_2', v)} disabled={!trainerCanEdit || !sumSecondEditable} className="mt-0.5" highlight={role === 'trainer' && sumSecondEditable} suggestionFrom={sum.trainer_sig_1 ?? undefined} onSuggestionClick={sum.trainer_sig_1 ? () => { handleAssessmentSummaryChange('trainer_sig_2', sum.trainer_sig_1); handleAssessmentSummaryChange('trainer_date_2', sum.trainer_date_1 ?? null); } : undefined} /></div>
+                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_3 ?? null} onChange={(v) => handleAssessmentSummaryChange('trainer_sig_3', v)} disabled={!trainerCanEdit || !sumThirdEditable} className="mt-0.5" highlight={role === 'trainer' && sumThirdEditable} suggestionFrom={sum.trainer_sig_1 ?? undefined} onSuggestionClick={sum.trainer_sig_1 ? () => { handleAssessmentSummaryChange('trainer_sig_3', sum.trainer_sig_1); handleAssessmentSummaryChange('trainer_date_3', sum.trainer_date_1 ?? null); } : undefined} /></div>
+                                          <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_1 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_1', v || null)} disabled={!trainerCanEdit || !sumFirstEditable} highlight={role === 'trainer' && sumFirstEditable} compact placement="above" className="w-full" minDate={minSumTrainerDate1} /></div>
+                                          <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_2 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_2', v || null)} disabled={!trainerCanEdit || !sumSecondEditable} highlight={role === 'trainer' && sumSecondEditable} compact placement="above" className="w-full" minDate={minSumTrainerDate2} /></div>
+                                          <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_3 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_3', v || null)} disabled={!trainerCanEdit || !sumThirdEditable} highlight={role === 'trainer' && sumThirdEditable} compact placement="above" className="w-full" minDate={minSumTrainerDate3} /></div>
                                         </div>
                                       </td>
                                     </tr>
@@ -2048,19 +2396,26 @@ export const InstanceFillPage: React.FC = () => {
                                       <td colSpan={3} className="border border-gray-400 p-1.5">
                                         <p className="text-[10px] text-gray-600 mb-1.5">I declare that I have been assessed in this unit, and I have been advised of my result. I also am aware of my appeal rights.</p>
                                         <div className="grid grid-cols-3 gap-4">
-                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_1 ?? null} onChange={(v) => handleAssessmentSummaryChange('student_sig_1', v)} disabled={!studentCanEdit || !sumFirstEditable} className="mt-0.5" suggestionFrom={studentRefSig} onSuggestionClick={studentRefSig ? () => { handleAssessmentSummaryChange('student_sig_1', studentRefSig); handleAssessmentSummaryChange('student_date_1', studentRefDate); } : undefined} /></div>
-                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_2 ?? null} onChange={(v) => handleAssessmentSummaryChange('student_sig_2', v)} disabled={!studentCanEdit || !sumSecondEditable} className="mt-0.5" suggestionFrom={sum.student_sig_1 ?? undefined} onSuggestionClick={sum.student_sig_1 ? () => { handleAssessmentSummaryChange('student_sig_2', sum.student_sig_1); handleAssessmentSummaryChange('student_date_2', sum.student_date_1 ?? null); } : undefined} /></div>
-                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_3 ?? null} onChange={(v) => handleAssessmentSummaryChange('student_sig_3', v)} disabled={!studentCanEdit || !sumThirdEditable} className="mt-0.5" suggestionFrom={sum.student_sig_1 ?? undefined} onSuggestionClick={sum.student_sig_1 ? () => { handleAssessmentSummaryChange('student_sig_3', sum.student_sig_1); handleAssessmentSummaryChange('student_date_3', sum.student_date_1 ?? null); } : undefined} /></div>
-                                          <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_1 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_1', v || null)} disabled={!studentCanEdit || !sumFirstEditable} compact placement="above" className="w-full" /></div>
-                                          <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_2 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_2', v || null)} disabled={!studentCanEdit || !sumSecondEditable} compact placement="above" className="w-full" /></div>
-                                          <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_3 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_3', v || null)} disabled={!studentCanEdit || !sumThirdEditable} compact placement="above" className="w-full" /></div>
+                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_1 ?? null} onChange={(v) => handleAssessmentSummaryChange('student_sig_1', v)} disabled={!studentCanEdit || !sumFirstEditable} className="mt-0.5" highlight={role === 'student' && sumFirstEditable} suggestionFrom={studentRefSig} onSuggestionClick={studentRefSig ? () => { handleAssessmentSummaryChange('student_sig_1', studentRefSig); handleAssessmentSummaryChange('student_date_1', studentRefDate); } : undefined} /></div>
+                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_2 ?? null} onChange={(v) => handleAssessmentSummaryChange('student_sig_2', v)} disabled={!studentCanEdit || !sumSecondEditable} className="mt-0.5" highlight={role === 'student' && sumSecondEditable} suggestionFrom={sum.student_sig_1 ?? undefined} onSuggestionClick={sum.student_sig_1 ? () => { handleAssessmentSummaryChange('student_sig_2', sum.student_sig_1); handleAssessmentSummaryChange('student_date_2', sum.student_date_1 ?? null); } : undefined} /></div>
+                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_3 ?? null} onChange={(v) => handleAssessmentSummaryChange('student_sig_3', v)} disabled={!studentCanEdit || !sumThirdEditable} className="mt-0.5" highlight={role === 'student' && sumThirdEditable} suggestionFrom={sum.student_sig_1 ?? undefined} onSuggestionClick={sum.student_sig_1 ? () => { handleAssessmentSummaryChange('student_sig_3', sum.student_sig_1); handleAssessmentSummaryChange('student_date_3', sum.student_date_1 ?? null); } : undefined} /></div>
+                                          <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_1 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_1', v || null)} disabled={!studentCanEdit || !sumFirstEditable} highlight={role === 'student' && sumFirstEditable} compact placement="above" className="w-full" /></div>
+                                          <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_2 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_2', v || null)} disabled={!studentCanEdit || !sumSecondEditable} highlight={role === 'student' && sumSecondEditable} compact placement="above" className="w-full" /></div>
+                                          <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_3 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_3', v || null)} disabled={!studentCanEdit || !sumThirdEditable} highlight={role === 'student' && sumThirdEditable} compact placement="above" className="w-full" /></div>
                                         </div>
                                       </td>
                                     </tr>
                                     <tr>
                                       <td className="border border-gray-400 bg-gray-100 font-semibold p-1.5 text-xs">Student overall Feedback:</td>
                                       <td colSpan={3} className="border border-gray-400 p-1.5">
-                                        <textarea value={sum.student_overall_feedback ?? ''} onChange={(e) => handleAssessmentSummaryChange('student_overall_feedback', e.target.value || null)} disabled={!trainerCanEdit} className="w-full border border-gray-400 min-h-[60px] p-1.5 text-xs" />
+                                        <textarea
+                                          value={sum.student_overall_feedback ?? ''}
+                                          onChange={(e) => handleAssessmentSummaryChange('student_overall_feedback', e.target.value || null)}
+                                          disabled={!trainerCanEdit}
+                                          className={`w-full border border-gray-400 min-h-[60px] p-1.5 text-xs ${
+                                            role === 'student' ? 'bg-blue-50/70' : ''
+                                          }`}
+                                        />
                                       </td>
                                     </tr>
                                     <tr>
@@ -2121,6 +2476,7 @@ export const InstanceFillPage: React.FC = () => {
                                             handleAnswerChange(q.id, null, merged as string | number | boolean | Record<string, unknown> | string[]);
                                           }}
                                           disabled={!editable}
+                                          highlight={(role === 'student' || role === 'trainer') && editable}
                                           suggestionFrom={studentSigSuggestion}
                                           onSuggestionClick={studentSigSuggestion && editable ? () => {
                                             const base = (sigObj && typeof sigObj === 'object' ? { ...sigObj } : {}) as Record<string, unknown>;
@@ -2138,6 +2494,7 @@ export const InstanceFillPage: React.FC = () => {
                                               handleAnswerChange(q.id, null, { ...base, date: newDate } as string | number | boolean | Record<string, unknown> | string[]);
                                             }}
                                             disabled={!editable}
+                                            highlight={(role === 'student' || role === 'trainer') && editable}
                                             compact
                                             placement="above"
                                             className="flex-1 min-w-0"
@@ -2158,6 +2515,7 @@ export const InstanceFillPage: React.FC = () => {
                                   disabled={!editable}
                                   error={errors[`q-${q.id}`]}
                                   declarationStyle={section.pdf_render_mode === 'declarations'}
+                                  highlightAsFill={editable}
                                 />
                               );
                             })}
@@ -2212,6 +2570,7 @@ export const InstanceFillPage: React.FC = () => {
                                 onChange={onLikertChange}
                                 disabled={!editable}
                                 error={errors[`q-${q.id}`]}
+                                highlightAsFill={editable}
                               />
                             );
                           }
@@ -2245,6 +2604,7 @@ export const InstanceFillPage: React.FC = () => {
                                 onChange={onGridChange}
                                 disabled={!editable}
                                 error={errors[`q-${q.id}`]}
+                                highlightAsFill={editable}
                               />
                             );
                           }
@@ -2323,6 +2683,7 @@ export const InstanceFillPage: React.FC = () => {
                               disabled={!editable}
                               error={errors[`q-${q.id}`]}
                               declarationStyle={section.pdf_render_mode === 'declarations'}
+                              highlightAsFill={editable}
                             />
                           );
                         })
@@ -2378,61 +2739,63 @@ export const InstanceFillPage: React.FC = () => {
             </div>
           </form>
 
-          <div className="lg:col-span-3">
-            <div className="lg:sticky lg:top-3">
-              <Card>
-                <h3 className="font-bold text-[var(--text)] mb-4">PDF Preview</h3>
-                <div className="space-y-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="w-full"
-                    onClick={() => {
-                      window.open(`${PDF_BASE}/pdf/${id}?role=${role}&t=${pdfCacheBust}#toolbar=0`, '_blank', 'width=800,height=600');
-                    }}
-                  >
-                    Preview PDF
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="w-full"
-                    onClick={() => {
-                      setPdfLoading(true);
-                      setPdfRefresh((r) => r + 1);
-                    }}
-                  >
-                    Refresh PDF
-                  </Button>
-                  <a
-                    href={`${PDF_BASE}/pdf/${id}?role=${role}&download=1&t=${pdfCacheBust}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="block"
-                  >
-                    <Button variant="outline" size="sm" className="w-full">
-                      Download PDF
+          {canViewPdfPreview && (
+            <div className="lg:col-span-3">
+              <div className="lg:sticky lg:top-3">
+                <Card>
+                  <h3 className="font-bold text-[var(--text)] mb-4">PDF Preview</h3>
+                  <div className="space-y-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full"
+                      onClick={() => {
+                        window.open(`${PDF_BASE}/pdf/${id}?role=${role}&t=${pdfCacheBust}#toolbar=0`, '_blank', 'width=800,height=600');
+                      }}
+                    >
+                      Preview PDF
                     </Button>
-                  </a>
-                </div>
-                <div className="mt-4 relative min-h-96 bg-gray-50 border border-[var(--border)] rounded-lg overflow-hidden">
-                  {pdfLoading && (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-white/90 z-10">
-                      <Loader variant="spinner" size="lg" />
-                      <p className="text-sm font-medium text-gray-600 animate-pulse">Loading PDF...</p>
-                    </div>
-                  )}
-                  <iframe
-                    key={pdfCacheBust}
-                    src={`${PDF_BASE}/pdf/${id}?role=${role}&t=${pdfCacheBust}#toolbar=0`}
-                    title="PDF Preview"
-                    className="w-full h-96 border-0 rounded-lg"
-                    onLoad={() => setPdfLoading(false)}
-                  />
-                </div>
-              </Card>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="w-full"
+                      onClick={() => {
+                        setPdfLoading(true);
+                        setPdfRefresh((r) => r + 1);
+                      }}
+                    >
+                      Refresh PDF
+                    </Button>
+                    <a
+                      href={`${PDF_BASE}/pdf/${id}?role=${role}&download=1&t=${pdfCacheBust}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block"
+                    >
+                      <Button variant="outline" size="sm" className="w-full">
+                        Download PDF
+                      </Button>
+                    </a>
+                  </div>
+                  <div className="mt-4 relative min-h-96 bg-gray-50 border border-[var(--border)] rounded-lg overflow-hidden">
+                    {pdfLoading && (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-white/90 z-10">
+                        <Loader variant="spinner" size="lg" />
+                        <p className="text-sm font-medium text-gray-600 animate-pulse">Loading PDF...</p>
+                      </div>
+                    )}
+                    <iframe
+                      key={pdfCacheBust}
+                      src={`${PDF_BASE}/pdf/${id}?role=${role}&t=${pdfCacheBust}#toolbar=0`}
+                      title="PDF Preview"
+                      className="w-full h-96 border-0 rounded-lg"
+                      onLoad={() => setPdfLoading(false)}
+                    />
+                  </div>
+                </Card>
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
       <ConfirmDialog

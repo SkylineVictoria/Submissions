@@ -9,6 +9,8 @@ interface GridTableQuestionProps {
   onChange: (value: Record<string, string>) => void;
   disabled?: boolean;
   error?: string;
+  /** Highlight textarea background when current user needs to fill fields */
+  highlight?: boolean;
   /** When true, adds a Status column with check/cancel per row (Assessment Task 2+) */
   showRowAssessmentColumn?: boolean;
   rowAssessments?: Record<number, string>;
@@ -81,6 +83,7 @@ export const GridTableQuestion: React.FC<GridTableQuestionProps> = ({
   onChange,
   disabled,
   error,
+  highlight = false,
   showRowAssessmentColumn,
   rowAssessments = {},
   onRowAssessmentChange,
@@ -138,6 +141,8 @@ export const GridTableQuestion: React.FC<GridTableQuestionProps> = ({
     const cellVal = getCellValue(row.id, colIndex);
     const wordCount = cellVal.trim() ? cellVal.trim().split(/\s+/).length : 0;
     const rowReadOnly = !!studentResubmissionReadOnlyForSatisfactoryRows && rowAssessments[row.id] === 'yes';
+    const answerBgClass =
+      !!highlight && !disabled && !rowReadOnly ? 'bg-blue-50/70' : 'bg-transparent';
     return (
       <td key={colIndex} className={cellClass}>
         <textarea
@@ -152,7 +157,7 @@ export const GridTableQuestion: React.FC<GridTableQuestionProps> = ({
           }}
           disabled={disabled || rowReadOnly}
           rows={wordLimit ? Math.max(1, Math.min(6, Math.ceil(wordLimit / 10))) : 1}
-          className={`w-full px-2 py-1.5 text-sm bg-transparent border-none border-b border-gray-300 focus:border-[var(--brand)] focus:outline-none ${wordLimit ? 'resize-none' : ''}`}
+          className={`w-full px-2 py-1.5 text-sm ${answerBgClass} border-none border-b border-gray-300 focus:border-[var(--brand)] focus:outline-none ${wordLimit ? 'resize-none' : ''}`}
           style={boxHeight ? { minHeight: boxHeight, maxHeight: boxHeight, height: boxHeight } : { minHeight: 34 }}
         />
         {wordLimit != null && (

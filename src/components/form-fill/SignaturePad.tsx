@@ -15,6 +15,8 @@ interface SignaturePadProps {
   onChange: (value: string | null) => void;
   disabled?: boolean;
   error?: string;
+  /** Highlight background when the current user needs to fill this field */
+  highlight?: boolean;
 }
 
 export const SignaturePad: React.FC<SignaturePadProps> = ({
@@ -23,6 +25,7 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
   onChange,
   disabled,
   error,
+  highlight = false,
 }) => {
   const canvasRef = useRef<SignatureCanvas>(null);
   const typedInputRef = useRef<HTMLInputElement>(null);
@@ -61,7 +64,9 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
         {error && <span className="text-red-600 ml-1">*</span>}
       </div>
       <div
-        className="border-2 border-[var(--border)] rounded-lg bg-white min-h-[120px] flex items-center justify-center"
+        className={`border-2 border-[var(--border)] rounded-lg min-h-[120px] flex items-center justify-center ${
+          !disabled && highlight ? 'bg-blue-50/70' : 'bg-white'
+        }`}
         style={{ minHeight: '120px' }}
       >
         {hasValue ? (

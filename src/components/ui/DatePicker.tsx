@@ -19,6 +19,8 @@ interface DatePickerProps {
   placeholder?: string;
   className?: string;
   id?: string;
+  /** Highlight background when the current user needs to fill this field */
+  highlight?: boolean;
   /** Compact style for table cells */
   compact?: boolean;
   /** Popover placement: above or below input */
@@ -45,6 +47,7 @@ export const DatePicker: React.FC<DatePickerProps> = ({
   placeholder = 'dd-mm-yyyy',
   className,
   id,
+  highlight = false,
   compact = false,
   placement = 'above',
   fromYear = 1900,
@@ -158,12 +161,13 @@ export const DatePicker: React.FC<DatePickerProps> = ({
       )}
       <div
         className={cn(
-          'flex items-center rounded-lg border bg-white transition-all duration-200',
+          'flex items-center rounded-lg border transition-all duration-200',
           'focus-within:ring-2 focus-within:ring-[var(--brand)] focus-within:ring-offset-1 focus-within:border-[var(--brand)]',
           error
             ? 'border-red-400 focus-within:ring-red-400'
             : 'border-[var(--border)] hover:border-gray-300',
           disabled && 'bg-gray-50 cursor-not-allowed opacity-60',
+          !disabled && highlight ? 'bg-blue-50/70 hover:bg-blue-50/70' : 'bg-white',
           compact ? 'h-8 px-2' : 'h-11 sm:h-12 px-3 sm:px-4'
         )}
       >

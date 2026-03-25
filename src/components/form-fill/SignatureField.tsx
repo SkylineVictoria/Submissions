@@ -14,6 +14,8 @@ interface SignatureFieldProps {
   onChange: (value: string | null) => void;
   disabled?: boolean;
   className?: string;
+  /** Highlight background for fields the current user needs to fill */
+  highlight?: boolean;
   /** When provided and current value empty, show clickable preview of this signature (no text labels) */
   suggestionFrom?: string | null;
   /** @deprecated Use suggestion preview instead - no text labels shown */
@@ -26,6 +28,7 @@ export const SignatureField: React.FC<SignatureFieldProps> = ({
   onChange,
   disabled,
   className = '',
+  highlight = false,
   suggestionFrom,
   onSuggestionClick,
 }) => {
@@ -63,7 +66,9 @@ export const SignatureField: React.FC<SignatureFieldProps> = ({
   return (
     <div className={`relative ${className}`}>
       <div
-        className="border border-gray-400 rounded bg-white min-h-[60px] flex items-center justify-center p-2 relative"
+        className={`border rounded min-h-[60px] flex items-center justify-center p-2 relative ${
+          highlight ? 'bg-blue-50 border-blue-300' : 'bg-white border-gray-400'
+        }`}
       >
         {hasValue ? (
           <div className="flex items-center gap-2 w-full min-w-0">

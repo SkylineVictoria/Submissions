@@ -96,12 +96,18 @@ interface QuestionRendererProps {
   disabled?: boolean;
   error?: string;
   declarationStyle?: boolean;
+  /** Highlight inputs the current user needs to fill (student/trainer) */
+  highlightAsFill?: boolean;
   /** For Assessment Task 2+ grid_table: show per-row check/cancel */
   showRowAssessmentColumn?: boolean;
   rowAssessments?: Record<number, string>;
   onRowAssessmentChange?: (rowId: number, satisfactory: 'yes' | 'no') => void;
   /** When true (student resubmission), grid rows where trainer marked satisfactory='yes' become read-only */
   studentResubmissionReadOnlyForSatisfactoryRows?: boolean;
+  /** When the parent UI already shows `question.label` (e.g. task question card header), hide the duplicate above the grid. */
+  hideQuestionLabel?: boolean;
+  /** Task assessment section: 1-based index matching PDF Q1, Q2, … (see getTaskQuestionDisplayNumbers). */
+  taskQuestionDisplayNumber?: number;
 }
 
 export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
@@ -111,13 +117,20 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
   disabled,
   error,
   declarationStyle,
+  highlightAsFill,
   showRowAssessmentColumn,
   rowAssessments,
   onRowAssessmentChange,
   studentResubmissionReadOnlyForSatisfactoryRows,
+  hideQuestionLabel,
+  taskQuestionDisplayNumber,
 }) => {
   const pm = (question.pdf_meta as Record<string, unknown>) || {};
   const wordLimit = normalizeWordLimit(pm.wordLimit);
+  const taskLabel = (label: string) =>
+    taskQuestionDisplayNumber != null ? `Q${taskQuestionDisplayNumber}: ${label}` : label;
+  const shouldHighlight = !!highlightAsFill && !disabled;
+  const fillBgClass = shouldHighlight ? 'bg-blue-50/70 hover:bg-blue-50/70' : undefined;
   if (question.type === 'instruction_block') {
     const imgUrl = pm.imageUrl as string | undefined;
     return (
@@ -153,28 +166,38 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
 
   if (question.type === 'grid_table') {
     return (
-      <GridTableQuestion
-        question={question}
-        value={value as Record<string, string> | null}
-        onChange={(v) => onChange(v)}
-        disabled={disabled}
-        error={error}
-        showRowAssessmentColumn={showRowAssessmentColumn}
-        rowAssessments={rowAssessments}
-        onRowAssessmentChange={onRowAssessmentChange}
-        studentResubmissionReadOnlyForSatisfactoryRows={studentResubmissionReadOnlyForSatisfactoryRows}
-      />
+      <div className="space-y-2">
+        {!hideQuestionLabel && question.label?.trim() && (
+          <div>
+            <div className="text-sm font-medium text-gray-700 whitespace-pre-line">{taskLabel(question.label)}</div>
+            {question.help_text && <div className="text-xs text-gray-500 mt-1">{question.help_text}</div>}
+          </div>
+        )}
+        <GridTableQuestion
+          question={question}
+          value={value as Record<string, string> | null}
+          onChange={(v) => onChange(v)}
+          disabled={disabled}
+          error={error}
+          showRowAssessmentColumn={showRowAssessmentColumn}
+          rowAssessments={rowAssessments}
+          onRowAssessmentChange={onRowAssessmentChange}
+          studentResubmissionReadOnlyForSatisfactoryRows={studentResubmissionReadOnlyForSatisfactoryRows}
+          highlight={shouldHighlight}
+        />
+      </div>
     );
   }
 
   if (question.type === 'signature') {
     return (
       <SignaturePad
-        label={question.label}
+        label={taskLabel(question.label)}
         value={value as string | null}
         onChange={(v) => onChange(v as string)}
         disabled={disabled}
         error={error}
+        highlight={shouldHighlight}
       />
     );
   }
@@ -184,13 +207,14 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
     if (isDateField) {
       return (
         <DatePicker
-          label={question.label}
+          label={taskLabel(question.label)}
           value={(value as string) || ''}
           onChange={(v) => onChange(v)}
           disabled={disabled}
           error={error}
           required={question.required && !disabled}
           placement="above"
+          highlight={shouldHighlight}
         />
       );
     }
@@ -199,7 +223,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
       return (
         <div>
           <QuestionLabelWithImage
-            label={question.label}
+            label={taskLabel(question.label)}
             helpText={question.help_text}
             imageUrl={imgUrl}
             imageLayout={(pm.imageLayout as ImageLayoutOption) || 'side_by_side'}
@@ -214,6 +238,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
                 }}
                 disabled={disabled}
                 error={error}
+                className={fillBgClass}
                 required={question.required && !disabled}
                 helperText={wordLimit ? `${countWords(String(value || ''))} / ${wordLimit} words` : undefined}
               />
@@ -224,7 +249,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
     }
     return (
       <Input
-        label={question.label}
+        label={taskLabel(question.label)}
         value={(value as string) || ''}
         onChange={(e) => {
           const next = e.target.value;
@@ -232,6 +257,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
         }}
         disabled={disabled}
         error={error}
+        className={fillBgClass}
         required={question.required && !disabled}
         helperText={[question.help_text, wordLimit ? `${countWords(String(value || ''))} / ${wordLimit} words` : null].filter(Boolean).join(' • ') || undefined}
       />
@@ -244,7 +270,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
       return (
         <div>
           <QuestionLabelWithImage
-            label={question.label}
+            label={taskLabel(question.label)}
             helpText={question.help_text}
             imageUrl={imgUrl}
             imageLayout={(pm.imageLayout as ImageLayoutOption) || 'side_by_side'}
@@ -256,6 +282,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
                 onChange={(e) => onChange(e.target.value)}
                 disabled={disabled}
                 error={error}
+                className={fillBgClass}
                 required={question.required && !disabled}
                 helperText={wordLimit ? `${countWords(String(value || ''))} / ${wordLimit} words` : undefined}
                 rows={wordLimit ? Math.max(2, Math.min(10, Math.ceil(wordLimit / 10))) : 8}
@@ -269,11 +296,12 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
     }
     return (
       <Textarea
-        label={question.label}
+        label={taskLabel(question.label)}
         value={(value as string) || ''}
         onChange={(e) => onChange(e.target.value)}
         disabled={disabled}
         error={error}
+        className={fillBgClass}
         required={question.required && !disabled}
         helperText={question.help_text || undefined}
         rows={wordLimit ? Math.max(2, Math.min(10, Math.ceil(wordLimit / 10))) : 8}
@@ -286,13 +314,14 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
   if (question.type === 'date') {
     return (
       <DatePicker
-        label={question.label}
+        label={taskLabel(question.label)}
         value={(value as string) || ''}
         onChange={(v) => onChange(v)}
         disabled={disabled}
         error={error}
         required={question.required && !disabled}
         placement="above"
+        highlight={shouldHighlight}
       />
     );
   }
@@ -303,7 +332,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
       return (
         <div>
           <Checkbox
-            label={`${question.label}${question.required ? ' *' : ''}`}
+            label={`${taskLabel(question.label)}${question.required ? ' *' : ''}`}
             checked={checked}
             onChange={(v) => onChange(v ? 'yes' : 'no')}
             disabled={disabled}
@@ -316,7 +345,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
     return (
       <div>
         <div className="text-sm font-semibold text-gray-700 mb-2 whitespace-pre-line">
-          {question.label}
+          {taskLabel(question.label)}
           {question.required && <span className="text-[var(--brand)] ml-1">*</span>}
         </div>
         <RadioGroup
@@ -338,7 +367,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
     return (
       <div>
         <div className="text-sm font-semibold text-gray-700 mb-2 whitespace-pre-line">
-          {question.label}
+          {taskLabel(question.label)}
           {question.required && <span className="text-[var(--brand)] ml-1">*</span>}
         </div>
         <RadioGroup
@@ -359,7 +388,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
     return (
       <div>
         <div className="text-sm font-semibold text-gray-700 mb-2 whitespace-pre-line">
-          {question.label}
+          {taskLabel(question.label)}
           {question.required && <span className="text-[var(--brand)] ml-1">*</span>}
         </div>
         <div className="space-y-2">
