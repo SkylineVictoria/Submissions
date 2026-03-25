@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Copy, ExternalLink, Send, RefreshCw, Ban, CheckCircle, User, CalendarClock } from 'lucide-react';
-import { listSubmittedInstancesPaged, updateInstanceRole, issueInstanceAccessLink, getOrIssueInstanceAccessLink, revokeRoleAccessTokens, extendInstanceAccessTokens, extendInstanceAccessTokensToDate, allowStudentResubmission, listTrainers } from '../lib/formEngine';
+import { listSubmittedInstancesPaged, updateInstanceRole, updateInstanceWorkflowStatus, issueInstanceAccessLink, getOrIssueInstanceAccessLink, revokeRoleAccessTokens, extendInstanceAccessTokens, extendInstanceAccessTokensToDate, allowStudentResubmission, listTrainers } from '../lib/formEngine';
 import type { SubmittedInstanceRow, Trainer } from '../lib/formEngine';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -19,18 +19,18 @@ const formatDateTime = (value: string | null): string => {
 
 const getWorkflowLabel = (row: SubmittedInstanceRow): string => {
   if (row.status === 'locked') return 'Completed';
-  if (row.status === 'draft') return 'Awaiting Student';
   if (row.role_context === 'trainer') return 'Waiting Trainer';
   if (row.role_context === 'office') return 'Waiting Office';
+  if (row.status === 'draft') return 'Awaiting Student';
   return 'Submitted (Not Sent)';
 };
 
 const getWorkflowBadgeClass = (row: SubmittedInstanceRow): string => {
   const base = 'border border-gray-200/80';
   if (row.status === 'locked') return `${base} bg-emerald-50 text-emerald-800`;
-  if (row.status === 'draft') return `${base} bg-gray-50 text-gray-700`;
   if (row.role_context === 'trainer') return `${base} bg-amber-50 text-amber-800`;
   if (row.role_context === 'office') return `${base} bg-sky-50 text-sky-800`;
+  if (row.status === 'draft') return `${base} bg-gray-50 text-gray-700`;
   return `${base} bg-gray-50 text-gray-600`;
 };
 
@@ -132,6 +132,11 @@ export const AdminAssessmentsPage: React.FC = () => {
     if (!sendToTrainerRow || !selectedTrainerId) return;
     const trainer = trainers.find((t) => t.id === selectedTrainerId);
     setSendingId(sendToTrainerRow.id);
+    // Ensure trainer sees editable form (trainer can only edit in waiting_trainer workflow).
+    if (sendToTrainerRow.status === 'draft') {
+      await updateInstanceWorkflowStatus(sendToTrainerRow.id, 'waiting_trainer');
+      setRows((prev) => prev.map((r) => (r.id === sendToTrainerRow.id ? { ...r, status: 'submitted' } : r)));
+    }
     if (sendToTrainerRow.role_context !== 'trainer') {
       await updateInstanceRole(sendToTrainerRow.id, 'trainer');
       setRows((prev) => prev.map((r) => (r.id === sendToTrainerRow.id ? { ...r, role_context: 'trainer' } : r)));
@@ -254,14 +259,22 @@ export const AdminAssessmentsPage: React.FC = () => {
                                   <CalendarClock className={actionIcon} />
                                   <span className={actionText}>Extend Deadline</span>
                                 </button>
-                                {row.status === 'submitted' && (row.role_context === 'trainer' || row.role_context === 'office') && (
+                                {row.status !== 'locked' &&
+                                  (row.role_context === 'trainer' || row.role_context === 'office') &&
+                                  (Number((row as unknown as { submission_count?: number }).submission_count ?? 0) > 0 || !!row.submitted_at) && (
                                   <button type="button" onClick={async () => { setManagingId(row.id); await allowStudentResubmission(row.id); setManagingId(null); await loadRows(currentPage, searchTerm, { silent: true }); const url = `${window.location.origin}/forms/${row.form_id}/student-access`; await navigator.clipboard.writeText(url); toast.success('Resubmission allowed. Generic link copied—student uses email and OTP.'); }} disabled={managingId === row.id} className={actionBtn} title="Allow student to resubmit">
                                     <CheckCircle className={actionIcon} />
                                     <span className={actionText}>Allow Resubmission</span>
                                   </button>
                                 )}
-                                {row.status === 'submitted' && (
-                                  <button type="button" onClick={() => openSendToTrainer(row)} disabled={sendingId === row.id} className={actionBtn} title={row.role_context === 'trainer' ? 'Resend to Trainer' : 'Send to Trainer'}>
+                                {(row.status === 'submitted' || row.status === 'draft') && (
+                                  <button
+                                    type="button"
+                                    onClick={() => openSendToTrainer(row)}
+                                    disabled={sendingId === row.id}
+                                    className={actionBtn}
+                                    title={row.role_context === 'trainer' ? 'Resend to Trainer' : 'Send to Trainer'}
+                                  >
                                     <Send className={actionIcon} />
                                     <span className={actionText}>{sendingId === row.id ? 'Sending...' : row.role_context === 'trainer' ? 'Resend to Trainer' : 'Send to Trainer'}</span>
                                   </button>

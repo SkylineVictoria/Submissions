@@ -36,9 +36,10 @@ export const SignatureField: React.FC<SignatureFieldProps> = ({
   const typedInputRef = useRef<HTMLInputElement>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [mode, setMode] = useState<'draw' | 'type'>('draw');
-  const hasValue = !!value;
+  const effectiveValue = value ?? (disabled ? (suggestionFrom ?? null) : null);
+  const hasValue = !!effectiveValue;
   const showSuggestion = !hasValue && !!suggestionFrom && !!onSuggestionClick;
-  const isImage = isImageSignature(value);
+  const isImage = isImageSignature(effectiveValue);
   const suggestionIsImage = suggestionFrom ? isImageSignature(suggestionFrom) : false;
 
   const handleSaveDraw = () => {
@@ -74,13 +75,13 @@ export const SignatureField: React.FC<SignatureFieldProps> = ({
           <div className="flex items-center gap-2 w-full min-w-0">
             {isImage ? (
               <img
-                src={value}
+                src={effectiveValue as string}
                 alt="Signature"
                 className="h-10 w-auto max-w-full object-contain rounded border border-gray-200"
               />
             ) : (
               <span className="text-red-600 italic font-serif text-sm font-medium truncate flex-1">
-                {value}
+                {effectiveValue}
               </span>
             )}
             {!disabled && (
@@ -119,42 +120,46 @@ export const SignatureField: React.FC<SignatureFieldProps> = ({
           <span className="text-gray-400 italic text-xs">No signature</span>
         ) : (
           <div className="flex flex-col gap-1 w-full">
-            <div className="flex gap-1">
-              <button
-                type="button"
-                onClick={() => { setMode('draw'); setIsModalOpen(true); }}
-                className="text-xs px-2 py-1 rounded border border-gray-300 hover:bg-gray-50"
-              >
-                Draw
-              </button>
-              <button
-                type="button"
-                onClick={() => { setMode('type'); setIsModalOpen(true); }}
-                className="text-xs px-2 py-1 rounded border border-gray-300 hover:bg-gray-50"
-              >
-                Type name
-              </button>
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="flex gap-1">
+                <button
+                  type="button"
+                  onClick={() => { setMode('draw'); setIsModalOpen(true); }}
+                  className="text-xs px-2 py-1 rounded border border-gray-300 hover:bg-gray-50"
+                >
+                  Draw
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setMode('type'); setIsModalOpen(true); }}
+                  className="text-xs px-2 py-1 rounded border border-gray-300 hover:bg-gray-50"
+                >
+                  Type name
+                </button>
+              </div>
+              {showSuggestion && (
+                <button
+                  type="button"
+                  onClick={onSuggestionClick}
+                  className="inline-flex items-center gap-2 px-2 py-1 rounded border border-dashed border-gray-300 hover:border-gray-400 hover:bg-gray-50 text-left transition-colors"
+                  title="Use suggested signature"
+                >
+                  <span className="text-[11px] text-gray-600 whitespace-nowrap">Use</span>
+                  {suggestionIsImage ? (
+                    <img
+                      src={suggestionFrom!}
+                      alt=""
+                      className="h-6 w-auto max-w-[90px] object-contain rounded border border-gray-200"
+                    />
+                  ) : (
+                    <span className="text-red-600 italic font-serif text-xs truncate max-w-[160px]">
+                      {suggestionFrom}
+                    </span>
+                  )}
+                  <span className="text-[11px] text-gray-500 whitespace-nowrap">Tap to use</span>
+                </button>
+              )}
             </div>
-            {showSuggestion && (
-              <button
-                type="button"
-                onClick={onSuggestionClick}
-                className="inline-flex items-center gap-1.5 px-2 py-1 rounded border border-dashed border-gray-300 hover:border-gray-400 hover:bg-gray-50 text-left transition-colors"
-                title="Use same signature"
-              >
-                {suggestionIsImage ? (
-                  <img
-                    src={suggestionFrom!}
-                    alt=""
-                    className="h-6 w-auto max-w-[80px] object-contain rounded border border-gray-200"
-                  />
-                ) : (
-                  <span className="text-red-600 italic font-serif text-xs truncate max-w-[120px]">
-                    {suggestionFrom}
-                  </span>
-                )}
-              </button>
-            )}
           </div>
         )}
       </div>

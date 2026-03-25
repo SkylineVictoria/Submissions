@@ -190,11 +190,23 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
   }
 
   if (question.type === 'signature') {
+    const raw = value;
+    const rawObj = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
+    const sigValue =
+      rawObj
+        ? (String(rawObj.signature ?? rawObj.imageDataUrl ?? rawObj.typedText ?? '').trim() || null)
+        : (typeof raw === 'string' ? (raw.trim() || null) : null);
     return (
       <SignaturePad
         label={taskLabel(question.label)}
-        value={value as string | null}
-        onChange={(v) => onChange(v as string)}
+        value={sigValue}
+        onChange={(v) => {
+          if (rawObj) {
+            onChange({ ...rawObj, signature: v } as Record<string, unknown>);
+          } else {
+            onChange(v as string);
+          }
+        }}
         disabled={disabled}
         error={error}
         highlight={shouldHighlight}

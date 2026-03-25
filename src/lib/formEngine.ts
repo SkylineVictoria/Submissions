@@ -1121,7 +1121,17 @@ export async function extendInstanceAccessTokensToDate(
 /** Allow student resubmission: set instance back to draft, role to student, and re-enable student link. For 2nd/3rd attempts. */
 export async function allowStudentResubmission(instanceId: number): Promise<void> {
   const { updated_by } = getAuditFields();
-  await supabase.from('skyline_form_instances').update({ status: 'draft', role_context: 'student', updated_by }).eq('id', instanceId);
+  const { data: instRow } = await supabase
+    .from('skyline_form_instances')
+    .select('submission_count')
+    .eq('id', instanceId)
+    .single();
+  const current = Number((instRow as { submission_count?: number | null } | null)?.submission_count ?? 0) || 0;
+  const nextCount = Math.min(Math.max(current, 1) + 1, 3);
+  await supabase
+    .from('skyline_form_instances')
+    .update({ status: 'draft', role_context: 'student', updated_by, submission_count: nextCount })
+    .eq('id', instanceId);
   await extendInstanceAccessTokens(instanceId, 'student', 30);
 }
 
@@ -1725,6 +1735,7 @@ export interface SubmittedInstanceRow {
   role_context: string;
   created_at: string;
   submitted_at: string | null;
+  submission_count: number;
   /** True if the link for this role is revoked or past expiry (show Enable); false = active (show Expire) */
   link_expired: boolean;
 }
@@ -1804,7 +1815,7 @@ export async function listStudentsPaged(
 export async function listSubmittedInstances(): Promise<SubmittedInstanceRow[]> {
   const { data: instances, error } = await supabase
     .from('skyline_form_instances')
-    .select('id, form_id, student_id, status, role_context, created_at, submitted_at')
+    .select('id, form_id, student_id, status, role_context, created_at, submitted_at, submission_count')
     .not('student_id', 'is', null)
     .order('created_at', { ascending: false });
   if (error) {
@@ -1877,6 +1888,7 @@ export async function listSubmittedInstances(): Promise<SubmittedInstanceRow[]> 
       role_context: roleCtx,
       created_at: String(r.created_at ?? ''),
       submitted_at: r.submitted_at ? String(r.submitted_at) : null,
+      submission_count: Number(r.submission_count ?? 0) || 0,
       link_expired,
     };
   });
@@ -1891,7 +1903,7 @@ export async function listSubmittedInstancesPaged(
   const to = from + pageSize - 1;
   let query = supabase
     .from('skyline_form_instances')
-    .select('id, form_id, student_id, status, role_context, created_at, submitted_at', { count: 'exact' })
+    .select('id, form_id, student_id, status, role_context, created_at, submitted_at, submission_count', { count: 'exact' })
     .not('student_id', 'is', null)
     .order('created_at', { ascending: false });
 
@@ -1994,6 +2006,7 @@ export async function listSubmittedInstancesPaged(
         role_context: roleCtx,
         created_at: String(r.created_at ?? ''),
         submitted_at: r.submitted_at ? String(r.submitted_at) : null,
+        submission_count: Number(r.submission_count ?? 0) || 0,
         link_expired,
       };
     }),
@@ -2147,6 +2160,7 @@ export async function listDashboardInstances(
         role_context: roleCtx,
         created_at: String(r.created_at ?? ''),
         submitted_at: r.submitted_at ? String(r.submitted_at) : null,
+        submission_count: Number(r.submission_count ?? 0) || 0,
         link_expired,
       };
     }),
@@ -3465,7 +3479,20 @@ export async function updateInstanceWorkflowStatus(instanceId: number, workflowS
   if (workflowStatus === 'draft') payload.status = 'draft';
   if (workflowStatus === 'waiting_trainer' || workflowStatus === 'waiting_office') payload.status = 'submitted';
   if (workflowStatus === 'completed') payload.status = 'locked';
-  if (workflowStatus === 'waiting_trainer') payload.submitted_at = nowIso;
+  if (workflowStatus === 'waiting_trainer') {
+    const { data: instRow } = await supabase
+      .from('skyline_form_instances')
+      .select('submission_count, submitted_at')
+      .eq('id', instanceId)
+      .single();
+    const existingSubmittedAt = (instRow as { submitted_at?: string | null } | null)?.submitted_at;
+    // First student submission sets submitted_at; resubmissions must not overwrite the original timestamp.
+    if (!existingSubmittedAt) {
+      payload.submitted_at = nowIso;
+    }
+    const current = Number((instRow as { submission_count?: number | null } | null)?.submission_count ?? 0) || 0;
+    payload.submission_count = Math.max(current, 1);
+  }
   const { error } = await supabase.from('skyline_form_instances').update(payload).eq('id', instanceId);
   if (error) console.error('updateInstanceWorkflowStatus error', error);
 }

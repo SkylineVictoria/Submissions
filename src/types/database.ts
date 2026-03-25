@@ -151,6 +151,7 @@ export interface Database {
           role_context: string;
           created_at: string;
           submitted_at: string | null;
+          submission_count: number;
         };
         Insert: {
           id?: number;
@@ -159,6 +160,7 @@ export interface Database {
           role_context?: string;
           created_at?: string;
           submitted_at?: string | null;
+          submission_count?: number;
         };
         Update: Partial<Database['public']['Tables']['form_instances']['Insert']>;
       };

@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { DayPicker } from 'react-day-picker';
 import 'react-day-picker/style.css';
 import { format, parse, isValid } from 'date-fns';
-import { Calendar } from 'lucide-react';
+import { Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '../utils/cn';
 
 const DISPLAY_FORMAT = 'dd-MM-yyyy';
@@ -72,6 +72,26 @@ export const DatePicker: React.FC<DatePickerProps> = ({
   const today = new Date();
   const minDateObj = minDate && isValid(parse(minDate, ISO_FORMAT, new Date())) ? parse(minDate, ISO_FORMAT, new Date()) : undefined;
   const maxDateObj = maxDate && isValid(parse(maxDate, ISO_FORMAT, new Date())) ? parse(maxDate, ISO_FORMAT, new Date()) : undefined;
+
+  const monthStart = (d: Date) => new Date(d.getFullYear(), d.getMonth(), 1);
+  const addMonths = (d: Date, delta: number) => new Date(d.getFullYear(), d.getMonth() + delta, 1);
+  const clampMonth = (d: Date) => {
+    const y = d.getFullYear();
+    if (y < fromYear) return new Date(fromYear, 0, 1);
+    if (y > toYear) return new Date(toYear, 11, 1);
+    return d;
+  };
+  const minMonth = minDateObj ? monthStart(minDateObj) : null;
+  const maxMonth = maxDateObj ? monthStart(maxDateObj) : null;
+  const prevMonthCandidate = clampMonth(addMonths(activeMonth, -1));
+  const nextMonthCandidate = clampMonth(addMonths(activeMonth, 1));
+  const canGoPrev =
+    prevMonthCandidate.getTime() !== activeMonth.getTime() &&
+    (!minMonth || prevMonthCandidate >= minMonth);
+  const canGoNext =
+    nextMonthCandidate.getTime() !== activeMonth.getTime() &&
+    (!maxMonth || nextMonthCandidate <= maxMonth) &&
+    !(disableFuture && nextMonthCandidate > monthStart(today));
 
   useEffect(() => {
     if (value && isValid(parse(value, ISO_FORMAT, new Date()))) {
@@ -219,8 +239,21 @@ export const DatePicker: React.FC<DatePickerProps> = ({
           className="p-3 bg-white rounded-xl shadow-lg border border-gray-200 rdp-datepicker-modern overflow-visible"
           style={popoverStyle}
         >
-          {/* Header: \"February 2026\" – cycles day → month → year views on click */}
-          <div className="flex items-center justify-center mb-2">
+          {/* Header: \"February 2026\" – nav + cycles day → year → month */}
+          <div className="flex items-center justify-between mb-2">
+            <button
+              type="button"
+              className={cn(
+                'p-1.5 rounded-md text-gray-600 hover:bg-gray-100 hover:text-gray-800 transition-colors',
+                (!canGoPrev || view !== 'day') && 'opacity-40 cursor-not-allowed hover:bg-transparent hover:text-gray-600'
+              )}
+              disabled={!canGoPrev || view !== 'day'}
+              onClick={() => setActiveMonth(prevMonthCandidate)}
+              aria-label="Previous month"
+              title="Previous month"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
             <button
               type="button"
               className="text-sm font-semibold text-gray-800 hover:text-[var(--brand)]"
@@ -231,6 +264,19 @@ export const DatePicker: React.FC<DatePickerProps> = ({
               }}
             >
               {format(activeMonth, 'MMMM yyyy')}
+            </button>
+            <button
+              type="button"
+              className={cn(
+                'p-1.5 rounded-md text-gray-600 hover:bg-gray-100 hover:text-gray-800 transition-colors',
+                (!canGoNext || view !== 'day') && 'opacity-40 cursor-not-allowed hover:bg-transparent hover:text-gray-600'
+              )}
+              disabled={!canGoNext || view !== 'day'}
+              onClick={() => setActiveMonth(nextMonthCandidate)}
+              aria-label="Next month"
+              title="Next month"
+            >
+              <ChevronRight className="w-4 h-4" />
             </button>
           </div>
 
