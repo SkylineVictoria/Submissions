@@ -48,7 +48,7 @@ export const Input: React.FC<InputProps> = ({
           'text-base sm:text-sm', // Larger text on mobile for better UX
           error
             ? 'border-red-400 focus:ring-red-400 focus:border-red-400 bg-red-50'
-            : 'border-[var(--border)] hover:border-gray-300 bg-white',
+            : 'border-[var(--border)] hover:border-gray-300 bg-blue-50/70',
           'disabled:bg-gray-50 disabled:cursor-not-allowed disabled:text-gray-500',
           'text-[var(--text)] placeholder:text-gray-400',
           props.type === 'date' && 'input-date-styled cursor-pointer',

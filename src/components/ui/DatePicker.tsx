@@ -47,7 +47,7 @@ export const DatePicker: React.FC<DatePickerProps> = ({
   placeholder = 'dd-mm-yyyy',
   className,
   id,
-  highlight = false,
+  highlight: _highlight = false,
   compact = false,
   placement = 'above',
   fromYear = 1900,
@@ -187,7 +187,7 @@ export const DatePicker: React.FC<DatePickerProps> = ({
             ? 'border-red-400 focus-within:ring-red-400'
             : 'border-[var(--border)] hover:border-gray-300',
           disabled && 'bg-gray-50 cursor-not-allowed opacity-60',
-          !disabled && highlight ? 'bg-blue-50/70 hover:bg-blue-50/70' : 'bg-white',
+          !disabled && 'bg-blue-50/70',
           compact ? 'h-8 px-2' : 'h-11 sm:h-12 px-3 sm:px-4'
         )}
       >

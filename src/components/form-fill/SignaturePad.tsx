@@ -25,7 +25,7 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
   onChange,
   disabled,
   error,
-  highlight = false,
+  highlight: _highlight = false,
 }) => {
   const canvasRef = useRef<SignatureCanvas>(null);
   const typedInputRef = useRef<HTMLInputElement>(null);
@@ -65,7 +65,7 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
       </div>
       <div
         className={`border-2 border-[var(--border)] rounded-lg min-h-[120px] flex items-center justify-center ${
-          !disabled && highlight ? 'bg-blue-50/70' : 'bg-white'
+          !disabled ? 'bg-blue-50/70' : 'bg-gray-50'
         }`}
         style={{ minHeight: '120px' }}
       >

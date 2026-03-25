@@ -104,6 +104,39 @@ function maxIsoDate(...vals: (string | null | undefined)[]): string | undefined 
   return norm.reduce((a, b) => (a >= b ? a : b));
 }
 
+/**
+ * Task results sheet: earliest date allowed for 2nd/3rd attempt outcomes. Aligns with assessment summary
+ * student signature dates (student_date_2 / student_date_3) and the prior chain on this row + summary.
+ */
+function getResultsMinSecondAttemptDate(
+  rd: import('../lib/formEngine').ResultsDataEntry | null | undefined,
+  sum: import('../lib/formEngine').AssessmentSummaryDataEntry | null | undefined,
+): string | undefined {
+  return maxIsoDate(
+    rd?.first_attempt_date ?? undefined,
+    rd?.trainer_date ?? undefined,
+    sum?.student_date_2 ?? undefined,
+    sum?.trainer_date_1 ?? undefined,
+    sum?.student_date_1 ?? undefined,
+  );
+}
+
+function getResultsMinThirdAttemptDate(
+  rd: import('../lib/formEngine').ResultsDataEntry | null | undefined,
+  sum: import('../lib/formEngine').AssessmentSummaryDataEntry | null | undefined,
+): string | undefined {
+  return maxIsoDate(
+    rd?.first_attempt_date ?? undefined,
+    rd?.trainer_date ?? undefined,
+    rd?.second_attempt_date ?? undefined,
+    sum?.student_date_3 ?? undefined,
+    sum?.trainer_date_2 ?? undefined,
+    sum?.student_date_2 ?? undefined,
+    sum?.trainer_date_1 ?? undefined,
+    sum?.student_date_1 ?? undefined,
+  );
+}
+
 function addIsoDays(iso: string, days: number): string | undefined {
   const s = String(iso || '').trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return undefined;
@@ -400,18 +433,20 @@ export const InstanceFillPage: React.FC = () => {
       setResultsData((prev) => {
         const rd = prev[sectionId];
         const base = rd ?? ({ section_id: sectionId } as import('../lib/formEngine').ResultsDataEntry);
-        const first = base.first_attempt_date ?? null;
-        const second = base.second_attempt_date ?? null;
-
         // First attempt date can be adjusted while still on first attempt (UI already prevents edits once later attempts start).
-        if (field === 'second_attempt_date' && normalized && first && isCalendarBefore(normalized, first)) {
-          rejectReason = 'Second attempt date cannot be before the first attempt date.';
-          return prev;
+        if (field === 'second_attempt_date' && normalized) {
+          const minSecond = getResultsMinSecondAttemptDate(base, assessmentSummary);
+          if (minSecond && isCalendarBefore(normalized, minSecond)) {
+            rejectReason =
+              'Second attempt date must be on or after the student date on the assessment summary (attempt 2) and the first-attempt dates.';
+            return prev;
+          }
         }
         if (field === 'third_attempt_date' && normalized) {
-          const minLater = maxIsoDate(first, second);
-          if (minLater && isCalendarBefore(normalized, minLater)) {
-            rejectReason = 'Third attempt date cannot be before the first or second attempt date.';
+          const minThird = getResultsMinThirdAttemptDate(base, assessmentSummary);
+          if (minThird && isCalendarBefore(normalized, minThird)) {
+            rejectReason =
+              'Third attempt date must be on or after the student date on the assessment summary (attempt 3) and earlier attempt dates.';
             return prev;
           }
         }
@@ -431,7 +466,7 @@ export const InstanceFillPage: React.FC = () => {
       await saveResultsData(id, sectionId, { [field]: normalized });
       setPdfRefresh((r) => r + 1);
     },
-    [id, normalizeSignatureValue]
+    [id, normalizeSignatureValue, assessmentSummary]
   );
 
   useEffect(() => {
@@ -1015,6 +1050,20 @@ export const InstanceFillPage: React.FC = () => {
       const stepData = template.steps[stepNumber - 2];
       if (!stepData) return true;
       const stepErrors: Record<string, string> = {};
+      const taskResultIdsAppendixVal = (template.steps ?? [])
+        .flatMap((st) => st.sections)
+        .filter((s) => s.pdf_render_mode === 'task_results')
+        .map((s) => s.id);
+      const firstTaskSecAppendixVal = taskResultIdsAppendixVal[0];
+      const firstTaskRdAppendixVal = firstTaskSecAppendixVal ? resultsData[firstTaskSecAppendixVal] : null;
+      const secondOrThirdHasDataAppendixVal = !!(
+        firstTaskRdAppendixVal?.second_attempt_date ||
+        firstTaskRdAppendixVal?.second_attempt_satisfactory ||
+        firstTaskRdAppendixVal?.third_attempt_date ||
+        firstTaskRdAppendixVal?.third_attempt_satisfactory
+      );
+      const isAppendixAStepTitle = /Appendix\s*A/i.test((stepData.title || '').trim());
+
       for (const section of stepData.sections) {
         // `task_results` and `assessment_summary` are rendered from `resultsData` / `assessmentSummary`
         // state (not from `answers` + `section.questions`). So validate them explicitly here.
@@ -1186,13 +1235,19 @@ export const InstanceFillPage: React.FC = () => {
           continue;
         }
 
+        const appendixFirstCycleEditableForStep =
+          !isAppendixAStepTitle || section.pdf_render_mode !== 'reasonable_adjustment'
+            ? true
+            : submissionCount < 2 && !secondOrThirdHasDataAppendixVal;
+
         for (const q of section.questions) {
           if (q.type === 'instruction_block' || q.type === 'page_break') continue;
           if ((q.pdf_meta as Record<string, unknown>)?.isAdditionalBlockOf) continue;
           if (!isRoleVisible((q.role_visibility as Record<string, boolean>) || {}, role)) continue;
           const baseEditable = isRoleEditable((q.role_editability as Record<string, boolean>) || {}, role) && canRoleEditCurrentWorkflow;
           const editable = baseEditable && !isQuestionReadOnlyByTrainer(q.id);
-          if (!q.required || !editable) continue;
+          const effectiveEditable = editable && appendixFirstCycleEditableForStep;
+          if (!q.required || !effectiveEditable) continue;
 
           if (q.type === 'grid_table' && q.rows?.length) {
             if (!isGridTableFilled(q, answers)) {
@@ -1237,6 +1292,16 @@ export const InstanceFillPage: React.FC = () => {
           // which incorrectly passes the "required" check. Use content-based validation instead.
           if (!rowAnswerHasContent(val as AnswersMap[string] | undefined)) {
             stepErrors[`q-${q.id}`] = `${q.label} is required`;
+          } else if (q.code === 'evaluation.evaluationDate' && rowAnswerHasContent(val as AnswersMap[string] | undefined)) {
+            const trIds = (template?.steps ?? [])
+              .flatMap((st) => st.sections)
+              .filter((s) => s.pdf_render_mode === 'task_results')
+              .map((s) => s.id);
+            const firstRd = trIds[0] ? resultsData[trIds[0]] : null;
+            const firstAttempt = firstRd?.first_attempt_date;
+            if (firstAttempt && String(firstAttempt).trim() && isCalendarBefore(String(val), String(firstAttempt))) {
+              stepErrors[`q-${q.id}`] = 'Date of Evaluation cannot be before the first attempt date.';
+            }
           }
         }
       }
@@ -1460,6 +1525,15 @@ export const InstanceFillPage: React.FC = () => {
                               .map((q) => {
                                 const re = (q.role_editability as Record<string, boolean>) || {};
                                 const editable = isRoleEditable(re, role) && canRoleEditCurrentWorkflow;
+                                const secondOrThirdHasDataAppendix = !!(
+                                  firstTaskRdForRA?.second_attempt_date ||
+                                  firstTaskRdForRA?.second_attempt_satisfactory ||
+                                  firstTaskRdForRA?.third_attempt_date ||
+                                  firstTaskRdForRA?.third_attempt_satisfactory
+                                );
+                                /** Appendix A is first-cycle RA content; lock when resubmission (submission_count ≥ 2) or later attempts exist on task results. */
+                                const appendixFirstCycleEditable =
+                                  editable && submissionCount < 2 && !secondOrThirdHasDataAppendix;
                                 const key = getAnswerKey(q.id, null);
                                 const val = answers[key];
                                 if (isAppendixA) {
@@ -1467,12 +1541,12 @@ export const InstanceFillPage: React.FC = () => {
                                   const isExplanationField = q.code === 'reasonable_adjustment_appendix.explanation' || q.code === 'reasonable_adjustment.description';
                                   if (isTaskField) {
                                     return (
-                                      <QuestionRenderer key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!editable} error={errors[`q-${q.id}`]} highlightAsFill={editable} />
+                                      <QuestionRenderer key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!appendixFirstCycleEditable} error={errors[`q-${q.id}`]} highlightAsFill={appendixFirstCycleEditable} />
                                     );
                                   }
                                   if (isExplanationField) {
                                     return (
-                                      <QuestionRenderer key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!editable} error={errors[`q-${q.id}`]} highlightAsFill={editable} />
+                                      <QuestionRenderer key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!appendixFirstCycleEditable} error={errors[`q-${q.id}`]} highlightAsFill={appendixFirstCycleEditable} />
                                     );
                                   }
                                   if (q.code === 'reasonable_adjustment_appendix.matrix' || (q.pdf_meta as Record<string, unknown>)?.appendixMatrix) {
@@ -1482,18 +1556,18 @@ export const InstanceFillPage: React.FC = () => {
                                         key={q.id}
                                         value={matrixVal}
                                         onChange={(v) => handleAnswerChange(q.id, null, v)}
-                                        disabled={!editable}
+                                        disabled={!appendixFirstCycleEditable}
                                       />
                                     );
                                   }
                                   if (q.type === 'short_text' && !isTaskField) {
                                     return (
-                                      <QuestionRenderer key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!editable} error={errors[`q-${q.id}`]} highlightAsFill={editable} />
+                                      <QuestionRenderer key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!appendixFirstCycleEditable} error={errors[`q-${q.id}`]} highlightAsFill={appendixFirstCycleEditable} />
                                     );
                                   }
                                   if (q.type === 'long_text' && !isExplanationField) {
                                     return (
-                                      <QuestionRenderer key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!editable} error={errors[`q-${q.id}`]} highlightAsFill={editable} />
+                                      <QuestionRenderer key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!appendixFirstCycleEditable} error={errors[`q-${q.id}`]} highlightAsFill={appendixFirstCycleEditable} />
                                     );
                                   }
                                   if (q.type === 'signature') {
@@ -1505,18 +1579,18 @@ export const InstanceFillPage: React.FC = () => {
                                       <div key={q.id} className="flex items-center gap-4 flex-wrap pt-2">
                                         <div className="flex-1 min-w-[200px]">
                                           <div className="text-sm font-semibold text-gray-700 mb-1">{q.label}</div>
-                                          <SignatureField value={(imgVal as string | null) ?? null} onChange={(v) => { const img = typeof v === 'string' ? v : null; const base = (sigObj && typeof sigObj === 'object' ? { ...sigObj } : {}) as Record<string, unknown>; handleAnswerChange(q.id, null, (img != null ? { ...base, signature: img } : { ...base, signature: null }) as string | number | boolean | Record<string, unknown> | string[]); }} disabled={!editable} highlight={(role === 'student' || role === 'trainer') && editable} suggestionFrom={raSigSuggestion} onSuggestionClick={raSigSuggestion && editable ? () => { const base = (sigObj && typeof sigObj === 'object' ? { ...sigObj } : {}) as Record<string, unknown>; handleAnswerChange(q.id, null, { ...base, signature: raSigSuggestion, date: raDateSuggestion } as string | number | boolean | Record<string, unknown> | string[], true); } : undefined} />
+                                          <SignatureField value={(imgVal as string | null) ?? null} onChange={(v) => { const img = typeof v === 'string' ? v : null; const base = (sigObj && typeof sigObj === 'object' ? { ...sigObj } : {}) as Record<string, unknown>; handleAnswerChange(q.id, null, (img != null ? { ...base, signature: img } : { ...base, signature: null }) as string | number | boolean | Record<string, unknown> | string[]); }} disabled={!appendixFirstCycleEditable} highlight={(role === 'student' || role === 'trainer') && appendixFirstCycleEditable} suggestionFrom={raSigSuggestion} onSuggestionClick={raSigSuggestion && appendixFirstCycleEditable ? () => { const base = (sigObj && typeof sigObj === 'object' ? { ...sigObj } : {}) as Record<string, unknown>; handleAnswerChange(q.id, null, { ...base, signature: raSigSuggestion, date: raDateSuggestion } as string | number | boolean | Record<string, unknown> | string[], true); } : undefined} />
                                         </div>
                                         <div className="flex items-center gap-2 min-w-[140px]">
                                           <span className="text-sm font-semibold text-gray-700 shrink-0">Date:</span>
-                                          <DatePicker value={dateVal} onChange={(newDate) => { const base = sigObj || (typeof sigVal === 'string' ? { signature: sigVal } : {}); handleAnswerChange(q.id, null, { ...base, date: newDate } as string | number | boolean | Record<string, unknown> | string[]); }} disabled={!editable} highlight={(role === 'student' || role === 'trainer') && editable} compact placement="above" className="flex-1 min-w-0" />
+                                          <DatePicker value={dateVal} onChange={(newDate) => { const base = sigObj || (typeof sigVal === 'string' ? { signature: sigVal } : {}); handleAnswerChange(q.id, null, { ...base, date: newDate } as string | number | boolean | Record<string, unknown> | string[]); }} disabled={!appendixFirstCycleEditable} highlight={(role === 'student' || role === 'trainer') && appendixFirstCycleEditable} compact placement="above" className="flex-1 min-w-0" />
                                         </div>
                                       </div>
                                     );
                                   }
                                   if (q.type === 'yes_no') {
                                     return (
-                                      <QuestionRenderer key={q.id} question={q} value={(val as string | number | boolean) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string | number | boolean)} disabled={!editable} error={errors[`q-${q.id}`]} highlightAsFill={editable} />
+                                      <QuestionRenderer key={q.id} question={q} value={(val as string | number | boolean) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string | number | boolean)} disabled={!appendixFirstCycleEditable} error={errors[`q-${q.id}`]} highlightAsFill={appendixFirstCycleEditable} />
                                     );
                                   }
                                   return null;
@@ -2338,11 +2412,8 @@ export const InstanceFillPage: React.FC = () => {
                           const studentDeclSigObj = studentDeclVal && typeof studentDeclVal === 'object' && !Array.isArray(studentDeclVal) ? (studentDeclVal as Record<string, unknown>) : null;
                           const studentDeclSig = studentDeclSigObj ? (String(studentDeclSigObj.signature ?? studentDeclSigObj.imageDataUrl ?? '') || null) : (typeof studentDeclVal === 'string' ? studentDeclVal : null);
                           const minFirstAttempt = undefined;
-                          const minSecondAttempt = maxIsoDate(rd?.first_attempt_date, rd?.trainer_date);
-                          const minThirdAttempt = maxIsoDate(
-                            maxIsoDate(rd?.first_attempt_date, rd?.trainer_date),
-                            rd?.second_attempt_date
-                          );
+                          const minSecondAttempt = getResultsMinSecondAttemptDate(rd, assessmentSummary);
+                          const minThirdAttempt = getResultsMinThirdAttemptDate(rd, assessmentSummary);
                           const minTrainerDate = maxIsoDate(rd?.first_attempt_date);
                           const firstAttemptComplete =
                             rowAnswerHasContent(rd?.first_attempt_satisfactory ?? undefined) && rowAnswerHasContent(rd?.first_attempt_date ?? undefined);
@@ -2361,6 +2432,8 @@ export const InstanceFillPage: React.FC = () => {
                             !thirdAttemptHasData;
                           const thirdAttemptEditable =
                             trainerCanEdit && secondAttemptComplete && thirdAttemptUnlockedByResubmission;
+                          /** Footer trainer sign-off belongs to the first assessment cycle; lock when attempt 1 column is locked. */
+                          const trainerFooterEditable = trainerCanEdit && firstAttemptEditable;
                           const studentSuggestionSig = studentDeclSig ?? firstTaskData?.student_signature ?? null;
                           const studentNameQ = template?.steps?.flatMap((st) => st.sections).flatMap((s) => s.questions).find((q) => q.code === 'student.fullName');
                           const trainerNameQ = template?.steps?.flatMap((st) => st.sections).flatMap((s) => s.questions).find((q) => q.code === 'trainer.fullName');
@@ -2582,13 +2655,13 @@ export const InstanceFillPage: React.FC = () => {
                                       type="text"
                                       value={rd?.trainer_name ?? ''}
                                       onChange={(e) => handleResultsDataChange(section.id, 'trainer_name', e.target.value || null)}
-                                      disabled={!trainerCanEdit}
+                                      disabled={!trainerFooterEditable}
                                       placeholder="Enter trainer name"
                                       className={`w-full border-b border-gray-400 min-h-[18px] px-1 py-0.5 text-sm ${
-                                        trainerCanEdit ? 'bg-blue-50/70' : 'bg-transparent'
+                                        trainerFooterEditable ? 'bg-blue-50/70' : 'bg-transparent'
                                       } focus:outline-none focus:ring-1 focus:ring-gray-400 disabled:bg-gray-100 disabled:cursor-not-allowed`}
                                     />
-                                    {suggestedTrainerName && !rd?.trainer_name && trainerCanEdit && (
+                                    {suggestedTrainerName && !rd?.trainer_name && trainerFooterEditable && (
                                       <button type="button" onClick={() => handleResultsDataChange(section.id, 'trainer_name', suggestedTrainerName)} className="text-xs text-blue-600 hover:underline mt-0.5">Use {suggestedTrainerName}</button>
                                     )}
                                   </td>
@@ -2599,10 +2672,17 @@ export const InstanceFillPage: React.FC = () => {
                                     <SignatureField
                                       value={rd?.trainer_signature ?? null}
                                       onChange={(v) => handleResultsDataChange(section.id, 'trainer_signature', v)}
-                                      disabled={!trainerCanEdit}
-                                      highlight={trainerCanEdit}
+                                      disabled={!trainerFooterEditable}
+                                      highlight={trainerFooterEditable}
                                       suggestionFrom={trainerSuggestionSig}
-                                      onSuggestionClick={trainerSuggestionSig ? () => { handleResultsDataChange(section.id, 'trainer_signature', trainerSuggestionSig); handleResultsDataChange(section.id, 'trainer_date', trainerSuggestionDate || null); } : undefined}
+                                      onSuggestionClick={
+                                        trainerFooterEditable && trainerSuggestionSig
+                                          ? () => {
+                                              handleResultsDataChange(section.id, 'trainer_signature', trainerSuggestionSig);
+                                              handleResultsDataChange(section.id, 'trainer_date', trainerSuggestionDate || null);
+                                            }
+                                          : undefined
+                                      }
                                     />
                                   </td>
                                 </tr>
@@ -2612,12 +2692,12 @@ export const InstanceFillPage: React.FC = () => {
                                     <DatePicker
                                       value={rd?.trainer_date ?? ''}
                                       onChange={(v) => handleResultsDataChange(section.id, 'trainer_date', v || null)}
-                                      disabled={!trainerCanEdit}
-                                      highlight={trainerCanEdit}
+                                      disabled={!trainerFooterEditable}
+                                      highlight={trainerFooterEditable}
                                       compact
                                       placement="above"
                                       className="min-w-[120px]"
-                                      minDate={minTrainerDate || undefined}
+                                      minDate={trainerFooterEditable ? minTrainerDate || undefined : undefined}
                                     />
                                   </td>
                                 </tr>
@@ -2971,6 +3051,18 @@ export const InstanceFillPage: React.FC = () => {
                         section.questions
                         .filter((q) => q.type !== 'instruction_block' && isRoleVisible((q.role_visibility as Record<string, boolean>) || {}, role))
                         .map((q) => {
+                          const taskResultSectionIdsForEval = (template?.steps ?? [])
+                            .flatMap((st) => st.sections)
+                            .filter((s) => s.pdf_render_mode === 'task_results')
+                            .map((s) => s.id);
+                          const firstTaskRdForEvalDate = taskResultSectionIdsForEval[0]
+                            ? resultsData[taskResultSectionIdsForEval[0]]
+                            : null;
+                          const minEvaluationDateIso =
+                            firstTaskRdForEvalDate?.first_attempt_date != null &&
+                            String(firstTaskRdForEvalDate.first_attempt_date).trim()
+                              ? normalizeCalendarDateToIso(String(firstTaskRdForEvalDate.first_attempt_date)) ?? undefined
+                              : undefined;
                           const re = (q.role_editability as Record<string, boolean>) || {};
                           const isQualUnitField = q.code === 'qualification.code' || q.code === 'qualification.name' || q.code === 'unit.code' || q.code === 'unit.name';
                           const isEvalUnitName = q.code === 'evaluation.unitName';
@@ -3135,6 +3227,7 @@ export const InstanceFillPage: React.FC = () => {
                               error={errors[`q-${q.id}`]}
                               declarationStyle={section.pdf_render_mode === 'declarations'}
                               highlightAsFill={editable}
+                              minDate={q.code === 'evaluation.evaluationDate' ? minEvaluationDateIso : undefined}
                             />
                           );
                         })

@@ -83,7 +83,7 @@ export const GridTableQuestion: React.FC<GridTableQuestionProps> = ({
   onChange,
   disabled,
   error,
-  highlight = false,
+  highlight: _highlight = false,
   showRowAssessmentColumn,
   rowAssessments = {},
   onRowAssessmentChange,
@@ -142,7 +142,7 @@ export const GridTableQuestion: React.FC<GridTableQuestionProps> = ({
     const wordCount = cellVal.trim() ? cellVal.trim().split(/\s+/).length : 0;
     const rowReadOnly = !!studentResubmissionReadOnlyForSatisfactoryRows && rowAssessments[row.id] === 'yes';
     const answerBgClass =
-      !!highlight && !disabled && !rowReadOnly ? 'bg-blue-50/70' : 'bg-transparent';
+      disabled || rowReadOnly ? 'bg-gray-50' : 'bg-blue-50/70';
     return (
       <td key={colIndex} className={cellClass}>
         <textarea

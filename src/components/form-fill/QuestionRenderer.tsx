@@ -108,6 +108,9 @@ interface QuestionRendererProps {
   hideQuestionLabel?: boolean;
   /** Task assessment section: 1-based index matching PDF Q1, Q2, … (see getTaskQuestionDisplayNumbers). */
   taskQuestionDisplayNumber?: number;
+  /** Passed to DatePicker for `evaluation.evaluationDate` etc. (ISO yyyy-MM-dd). */
+  minDate?: string;
+  maxDate?: string;
 }
 
 export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
@@ -124,13 +127,16 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
   studentResubmissionReadOnlyForSatisfactoryRows,
   hideQuestionLabel,
   taskQuestionDisplayNumber,
+  minDate,
+  maxDate,
 }) => {
   const pm = (question.pdf_meta as Record<string, unknown>) || {};
   const wordLimit = normalizeWordLimit(pm.wordLimit);
   const taskLabel = (label: string) =>
     taskQuestionDisplayNumber != null ? `Q${taskQuestionDisplayNumber}: ${label}` : label;
   const shouldHighlight = !!highlightAsFill && !disabled;
-  const fillBgClass = shouldHighlight ? 'bg-blue-50/70 hover:bg-blue-50/70' : undefined;
+  /** Match task results / tables: editable fields use a steady fill; keep error state visible. */
+  const fillBgClass = disabled || error ? undefined : 'bg-blue-50/70';
   if (question.type === 'instruction_block') {
     const imgUrl = pm.imageUrl as string | undefined;
     return (
@@ -227,6 +233,8 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
           required={question.required && !disabled}
           placement="above"
           highlight={shouldHighlight}
+          minDate={minDate}
+          maxDate={maxDate}
         />
       );
     }
@@ -334,6 +342,8 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
         required={question.required && !disabled}
         placement="above"
         highlight={shouldHighlight}
+        minDate={minDate}
+        maxDate={maxDate}
       />
     );
   }

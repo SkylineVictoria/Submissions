@@ -68,7 +68,7 @@ export const SignatureField: React.FC<SignatureFieldProps> = ({
     <div className={`relative ${className}`}>
       <div
         className={`border rounded min-h-[60px] flex items-center justify-center p-2 relative ${
-          highlight ? 'bg-blue-50 border-blue-300' : 'bg-white border-gray-400'
+          highlight ? 'bg-blue-50 border-blue-300' : 'bg-blue-50/70 border-gray-400'
         }`}
       >
         {hasValue ? (
