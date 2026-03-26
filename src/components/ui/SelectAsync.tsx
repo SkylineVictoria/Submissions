@@ -46,7 +46,13 @@ export const SelectAsync: React.FC<SelectAsyncProps> = ({
   const selectRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const [dropdownStyle, setDropdownStyle] = useState<{ top: number; left: number; minWidth: number; maxWidth: number } | null>(null);
+  const [dropdownStyle, setDropdownStyle] = useState<{
+    top: number;
+    left: number;
+    minWidth: number;
+    maxWidth: number;
+    maxHeight: number;
+  } | null>(null);
   const [options, setOptions] = useState<SelectAsyncOption[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -123,13 +129,25 @@ export const SelectAsync: React.FC<SelectAsyncProps> = ({
   useEffect(() => {
     if (isOpen && triggerRef.current) {
       const rect = triggerRef.current.getBoundingClientRect();
+      const viewportH = window.innerHeight || document.documentElement.clientHeight || 0;
+      const margin = 8;
+      const gap = 4;
+      const spaceBelow = Math.max(0, viewportH - rect.bottom - margin);
+      const spaceAbove = Math.max(0, rect.top - margin);
+      // Target height for the whole dropdown (search + list). We'll clamp to what's available.
+      const desiredMax = 360;
+      const minUsable = 180;
+      const openDown = spaceBelow >= 220 || spaceBelow >= spaceAbove;
+      const available = openDown ? spaceBelow : spaceAbove;
+      const maxHeight = Math.max(minUsable, Math.min(desiredMax, available));
       const maxAllowed = window.innerWidth - rect.left - 16;
       const maxW = Math.min(360, maxAllowed);
       setDropdownStyle({
-        top: rect.bottom + 4,
+        top: openDown ? rect.bottom + gap : Math.max(margin, rect.top - maxHeight - gap),
         left: rect.left,
         minWidth: Math.min(rect.width, maxW),
         maxWidth: maxW,
+        maxHeight,
       });
     } else {
       setDropdownStyle(null);
@@ -199,6 +217,7 @@ export const SelectAsync: React.FC<SelectAsyncProps> = ({
                 left: dropdownStyle.left,
                 width: dropdownStyle.minWidth,
                 maxWidth: dropdownStyle.maxWidth,
+                maxHeight: dropdownStyle.maxHeight,
               }}
             >
               <div className="p-2 border-b border-gray-100">
@@ -213,8 +232,12 @@ export const SelectAsync: React.FC<SelectAsyncProps> = ({
               </div>
               <div
                 ref={listRef}
-                className="max-h-60 overflow-auto py-1"
+                className="flex-1 overflow-auto py-1 overscroll-contain"
                 onScroll={handleScroll}
+                onWheel={(e) => {
+                  // Prevent the page from "stealing" scroll when the menu is at the bottom/top.
+                  e.stopPropagation();
+                }}
               >
                 {loading && options.length === 0 ? (
                   <div className="flex justify-center py-8">
