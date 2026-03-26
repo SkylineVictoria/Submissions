@@ -33,7 +33,6 @@ import { Checkbox } from '../components/ui/Checkbox';
 import { TaskInstructionsModal, type TaskInstructionsData } from '../components/form-fill/TaskInstructionsModal';
 import { SectionInstructionsEditor } from '../components/form-fill/SectionInstructionsEditor';
 import { TableLayoutSelect } from '../components/form-fill/TableLayoutSelect';
-import { DatePicker } from '../components/ui/DatePicker';
 import { cn } from '../components/utils/cn';
 
 const FLUSH_PENDING_EVENT = 'form-builder:flush-pending';
@@ -1635,31 +1634,9 @@ export const AdminFormBuilderPage: React.FC = () => {
                   className="text-sm border border-[var(--border)] rounded px-2 py-0.5 w-14 focus:outline-none focus:ring-1 focus:ring-[var(--brand)] focus:border-[var(--brand)] shrink-0"
                   placeholder="1.0.0"
                 />
-                <span className="text-xs font-medium text-gray-500 shrink-0">Link valid:</span>
-                <DatePicker
-                  value={form.start_date ?? ''}
-                  onChange={(v) => {
-                    const val = (v && v.trim()) ? v : null;
-                    setForm((prev) => (prev ? { ...prev, start_date: val } : null));
-                    void updateForm(Number(formId), { start_date: val });
-                  }}
-                  compact
-                  placement="below"
-                  className="w-[150px] max-w-[150px] shrink-0"
-                />
-                <span className="text-gray-400 shrink-0">–</span>
-                <DatePicker
-                  value={form.end_date ?? ''}
-                  onChange={(v) => {
-                    const val = (v && v.trim()) ? v : null;
-                    setForm((prev) => (prev ? { ...prev, end_date: val } : null));
-                    void updateForm(Number(formId), { end_date: val });
-                  }}
-                  compact
-                  placement="below"
-                  className="w-[150px] max-w-[150px] shrink-0"
-                />
-                <span className="text-xs text-gray-400 shrink-0" title="Sent links expire at end date">(expires end date)</span>
+                <span className="text-xs text-gray-500 shrink-0" title="Access/expiry is now controlled per assessment (instance) by admin.">
+                  Link expiry is per assessment (instance)
+                </span>
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0 self-start sm:self-center">

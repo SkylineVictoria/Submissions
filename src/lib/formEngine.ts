@@ -797,9 +797,20 @@ export async function createFormInstance(
   formId: number,
   roleContext: string,
   studentId?: number | null
+  ,
+  opts?: { start_date?: string | null; end_date?: string | null }
 ): Promise<FormInstance | null> {
   const { created_by } = getAuditFields();
-  const insert: Record<string, unknown> = { form_id: formId, role_context: roleContext, created_by };
+  const now = new Date();
+  const startDate = getMelbourneDateStr(now);
+  const endDate = getMelbourneDateStr(new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000));
+  const insert: Record<string, unknown> = {
+    form_id: formId,
+    role_context: roleContext,
+    created_by,
+    start_date: (opts?.start_date ?? startDate) || null,
+    end_date: (opts?.end_date ?? endDate) || null,
+  };
   if (studentId != null) insert.student_id = studentId;
   const { data, error } = await supabase
     .from('skyline_form_instances')
@@ -813,43 +824,29 @@ export async function createFormInstance(
   return data as FormInstance;
 }
 
+export async function updateFormInstanceDates(
+  instanceId: number,
+  updates: { start_date?: string | null; end_date?: string | null }
+): Promise<void> {
+  const payload: Record<string, unknown> = {};
+  if ('start_date' in updates) payload.start_date = updates.start_date ? updates.start_date.trim() : null;
+  if ('end_date' in updates) payload.end_date = updates.end_date ? updates.end_date.trim() : null;
+  if (Object.keys(payload).length === 0) return;
+  await supabase.from('skyline_form_instances').update(payload).eq('id', instanceId);
+}
+
 export type InstanceAccessRole = 'student' | 'trainer' | 'office';
 
 const MELBOURNE_TZ = 'Australia/Melbourne';
 
-/** Get current date and time in Melbourne (YYYY-MM-DD, hour, minute, second). */
-function getMelbourneNow(): { dateStr: string; hour: number; minute: number; second: number } {
-  const d = new Date();
+function getMelbourneDateStr(d: Date): string {
   const fmt = new Intl.DateTimeFormat('en-CA', {
     timeZone: MELBOURNE_TZ,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
   });
-  const parts = fmt.formatToParts(d);
-  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? '0';
-  const m = get('month').padStart(2, '0');
-  const day = get('day').padStart(2, '0');
-  return {
-    dateStr: `${get('year')}-${m}-${day}`,
-    hour: Number(get('hour')),
-    minute: Number(get('minute')),
-    second: Number(get('second')),
-  };
-}
-
-/** True if current Melbourne time is within [start_date 0:00, end_date 23:59:59]. Dates are YYYY-MM-DD. Treats empty string as unset. */
-function isWithinFormWindowMelbourne(startDate: string | null, endDate: string | null): boolean {
-  const start = (startDate ?? '').trim() || null;
-  const end = (endDate ?? '').trim() || null;
-  const now = getMelbourneNow();
-  if (start && now.dateStr < start) return false;
-  if (end && now.dateStr > end) return false;
-  return true;
+  return fmt.format(d);
 }
 
 /** UTC timestamp for end_date 23:59:59.999 in Melbourne. */
@@ -931,36 +928,32 @@ export async function issueInstanceAccessLink(
   instanceId: number,
   roleContext: InstanceAccessRole,
   ttlMinutes?: number,
-  /** When true (resubmission), use extended expiry instead of form end_date. */
+  /** When true, use provided `fixedExpiresAt` (per-instance deadline alignment). */
   useResubmissionExpiry?: boolean,
-  /** When provided (resubmission), use this expiry to align with admin-extended submission deadline. */
+  /** When provided, use this expiry to align with an instance-specific deadline (admin extend). */
   resubmissionExpiresAt?: string
 ): Promise<string | null> {
   const token = generateAccessToken();
   let expiresAt: string;
-  const { data: instance } = await supabase.from('skyline_form_instances').select('form_id').eq('id', instanceId).single();
+  const { data: instDates } = await supabase
+    .from('skyline_form_instances')
+    .select('start_date, end_date')
+    .eq('id', instanceId)
+    .maybeSingle();
+  const instanceEndDate = (instDates as { end_date?: string | null } | null)?.end_date ?? null;
   const isTrainerOrOffice = roleContext === 'trainer' || roleContext === 'office';
-  if (instance && !useResubmissionExpiry) {
-    if (isTrainerOrOffice) {
-      const { data: form } = await supabase.from('skyline_forms').select('end_date').eq('id', (instance as { form_id: number }).form_id).single();
-      const endDate = form && (form as { end_date: string | null }).end_date;
-      const base90 = Date.now() + 90 * 24 * 60 * 60 * 1000;
-      const formEndMs = endDate ? getMelbourneEndOfDayUTC(endDate) + 14 * 24 * 60 * 60 * 1000 : 0;
-      expiresAt = new Date(Math.max(base90, formEndMs || base90)).toISOString();
-    } else {
-      const { data: form } = await supabase.from('skyline_forms').select('end_date').eq('id', (instance as { form_id: number }).form_id).single();
-      const endDate = form && (form as { end_date: string | null }).end_date;
-      if (endDate) {
-        const utcMs = getMelbourneEndOfDayUTC(endDate);
-        expiresAt = new Date(utcMs).toISOString();
-      } else {
-        expiresAt = new Date(Date.now() + (ttlMinutes ?? 60 * 24 * 7) * 60 * 1000).toISOString();
-      }
-    }
-  } else if (useResubmissionExpiry) {
-    expiresAt = resubmissionExpiresAt ?? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+  if (useResubmissionExpiry && resubmissionExpiresAt) {
+    // Align new token expiry to the instance's current deadline (admin-extended).
+    expiresAt = resubmissionExpiresAt;
+  } else if (roleContext === 'student' && instanceEndDate && instanceEndDate.trim()) {
+    // Student access should expire at the instance end_date (Melbourne end-of-day).
+    expiresAt = new Date(getMelbourneEndOfDayUTC(instanceEndDate.trim())).toISOString();
+  } else if (ttlMinutes != null && Number.isFinite(ttlMinutes) && ttlMinutes > 0) {
+    expiresAt = new Date(Date.now() + ttlMinutes * 60 * 1000).toISOString();
   } else {
-    expiresAt = new Date(Date.now() + (ttlMinutes ?? 60 * 24 * 7) * 60 * 1000).toISOString();
+    // Default expiry now comes from instance-level policy, not skyline_forms.start_date/end_date.
+    // Student links default to 30 days; trainer/office links default to 90 days.
+    expiresAt = new Date(Date.now() + (isTrainerOrOffice ? 90 : 30) * 24 * 60 * 60 * 1000).toISOString();
   }
   const { error } = await supabase.from('skyline_instance_access_tokens').insert({
     instance_id: instanceId,
@@ -1008,7 +1001,11 @@ export async function validateInstanceAccessToken(
   }
 
   if (role === 'student') {
-    const { data: inst } = await supabase.from('skyline_form_instances').select('form_id, student_id').eq('id', instanceId).single();
+    const { data: inst } = await supabase
+      .from('skyline_form_instances')
+      .select('form_id, student_id, start_date, end_date')
+      .eq('id', instanceId)
+      .single();
     if (inst) {
       const studentId = (inst as { student_id?: number | null }).student_id;
       if (studentId != null) {
@@ -1023,20 +1020,17 @@ export async function validateInstanceAccessToken(
           };
         }
       }
-      const { data: form } = await supabase.from('skyline_forms').select('start_date, end_date').eq('id', (inst as { form_id: number }).form_id).single();
-      const startDate = (form as { start_date?: string | null } | null)?.start_date ?? null;
-      const endDate = (form as { end_date?: string | null } | null)?.end_date ?? null;
-      const formWindowClosed = !isWithinFormWindowMelbourne(startDate, endDate);
-      const formEndMs = endDate ? getMelbourneEndOfDayUTC(endDate) : 0;
-      const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-      const isExtendedToken = endDate && expiresAt > formEndMs + ONE_DAY_MS;
-      if (formWindowClosed && !isExtendedToken) {
-        return {
-          valid: false,
-          role_context: null,
-          tokenId: Number(row.id ?? 0) || null,
-          reason: 'This form is only available between the start and end dates. The access period has not started or has ended.',
-        };
+
+      const startDate = (inst as { start_date?: string | null }).start_date ?? null;
+      const endDate = (inst as { end_date?: string | null }).end_date ?? null;
+      const todayMel = getMelbourneDateStr(new Date());
+      const start = (startDate ?? '').trim();
+      const end = (endDate ?? '').trim();
+      if (start && todayMel < start) {
+        return { valid: false, role_context: null, tokenId: Number(row.id ?? 0) || null, reason: 'This assessment is not available yet.' };
+      }
+      if (end && todayMel > end) {
+        return { valid: false, role_context: null, tokenId: Number(row.id ?? 0) || null, reason: 'This assessment has expired. Contact your administrator to extend it.' };
       }
     }
   }
@@ -1091,6 +1085,14 @@ export async function listInstanceAccessTokens(instanceId: number): Promise<Inst
 
 /** Re-enable revoked links and extend expiry. Admin can use this to allow access past form end_date. */
 export async function extendInstanceAccessTokens(instanceId: number, roleContext: InstanceAccessRole, extraDays = 30): Promise<void> {
+  // Keep instance end_date aligned with link extension so access checks remain consistent.
+  const today = getMelbourneDateStr(new Date());
+  const desiredEnd = getMelbourneDateStr(new Date(Date.now() + extraDays * 24 * 60 * 60 * 1000));
+  const { data: inst } = await supabase.from('skyline_form_instances').select('end_date').eq('id', instanceId).maybeSingle();
+  const currentEnd = (inst as { end_date?: string | null } | null)?.end_date ?? null;
+  const currentTrim = (currentEnd ?? '').trim();
+  const nextEnd = currentTrim ? (currentTrim < today ? desiredEnd : (currentTrim < desiredEnd ? desiredEnd : currentTrim)) : desiredEnd;
+  await supabase.from('skyline_form_instances').update({ end_date: nextEnd }).eq('id', instanceId);
   const newExpiresAt = new Date(Date.now() + extraDays * 24 * 60 * 60 * 1000).toISOString();
   const { error } = await supabase
     .from('skyline_instance_access_tokens')
@@ -1109,6 +1111,7 @@ export async function extendInstanceAccessTokensToDate(
 ): Promise<void> {
   const utcMs = getMelbourneEndOfDayUTC(endDateStr);
   const newExpiresAt = new Date(utcMs).toISOString();
+  await supabase.from('skyline_form_instances').update({ end_date: endDateStr.trim() || null }).eq('id', instanceId);
   const { error } = await supabase
     .from('skyline_instance_access_tokens')
     .update({ revoked_at: null, expires_at: newExpiresAt })
@@ -1191,10 +1194,6 @@ async function studentFormAccessFromId(formId: number, studentId: number): Promi
     };
   }
 
-  const { data: form } = await supabase.from('skyline_forms').select('start_date, end_date').eq('id', formId).single();
-  const startDate = (form as { start_date?: string | null } | null)?.start_date ?? null;
-  const endDate = (form as { end_date?: string | null } | null)?.end_date ?? null;
-
   const { data: instRow } = await supabase
     .from('skyline_form_instances')
     .select('status, submitted_at')
@@ -1203,35 +1202,25 @@ async function studentFormAccessFromId(formId: number, studentId: number): Promi
   const instStatus = (instRow as { status?: string } | null)?.status ?? 'draft';
   const hasSubmittedBefore = !!(instRow as { submitted_at?: string } | null)?.submitted_at;
   const isResubmission = hasSubmittedBefore && instStatus === 'draft';
-
-  const formWindowOpen = isWithinFormWindowMelbourne(startDate, endDate);
-  let hasAdminExtendedAccess = false;
-  let resubmissionExpiresAt: string | undefined;
-  if (!formWindowOpen && endDate && (endDate ?? '').trim()) {
-    const formEndMs = getMelbourneEndOfDayUTC(endDate);
-    const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-    const { data: tokens } = await supabase
+  // Forms no longer have their own start/end access window. Access is controlled per assessment instance
+  // via secure tokens (admin can revoke/extend the instance deadline).
+  let fixedExpiresAt: string | undefined;
+  {
+    const { data: allTokens } = await supabase
       .from('skyline_instance_access_tokens')
-      .select('expires_at')
+      .select('expires_at, revoked_at')
       .eq('instance_id', instance.id)
       .eq('role_context', 'student');
-    const tokenRows = (tokens as Array<{ expires_at: string }> | null) ?? [];
-    const extended = tokenRows.filter((t) => t.expires_at && new Date(t.expires_at).getTime() > formEndMs + ONE_DAY_MS);
-    hasAdminExtendedAccess = extended.length > 0;
-    if (extended.length > 0) {
-      const maxExpiry = Math.max(...extended.map((t) => new Date(t.expires_at!).getTime()));
-      resubmissionExpiresAt = new Date(maxExpiry).toISOString();
+    const now = Date.now();
+    const candidates =
+      ((allTokens as Array<{ expires_at: string; revoked_at: string | null }> | null) ?? [])
+        .filter((t) => !t.revoked_at && t.expires_at)
+        .map((t) => new Date(t.expires_at).getTime())
+        .filter((ms) => Number.isFinite(ms) && ms > now);
+    if (candidates.length > 0) {
+      fixedExpiresAt = new Date(Math.max(...candidates)).toISOString();
     }
   }
-
-  if (!formWindowOpen && !isResubmission && !hasAdminExtendedAccess) {
-    return {
-      success: false,
-      error: 'This form is only available between the start and end dates. Please try again within the access period.',
-    };
-  }
-
-  const useExtendedExpiry = isResubmission || hasAdminExtendedAccess;
 
   if (hasSubmittedBefore && instStatus !== 'draft') {
     const { data: allTokens } = await supabase
@@ -1251,7 +1240,15 @@ async function studentFormAccessFromId(formId: number, studentId: number): Promi
     }
   }
 
-  const url = await issueInstanceAccessLink(instance.id, 'student', undefined, useExtendedExpiry, resubmissionExpiresAt);
+  const url = await issueInstanceAccessLink(
+    instance.id,
+    'student',
+    undefined,
+    // Preserve existing per-instance deadline when present, or when this is a resubmission flow.
+    // (New token will align to the already-extended deadline if admin has set it.)
+    isResubmission || !!fixedExpiresAt,
+    fixedExpiresAt
+  );
   if (!url) return { success: false, error: 'Failed to generate access link.' };
   return { success: true, url, instanceId: instance.id };
 }
@@ -1667,6 +1664,8 @@ export interface Batch {
   name: string;
   trainer_id: number;
   trainer_name: string | null;
+  course_id: number | null;
+  course_name: string | null;
   created_at: string;
 }
 
@@ -1736,6 +1735,8 @@ export interface SubmittedInstanceRow {
   created_at: string;
   submitted_at: string | null;
   submission_count: number;
+  start_date: string | null;
+  end_date: string | null;
   /** True if the link for this role is revoked or past expiry (show Enable); false = active (show Expire) */
   link_expired: boolean;
 }
@@ -1889,6 +1890,8 @@ export async function listSubmittedInstances(): Promise<SubmittedInstanceRow[]> 
       created_at: String(r.created_at ?? ''),
       submitted_at: r.submitted_at ? String(r.submitted_at) : null,
       submission_count: Number(r.submission_count ?? 0) || 0,
+      start_date: r.start_date ? String(r.start_date) : null,
+      end_date: r.end_date ? String(r.end_date) : null,
       link_expired,
     };
   });
@@ -1903,7 +1906,7 @@ export async function listSubmittedInstancesPaged(
   const to = from + pageSize - 1;
   let query = supabase
     .from('skyline_form_instances')
-    .select('id, form_id, student_id, status, role_context, created_at, submitted_at, submission_count', { count: 'exact' })
+    .select('id, form_id, student_id, status, role_context, created_at, submitted_at, submission_count, start_date, end_date', { count: 'exact' })
     .not('student_id', 'is', null)
     .order('created_at', { ascending: false });
 
@@ -2007,6 +2010,8 @@ export async function listSubmittedInstancesPaged(
         created_at: String(r.created_at ?? ''),
         submitted_at: r.submitted_at ? String(r.submitted_at) : null,
         submission_count: Number(r.submission_count ?? 0) || 0,
+        start_date: r.start_date ? String(r.start_date) : null,
+        end_date: r.end_date ? String(r.end_date) : null,
         link_expired,
       };
     }),
@@ -2161,6 +2166,8 @@ export async function listDashboardInstances(
         created_at: String(r.created_at ?? ''),
         submitted_at: r.submitted_at ? String(r.submitted_at) : null,
         submission_count: Number(r.submission_count ?? 0) || 0,
+        start_date: r.start_date ? String(r.start_date) : null,
+        end_date: r.end_date ? String(r.end_date) : null,
         link_expired,
       };
     }),
@@ -2174,7 +2181,7 @@ export async function listDashboardInstances(
 export async function listTrainerBatches(userId: number): Promise<Batch[]> {
   const { data, error } = await supabase
     .from('skyline_batches')
-    .select('id, name, trainer_id, created_at')
+    .select('id, name, trainer_id, course_id, created_at')
     .eq('trainer_id', userId)
     .order('name', { ascending: true });
   if (error) {
@@ -2182,7 +2189,7 @@ export async function listTrainerBatches(userId: number): Promise<Batch[]> {
     return [];
   }
   const rows = (data as Record<string, unknown>[]) || [];
-  if (rows.length === 0) return rows.map((r) => mapBatchRow(r, null));
+  if (rows.length === 0) return rows.map((r) => mapBatchRow(r, null, null));
   const trainerIds = [...new Set(rows.map((r) => Number(r.trainer_id)).filter(Boolean))];
   const trainerMap = new Map<number, string>();
   if (trainerIds.length > 0) {
@@ -2194,7 +2201,24 @@ export async function listTrainerBatches(userId: number): Promise<Batch[]> {
       trainerMap.set(t.id, t.full_name ?? '');
     }
   }
-  return rows.map((r) => mapBatchRow(r, trainerMap.get(Number(r.trainer_id)) ?? null));
+  const courseIds = [...new Set(rows.map((r) => (r.course_id != null ? Number(r.course_id) : null)).filter((x): x is number => x != null && Number.isFinite(x)))];
+  const courseMap = new Map<number, string>();
+  if (courseIds.length > 0) {
+    const { data: courses } = await supabase
+      .from('skyline_courses')
+      .select('id, name')
+      .in('id', courseIds);
+    for (const c of (courses as { id: number; name: string }[]) || []) {
+      courseMap.set(c.id, c.name ?? '');
+    }
+  }
+  return rows.map((r) =>
+    mapBatchRow(
+      r,
+      trainerMap.get(Number(r.trainer_id)) ?? null,
+      r.course_id != null ? (courseMap.get(Number(r.course_id)) ?? null) : null
+    )
+  );
 }
 
 /** Number of batches assigned to the trainer. */
@@ -2239,19 +2263,20 @@ export async function getDashboardPendingCount(role: 'trainer' | 'office', userI
 export interface CreateBatchInput {
   name: string;
   trainer_id: number;
+  course_id?: number | null;
 }
 
 export async function listBatches(): Promise<Batch[]> {
   const { data, error } = await supabase
     .from('skyline_batches')
-    .select('id, name, trainer_id, created_at')
+    .select('id, name, trainer_id, course_id, created_at')
     .order('name', { ascending: true });
   if (error) {
     console.error('listBatches error', error);
     return [];
   }
   const rows = (data as Record<string, unknown>[]) || [];
-  if (rows.length === 0) return rows.map((r) => mapBatchRow(r, null));
+  if (rows.length === 0) return rows.map((r) => mapBatchRow(r, null, null));
   const trainerIds = [...new Set(rows.map((r) => Number(r.trainer_id)).filter(Boolean))];
   const trainerMap = new Map<number, string>();
   if (trainerIds.length > 0) {
@@ -2263,22 +2288,43 @@ export async function listBatches(): Promise<Batch[]> {
       trainerMap.set(t.id, t.full_name ?? '');
     }
   }
-  return rows.map((r) => mapBatchRow(r, trainerMap.get(Number(r.trainer_id)) ?? null));
+  const courseIds = [...new Set(rows.map((r) => (r.course_id != null ? Number(r.course_id) : null)).filter((x): x is number => x != null && Number.isFinite(x)))];
+  const courseMap = new Map<number, string>();
+  if (courseIds.length > 0) {
+    const { data: courses } = await supabase
+      .from('skyline_courses')
+      .select('id, name')
+      .in('id', courseIds);
+    for (const c of (courses as { id: number; name: string }[]) || []) {
+      courseMap.set(c.id, c.name ?? '');
+    }
+  }
+  return rows.map((r) =>
+    mapBatchRow(
+      r,
+      trainerMap.get(Number(r.trainer_id)) ?? null,
+      r.course_id != null ? (courseMap.get(Number(r.course_id)) ?? null) : null
+    )
+  );
 }
 
 export async function listBatchesPaged(
   page = 1,
   pageSize = 20,
-  search?: string
+  search?: string,
+  courseId?: number
 ): Promise<PaginatedResult<Batch>> {
   const from = Math.max(0, (page - 1) * pageSize);
   const to = from + pageSize - 1;
   let query = supabase
     .from('skyline_batches')
-    .select('id, name, trainer_id, created_at', { count: 'exact' })
+    .select('id, name, trainer_id, course_id, created_at', { count: 'exact' })
     .order('name', { ascending: true });
   if (search && search.trim()) {
     query = query.ilike('name', `%${search.trim()}%`);
+  }
+  if (courseId != null && Number.isFinite(courseId)) {
+    query = query.eq('course_id', courseId);
   }
   const { data, error, count } = await query.range(from, to);
   if (error) {
@@ -2298,7 +2344,24 @@ export async function listBatchesPaged(
       trainerMap.set(t.id, t.full_name ?? '');
     }
   }
-  const mapped = rows.map((r) => mapBatchRow(r, trainerMap.get(Number(r.trainer_id)) ?? null));
+  const courseIds = [...new Set(rows.map((r) => (r.course_id != null ? Number(r.course_id) : null)).filter((x): x is number => x != null && Number.isFinite(x)))];
+  const courseMap = new Map<number, string>();
+  if (courseIds.length > 0) {
+    const { data: courses } = await supabase
+      .from('skyline_courses')
+      .select('id, name')
+      .in('id', courseIds);
+    for (const c of (courses as { id: number; name: string }[]) || []) {
+      courseMap.set(c.id, c.name ?? '');
+    }
+  }
+  const mapped = rows.map((r) =>
+    mapBatchRow(
+      r,
+      trainerMap.get(Number(r.trainer_id)) ?? null,
+      r.course_id != null ? (courseMap.get(Number(r.course_id)) ?? null) : null
+    )
+  );
   return {
     data: mapped,
     total: Number(count ?? 0),
@@ -2307,12 +2370,86 @@ export async function listBatchesPaged(
   };
 }
 
-function mapBatchRow(row: Record<string, unknown>, trainerName: string | null): Batch {
+/** Batches currently assigned to a course (course_id). */
+export async function listBatchesForCourse(courseId: number): Promise<Batch[]> {
+  if (!courseId || !Number.isFinite(courseId)) return [];
+  const { data, error } = await supabase
+    .from('skyline_batches')
+    .select('id, name, trainer_id, course_id, created_at')
+    .eq('course_id', courseId)
+    .order('name', { ascending: true });
+  if (error) {
+    console.error('listBatchesForCourse error', error);
+    return [];
+  }
+  const rows = (data as Record<string, unknown>[]) || [];
+  if (rows.length === 0) return [];
+  const trainerIds = [...new Set(rows.map((r) => Number(r.trainer_id)).filter(Boolean))];
+  const trainerMap = new Map<number, string>();
+  if (trainerIds.length > 0) {
+    const { data: trainers } = await supabase
+      .from('skyline_users')
+      .select('id, full_name')
+      .in('id', trainerIds);
+    for (const t of (trainers as { id: number; full_name: string }[]) || []) {
+      trainerMap.set(t.id, t.full_name ?? '');
+    }
+  }
+  // course name is the same for all; omit extra query and keep null (UI can show just batch name).
+  return rows.map((r) => mapBatchRow(r, trainerMap.get(Number(r.trainer_id)) ?? null, null));
+}
+
+/** Assign batches to a course (one-to-many). Replaces existing course→batch assignments. */
+export async function setCourseBatches(courseId: number, batchIds: number[]): Promise<boolean> {
+  try {
+    if (!courseId || !Number.isFinite(courseId)) return false;
+    const { updated_by } = getAuditFields();
+    const normalized = [...new Set(batchIds.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0))];
+    // Unassign any batches currently in this course but not selected.
+    if (normalized.length > 0) {
+      const { error: unassignErr } = await supabase
+        .from('skyline_batches')
+        .update({ course_id: null, updated_by })
+        .eq('course_id', courseId)
+        .not('id', 'in', `(${normalized.join(',')})`);
+      if (unassignErr) {
+        console.error('setCourseBatches unassign error', unassignErr);
+        return false;
+      }
+      // Assign selected batches to this course.
+      const { error: assignErr } = await supabase
+        .from('skyline_batches')
+        .update({ course_id: courseId, updated_by })
+        .in('id', normalized);
+      if (assignErr) {
+        console.error('setCourseBatches assign error', assignErr);
+        return false;
+      }
+    } else {
+      const { error: unassignAllErr } = await supabase
+        .from('skyline_batches')
+        .update({ course_id: null, updated_by })
+        .eq('course_id', courseId);
+      if (unassignAllErr) {
+        console.error('setCourseBatches unassignAll error', unassignAllErr);
+        return false;
+      }
+    }
+    return true;
+  } catch (e) {
+    console.error('setCourseBatches error', e);
+    return false;
+  }
+}
+
+function mapBatchRow(row: Record<string, unknown>, trainerName: string | null, courseName: string | null): Batch {
   return {
     id: Number(row.id),
     name: String(row.name ?? ''),
     trainer_id: Number(row.trainer_id),
     trainer_name: trainerName,
+    course_id: row.course_id != null ? Number(row.course_id) : null,
+    course_name: courseName,
     created_at: String(row.created_at ?? ''),
   };
 }
@@ -2324,9 +2461,10 @@ export async function createBatch(input: CreateBatchInput): Promise<Batch | null
     .insert({
       name: input.name.trim(),
       trainer_id: input.trainer_id,
+      course_id: input.course_id ?? null,
       created_by,
     })
-    .select('id, name, trainer_id, created_at')
+    .select('id, name, trainer_id, course_id, created_at')
     .single();
   if (error) {
     console.error('createBatch error', error);
@@ -2340,21 +2478,31 @@ export async function createBatch(input: CreateBatchInput): Promise<Batch | null
     .eq('id', row.trainer_id)
     .single();
   if (t && typeof t === 'object' && 'full_name' in t) trainerName = String((t as { full_name: string }).full_name ?? '');
-  return mapBatchRow(row, trainerName);
+  let courseName: string | null = null;
+  if (row.course_id != null) {
+    const { data: c } = await supabase
+      .from('skyline_courses')
+      .select('name')
+      .eq('id', row.course_id)
+      .single();
+    if (c && typeof c === 'object' && 'name' in c) courseName = String((c as { name: string }).name ?? '');
+  }
+  return mapBatchRow(row, trainerName, courseName);
 }
 
-export type UpdateBatchInput = Partial<Pick<CreateBatchInput, 'name' | 'trainer_id'>>;
+export type UpdateBatchInput = Partial<Pick<CreateBatchInput, 'name' | 'trainer_id' | 'course_id'>>;
 
 export async function updateBatch(id: number, input: UpdateBatchInput): Promise<Batch | null> {
   const payload: Record<string, unknown> = {};
   if (input.name !== undefined) payload.name = input.name.trim();
   if (input.trainer_id !== undefined) payload.trainer_id = input.trainer_id;
+  if (input.course_id !== undefined) payload.course_id = input.course_id;
   payload.updated_by = getAuditFields().updated_by;
   const { data, error } = await supabase
     .from('skyline_batches')
     .update(payload)
     .eq('id', id)
-    .select('id, name, trainer_id, created_at')
+    .select('id, name, trainer_id, course_id, created_at')
     .single();
   if (error) {
     console.error('updateBatch error', error);
@@ -2368,7 +2516,16 @@ export async function updateBatch(id: number, input: UpdateBatchInput): Promise<
     .eq('id', row.trainer_id)
     .single();
   if (t && typeof t === 'object' && 'full_name' in t) trainerName = String((t as { full_name: string }).full_name ?? '');
-  return mapBatchRow(row, trainerName);
+  let courseName: string | null = null;
+  if (row.course_id != null) {
+    const { data: c } = await supabase
+      .from('skyline_courses')
+      .select('name')
+      .eq('id', row.course_id)
+      .single();
+    if (c && typeof c === 'object' && 'name' in c) courseName = String((c as { name: string }).name ?? '');
+  }
+  return mapBatchRow(row, trainerName, courseName);
 }
 
 export async function updateBatchStudentAssignments(batchId: number, studentIds: number[]): Promise<boolean> {
@@ -3052,6 +3209,14 @@ export interface Course {
   created_at: string;
 }
 
+export interface CourseLinkExport {
+  id: number;
+  course_id: number;
+  batch_id: number | null;
+  payload_json: unknown;
+  created_at: string;
+}
+
 export async function listCourses(): Promise<Course[]> {
   const { data, error } = await supabase
     .from('skyline_courses')
@@ -3243,6 +3408,66 @@ export async function setCourseForms(courseId: number, formIds: number[]): Promi
     return false;
   }
   return true;
+}
+
+export async function createCourseLinkExport(
+  courseId: number,
+  batchId: number | null,
+  payload: unknown
+): Promise<CourseLinkExport | null> {
+  try {
+    const { created_by } = getAuditFields();
+    const { data, error } = await supabase
+      .from('skyline_course_link_exports')
+      .insert({
+        course_id: courseId,
+        batch_id: batchId,
+        payload_json: payload,
+        created_by,
+      })
+      .select('id, course_id, batch_id, payload_json, created_at')
+      .single();
+    if (error || !data) {
+      console.error('createCourseLinkExport error', error);
+      return null;
+    }
+    const row = data as Record<string, unknown>;
+    return {
+      id: Number(row.id),
+      course_id: Number(row.course_id),
+      batch_id: row.batch_id != null ? Number(row.batch_id) : null,
+      payload_json: row.payload_json,
+      created_at: String(row.created_at ?? ''),
+    };
+  } catch (e) {
+    console.error('createCourseLinkExport error', e);
+    return null;
+  }
+}
+
+export async function listCourseLinkExports(courseId: number, limit = 10): Promise<CourseLinkExport[]> {
+  try {
+    const { data, error } = await supabase
+      .from('skyline_course_link_exports')
+      .select('id, course_id, batch_id, payload_json, created_at')
+      .eq('course_id', courseId)
+      .order('created_at', { ascending: false })
+      .limit(Math.max(1, Math.min(50, limit)));
+    if (error) {
+      console.error('listCourseLinkExports error', error);
+      return [];
+    }
+    return ((data as Record<string, unknown>[]) || []).map((row) => ({
+      id: Number(row.id),
+      course_id: Number(row.course_id),
+      batch_id: row.batch_id != null ? Number(row.batch_id) : null,
+      payload_json: row.payload_json,
+      created_at: String(row.created_at ?? ''),
+    }));
+  } catch (e) {
+    console.error('listCourseLinkExports error', e);
+    return [];
+  }
 }
 
 /** Returns true if another form (excluding excludeFormId) already has this name (case-insensitive trim). */

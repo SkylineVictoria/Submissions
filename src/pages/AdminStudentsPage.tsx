@@ -1,7 +1,18 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
-import { Plus, Send, Mail, Phone, Pencil, Link, Upload, Trash2 } from 'lucide-react';
+import { Plus, Send, Mail, Phone, Pencil, Upload, Trash2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import { listStudentsPaged, createStudent, updateStudent, createFormInstance, getInstanceForStudentAndForm, listForms, listBatchesPaged, listStudentsInBatch, listCoursesPaged, getFormsForCourse, listFormsPaged } from '../lib/formEngine';
+import {
+  listStudentsPaged,
+  createStudent,
+  updateStudent,
+  createFormInstance,
+  getInstanceForStudentAndForm,
+  listForms,
+  listBatchesPaged,
+  listFormsPaged,
+  updateFormInstanceDates,
+  extendInstanceAccessTokensToDate,
+} from '../lib/formEngine';
 import {
   buildEmailFromLocalAndDomain,
   getEmailLocalPartForEdit,
@@ -19,6 +30,7 @@ import { Select } from '../components/ui/Select';
 import { SelectAsync } from '../components/ui/SelectAsync';
 import { Modal } from '../components/ui/Modal';
 import { Loader } from '../components/ui/Loader';
+import { DatePicker } from '../components/ui/DatePicker';
 import { toast } from '../utils/toast';
 
 const STATUS_OPTIONS = [
@@ -46,12 +58,13 @@ export const AdminStudentsPage: React.FC = () => {
   const [totalStudents, setTotalStudents] = useState(0);
   const [rowFormMap, setRowFormMap] = useState<Record<number, string>>({});
   const [sending, setSending] = useState<number | null>(null);
-  const [sendingBatch, setSendingBatch] = useState(false);
-  const [sendToBatchFormId, setSendToBatchFormId] = useState('');
-  const [sendToBatchBatchId, setSendToBatchBatchId] = useState('');
-  const [courseFilter, setCourseFilter] = useState('');
-  const [filteredForms, setFilteredForms] = useState<Form[]>([]);
   const [hasBatches, setHasBatches] = useState(false);
+  const [sendDatesOpen, setSendDatesOpen] = useState(false);
+  const [sendDatesStudentId, setSendDatesStudentId] = useState<number | null>(null);
+  const [sendDatesFormId, setSendDatesFormId] = useState<number | null>(null);
+  const [sendDatesStart, setSendDatesStart] = useState<string>('');
+  const [sendDatesEnd, setSendDatesEnd] = useState<string>('');
+  const [sendDatesSaving, setSendDatesSaving] = useState(false);
   const [studentDraft, setStudentDraft] = useState({
     student_id: '',
     first_name: '',
@@ -95,18 +108,14 @@ export const AdminStudentsPage: React.FC = () => {
   useEffect(() => {
     listBatchesPaged(1, 1).then((res) => setHasBatches(res.total > 0));
   }, []);
+  const displayForms = forms;
 
-  useEffect(() => {
-    if (!courseFilter) {
-      setFilteredForms([]);
-      return;
-    }
-    const cid = Number(courseFilter);
-    if (!Number.isFinite(cid)) return;
-    getFormsForCourse(cid, { asAdmin: false }).then((f) => setFilteredForms(f.filter((form) => form.status === 'published')));
-  }, [courseFilter]);
-
-  const displayForms = courseFilter ? filteredForms : forms;
+  const loadBatchesOptionsWithNone = useCallback(async (page: number, search: string) => {
+    const res = await listBatchesPaged(page, 20, search || undefined);
+    const opts = res.data.map((b) => ({ value: String(b.id), label: b.name }));
+    const withNone = page === 1 && !search?.trim() ? [{ value: '', label: 'No batch' }, ...opts] : opts;
+    return { options: withNone, hasMore: page * 20 < res.total };
+  }, []);
 
   const loadBatchesOptions = useCallback(async (page: number, search: string) => {
     const res = await listBatchesPaged(page, 20, search || undefined);
@@ -116,42 +125,15 @@ export const AdminStudentsPage: React.FC = () => {
     };
   }, []);
 
-  const loadBatchesOptionsWithNone = useCallback(async (page: number, search: string) => {
-    const res = await listBatchesPaged(page, 20, search || undefined);
-    const opts = res.data.map((b) => ({ value: String(b.id), label: b.name }));
-    const withNone = page === 1 && !search?.trim() ? [{ value: '', label: 'No batch' }, ...opts] : opts;
-    return { options: withNone, hasMore: page * 20 < res.total };
-  }, []);
-
-  const loadCoursesOptions = useCallback(async (page: number, search: string) => {
-    const res = await listCoursesPaged(page, 20, search || undefined);
-    const opts = res.data.map((c) => ({ value: String(c.id), label: c.name }));
-    const withAll = page === 1 && !search?.trim() ? [{ value: '', label: 'All courses' }, ...opts] : opts;
-    return { options: withAll, hasMore: page * 20 < res.total };
-  }, []);
-
   const loadFormsOptions = useCallback(
     async (page: number, search: string) => {
-      if (courseFilter) {
-        const cid = Number(courseFilter);
-        if (!Number.isFinite(cid)) return { options: [], hasMore: false };
-        const formsForCourse = await getFormsForCourse(cid, { asAdmin: false });
-        const published = formsForCourse.filter((f) => f.status === 'published');
-        const filtered = search?.trim()
-          ? published.filter((f) => f.name.toLowerCase().includes(search.toLowerCase()))
-          : published;
-        return {
-          options: filtered.map((f) => ({ value: String(f.id), label: `${f.name} (${f.version ?? '1.0.0'})` })),
-          hasMore: false,
-        };
-      }
       const res = await listFormsPaged(page, 20, 'published', undefined, search || undefined, { asAdmin: false });
       return {
         options: res.data.map((f) => ({ value: String(f.id), label: `${f.name} (${f.version ?? '1.0.0'})` })),
         hasMore: page * 20 < res.total,
       };
     },
-    [courseFilter]
+    []
   );
 
   useEffect(() => {
@@ -355,64 +337,49 @@ export const AdminStudentsPage: React.FC = () => {
     }
   };
 
-  const handleSendForm = async (studentId: number) => {
+  const openSendDates = (studentId: number) => {
     const formId = Number(rowFormMap[studentId]);
     if (!formId) return;
+    setSendDatesStudentId(studentId);
+    setSendDatesFormId(formId);
+    const today = new Date().toISOString().slice(0, 10);
+    const end = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    setSendDatesStart(today);
+    setSendDatesEnd(end);
+    setSendDatesOpen(true);
+  };
+
+  const confirmSendWithDates = async () => {
+    const studentId = sendDatesStudentId;
+    const formId = sendDatesFormId;
+    const start = (sendDatesStart ?? '').trim();
+    const end = (sendDatesEnd ?? '').trim();
+    if (!studentId || !formId) return;
+    if (!start || !end) {
+      toast.error('Select start and end date');
+      return;
+    }
+    if (end < start) {
+      toast.error('End date cannot be earlier than start date');
+      return;
+    }
+    setSendDatesSaving(true);
     setSending(studentId);
     const existing = await getInstanceForStudentAndForm(formId, studentId);
     if (!existing) {
-      await createFormInstance(formId, 'student', studentId);
+      await createFormInstance(formId, 'student', studentId, { start_date: start, end_date: end });
+    } else {
+      await updateFormInstanceDates(existing.id, { start_date: start });
+      await extendInstanceAccessTokensToDate(existing.id, 'student', end);
     }
     setSending(null);
+    setSendDatesSaving(false);
+    setSendDatesOpen(false);
+    setSendDatesStudentId(null);
+    setSendDatesFormId(null);
     const url = `${window.location.origin}/forms/${formId}/student-access`;
     await navigator.clipboard.writeText(url);
-    toast.success(existing ? 'Student already has this form. Generic link copied.' : 'Secure student form link copied! Share with student.');
-  };
-
-  const handleCopyGenericLink = () => {
-    const formId = sendToBatchFormId || (displayForms[0] ? String(displayForms[0].id) : '');
-    if (!formId) {
-      toast.error('Select a form first.');
-      return;
-    }
-    const url = `${window.location.origin}/forms/${formId}/student-access`;
-    navigator.clipboard.writeText(url);
-    toast.success('Generic student access link copied. Share with students—they enter email and OTP.');
-  };
-
-  const handleSendToBatch = async () => {
-    const formId = Number(sendToBatchFormId);
-    const batchId = Number(sendToBatchBatchId);
-    if (!formId || !batchId) {
-      toast.error('Select form and batch');
-      return;
-    }
-    setSendingBatch(true);
-    const batchStudents = await listStudentsInBatch(batchId);
-    let created = 0;
-    let skipped = 0;
-    for (const s of batchStudents) {
-      const existing = await getInstanceForStudentAndForm(formId, s.id);
-      if (existing) {
-        skipped++;
-      } else {
-        const inst = await createFormInstance(formId, 'student', s.id);
-        if (inst) created++;
-      }
-    }
-    setSendingBatch(false);
-    if (created > 0 || skipped > 0) {
-      const url = `${window.location.origin}/forms/${formId}/student-access`;
-      await navigator.clipboard.writeText(url);
-      const msg = skipped > 0
-        ? `Form sent to ${created} students. ${skipped} already had this form. Generic link copied—students use email and OTP.`
-        : `Form sent to ${created} students. Generic link copied—students use email and OTP.`;
-      toast.success(msg);
-    } else if (batchStudents.length === 0) {
-      toast.error('No students in this batch');
-    } else {
-      toast.error('Failed to send form');
-    }
+    toast.success(existing ? 'Assessment dates updated. Generic link copied.' : 'Assessment created. Generic link copied.');
   };
 
   const editingStudent = useMemo(() => (editingId ? students.find((s) => s.id === editingId) : null), [editingId, students]);
@@ -549,79 +516,6 @@ export const AdminStudentsPage: React.FC = () => {
           </div>
         </Card>
 
-        <Card className="mb-6">
-          <h3 className="text-base font-semibold text-[var(--text)] mb-3">Send form to batch</h3>
-          <p className="text-sm text-gray-600 mb-4">
-            Send a form to all students in a batch. Students who already have this form are skipped.
-          </p>
-          <div className="flex flex-nowrap items-end gap-3 overflow-x-auto">
-            <div className="min-w-[180px] shrink-0">
-              <label className="block text-xs font-medium text-gray-600 mb-1">Course</label>
-              <SelectAsync
-                value={courseFilter}
-                onChange={(v) => {
-                  setCourseFilter(v);
-                  setSendToBatchFormId('');
-                }}
-                loadOptions={loadCoursesOptions}
-                placeholder="All courses"
-                selectedLabel={!courseFilter ? 'All courses' : undefined}
-                className="w-full"
-              />
-            </div>
-            <div className="min-w-[180px] shrink-0">
-              <label className="block text-xs font-medium text-gray-600 mb-1">Form</label>
-              <SelectAsync
-                value={sendToBatchFormId}
-                onChange={(v) => setSendToBatchFormId(v)}
-                loadOptions={loadFormsOptions}
-                placeholder="Select form"
-                className="w-full"
-              />
-            </div>
-            <div className="min-w-[180px] shrink-0">
-              <label className="block text-xs font-medium text-gray-600 mb-1">Batch</label>
-              <SelectAsync
-                value={sendToBatchBatchId}
-                onChange={(v) => setSendToBatchBatchId(v)}
-                loadOptions={loadBatchesOptions}
-                placeholder="Select batch"
-                className="w-full"
-              />
-            </div>
-            <Button
-              onClick={handleSendToBatch}
-              disabled={sendingBatch || !sendToBatchFormId || !sendToBatchBatchId || displayForms.length === 0}
-              className="shrink-0"
-            >
-              {sendingBatch ? (
-                <>
-                  <Loader variant="dots" size="sm" inline className="mr-2" />
-                  Sending...
-                </>
-              ) : (
-                <>
-                  <Send className="w-4 h-4 mr-2 inline" />
-                  Send to batch
-                </>
-              )}
-            </Button>
-            <Button
-              variant="outline"
-              onClick={handleCopyGenericLink}
-              disabled={displayForms.length === 0}
-              title="Copy generic link for students to login with email and OTP"
-              className="shrink-0"
-            >
-              <Link className="w-4 h-4 mr-2 inline" />
-              Copy generic link
-            </Button>
-          </div>
-          <p className="text-xs text-gray-500 mt-2">
-            Generic link: students enter email and request OTP to access forms.
-          </p>
-        </Card>
-
         <Card>
           <h2 className="text-lg font-bold text-[var(--text)] mb-4">Student Directory</h2>
           {loading ? (
@@ -713,12 +607,12 @@ export const AdminStudentsPage: React.FC = () => {
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => handleSendForm(student.id)}
+                            onClick={() => openSendDates(student.id)}
                             disabled={sending !== null || displayForms.length === 0}
                             className="inline-flex items-center justify-center gap-1.5 min-w-[110px] whitespace-nowrap"
                           >
                             <Send className="w-4 h-4" />
-                            {sending === student.id ? 'Creating...' : 'Send form'}
+                            {sending === student.id ? 'Saving...' : 'Send form'}
                           </Button>
                         </div>
                       </td>
@@ -831,6 +725,38 @@ export const AdminStudentsPage: React.FC = () => {
                   Add Student
                 </>
               )}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={sendDatesOpen}
+        onClose={() => !sendDatesSaving && setSendDatesOpen(false)}
+        title="Set assessment start and end date"
+        size="md"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">
+            Set the assessment window for this student. This controls expiry and can be extended later.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <label className="block">
+              <span className="text-sm font-medium text-gray-700">Start date</span>
+              <DatePicker value={sendDatesStart} onChange={(v) => setSendDatesStart(v || '')} className="mt-1 max-w-[200px]" />
+            </label>
+            <label className="block">
+              <span className="text-sm font-medium text-gray-700">End date</span>
+              <DatePicker value={sendDatesEnd} onChange={(v) => setSendDatesEnd(v || '')} className="mt-1 max-w-[200px]" />
+            </label>
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => setSendDatesOpen(false)} disabled={sendDatesSaving}>
+              Cancel
+            </Button>
+            <Button onClick={confirmSendWithDates} disabled={sendDatesSaving || !sendDatesStart.trim() || !sendDatesEnd.trim()}>
+              {sendDatesSaving ? <Loader variant="dots" size="sm" inline className="mr-2" /> : null}
+              Save & copy link
             </Button>
           </div>
         </div>

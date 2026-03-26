@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Plus, Pencil, Users } from 'lucide-react';
-import { listBatchesPaged, createBatch, updateBatch, updateBatchStudentAssignments, listUsersForBatchAssignmentPaged, listStudentsPaged, listStudentsInBatch } from '../lib/formEngine';
+import { listBatchesPaged, createBatch, updateBatch, updateBatchStudentAssignments, listUsersForBatchAssignmentPaged, listStudentsPaged, listStudentsInBatch, listCoursesPaged } from '../lib/formEngine';
 import type { Batch } from '../lib/formEngine';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -22,8 +22,8 @@ export const AdminBatchesPage: React.FC = () => {
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
-  const [draft, setDraft] = useState({ name: '', trainer_id: '' });
-  const [editDraft, setEditDraft] = useState<{ name: string; trainer_id: string; student_ids: number[] } | null>(null);
+  const [draft, setDraft] = useState({ name: '', trainer_id: '', course_id: '' });
+  const [editDraft, setEditDraft] = useState<{ name: string; trainer_id: string; course_id: string; student_ids: number[] } | null>(null);
 
   const loadBatches = useCallback(async (page: number) => {
     setLoading(true);
@@ -56,6 +56,14 @@ export const AdminBatchesPage: React.FC = () => {
     };
   }, []);
 
+  const loadCoursesOptions = useCallback(async (page: number, search: string) => {
+    const res = await listCoursesPaged(page, 20, search || undefined);
+    return {
+      options: res.data.map((c) => ({ value: String(c.id), label: c.name })),
+      hasMore: page * 20 < res.total,
+    };
+  }, []);
+
   const totalPages = Math.max(1, Math.ceil(totalBatches / BATCH_PAGE_SIZE));
 
   const handleCreate = async () => {
@@ -68,12 +76,17 @@ export const AdminBatchesPage: React.FC = () => {
       toast.error('Select a trainer');
       return;
     }
+    const courseId = Number(draft.course_id);
+    if (!courseId || !Number.isFinite(courseId)) {
+      toast.error('Select a course');
+      return;
+    }
     setCreating(true);
-    const created = await createBatch({ name: draft.name.trim(), trainer_id: trainerId });
+    const created = await createBatch({ name: draft.name.trim(), trainer_id: trainerId, course_id: courseId });
     setCreating(false);
     if (created) {
       await loadBatches(currentPage);
-      setDraft({ name: '', trainer_id: '' });
+      setDraft({ name: '', trainer_id: '', course_id: '' });
       setIsCreateOpen(false);
       toast.success('Batch added');
     } else {
@@ -87,7 +100,7 @@ export const AdminBatchesPage: React.FC = () => {
       setEditDraft(null);
       return;
     }
-    setEditDraft({ name: editingBatch.name, trainer_id: String(editingBatch.trainer_id), student_ids: [] });
+    setEditDraft({ name: editingBatch.name, trainer_id: String(editingBatch.trainer_id), course_id: editingBatch.course_id != null ? String(editingBatch.course_id) : '', student_ids: [] });
     listStudentsInBatch(editingBatch.id).then((students) => {
       const studentIds = students.map((s) => s.id);
       setEditDraft((p) => (p ? { ...p, student_ids: studentIds } : null));
@@ -105,10 +118,16 @@ export const AdminBatchesPage: React.FC = () => {
       toast.error('Select a trainer');
       return;
     }
+    const courseId = Number(editDraft.course_id);
+    if (!courseId || !Number.isFinite(courseId)) {
+      toast.error('Select a course');
+      return;
+    }
     setSavingEdit(true);
     const batchUpdated = await updateBatch(editingId, {
       name: editDraft.name.trim(),
       trainer_id: trainerId,
+      course_id: courseId,
     });
     const assignmentsOk = await updateBatchStudentAssignments(editingId, editDraft.student_ids);
     setSavingEdit(false);
@@ -178,6 +197,7 @@ export const AdminBatchesPage: React.FC = () => {
                 <thead className="bg-gray-50 text-gray-700">
                   <tr>
                     <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Batch</th>
+                    <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Course</th>
                     <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Trainer</th>
                     <th className="text-right px-4 py-3 font-semibold border-b border-[var(--border)]">Action</th>
                   </tr>
@@ -190,6 +210,9 @@ export const AdminBatchesPage: React.FC = () => {
                           <Users className="w-4 h-4 text-gray-400" />
                           <span className="font-medium">{batch.name}</span>
                         </div>
+                      </td>
+                      <td className="px-4 py-3 border-b border-[var(--border)] text-gray-700">
+                        {batch.course_name ?? '—'}
                       </td>
                       <td className="px-4 py-3 border-b border-[var(--border)] text-gray-700">
                         {batch.trainer_name ?? `ID: ${batch.trainer_id}`}
@@ -240,6 +263,16 @@ export const AdminBatchesPage: React.FC = () => {
               className="mt-1"
             />
           </label>
+          <label className="block">
+            <span className="text-sm font-medium text-gray-700">Course *</span>
+            <SelectAsync
+              value={draft.course_id}
+              onChange={(v) => setDraft((p) => ({ ...p, course_id: v }))}
+              loadOptions={loadCoursesOptions}
+              placeholder="Select course"
+              className="mt-1"
+            />
+          </label>
         </div>
         <div className="flex items-center justify-end gap-2 pt-4 mt-4 border-t border-[var(--border)]">
           <Button variant="outline" onClick={() => setIsCreateOpen(false)} disabled={creating}>
@@ -248,7 +281,7 @@ export const AdminBatchesPage: React.FC = () => {
           <Button
             variant="primary"
             onClick={handleCreate}
-            disabled={creating || !draft.name.trim() || !draft.trainer_id}
+            disabled={creating || !draft.name.trim() || !draft.trainer_id || !draft.course_id}
           >
             {creating ? 'Adding...' : 'Add Batch'}
           </Button>
@@ -283,6 +316,17 @@ export const AdminBatchesPage: React.FC = () => {
                 className="mt-1"
               />
             </label>
+            <label className="block">
+              <span className="text-sm font-medium text-gray-700">Course *</span>
+              <SelectAsync
+                value={editDraft.course_id}
+                onChange={(v) => setEditDraft((p) => (p ? { ...p, course_id: v } : null))}
+                loadOptions={loadCoursesOptions}
+                placeholder="Select course"
+                selectedLabel={editingBatch?.course_name ?? undefined}
+                className="mt-1"
+              />
+            </label>
             <div className="mt-4">
               <MultiSelectAsync
                 label="Students"
@@ -305,7 +349,7 @@ export const AdminBatchesPage: React.FC = () => {
             <Button
               variant="primary"
               onClick={handleSaveEdit}
-              disabled={savingEdit || !editDraft.name.trim() || !editDraft.trainer_id}
+              disabled={savingEdit || !editDraft.name.trim() || !editDraft.trainer_id || !editDraft.course_id}
             >
               {savingEdit ? 'Saving...' : 'Save'}
             </Button>

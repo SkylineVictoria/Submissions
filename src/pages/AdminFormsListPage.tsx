@@ -1,13 +1,12 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Plus, FileText, Edit, Eye, MoreVertical, Copy, ToggleLeft, ToggleRight, Search } from 'lucide-react';
-import { listFormsPaged, createForm, duplicateForm, updateForm, getDefaultFormDates, listCoursesPaged, getCoursesForForms } from '../lib/formEngine';
+import { listFormsPaged, createForm, duplicateForm, updateForm, listCoursesPaged, getCoursesForForms } from '../lib/formEngine';
 import type { Form } from '../types/database';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { SelectAsync } from '../components/ui/SelectAsync';
-import { DatePicker } from '../components/ui/DatePicker';
 import { Modal } from '../components/ui/Modal';
 import { Loader } from '../components/ui/Loader';
 
@@ -21,8 +20,6 @@ export const AdminFormsListPage: React.FC = () => {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [newName, setNewName] = useState('');
   const [newVersion, setNewVersion] = useState('1.0.0');
-  const [newStartDate, setNewStartDate] = useState(() => getDefaultFormDates().start_date);
-  const [newEndDate, setNewEndDate] = useState(() => getDefaultFormDates().end_date);
   const [qualificationCode, setQualificationCode] = useState('');
   const [qualificationName, setQualificationName] = useState('');
   const [unitCode, setUnitCode] = useState('');
@@ -80,8 +77,6 @@ export const AdminFormsListPage: React.FC = () => {
     const created = await createForm({
       name: newName.trim(),
       version: newVersion.trim() || '1.0.0',
-      start_date: newStartDate.trim() || undefined,
-      end_date: newEndDate.trim() || undefined,
       qualification_code: qualificationCode.trim(),
       qualification_name: qualificationName.trim(),
       unit_code: unitCode.trim(),
@@ -97,8 +92,6 @@ export const AdminFormsListPage: React.FC = () => {
       await loadFormsPage(1, courseFilter ? Number(courseFilter) : undefined, searchTerm.trim() || undefined);
       setNewName('');
       setNewVersion('1.0.0');
-      setNewStartDate(getDefaultFormDates().start_date);
-      setNewEndDate(getDefaultFormDates().end_date);
       setQualificationCode('');
       setQualificationName('');
       setUnitCode('');
@@ -340,19 +333,6 @@ export const AdminFormsListPage: React.FC = () => {
             <span className="text-sm font-medium text-gray-700">Version (default: 1.0.0)</span>
             <Input value={newVersion} onChange={(e) => setNewVersion(e.target.value)} placeholder="1.0.0" className="mt-1" />
           </label>
-          <div>
-            <span className="text-sm font-medium text-gray-700 block mb-1">Link validity period (sent links expire at end date)</span>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-1">
-              <div>
-                <span className="block text-xs text-gray-500 mb-1">Start date</span>
-                <DatePicker value={newStartDate} onChange={setNewStartDate} compact placement="above" className="w-full min-w-0" />
-              </div>
-              <div>
-                <span className="block text-xs text-gray-500 mb-1">End date</span>
-                <DatePicker value={newEndDate} onChange={setNewEndDate} compact placement="above" className="w-full min-w-0" />
-              </div>
-            </div>
-          </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <label className="block">
               <span className="text-sm font-medium text-gray-700">Qualification Code *</span>

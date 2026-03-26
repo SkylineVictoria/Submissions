@@ -105,18 +105,31 @@ function maxIsoDate(...vals: (string | null | undefined)[]): string | undefined 
 }
 
 /**
- * Task results sheet: earliest date allowed for 2nd/3rd attempt outcomes. Aligns with assessment summary
- * student signature dates (student_date_2 / student_date_3) and the prior chain on this row + summary.
+ * Task results sheet (trainer outcomes): enforce the same chronological hierarchy as the assessment summary.
+ *
+ * Assessment summary chain is:
+ * Student1 → Trainer1 → Student2 → Trainer2 → Student3 → Trainer3.
+ *
+ * Results sheet attempt dates are trainer-recorded outcomes. So:
+ * - Attempt 1 results date must be ≥ assessment summary Student1 date.
+ * - Attempt 2 results date must be ≥ assessment summary Trainer1 date (and ≥ Attempt 1 results date).
+ * - Attempt 3 results date must be ≥ assessment summary Trainer2 date (and ≥ Attempt 2 results date).
  */
+function getResultsMinFirstAttemptDate(
+  sum: import('../lib/formEngine').AssessmentSummaryDataEntry | null | undefined,
+): string | undefined {
+  return maxIsoDate(sum?.student_date_1 ?? undefined);
+}
+
 function getResultsMinSecondAttemptDate(
   rd: import('../lib/formEngine').ResultsDataEntry | null | undefined,
   sum: import('../lib/formEngine').AssessmentSummaryDataEntry | null | undefined,
 ): string | undefined {
   return maxIsoDate(
     rd?.first_attempt_date ?? undefined,
-    rd?.trainer_date ?? undefined,
-    sum?.student_date_2 ?? undefined,
     sum?.trainer_date_1 ?? undefined,
+    // Must not be before summary student attempt-2 date.
+    sum?.student_date_2 ?? undefined,
     sum?.student_date_1 ?? undefined,
   );
 }
@@ -127,10 +140,10 @@ function getResultsMinThirdAttemptDate(
 ): string | undefined {
   return maxIsoDate(
     rd?.first_attempt_date ?? undefined,
-    rd?.trainer_date ?? undefined,
     rd?.second_attempt_date ?? undefined,
-    sum?.student_date_3 ?? undefined,
     sum?.trainer_date_2 ?? undefined,
+    // Must not be before summary student attempt-3 date.
+    sum?.student_date_3 ?? undefined,
     sum?.student_date_2 ?? undefined,
     sum?.trainer_date_1 ?? undefined,
     sum?.student_date_1 ?? undefined,
@@ -233,13 +246,101 @@ function rowAnswerHasContent(val: string | number | boolean | Record<string, unk
   return String(val).trim() !== '';
 }
 
+type GridColumnType = 'question' | 'answer';
+
+function normalizeGridColumnType(raw: unknown): GridColumnType {
+  return String(raw ?? '').trim().toLowerCase() === 'question' ? 'question' : 'answer';
+}
+
+function getGridAnswerColumnIndexes(q: FormQuestionWithOptionsAndRows): number[] {
+  const pm = (q.pdf_meta as Record<string, unknown>) || {};
+  const colsMeta = pm.columnsMeta;
+  if (Array.isArray(colsMeta) && colsMeta.length > 0) {
+    return colsMeta
+      .map((entry, idx) => {
+        if (!entry || typeof entry !== 'object') return idx;
+        const e = entry as Record<string, unknown>;
+        return normalizeGridColumnType(e.type) === 'answer' ? idx : -1;
+      })
+      .filter((idx) => idx >= 0);
+  }
+  const columns = Array.isArray(pm.columns) ? (pm.columns as unknown[]) : [];
+  const types = Array.isArray(pm.columnTypes) ? (pm.columnTypes as unknown[]) : [];
+  if (columns.length > 0) {
+    return columns
+      .map((_, idx) => (normalizeGridColumnType(types[idx]) === 'answer' ? idx : -1))
+      .filter((idx) => idx >= 0);
+  }
+  return [0];
+}
+
 function isGridTableFilled(q: FormQuestionWithOptionsAndRows, answers: AnswersMap): boolean {
   if (q.type !== 'grid_table' || !q.rows?.length) return false;
+  const pm = (q.pdf_meta as Record<string, unknown>) || {};
+  const layout = String(pm.layout ?? 'no_image');
+  const isNoHeader = layout === 'no_image_no_header';
+  const answerColIndexes = getGridAnswerColumnIndexes(q);
+  const hasQuestionTypedColumn = (() => {
+    const colsMeta = pm.columnsMeta;
+    if (Array.isArray(colsMeta) && colsMeta.length > 0) {
+      return colsMeta.some((entry) => {
+        if (!entry || typeof entry !== 'object') return false;
+        return normalizeGridColumnType((entry as Record<string, unknown>).type) === 'question';
+      });
+    }
+    const types = Array.isArray(pm.columnTypes) ? (pm.columnTypes as unknown[]) : [];
+    return types.some((t) => normalizeGridColumnType(t) === 'question');
+  })();
+
+  // Case 2: no-header + question-row style table:
+  // required means at least one answer column must be fully filled down all rows.
+  if (isNoHeader && hasQuestionTypedColumn && answerColIndexes.length > 0) {
+    for (const colIdx of answerColIndexes) {
+      let allRowsFilledForColumn = true;
+      for (const r of q.rows) {
+        const rowVal = answers[getAnswerKey(q.id, r.id)];
+        const rowObj = rowVal && typeof rowVal === 'object' && !Array.isArray(rowVal)
+          ? (rowVal as Record<string, unknown>)
+          : null;
+        const cellVal = rowObj ? String(rowObj[`r${r.id}_c${colIdx}`] ?? '').trim() : '';
+        if (!cellVal) {
+          allRowsFilledForColumn = false;
+          break;
+        }
+      }
+      if (allRowsFilledForColumn) return true;
+    }
+    return false;
+  }
+
+  // Case 1: header table (or generic grid):
+  // required means one full row across answer columns is enough.
+  if (answerColIndexes.length > 0) {
+    for (const r of q.rows) {
+      const rowVal = answers[getAnswerKey(q.id, r.id)];
+      const rowObj = rowVal && typeof rowVal === 'object' && !Array.isArray(rowVal)
+        ? (rowVal as Record<string, unknown>)
+        : null;
+      if (!rowObj) continue;
+      let fullRow = true;
+      for (const colIdx of answerColIndexes) {
+        const cellVal = String(rowObj[`r${r.id}_c${colIdx}`] ?? '').trim();
+        if (!cellVal) {
+          fullRow = false;
+          break;
+        }
+      }
+      if (fullRow) return true;
+    }
+    return false;
+  }
+
+  // Fallback for legacy data shapes: any row having content counts as answered.
   for (const r of q.rows) {
     const key = getAnswerKey(q.id, r.id);
-    if (!rowAnswerHasContent(answers[key])) return false;
+    if (rowAnswerHasContent(answers[key])) return true;
   }
-  return true;
+  return false;
 }
 
 function isLikertFilled(q: FormQuestionWithOptionsAndRows, answers: AnswersMap): boolean {
@@ -433,12 +534,18 @@ export const InstanceFillPage: React.FC = () => {
       setResultsData((prev) => {
         const rd = prev[sectionId];
         const base = rd ?? ({ section_id: sectionId } as import('../lib/formEngine').ResultsDataEntry);
-        // First attempt date can be adjusted while still on first attempt (UI already prevents edits once later attempts start).
+        if (field === 'first_attempt_date' && normalized) {
+          const minFirst = getResultsMinFirstAttemptDate(assessmentSummary);
+          if (minFirst && isCalendarBefore(normalized, minFirst)) {
+            rejectReason = 'First attempt date must be on or after the student date (attempt 1) on the assessment summary.';
+            return prev;
+          }
+        }
         if (field === 'second_attempt_date' && normalized) {
           const minSecond = getResultsMinSecondAttemptDate(base, assessmentSummary);
           if (minSecond && isCalendarBefore(normalized, minSecond)) {
             rejectReason =
-              'Second attempt date must be on or after the student date on the assessment summary (attempt 2) and the first-attempt dates.';
+              'Second attempt date must be on or after the student date (attempt 2) on the assessment summary and the first attempt date.';
             return prev;
           }
         }
@@ -446,7 +553,7 @@ export const InstanceFillPage: React.FC = () => {
           const minThird = getResultsMinThirdAttemptDate(base, assessmentSummary);
           if (minThird && isCalendarBefore(normalized, minThird)) {
             rejectReason =
-              'Third attempt date must be on or after the student date on the assessment summary (attempt 3) and earlier attempt dates.';
+              'Third attempt date must be on or after the student date (attempt 3) on the assessment summary and earlier attempt dates.';
             return prev;
           }
         }
@@ -688,29 +795,9 @@ export const InstanceFillPage: React.FC = () => {
     });
   }, [template, id, resultsData, submissionCount]);
 
-  /** Resubmission: bump stored declaration date if it is still before min (e.g. first-cycle date). */
-  useEffect(() => {
-    if (!template || !id) return;
-    const studentDeclQ = template.steps?.flatMap((st) => st.sections).flatMap((s) => s.questions).find((q) => q.code === 'student.declarationSignature');
-    if (!studentDeclQ) return;
-    const taskResultSectionIds = (template.steps ?? []).flatMap((st) => st.sections).filter((s) => s.pdf_render_mode === 'task_results').map((s) => s.id);
-    const firstTaskSectionId = taskResultSectionIds[0];
-    const firstTaskRd = firstTaskSectionId ? resultsData[firstTaskSectionId] : null;
-    const minDeclDate = getStudentResubDeclarationMinDate(firstTaskRd, submissionCount);
-    if (!minDeclDate) return;
-
-    setAnswers((prev) => {
-      const key = getAnswerKey(studentDeclQ.id, null);
-      const val = prev[key];
-      const sigObj = val && typeof val === 'object' && !Array.isArray(val) ? (val as Record<string, unknown>) : null;
-      const dateVal = sigObj ? String(sigObj.date ?? sigObj.signedAtDate ?? '').trim() : '';
-      if (!dateVal || !isCalendarBefore(dateVal, minDeclDate)) return prev;
-      const next = { ...sigObj, date: minDeclDate };
-      saveAnswer(id, studentDeclQ.id, null, { json: next });
-      setPdfRefresh((r) => r + 1);
-      return { ...prev, [key]: next as string | number | boolean | Record<string, unknown> | string[] };
-    });
-  }, [template, id, submissionCount, resultsData]);
+  // NOTE: We intentionally do not auto-bump the stored student declaration date on resubmissions.
+  // The declaration is treated as historical evidence of when the student originally signed,
+  // and minDate rules are enforced only when the student edits/re-signs.
 
   useEffect(() => {
     if (!template || !id || !assessmentSummary) return;
@@ -1108,14 +1195,29 @@ export const InstanceFillPage: React.FC = () => {
             const thirdAttemptEditable =
               trainerCanEdit && secondAttemptComplete && thirdAttemptUnlockedByResubmission;
 
-            if (firstAttemptEditable && rowAnswerHasContent(rd?.first_attempt_satisfactory ?? undefined) && !rowAnswerHasContent(rd?.first_attempt_date ?? undefined)) {
-              stepErrors[`task-results-${section.id}-first_attempt_date`] = 'First attempt date is required';
+            if (firstAttemptEditable) {
+              if (!rowAnswerHasContent(rd?.first_attempt_satisfactory ?? undefined)) {
+                stepErrors[`task-results-${section.id}-first_attempt_satisfactory`] = 'First attempt outcome (S/NS) is required';
+              }
+              if (!rowAnswerHasContent(rd?.first_attempt_date ?? undefined)) {
+                stepErrors[`task-results-${section.id}-first_attempt_date`] = 'First attempt date is required';
+              }
             }
-            if (secondAttemptEditable && rowAnswerHasContent(rd?.second_attempt_satisfactory ?? undefined) && !rowAnswerHasContent(rd?.second_attempt_date ?? undefined)) {
-              stepErrors[`task-results-${section.id}-second_attempt_date`] = 'Second attempt date is required';
+            if (secondAttemptEditable) {
+              if (!rowAnswerHasContent(rd?.second_attempt_satisfactory ?? undefined)) {
+                stepErrors[`task-results-${section.id}-second_attempt_satisfactory`] = 'Second attempt outcome (S/NS) is required';
+              }
+              if (!rowAnswerHasContent(rd?.second_attempt_date ?? undefined)) {
+                stepErrors[`task-results-${section.id}-second_attempt_date`] = 'Second attempt date is required';
+              }
             }
-            if (thirdAttemptEditable && rowAnswerHasContent(rd?.third_attempt_satisfactory ?? undefined) && !rowAnswerHasContent(rd?.third_attempt_date ?? undefined)) {
-              stepErrors[`task-results-${section.id}-third_attempt_date`] = 'Third attempt date is required';
+            if (thirdAttemptEditable) {
+              if (!rowAnswerHasContent(rd?.third_attempt_satisfactory ?? undefined)) {
+                stepErrors[`task-results-${section.id}-third_attempt_satisfactory`] = 'Third attempt outcome (S/NS) is required';
+              }
+              if (!rowAnswerHasContent(rd?.third_attempt_date ?? undefined)) {
+                stepErrors[`task-results-${section.id}-third_attempt_date`] = 'Third attempt date is required';
+              }
             }
 
             if (!rowAnswerHasContent(rd?.trainer_name ?? undefined)) {
@@ -1179,6 +1281,9 @@ export const InstanceFillPage: React.FC = () => {
 
           if (trainerCanEdit) {
             if (sumFirstEditable) {
+              if (!rowAnswerHasContent(sum.final_attempt_1_result ?? undefined)) {
+                stepErrors['assessment-summary-final_attempt_1_result'] = 'Attempt 1 result (Competent / Not Yet Competent) is required';
+              }
               if (!rowAnswerHasContent(sum.trainer_sig_1 ?? undefined)) {
                 stepErrors['assessment-summary-trainer_sig_1'] = 'Trainer signature (attempt 1) is required';
               }
@@ -1187,6 +1292,9 @@ export const InstanceFillPage: React.FC = () => {
               }
             }
             if (sumSecondEditable) {
+              if (!rowAnswerHasContent(sum.final_attempt_2_result ?? undefined)) {
+                stepErrors['assessment-summary-final_attempt_2_result'] = 'Attempt 2 result (Competent / Not Yet Competent) is required';
+              }
               if (!rowAnswerHasContent(sum.trainer_sig_2 ?? undefined)) {
                 stepErrors['assessment-summary-trainer_sig_2'] = 'Trainer signature (attempt 2) is required';
               }
@@ -1195,6 +1303,9 @@ export const InstanceFillPage: React.FC = () => {
               }
             }
             if (sumThirdEditable) {
+              if (!rowAnswerHasContent(sum.final_attempt_3_result ?? undefined)) {
+                stepErrors['assessment-summary-final_attempt_3_result'] = 'Attempt 3 result (Competent / Not Yet Competent) is required';
+              }
               if (!rowAnswerHasContent(sum.trainer_sig_3 ?? undefined)) {
                 stepErrors['assessment-summary-trainer_sig_3'] = 'Trainer signature (attempt 3) is required';
               }
@@ -2411,7 +2522,7 @@ export const InstanceFillPage: React.FC = () => {
                           const studentDeclVal = studentDeclQ ? answers[getAnswerKey(studentDeclQ.id, null)] : undefined;
                           const studentDeclSigObj = studentDeclVal && typeof studentDeclVal === 'object' && !Array.isArray(studentDeclVal) ? (studentDeclVal as Record<string, unknown>) : null;
                           const studentDeclSig = studentDeclSigObj ? (String(studentDeclSigObj.signature ?? studentDeclSigObj.imageDataUrl ?? '') || null) : (typeof studentDeclVal === 'string' ? studentDeclVal : null);
-                          const minFirstAttempt = undefined;
+                          const minFirstAttempt = getResultsMinFirstAttemptDate(assessmentSummary);
                           const minSecondAttempt = getResultsMinSecondAttemptDate(rd, assessmentSummary);
                           const minThirdAttempt = getResultsMinThirdAttemptDate(rd, assessmentSummary);
                           const minTrainerDate = maxIsoDate(rd?.first_attempt_date);
@@ -2905,9 +3016,9 @@ export const InstanceFillPage: React.FC = () => {
                                       <td colSpan={3} className="border border-gray-400 p-1.5">
                                         <p className="text-[10px] text-gray-600 mb-1.5">I declare that I have conducted a fair, valid, reliable, and flexible assessment with this student, and I have provided appropriate feedback</p>
                                         <div className="grid grid-cols-3 gap-4">
-                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_1 ?? null} onChange={(v) => handleAssessmentSummaryChange('trainer_sig_1', v)} disabled={!trainerCanEdit || !sumFirstEditable} className="mt-0.5" highlight={role === 'trainer' && sumFirstEditable} suggestionFrom={trainerRefSig} onSuggestionClick={trainerRefSig ? () => { handleAssessmentSummaryChange('trainer_sig_1', trainerRefSig); const next = maxIsoDate(trainerRefDate, todayIso, minTrainerDate1) ?? minTrainerDate1 ?? todayIso; handleAssessmentSummaryChange('trainer_date_1', next || null); } : undefined} /></div>
-                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_2 ?? null} onChange={(v) => handleAssessmentSummaryChange('trainer_sig_2', v)} disabled={!trainerCanEdit || !sumSecondEditable} className="mt-0.5" highlight={role === 'trainer' && sumSecondEditable} suggestionFrom={sumSecondEditable ? (sum.trainer_sig_1 ?? undefined) : undefined} onSuggestionClick={sumSecondEditable && sum.trainer_sig_1 ? () => { handleAssessmentSummaryChange('trainer_sig_2', sum.trainer_sig_1); const next = maxIsoDate(sum.trainer_date_1, sum.student_date_2, todayIso) ?? sum.trainer_date_1 ?? todayIso; handleAssessmentSummaryChange('trainer_date_2', next || null); } : undefined} /></div>
-                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_3 ?? null} onChange={(v) => handleAssessmentSummaryChange('trainer_sig_3', v)} disabled={!trainerCanEdit || !sumThirdEditable} className="mt-0.5" highlight={role === 'trainer' && sumThirdEditable} suggestionFrom={sumThirdEditable ? (sum.trainer_sig_1 ?? undefined) : undefined} onSuggestionClick={sumThirdEditable && sum.trainer_sig_1 ? () => { handleAssessmentSummaryChange('trainer_sig_3', sum.trainer_sig_1); const next = maxIsoDate(sum.trainer_date_2, sum.student_date_3, todayIso) ?? sum.trainer_date_2 ?? todayIso; handleAssessmentSummaryChange('trainer_date_3', next || null); } : undefined} /></div>
+                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_1 ?? null} onChange={(v) => { handleAssessmentSummaryChange('trainer_sig_1', v); const cur = String(sum.trainer_date_1 ?? '').trim(); if (!cur || (minTrainerDate1 && isCalendarBefore(cur, minTrainerDate1))) handleAssessmentSummaryChange('trainer_date_1', minTrainerDate1 ?? null); }} disabled={!trainerCanEdit || !sumFirstEditable} className="mt-0.5" highlight={role === 'trainer' && sumFirstEditable} suggestionFrom={trainerRefSig} onSuggestionClick={trainerRefSig ? () => { handleAssessmentSummaryChange('trainer_sig_1', trainerRefSig); const next = maxIsoDate(trainerRefDate, minTrainerDate1) ?? minTrainerDate1 ?? trainerRefDate; handleAssessmentSummaryChange('trainer_date_1', next || null); } : undefined} /></div>
+                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_2 ?? null} onChange={(v) => { handleAssessmentSummaryChange('trainer_sig_2', v); const cur = String(sum.trainer_date_2 ?? '').trim(); if (!cur || (minTrainerDate2 && isCalendarBefore(cur, minTrainerDate2))) handleAssessmentSummaryChange('trainer_date_2', minTrainerDate2 ?? null); }} disabled={!trainerCanEdit || !sumSecondEditable} className="mt-0.5" highlight={role === 'trainer' && sumSecondEditable} suggestionFrom={sumSecondEditable ? (sum.trainer_sig_1 ?? undefined) : undefined} onSuggestionClick={sumSecondEditable && sum.trainer_sig_1 ? () => { handleAssessmentSummaryChange('trainer_sig_2', sum.trainer_sig_1); const next = maxIsoDate(sum.trainer_date_1, sum.student_date_2, minTrainerDate2) ?? minTrainerDate2 ?? sum.trainer_date_1 ?? sum.student_date_2; handleAssessmentSummaryChange('trainer_date_2', next || null); } : undefined} /></div>
+                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_3 ?? null} onChange={(v) => { handleAssessmentSummaryChange('trainer_sig_3', v); const cur = String(sum.trainer_date_3 ?? '').trim(); if (!cur || (minTrainerDate3 && isCalendarBefore(cur, minTrainerDate3))) handleAssessmentSummaryChange('trainer_date_3', minTrainerDate3 ?? null); }} disabled={!trainerCanEdit || !sumThirdEditable} className="mt-0.5" highlight={role === 'trainer' && sumThirdEditable} suggestionFrom={sumThirdEditable ? (sum.trainer_sig_1 ?? undefined) : undefined} onSuggestionClick={sumThirdEditable && sum.trainer_sig_1 ? () => { handleAssessmentSummaryChange('trainer_sig_3', sum.trainer_sig_1); const next = maxIsoDate(sum.trainer_date_2, sum.student_date_3, minTrainerDate3) ?? minTrainerDate3 ?? sum.trainer_date_2 ?? sum.student_date_3; handleAssessmentSummaryChange('trainer_date_3', next || null); } : undefined} /></div>
                                           <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_1 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_1', clampIsoToMin(v || null, minTrainerDate1))} disabled={!trainerCanEdit || !sumFirstEditable} highlight={role === 'trainer' && sumFirstEditable} compact placement="above" className="w-full" minDate={minTrainerDate1} /></div>
                                           <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_2 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_2', clampIsoToMin(v || null, minTrainerDate2))} disabled={!trainerCanEdit || !sumSecondEditable} highlight={role === 'trainer' && sumSecondEditable} compact placement="above" className="w-full" minDate={minTrainerDate2} /></div>
                                           <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_3 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_3', clampIsoToMin(v || null, minTrainerDate3))} disabled={!trainerCanEdit || !sumThirdEditable} highlight={role === 'trainer' && sumThirdEditable} compact placement="above" className="w-full" minDate={minTrainerDate3} /></div>
@@ -2919,9 +3030,9 @@ export const InstanceFillPage: React.FC = () => {
                                       <td colSpan={3} className="border border-gray-400 p-1.5">
                                         <p className="text-[10px] text-gray-600 mb-1.5">I declare that I have been assessed in this unit, and I have been advised of my result. I also am aware of my appeal rights.</p>
                                         <div className="grid grid-cols-3 gap-4">
-                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_1 ?? null} onChange={(v) => handleAssessmentSummaryChange('student_sig_1', v)} disabled={!studentCanEdit || !sumFirstEditable} className="mt-0.5" highlight={role === 'student' && sumFirstEditable} suggestionFrom={studentRefSig} onSuggestionClick={studentRefSig ? () => { handleAssessmentSummaryChange('student_sig_1', studentRefSig); const next = maxIsoDate(studentRefDate, todayIso, minStudentDate1) ?? minStudentDate1 ?? todayIso; handleAssessmentSummaryChange('student_date_1', next || null); } : undefined} /></div>
-                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_2 ?? null} onChange={(v) => handleAssessmentSummaryChange('student_sig_2', v)} disabled={!studentCanEdit || !sumSecondEditable} className="mt-0.5" highlight={role === 'student' && sumSecondEditable} suggestionFrom={sumSecondEditable ? (sum.student_sig_1 ?? undefined) : undefined} onSuggestionClick={sumSecondEditable && sum.student_sig_1 ? () => { handleAssessmentSummaryChange('student_sig_2', sum.student_sig_1); const next = maxIsoDate(minStudentDate2, todayIso) ?? minStudentDate2 ?? todayIso; handleAssessmentSummaryChange('student_date_2', next || null); } : undefined} /></div>
-                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_3 ?? null} onChange={(v) => handleAssessmentSummaryChange('student_sig_3', v)} disabled={!studentCanEdit || !sumThirdEditable} className="mt-0.5" highlight={role === 'student' && sumThirdEditable} suggestionFrom={sumThirdEditable ? (sum.student_sig_1 ?? undefined) : undefined} onSuggestionClick={sumThirdEditable && sum.student_sig_1 ? () => { handleAssessmentSummaryChange('student_sig_3', sum.student_sig_1); const next = maxIsoDate(minStudentDate3, todayIso) ?? minStudentDate3 ?? todayIso; handleAssessmentSummaryChange('student_date_3', next || null); } : undefined} /></div>
+                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_1 ?? null} onChange={(v) => { handleAssessmentSummaryChange('student_sig_1', v); const cur = String(sum.student_date_1 ?? '').trim(); if (!cur || (minStudentDate1 && isCalendarBefore(cur, minStudentDate1))) handleAssessmentSummaryChange('student_date_1', minStudentDate1 ?? null); }} disabled={!studentCanEdit || !sumFirstEditable} className="mt-0.5" highlight={role === 'student' && sumFirstEditable} suggestionFrom={studentRefSig} onSuggestionClick={studentRefSig ? () => { handleAssessmentSummaryChange('student_sig_1', studentRefSig); const next = maxIsoDate(studentRefDate, minStudentDate1) ?? minStudentDate1 ?? studentRefDate; handleAssessmentSummaryChange('student_date_1', next || null); } : undefined} /></div>
+                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_2 ?? null} onChange={(v) => { handleAssessmentSummaryChange('student_sig_2', v); const cur = String(sum.student_date_2 ?? '').trim(); if (!cur || (minStudentDate2 && isCalendarBefore(cur, minStudentDate2))) handleAssessmentSummaryChange('student_date_2', minStudentDate2 ?? null); }} disabled={!studentCanEdit || !sumSecondEditable} className="mt-0.5" highlight={role === 'student' && sumSecondEditable} suggestionFrom={sumSecondEditable ? (sum.student_sig_1 ?? undefined) : undefined} onSuggestionClick={sumSecondEditable && sum.student_sig_1 ? () => { handleAssessmentSummaryChange('student_sig_2', sum.student_sig_1); const next = maxIsoDate(sum.student_date_1, minStudentDate2) ?? minStudentDate2 ?? sum.student_date_1; handleAssessmentSummaryChange('student_date_2', next || null); } : undefined} /></div>
+                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_3 ?? null} onChange={(v) => { handleAssessmentSummaryChange('student_sig_3', v); const cur = String(sum.student_date_3 ?? '').trim(); if (!cur || (minStudentDate3 && isCalendarBefore(cur, minStudentDate3))) handleAssessmentSummaryChange('student_date_3', minStudentDate3 ?? null); }} disabled={!studentCanEdit || !sumThirdEditable} className="mt-0.5" highlight={role === 'student' && sumThirdEditable} suggestionFrom={sumThirdEditable ? (sum.student_sig_1 ?? undefined) : undefined} onSuggestionClick={sumThirdEditable && sum.student_sig_1 ? () => { handleAssessmentSummaryChange('student_sig_3', sum.student_sig_1); const next = maxIsoDate(sum.student_date_2, minStudentDate3) ?? minStudentDate3 ?? sum.student_date_2; handleAssessmentSummaryChange('student_date_3', next || null); } : undefined} /></div>
                                           <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_1 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_1', clampIsoToMin(v || null, minStudentDate1))} disabled={!studentCanEdit || !sumFirstEditable} highlight={role === 'student' && sumFirstEditable} compact placement="above" className="w-full" minDate={minStudentDate1} /></div>
                                           <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_2 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_2', clampIsoToMin(v || null, minStudentDate2))} disabled={!studentCanEdit || !sumSecondEditable} highlight={role === 'student' && sumSecondEditable} compact placement="above" className="w-full" minDate={minStudentDate2} /></div>
                                           <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_3 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_3', clampIsoToMin(v || null, minStudentDate3))} disabled={!studentCanEdit || !sumThirdEditable} highlight={role === 'student' && sumThirdEditable} compact placement="above" className="w-full" minDate={minStudentDate3} /></div>
@@ -2986,6 +3097,10 @@ export const InstanceFillPage: React.FC = () => {
                                 const todayIsoDecl = new Date().toISOString().split('T')[0];
                                 const hasDateField = (q.pdf_meta as { showDateField?: boolean } | undefined)?.showDateField;
                                 const minDeclDate = getStudentResubDeclarationMinDate(firstTaskRdForDecl, submissionCount);
+                                // Declaration must only ever be set on the first attempt cycle.
+                                // After attempt 1 is completed / resubmission begins, keep it read-only (historical).
+                                const declarationLockedToFirstAttempt = q.code === 'student.declarationSignature' && submissionCount >= 2;
+                                const effectiveEditable = editable && !declarationLockedToFirstAttempt;
                                 return (
                                   <div key={q.id} className="space-y-2">
                                     <div className="text-sm font-semibold text-gray-700">{q.label}{q.required ? ' *' : ''}</div>
@@ -2999,10 +3114,10 @@ export const InstanceFillPage: React.FC = () => {
                                             const merged = img != null ? { ...base, signature: img } : { ...base, signature: null };
                                             handleAnswerChange(q.id, null, merged as string | number | boolean | Record<string, unknown> | string[]);
                                           }}
-                                          disabled={!editable}
+                                          disabled={!effectiveEditable}
                                           highlight={(role === 'student' || role === 'trainer') && editable}
                                           suggestionFrom={studentSigSuggestion}
-                                          onSuggestionClick={studentSigSuggestion && editable ? () => {
+                                          onSuggestionClick={studentSigSuggestion && effectiveEditable ? () => {
                                             const base = (sigObj && typeof sigObj === 'object' ? { ...sigObj } : {}) as Record<string, unknown>;
                                             const nextDate = minDeclDate && isCalendarBefore(todayIsoDecl, minDeclDate) ? minDeclDate : todayIsoDecl;
                                             handleAnswerChange(q.id, null, { ...base, signature: studentSigSuggestion, date: nextDate } as string | number | boolean | Record<string, unknown> | string[], true);
@@ -3019,7 +3134,7 @@ export const InstanceFillPage: React.FC = () => {
                                               const nextDate = minDeclDate && newDate && isCalendarBefore(newDate, minDeclDate) ? minDeclDate : newDate;
                                               handleAnswerChange(q.id, null, { ...base, date: nextDate } as string | number | boolean | Record<string, unknown> | string[]);
                                             }}
-                                            disabled={!editable}
+                                            disabled={!effectiveEditable}
                                             highlight={(role === 'student' || role === 'trainer') && editable}
                                             compact
                                             placement="above"
@@ -3161,6 +3276,10 @@ export const InstanceFillPage: React.FC = () => {
                             const todayIsoDecl = new Date().toISOString().split('T')[0];
                             const hasDateField = (q.pdf_meta as { showDateField?: boolean } | undefined)?.showDateField;
                             const minDeclDate = getStudentResubDeclarationMinDate(firstTaskRdForDecl, submissionCount);
+                            // Declaration must only ever be set on the first attempt cycle.
+                            // After attempt 1 is completed / resubmission begins, keep it read-only (historical).
+                            const declarationLockedToFirstAttempt = q.code === 'student.declarationSignature' && submissionCount >= 2;
+                            const effectiveEditable = editable && !declarationLockedToFirstAttempt;
                             return (
                               <div key={q.id} className="space-y-2">
                                 <div className="text-sm font-semibold text-gray-700">{q.label}{q.required ? ' *' : ''}</div>
@@ -3174,9 +3293,9 @@ export const InstanceFillPage: React.FC = () => {
                                         const merged = img != null ? { ...base, signature: img } : { ...base, signature: null };
                                         handleAnswerChange(q.id, null, merged as string | number | boolean | Record<string, unknown> | string[]);
                                       }}
-                                      disabled={!editable}
+                                      disabled={!effectiveEditable}
                                       suggestionFrom={studentSigSuggestion}
-                                      onSuggestionClick={studentSigSuggestion && editable ? () => {
+                                      onSuggestionClick={studentSigSuggestion && effectiveEditable ? () => {
                                         const base = (sigObj && typeof sigObj === 'object' ? { ...sigObj } : {}) as Record<string, unknown>;
                                         const nextDate = minDeclDate && isCalendarBefore(todayIsoDecl, minDeclDate) ? minDeclDate : todayIsoDecl;
                                         handleAnswerChange(q.id, null, { ...base, signature: studentSigSuggestion, date: nextDate } as string | number | boolean | Record<string, unknown> | string[], true);
@@ -3193,7 +3312,7 @@ export const InstanceFillPage: React.FC = () => {
                                           const nextDate = minDeclDate && newDate && isCalendarBefore(newDate, minDeclDate) ? minDeclDate : newDate;
                                           handleAnswerChange(q.id, null, { ...base, date: nextDate } as string | number | boolean | Record<string, unknown> | string[]);
                                         }}
-                                        disabled={!editable}
+                                        disabled={!effectiveEditable}
                                         compact
                                         placement="above"
                                         className="flex-1 min-w-0"

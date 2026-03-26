@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Copy, ExternalLink, Send, RefreshCw, Ban, CheckCircle, User, CalendarClock } from 'lucide-react';
-import { listSubmittedInstancesPaged, updateInstanceRole, updateInstanceWorkflowStatus, issueInstanceAccessLink, getOrIssueInstanceAccessLink, revokeRoleAccessTokens, extendInstanceAccessTokens, extendInstanceAccessTokensToDate, allowStudentResubmission, listTrainers } from '../lib/formEngine';
+import { Copy, ExternalLink, Send, RefreshCw, Ban, CheckCircle, User, CalendarClock, CalendarDays } from 'lucide-react';
+import { listSubmittedInstancesPaged, updateInstanceRole, updateInstanceWorkflowStatus, issueInstanceAccessLink, getOrIssueInstanceAccessLink, revokeRoleAccessTokens, extendInstanceAccessTokens, extendInstanceAccessTokensToDate, allowStudentResubmission, listTrainers, updateFormInstanceDates } from '../lib/formEngine';
 import type { SubmittedInstanceRow, Trainer } from '../lib/formEngine';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -15,6 +15,11 @@ const formatDateTime = (value: string | null): string => {
   const dt = new Date(value);
   if (Number.isNaN(dt.getTime())) return '-';
   return dt.toLocaleString();
+};
+
+const formatDate = (value: string | null): string => {
+  const v = (value ?? '').trim();
+  return v ? v : '-';
 };
 
 const getWorkflowLabel = (row: SubmittedInstanceRow): string => {
@@ -51,6 +56,10 @@ export const AdminAssessmentsPage: React.FC = () => {
   const [extendDeadlineRow, setExtendDeadlineRow] = useState<SubmittedInstanceRow | null>(null);
   const [extendDeadlineNewDate, setExtendDeadlineNewDate] = useState('');
   const [extending, setExtending] = useState(false);
+  const [editDatesRow, setEditDatesRow] = useState<SubmittedInstanceRow | null>(null);
+  const [editDatesStart, setEditDatesStart] = useState('');
+  const [editDatesEnd, setEditDatesEnd] = useState('');
+  const [savingDates, setSavingDates] = useState(false);
 
   const loadRows = useCallback(async (page: number, search: string, opts?: { silent?: boolean }) => {
     if (!opts?.silent) setLoading(true);
@@ -97,7 +106,7 @@ export const AdminAssessmentsPage: React.FC = () => {
     await extendInstanceAccessTokens(instanceId, roleContext, 30);
     setManagingId(null);
     await loadRows(currentPage, searchTerm, { silent: true });
-    toast.success('Link re-enabled for 30 days. Student/trainer can access even if form date passed.');
+    toast.success('Link re-enabled for 30 days.');
   };
 
   const openSendToTrainer = (row: SubmittedInstanceRow) => {
@@ -112,7 +121,34 @@ export const AdminAssessmentsPage: React.FC = () => {
 
   const openExtendDeadline = (row: SubmittedInstanceRow) => {
     setExtendDeadlineRow(row);
-    setExtendDeadlineNewDate(new Date().toISOString().slice(0, 10));
+    setExtendDeadlineNewDate((row.end_date ?? '').trim() || new Date().toISOString().slice(0, 10));
+  };
+
+  const openEditDates = (row: SubmittedInstanceRow) => {
+    setEditDatesRow(row);
+    setEditDatesStart((row.start_date ?? '').trim() || new Date().toISOString().slice(0, 10));
+    setEditDatesEnd((row.end_date ?? '').trim() || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10));
+  };
+
+  const handleSaveDates = async () => {
+    if (!editDatesRow) return;
+    const start = editDatesStart.trim();
+    const end = editDatesEnd.trim();
+    if (!start || !end) {
+      toast.error('Select start and end date');
+      return;
+    }
+    if (end < start) {
+      toast.error('End date cannot be earlier than start date');
+      return;
+    }
+    setSavingDates(true);
+    await updateFormInstanceDates(editDatesRow.id, { start_date: start });
+    await extendInstanceAccessTokensToDate(editDatesRow.id, 'student', end);
+    setSavingDates(false);
+    setEditDatesRow(null);
+    await loadRows(currentPage, searchTerm, { silent: true });
+    toast.success('Assessment dates updated');
   };
 
   const handleExtendDeadlineConfirm = async () => {
@@ -125,7 +161,7 @@ export const AdminAssessmentsPage: React.FC = () => {
     setExtendDeadlineRow(null);
     setExtendDeadlineNewDate('');
     await loadRows(currentPage, searchTerm, { silent: true });
-    toast.success(`${studentName}'s submission deadline extended. They can access until ${newDate} 11:59 PM.`);
+    toast.success(`${studentName}'s assessment end date extended. They can access until ${newDate} 11:59 PM.`);
   };
 
   const handleSendToTrainerConfirm = async () => {
@@ -205,6 +241,8 @@ export const AdminAssessmentsPage: React.FC = () => {
                   <tr className="border-b border-gray-200 text-left text-xs uppercase tracking-wide text-gray-500">
                     <th className="py-3 pr-3">Student</th>
                     <th className="py-3 pr-3">Form</th>
+                    <th className="py-3 pr-3 w-[120px]">Start</th>
+                    <th className="py-3 pr-3 w-[120px]">End</th>
                     <th className="py-3 pr-3">Date</th>
                     <th className="py-3 pr-3 w-[140px]">Workflow</th>
                     <th className="py-3 text-right min-w-[220px]">Actions</th>
@@ -221,6 +259,8 @@ export const AdminAssessmentsPage: React.FC = () => {
                         <div className="font-medium text-gray-900">{row.form_name}</div>
                         <div className="text-xs text-gray-500">Version {row.form_version ?? '1.0.0'}</div>
                       </td>
+                      <td className="py-3 pr-3 text-gray-700">{formatDate(row.start_date)}</td>
+                      <td className="py-3 pr-3 text-gray-700">{formatDate(row.end_date)}</td>
                       <td className="py-3 pr-3 text-gray-700">{formatDateTime(row.submitted_at || row.created_at)}</td>
                       <td className="py-3 pr-3">
                         <span className={`inline-flex rounded-md px-2.5 py-1 text-xs font-medium ${getWorkflowBadgeClass(row)}`}>
@@ -255,13 +295,19 @@ export const AdminAssessmentsPage: React.FC = () => {
                                     <span className={actionText}>Enable</span>
                                   </button>
                                 )}
-                                <button type="button" onClick={() => openExtendDeadline(row)} className={actionBtn} title="Extend submission deadline">
+                                <button type="button" onClick={() => openExtendDeadline(row)} className={actionBtn} title="Extend assessment end date">
                                   <CalendarClock className={actionIcon} />
-                                  <span className={actionText}>Extend Deadline</span>
+                                  <span className={actionText}>Extend End Date</span>
+                                </button>
+                                <button type="button" onClick={() => openEditDates(row)} className={actionBtn} title="Edit assessment dates">
+                                  <CalendarDays className={actionIcon} />
+                                  <span className={actionText}>Edit dates</span>
                                 </button>
                                 {row.status !== 'locked' &&
                                   (row.role_context === 'trainer' || row.role_context === 'office') &&
-                                  (Number((row as unknown as { submission_count?: number }).submission_count ?? 0) > 0 || !!row.submitted_at) && (
+                                  (Number((row as unknown as { submission_count?: number }).submission_count ?? 0) > 0 || !!row.submitted_at) &&
+                                  // Max 3 student submissions/attempts; don't show when all attempts used.
+                                  Number((row as unknown as { submission_count?: number }).submission_count ?? 0) < 3 && (
                                   <button type="button" onClick={async () => { setManagingId(row.id); await allowStudentResubmission(row.id); setManagingId(null); await loadRows(currentPage, searchTerm, { silent: true }); const url = `${window.location.origin}/forms/${row.form_id}/student-access`; await navigator.clipboard.writeText(url); toast.success('Resubmission allowed. Generic link copied—student uses email and OTP.'); }} disabled={managingId === row.id} className={actionBtn} title="Allow student to resubmit">
                                     <CheckCircle className={actionIcon} />
                                     <span className={actionText}>Allow Resubmission</span>
@@ -389,16 +435,16 @@ export const AdminAssessmentsPage: React.FC = () => {
             setExtendDeadlineRow(null);
             setExtendDeadlineNewDate('');
           }}
-          title="Extend submission deadline (this instance only)"
+          title="Extend assessment end date (this instance only)"
           size="md"
         >
           {extendDeadlineRow && (
             <div className="space-y-4">
               <p className="text-sm text-gray-600">
-                Extend <strong>{extendDeadlineRow.student_name}</strong>'s submission deadline for <strong>{extendDeadlineRow.form_name}</strong>. Only this student is affected.
+                Extend <strong>{extendDeadlineRow.student_name}</strong>'s assessment end date for <strong>{extendDeadlineRow.form_name}</strong>. Only this student is affected.
               </p>
               <div className="flex flex-col gap-2">
-                <label className="text-sm font-medium text-gray-700">New deadline (end of day)</label>
+                <label className="text-sm font-medium text-gray-700">New end date (end of day)</label>
                 <DatePicker
                   value={extendDeadlineNewDate}
                   onChange={(v) => setExtendDeadlineNewDate(v || '')}
@@ -428,6 +474,44 @@ export const AdminAssessmentsPage: React.FC = () => {
                     <CalendarClock className="w-4 h-4" />
                   )}
                   <span>{extending ? 'Updating...' : 'Extend deadline'}</span>
+                </Button>
+              </div>
+            </div>
+          )}
+        </Modal>
+
+        <Modal
+          isOpen={!!editDatesRow}
+          onClose={() => {
+            setEditDatesRow(null);
+            setEditDatesStart('');
+            setEditDatesEnd('');
+          }}
+          title="Edit assessment dates (this instance only)"
+          size="md"
+        >
+          {editDatesRow && (
+            <div className="space-y-4">
+              <p className="text-sm text-gray-600">
+                Update start/end dates for <strong>{editDatesRow.student_name}</strong> — <strong>{editDatesRow.form_name}</strong>.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <label className="block">
+                  <span className="text-sm font-medium text-gray-700">Start date</span>
+                  <DatePicker value={editDatesStart} onChange={(v) => setEditDatesStart(v || '')} className="mt-1 max-w-[180px]" />
+                </label>
+                <label className="block">
+                  <span className="text-sm font-medium text-gray-700">End date</span>
+                  <DatePicker value={editDatesEnd} onChange={(v) => setEditDatesEnd(v || '')} className="mt-1 max-w-[180px]" minDate={editDatesStart || undefined} />
+                </label>
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <Button variant="outline" onClick={() => setEditDatesRow(null)} disabled={savingDates}>
+                  Cancel
+                </Button>
+                <Button onClick={handleSaveDates} disabled={savingDates || !editDatesStart.trim() || !editDatesEnd.trim()}>
+                  {savingDates ? <Loader variant="dots" size="sm" inline className="mr-2" /> : null}
+                  Save
                 </Button>
               </div>
             </div>

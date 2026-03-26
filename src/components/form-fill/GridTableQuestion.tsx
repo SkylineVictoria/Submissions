@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useLayoutEffect, useRef } from 'react';
 import { Check, X } from 'lucide-react';
 import type { FormQuestionWithOptionsAndRows } from '../../lib/formEngine';
 import { heightFromWordLimit } from '../ui/Textarea';
@@ -49,6 +49,39 @@ const formatHeader = (label: string, headerCase: GridHeaderCase): string => {
   if (headerCase === 'uppercase') return label.toUpperCase();
   if (headerCase === 'title') return toTitleCase(label);
   return label;
+};
+
+const AutoSizeTextarea: React.FC<{
+  value: string;
+  onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
+  onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
+  disabled?: boolean;
+  className?: string;
+  style?: React.CSSProperties;
+}> = ({ value, onChange, onKeyDown, disabled, className, style }) => {
+  const ref = useRef<HTMLTextAreaElement | null>(null);
+  const resize = () => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = '0px';
+    el.style.height = `${el.scrollHeight}px`;
+  };
+  useLayoutEffect(() => {
+    resize();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+  return (
+    <textarea
+      ref={ref}
+      value={value}
+      onChange={onChange}
+      onKeyDown={onKeyDown}
+      onInput={resize}
+      disabled={disabled}
+      className={className}
+      style={style}
+    />
+  );
 };
 
 const getGridColumnsMeta = (pm: Record<string, unknown>): GridTableColumnMeta[] => {
@@ -143,23 +176,41 @@ export const GridTableQuestion: React.FC<GridTableQuestionProps> = ({
     const rowReadOnly = !!studentResubmissionReadOnlyForSatisfactoryRows && rowAssessments[row.id] === 'yes';
     const answerBgClass =
       disabled || rowReadOnly ? 'bg-gray-50' : 'bg-blue-50/70';
+    const baseTextareaClass = `w-full px-2 py-1.5 text-sm ${answerBgClass} border-none border-b border-gray-300 focus:border-[var(--brand)] focus:outline-none`;
     return (
       <td key={colIndex} className={cellClass}>
-        <textarea
-          value={cellVal}
-          onChange={(e) => {
-            const limit = columnWordLimits[colIndex];
-            const next = limit ? truncateToWordLimit(e.target.value, limit) : e.target.value;
-            updateCell(row.id, colIndex, next);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') e.stopPropagation();
-          }}
-          disabled={disabled || rowReadOnly}
-          rows={wordLimit ? Math.max(1, Math.min(6, Math.ceil(wordLimit / 10))) : 1}
-          className={`w-full px-2 py-1.5 text-sm ${answerBgClass} border-none border-b border-gray-300 focus:border-[var(--brand)] focus:outline-none ${wordLimit ? 'resize-none' : ''}`}
-          style={boxHeight ? { minHeight: boxHeight, maxHeight: boxHeight, height: boxHeight } : { minHeight: 34 }}
-        />
+        {boxHeight ? (
+          <textarea
+            value={cellVal}
+            onChange={(e) => {
+              const limit = columnWordLimits[colIndex];
+              const next = limit ? truncateToWordLimit(e.target.value, limit) : e.target.value;
+              updateCell(row.id, colIndex, next);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') e.stopPropagation();
+            }}
+            disabled={disabled || rowReadOnly}
+            rows={Math.max(1, Math.min(6, Math.ceil((wordLimit || 10) / 10)))}
+            className={`${baseTextareaClass} resize-none`}
+            style={{ minHeight: boxHeight, maxHeight: boxHeight, height: boxHeight }}
+          />
+        ) : (
+          <AutoSizeTextarea
+            value={cellVal}
+            onChange={(e) => {
+              const limit = columnWordLimits[colIndex];
+              const next = limit ? truncateToWordLimit(e.target.value, limit) : e.target.value;
+              updateCell(row.id, colIndex, next);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') e.stopPropagation();
+            }}
+            disabled={disabled || rowReadOnly}
+            className={`${baseTextareaClass} resize-none overflow-hidden`}
+            style={{ minHeight: 34 }}
+          />
+        )}
         {wordLimit != null && (
           <p className="mt-0.5 text-xs text-gray-500">
             {wordCount} / {wordLimit} words
