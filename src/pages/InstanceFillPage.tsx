@@ -65,7 +65,6 @@ import { SectionLikertTable } from '../components/form-fill/SectionLikertTable';
 import { SignatureField } from '../components/form-fill/SignatureField';
 import { AppendixAMatrixForm } from '../components/form-fill/AppendixAMatrixForm';
 import { DatePicker } from '../components/ui/DatePicker';
-import { Check, X } from 'lucide-react';
 import { toast } from '../utils/toast';
 
 const PDF_BASE = import.meta.env.VITE_PDF_API_URL ?? '';
@@ -2210,8 +2209,30 @@ export const InstanceFillPage: React.FC = () => {
                                             <div>
                                               <div className="mb-3 py-2 px-3 rounded bg-gray-50 border-b border-gray-200 flex items-center justify-end gap-2">
                                                 <span className="text-sm font-semibold text-gray-700">Satisfactory response:</span>
-                                                <button type="button" onClick={() => trainerEditable && handleTrainerAssessmentChange(childQ.id, 'yes')} disabled={!trainerEditable} title="Satisfactory" className={`p-1.5 rounded border flex items-center justify-center ${childSatYes ? 'bg-red-50 border-red-600 text-red-600' : 'border-gray-300 text-gray-500 hover:border-gray-500 hover:text-gray-700'}`}><Check className="w-4 h-4" strokeWidth={2.5} /></button>
-                                                <button type="button" onClick={() => trainerEditable && handleTrainerAssessmentChange(childQ.id, 'no')} disabled={!trainerEditable} title="Not satisfactory" className={`p-1.5 rounded border flex items-center justify-center ${childSatNo ? 'bg-red-100 border-red-600 text-red-700' : 'border-gray-300 text-gray-500 hover:border-gray-500 hover:text-gray-700'}`}><X className="w-4 h-4" strokeWidth={2.5} /></button>
+                                                <button
+                                                  type="button"
+                                                  onClick={() => trainerEditable && handleTrainerAssessmentChange(childQ.id, 'yes')}
+                                                  disabled={!trainerEditable}
+                                                  className={`px-3 py-1.5 rounded-md border text-xs font-semibold ${
+                                                    childSatYes
+                                                      ? 'bg-emerald-100 border-emerald-600 text-emerald-900'
+                                                      : 'border-gray-300 text-gray-600 hover:border-gray-500 hover:text-gray-800'
+                                                  }`}
+                                                >
+                                                  Yes
+                                                </button>
+                                                <button
+                                                  type="button"
+                                                  onClick={() => trainerEditable && handleTrainerAssessmentChange(childQ.id, 'no')}
+                                                  disabled={!trainerEditable}
+                                                  className={`px-3 py-1.5 rounded-md border text-xs font-semibold ${
+                                                    childSatNo
+                                                      ? 'bg-rose-100 border-rose-600 text-rose-900'
+                                                      : 'border-gray-300 text-gray-600 hover:border-gray-500 hover:text-gray-800'
+                                                  }`}
+                                                >
+                                                  No
+                                                </button>
                                               </div>
                                               <QuestionRenderer
                                                 question={childQ}
@@ -2290,8 +2311,30 @@ export const InstanceFillPage: React.FC = () => {
                                                   <div>
                                                     <div className="mb-3 py-2 px-3 rounded bg-gray-50 border-b border-gray-200 flex items-center justify-end gap-2">
                                                       <span className="text-sm font-semibold text-gray-700">Satisfactory response:</span>
-                                                      <button type="button" onClick={() => trainerEditable && handleTrainerAssessmentChange(q.id, 'yes')} disabled={!trainerEditable} title="Satisfactory" className={`p-1.5 rounded border flex items-center justify-center ${satQYes ? 'bg-red-50 border-red-600 text-red-600' : 'border-gray-300 text-gray-500 hover:border-gray-500 hover:text-gray-700'}`}><Check className="w-4 h-4" strokeWidth={2.5} /></button>
-                                                      <button type="button" onClick={() => trainerEditable && handleTrainerAssessmentChange(q.id, 'no')} disabled={!trainerEditable} title="Not satisfactory" className={`p-1.5 rounded border flex items-center justify-center ${satQNo ? 'bg-red-100 border-red-600 text-red-700' : 'border-gray-300 text-gray-500 hover:border-gray-500 hover:text-gray-700'}`}><X className="w-4 h-4" strokeWidth={2.5} /></button>
+                                                      <button
+                                                        type="button"
+                                                        onClick={() => trainerEditable && handleTrainerAssessmentChange(q.id, 'yes')}
+                                                        disabled={!trainerEditable}
+                                                        className={`px-3 py-1.5 rounded-md border text-xs font-semibold ${
+                                                          satQYes
+                                                            ? 'bg-emerald-100 border-emerald-600 text-emerald-900'
+                                                            : 'border-gray-300 text-gray-600 hover:border-gray-500 hover:text-gray-800'
+                                                        }`}
+                                                      >
+                                                        Yes
+                                                      </button>
+                                                      <button
+                                                        type="button"
+                                                        onClick={() => trainerEditable && handleTrainerAssessmentChange(q.id, 'no')}
+                                                        disabled={!trainerEditable}
+                                                        className={`px-3 py-1.5 rounded-md border text-xs font-semibold ${
+                                                          satQNo
+                                                            ? 'bg-rose-100 border-rose-600 text-rose-900'
+                                                            : 'border-gray-300 text-gray-600 hover:border-gray-500 hover:text-gray-800'
+                                                        }`}
+                                                      >
+                                                        No
+                                                      </button>
                                                     </div>
                                                     <QuestionRenderer
                                                       question={q}
@@ -2311,8 +2354,30 @@ export const InstanceFillPage: React.FC = () => {
                                               <div>
                                                 <div className="mb-3 py-2 px-3 rounded bg-gray-50 border-b border-gray-200 flex items-center justify-end gap-2">
                                                   <span className="text-sm font-semibold text-gray-700">Satisfactory response:</span>
-                                                  <button type="button" onClick={() => trainerEditable && handleTrainerAssessmentChange(q.id, 'yes')} disabled={!trainerEditable} title="Satisfactory" className={`p-1.5 rounded border flex items-center justify-center ${trainerAssessments[q.id] === 'yes' ? 'bg-red-50 border-red-600 text-red-600' : 'border-gray-300 text-gray-500 hover:border-gray-500 hover:text-gray-700'}`}><Check className="w-4 h-4" strokeWidth={2.5} /></button>
-                                                  <button type="button" onClick={() => trainerEditable && handleTrainerAssessmentChange(q.id, 'no')} disabled={!trainerEditable} title="Not satisfactory" className={`p-1.5 rounded border flex items-center justify-center ${trainerAssessments[q.id] === 'no' ? 'bg-red-100 border-red-600 text-red-700' : 'border-gray-300 text-gray-500 hover:border-gray-500 hover:text-gray-700'}`}><X className="w-4 h-4" strokeWidth={2.5} /></button>
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => trainerEditable && handleTrainerAssessmentChange(q.id, 'yes')}
+                                                    disabled={!trainerEditable}
+                                                    className={`px-3 py-1.5 rounded-md border text-xs font-semibold ${
+                                                      trainerAssessments[q.id] === 'yes'
+                                                        ? 'bg-emerald-100 border-emerald-600 text-emerald-900'
+                                                        : 'border-gray-300 text-gray-600 hover:border-gray-500 hover:text-gray-800'
+                                                    }`}
+                                                  >
+                                                    Yes
+                                                  </button>
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => trainerEditable && handleTrainerAssessmentChange(q.id, 'no')}
+                                                    disabled={!trainerEditable}
+                                                    className={`px-3 py-1.5 rounded-md border text-xs font-semibold ${
+                                                      trainerAssessments[q.id] === 'no'
+                                                        ? 'bg-rose-100 border-rose-600 text-rose-900'
+                                                        : 'border-gray-300 text-gray-600 hover:border-gray-500 hover:text-gray-800'
+                                                    }`}
+                                                  >
+                                                    No
+                                                  </button>
                                                 </div>
                                                 <QuestionRenderer question={q} value={(answers[getAnswerKey(q.id, null)] as string | number | boolean | Record<string, unknown> | string[] | undefined) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string | number | boolean | Record<string, unknown> | string[])} disabled={!editable} error={errors[`q-${q.id}`]} highlightAsFill={editable} />
                                               </div>
