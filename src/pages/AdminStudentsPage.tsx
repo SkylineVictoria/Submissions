@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
-import { Plus, Send, Mail, Phone, Pencil, Upload, Trash2 } from 'lucide-react';
+import { Plus, Send, Mail, Phone, Pencil, Upload, Trash2, FileText } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import {
   listStudentsPaged,
@@ -12,6 +12,7 @@ import {
   listFormsPaged,
   updateFormInstanceDates,
   extendInstanceAccessTokensToDate,
+  getStudentsByEmails,
 } from '../lib/formEngine';
 import {
   buildEmailFromLocalAndDomain,
@@ -32,6 +33,9 @@ import { Modal } from '../components/ui/Modal';
 import { Loader } from '../components/ui/Loader';
 import { DatePicker } from '../components/ui/DatePicker';
 import { toast } from '../utils/toast';
+import { pdf } from '@react-pdf/renderer';
+import { GenericLinksPdf } from '../components/pdf/GenericLinksPdf';
+import { registerPdfFonts } from '../utils/fontLoader';
 
 const STATUS_OPTIONS = [
   { value: 'active', label: 'Active' },
@@ -77,9 +81,27 @@ export const AdminStudentsPage: React.FC = () => {
   });
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [importBatchId, setImportBatchId] = useState('');
-  const [importRows, setImportRows] = useState<Array<{ first_name: string; last_name: string; email: string; phone: string; student_id?: string }>>([]);
+  const [importRows, setImportRows] = useState<Array<{
+    first_name: string;
+    last_name: string;
+    email: string;
+    phone: string;
+    student_id?: string;
+    unit_code?: string;
+    qualification_code?: string;
+    activity_start_date?: string;
+    activity_end_date?: string;
+  }>>([]);
   const [importFileName, setImportFileName] = useState('');
   const [importing, setImporting] = useState(false);
+  const [importExistingByEmail, setImportExistingByEmail] = useState<Record<string, Student>>({});
+  const [importIdDecisionByEmail, setImportIdDecisionByEmail] = useState<Record<string, 'keep_existing' | 'use_new'>>({});
+  const [lastImportLinksPayload, setLastImportLinksPayload] = useState<{
+    createdAtIso: string;
+    batchId: number | null;
+    forms: Array<{ id: number; name: string; version?: string | null; url: string }>;
+    students: Array<{ id: number; name: string; email: string }>;
+  } | null>(null);
 
   const digitsOnly = (val: string) => val.replace(/\D/g, '');
   const validateCreateStudentForm = (form: {
@@ -207,7 +229,55 @@ export const AdminStudentsPage: React.FC = () => {
   const colMatch = (h: string, ...aliases: string[]) =>
     aliases.some((a) => normalizeCol(h).includes(normalizeCol(a)) || normalizeCol(a).includes(normalizeCol(h)));
 
-  const parseImportFile = (file: File): Promise<Array<{ first_name: string; last_name: string; email: string; phone: string; student_id?: string }>> => {
+  const toIsoDate = (val: unknown): string | undefined => {
+    if (val == null) return undefined;
+    if (val instanceof Date) {
+      if (Number.isNaN(val.getTime())) return undefined;
+      // Use local calendar date (AEDT/user locale), not UTC shifting.
+      const yyyy = String(val.getFullYear()).padStart(4, '0');
+      const mm = String(val.getMonth() + 1).padStart(2, '0');
+      const dd = String(val.getDate()).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd}`;
+    }
+    if (typeof val === 'number' && Number.isFinite(val)) {
+      const d = XLSX.SSF.parse_date_code(val);
+      if (!d || !d.y || !d.m || !d.d) return undefined;
+      const yyyy = String(d.y).padStart(4, '0');
+      const mm = String(d.m).padStart(2, '0');
+      const dd = String(d.d).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd}`;
+    }
+    const s = String(val).trim();
+    if (!s) return undefined;
+    // Accept dd/mm/yyyy or yyyy-mm-dd-ish.
+    const m1 = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+    if (m1) {
+      const dd = String(m1[1]).padStart(2, '0');
+      const mm = String(m1[2]).padStart(2, '0');
+      const yyyy = String(m1[3]).length === 2 ? `20${m1[3]}` : String(m1[3]).padStart(4, '0');
+      return `${yyyy}-${mm}-${dd}`;
+    }
+    const asDate = new Date(s);
+    if (!Number.isNaN(asDate.getTime())) {
+      const yyyy = String(asDate.getFullYear()).padStart(4, '0');
+      const mm = String(asDate.getMonth() + 1).padStart(2, '0');
+      const dd = String(asDate.getDate()).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd}`;
+    }
+    return undefined;
+  };
+
+  const parseImportFile = (file: File): Promise<Array<{
+    first_name: string;
+    last_name: string;
+    email: string;
+    phone: string;
+    student_id?: string;
+    unit_code?: string;
+    qualification_code?: string;
+    activity_start_date?: string;
+    activity_end_date?: string;
+  }>> => {
     return new Promise((resolve, reject) => {
       const isCsv = file.name.toLowerCase().endsWith('.csv');
       const reader = new FileReader();
@@ -218,6 +288,7 @@ export const AdminStudentsPage: React.FC = () => {
             reject(new Error('Could not read file'));
             return;
           }
+          // Keep raw numeric serial dates so parse_date_code can map calendar date directly.
           const wb = XLSX.read(data, { type: isCsv ? 'binary' : 'array' });
           const firstSheet = wb.SheetNames[0];
           if (!firstSheet) {
@@ -231,16 +302,30 @@ export const AdminStudentsPage: React.FC = () => {
             return;
           }
           const headers = (rows[0] ?? []).map((h) => String(h ?? '').trim());
-          const fnIdx = headers.findIndex((h) => colMatch(h, 'first name', 'firstname'));
-          const lnIdx = headers.findIndex((h) => colMatch(h, 'last name', 'lastname'));
-          const emIdx = headers.findIndex((h) => colMatch(h, 'email'));
-          const phIdx = headers.findIndex((h) => colMatch(h, 'phone'));
+          const fnIdx = headers.findIndex((h) => colMatch(h, 'given name', 'first name', 'firstname'));
+          const lnIdx = headers.findIndex((h) => colMatch(h, 'surname', 'last name', 'lastname'));
+          const emIdx = headers.findIndex((h) => colMatch(h, 'email address', 'email'));
+          const phIdx = headers.findIndex((h) => colMatch(h, 'mobile phone', 'phone', 'mobile'));
           const sidIdx = headers.findIndex((h) => colMatch(h, 'student id', 'studentid'));
+          const unitIdx = headers.findIndex((h) => colMatch(h, 'unit code', 'unit of competency code', 'unit'));
+          const qualIdx = headers.findIndex((h) => colMatch(h, 'qualification code', 'qualification'));
+          const startIdx = headers.findIndex((h) => colMatch(h, 'activity start date', 'start date', 'activity start'));
+          const endIdx = headers.findIndex((h) => colMatch(h, 'activity end date', 'end date', 'activity end'));
           if (fnIdx < 0 || emIdx < 0) {
             reject(new Error('Required columns: First Name, Email. Found: ' + headers.join(', ')));
             return;
           }
-          const result: Array<{ first_name: string; last_name: string; email: string; phone: string; student_id?: string }> = [];
+          const result: Array<{
+            first_name: string;
+            last_name: string;
+            email: string;
+            phone: string;
+            student_id?: string;
+            unit_code?: string;
+            qualification_code?: string;
+            activity_start_date?: string;
+            activity_end_date?: string;
+          }> = [];
           for (let i = 1; i < rows.length; i++) {
             const row = rows[i] as unknown[];
             const first = String(row[fnIdx] ?? '').trim();
@@ -248,8 +333,22 @@ export const AdminStudentsPage: React.FC = () => {
             const email = String(row[emIdx] ?? '').trim();
             const phone = phIdx >= 0 ? digitsOnly(String(row[phIdx] ?? '')).slice(0, 10) : '';
             const studentId = sidIdx >= 0 ? String(row[sidIdx] ?? '').trim() : undefined;
+            const unitCode = unitIdx >= 0 ? String(row[unitIdx] ?? '').trim() : '';
+            const qualCode = qualIdx >= 0 ? String(row[qualIdx] ?? '').trim() : '';
+            const start = startIdx >= 0 ? toIsoDate(row[startIdx]) : undefined;
+            const end = endIdx >= 0 ? toIsoDate(row[endIdx]) : undefined;
             if (!first && !email) continue;
-            result.push({ first_name: first, last_name: last, email, phone, student_id: studentId || undefined });
+            result.push({
+              first_name: first,
+              last_name: last,
+              email,
+              phone,
+              student_id: studentId || undefined,
+              unit_code: unitCode || undefined,
+              qualification_code: qualCode || undefined,
+              activity_start_date: start,
+              activity_end_date: end,
+            });
           }
           resolve(result);
         } catch (err) {
@@ -284,6 +383,29 @@ export const AdminStudentsPage: React.FC = () => {
     e.target.value = '';
   };
 
+  useEffect(() => {
+    if (importRows.length === 0) {
+      setImportExistingByEmail({});
+      setImportIdDecisionByEmail({});
+      return;
+    }
+    const emails = Array.from(new Set(importRows.map((r) => String(r.email ?? '').trim().toLowerCase()).filter(Boolean)));
+    getStudentsByEmails(emails).then((existing) => {
+      const map: Record<string, Student> = {};
+      for (const s of existing) {
+        if (s.email) map[String(s.email).trim().toLowerCase()] = s;
+      }
+      setImportExistingByEmail(map);
+      setImportIdDecisionByEmail((prev) => {
+        const next = { ...prev };
+        for (const email of emails) {
+          if (!(email in next)) next[email] = 'keep_existing';
+        }
+        return next;
+      });
+    });
+  }, [importRows]);
+
   const updateImportRow = (index: number, field: keyof typeof importRows[0], value: string) => {
     setImportRows((prev) =>
       prev.map((r, i) => (i === index ? { ...r, [field]: field === 'phone' ? digitsOnly(value).slice(0, 10) : value } : r))
@@ -302,6 +424,24 @@ export const AdminStudentsPage: React.FC = () => {
     setImporting(true);
     let success = 0;
     let failed = 0;
+    const unitToFormIds = new Map<string, number[]>();
+    const qualToFormIds = new Map<string, number[]>();
+    for (const f of displayForms) {
+      const unit = String((f as unknown as { unit_code?: string | null }).unit_code ?? '').trim().toUpperCase();
+      if (unit) {
+        const list = unitToFormIds.get(unit) ?? [];
+        list.push(Number(f.id));
+        unitToFormIds.set(unit, list);
+      }
+      const qual = String((f as unknown as { qualification_code?: string | null }).qualification_code ?? '').trim().toUpperCase();
+      if (qual) {
+        const list = qualToFormIds.get(qual) ?? [];
+        list.push(Number(f.id));
+        qualToFormIds.set(qual, list);
+      }
+    }
+    const importStudentsForPdf: Array<{ id: number; name: string; email: string }> = [];
+    const importFormIdsForPdf = new Set<number>();
     for (const row of importRows) {
       const first = row.first_name?.trim();
       const email = row.email?.trim();
@@ -309,18 +449,72 @@ export const AdminStudentsPage: React.FC = () => {
         failed++;
         continue;
       }
-      const studentId = row.student_id?.trim() || (email.includes('@') ? email.split('@')[0] : `${(first + '.' + row.last_name).toLowerCase().replace(/\s+/g, '.')}`);
+      const emailKey = email.trim().toLowerCase();
+      const existingStudent = importExistingByEmail[emailKey];
+      const candidateStudentId = row.student_id?.trim()
+        || (email.includes('@') ? email.split('@')[0] : `${(first + '.' + row.last_name).toLowerCase().replace(/\s+/g, '.')}`);
       const batchId = importBatchId ? Number(importBatchId) : null;
-      const created = await createStudent({
-        student_id: studentId.replace(/\s+/g, ''),
-        first_name: first,
-        last_name: row.last_name ?? '',
-        email,
-        phone: row.phone || undefined,
-        batch_id: (batchId && Number.isFinite(batchId)) ? batchId : undefined,
-      });
-      if (created) success++;
-      else failed++;
+      let student: Student | null = existingStudent ?? null;
+      if (student == null) {
+        const created = await createStudent({
+          student_id: candidateStudentId.replace(/\s+/g, ''),
+          first_name: first,
+          last_name: row.last_name ?? '',
+          email,
+          phone: row.phone || undefined,
+          batch_id: (batchId && Number.isFinite(batchId)) ? batchId : undefined,
+        });
+        if (!created) {
+          failed++;
+          continue;
+        }
+        student = created;
+      } else {
+        const decision = importIdDecisionByEmail[emailKey] ?? 'keep_existing';
+        const studentIdToSet = decision === 'use_new' ? candidateStudentId : (student.student_id ?? candidateStudentId);
+        const updated = await updateStudent(student.id, {
+          student_id: studentIdToSet,
+          first_name: first,
+          last_name: row.last_name ?? '',
+          phone: row.phone || undefined,
+          batch_id: (batchId && Number.isFinite(batchId)) ? batchId : undefined,
+        });
+        if (updated) student = updated;
+      }
+
+      // Create/update assessment(s) if unit_code or qualification_code matches forms.
+      const unit = String(row.unit_code ?? '').trim().toUpperCase();
+      const qual = String(row.qualification_code ?? '').trim().toUpperCase();
+      const matchedFormIds =
+        (unit && unitToFormIds.get(unit)) ||
+        (qual && qualToFormIds.get(qual)) ||
+        [];
+      const start = (row.activity_start_date ?? '').trim() || '';
+      const end = (row.activity_end_date ?? '').trim() || '';
+      if (student?.id && matchedFormIds.length > 0) {
+        for (const formId of matchedFormIds) {
+          if (!Number.isFinite(formId) || formId <= 0) continue;
+          importFormIdsForPdf.add(formId);
+          const existing = await getInstanceForStudentAndForm(formId, student.id);
+          if (!existing) {
+            const created = await createFormInstance(formId, 'student', student.id, { start_date: start || null, end_date: end || null });
+            if (created?.id && end) await extendInstanceAccessTokensToDate(created.id, 'student', end);
+          } else {
+            await updateFormInstanceDates(existing.id, { start_date: start || null, end_date: end || null });
+            if (end) await extendInstanceAccessTokensToDate(existing.id, 'student', end);
+          }
+        }
+      }
+
+      if (student?.id && student.email) {
+        importStudentsForPdf.push({
+          id: student.id,
+          name: [student.first_name, student.last_name].filter(Boolean).join(' ').trim() || student.email,
+          email: student.email,
+        });
+      }
+
+      success++;
     }
     setImporting(false);
     if (success > 0) {
@@ -328,13 +522,60 @@ export const AdminStudentsPage: React.FC = () => {
       const res = await listStudentsPaged(1, PAGE_SIZE, searchTerm, statusFilter || undefined);
       setStudents(res.data);
       setTotalStudents(res.total);
-      setImportRows([]);
-      setImportFileName('');
-      setIsImportOpen(false);
-      toast.success(`${success} student${success !== 1 ? 's' : ''} imported.${failed > 0 ? ` ${failed} failed (may be duplicates).` : ''}`);
+      const createdAtIso = new Date().toISOString();
+      const bid = importBatchId ? Number(importBatchId) : null;
+      const uniqueStudents = Array.from(
+        new Map(importStudentsForPdf.map((s) => [s.id, s])).values()
+      );
+      const formsForPdf = Array.from(importFormIdsForPdf).map((fid) => {
+        const f = displayForms.find((x) => Number(x.id) === fid);
+        return {
+          id: fid,
+          name: f?.name ?? `Form #${fid}`,
+          version: (f as unknown as { version?: string | null } | undefined)?.version ?? null,
+          url: `${window.location.origin}/forms/${fid}/student-access`,
+        };
+      });
+      setLastImportLinksPayload({
+        createdAtIso,
+        batchId: bid && Number.isFinite(bid) ? bid : null,
+        forms: formsForPdf,
+        students: uniqueStudents,
+      });
+
+      toast.success(
+        `${success} student${success !== 1 ? 's' : ''} imported.${failed > 0 ? ` ${failed} failed.` : ''} You can download the generic links PDF.`
+      );
     } else {
       toast.error(failed > 0 ? `Import failed for all ${failed} rows. Check for duplicate emails or Student IDs.` : 'No valid rows to import.');
     }
+  };
+
+  const downloadLastImportPdf = async () => {
+    if (!lastImportLinksPayload) return;
+    const bid = lastImportLinksPayload.batchId;
+    const batchName = bid ? `Batch #${bid}` : 'No batch';
+    await registerPdfFonts();
+    const doc = (
+      <GenericLinksPdf
+        title="Student import – generic links"
+        courseName=""
+        batchName={batchName}
+        createdAtIso={lastImportLinksPayload.createdAtIso}
+        forms={lastImportLinksPayload.forms}
+        students={lastImportLinksPayload.students}
+      />
+    );
+    const asPdf = pdf(doc);
+    const blob = await asPdf.toBlob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `student-import-links-${(bid ? `batch-${bid}` : 'no-batch')}-${lastImportLinksPayload.createdAtIso.slice(0, 10)}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   const openSendDates = (studentId: number) => {
@@ -512,6 +753,17 @@ export const AdminStudentsPage: React.FC = () => {
                 <Upload className="w-4 h-4 mr-2 inline" />
                 Import Students
               </Button>
+              {lastImportLinksPayload && (
+                <Button
+                  variant="outline"
+                  onClick={() => void downloadLastImportPdf()}
+                  className="shrink-0"
+                  title="Download generic links PDF from last import"
+                >
+                  <FileText className="w-4 h-4 mr-2 inline" />
+                  Download import PDF
+                </Button>
+              )}
             </div>
           </div>
         </Card>
@@ -765,7 +1017,7 @@ export const AdminStudentsPage: React.FC = () => {
       <Modal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} title="Import Students" size="lg">
         <div className="space-y-4">
           <p className="text-sm text-gray-600">
-            Upload a CSV or XLSX file with columns: <strong>First Name</strong>, <strong>Last Name</strong>, <strong>Email</strong>, <strong>Phone</strong>. Optional: <strong>Student ID</strong>.
+            Upload a CSV or XLSX file with columns: <strong>Given Name</strong>, <strong>Surname</strong> (optional), <strong>Email Address</strong>, <strong>Mobile Phone</strong>, <strong>Qualification Code</strong>, <strong>Activity Start Date</strong>, <strong>Activity End Date</strong>. Optional: <strong>Student ID</strong>, <strong>Unit Code</strong>.
           </p>
           <div className="flex flex-wrap items-center gap-3">
             <label className="cursor-pointer inline-flex">
@@ -796,27 +1048,45 @@ export const AdminStudentsPage: React.FC = () => {
                   className="w-full max-w-[300px]"
                 />
               </div>
+              <div className="rounded-lg border border-gray-200 bg-white p-3">
+                <div className="text-xs text-gray-600 font-medium">Duplicates / ID changes</div>
+                <div className="text-xs text-gray-500 mt-1">
+                  If a student with the same email already exists, you can choose whether to keep their current Student ID or replace it with the new one from the file.
+                </div>
+              </div>
               <p className="text-xs text-gray-500">Edit records before importing. Remove rows you don&apos;t want.</p>
-              <div className="max-h-[280px] overflow-x-auto overflow-y-auto border border-gray-200 rounded-lg">
-                <table className="w-full text-sm min-w-[520px]">
+              <div className="max-h-[320px] overflow-x-auto overflow-y-auto border border-gray-200 rounded-lg">
+                <table className="w-full text-sm table-auto min-w-[1900px]">
                   <thead className="bg-gray-50 sticky top-0">
                     <tr>
-                      <th className="text-left px-2 py-2 font-semibold w-[22%]">First Name</th>
-                      <th className="text-left px-2 py-2 font-semibold w-[22%]">Last Name</th>
-                      <th className="text-left px-2 py-2 font-semibold w-[36%]">Email</th>
-                      <th className="text-left px-2 py-2 font-semibold w-[12%]">Phone</th>
+                      <th className="text-left px-2 py-2 font-semibold">First Name</th>
+                      <th className="text-left px-2 py-2 font-semibold">Last Name</th>
+                      <th className="text-left px-2 py-2 font-semibold">Email</th>
+                      <th className="text-left px-2 py-2 font-semibold">Phone</th>
+                      <th className="text-left px-2 py-2 font-semibold">Qualification Code</th>
+                      <th className="text-left px-2 py-2 font-semibold">Activity Start</th>
+                      <th className="text-left px-2 py-2 font-semibold">Activity End</th>
+                      <th className="text-left px-2 py-2 font-semibold">If exists</th>
                       <th className="w-10 px-2 py-2"></th>
                     </tr>
                   </thead>
                   <tbody>
                     {importRows.map((r, i) => (
+                      (() => {
+                        const emailKey = String(r.email ?? '').trim().toLowerCase();
+                        const existing = importExistingByEmail[emailKey];
+                        const candidateId = (r.student_id ?? '').trim() || (r.email?.includes('@') ? r.email.split('@')[0] : '');
+                        const existingId = (existing?.student_id ?? '').trim();
+                        const hasConflict = !!existing && !!candidateId && !!existingId && candidateId !== existingId;
+                        const decision = importIdDecisionByEmail[emailKey] ?? 'keep_existing';
+                        return (
                       <tr key={i} className="border-t border-gray-100 hover:bg-gray-50/50">
                         <td className="px-2 py-1.5">
                           <Input
                             value={r.first_name}
                             onChange={(e) => updateImportRow(i, 'first_name', e.target.value)}
                             placeholder="First name"
-                            className="text-sm py-1.5 min-h-0"
+                            className="text-sm py-1.5 min-h-0 w-[220px]"
                           />
                         </td>
                         <td className="px-2 py-1.5">
@@ -824,7 +1094,7 @@ export const AdminStudentsPage: React.FC = () => {
                             value={r.last_name}
                             onChange={(e) => updateImportRow(i, 'last_name', e.target.value)}
                             placeholder="Last name"
-                            className="text-sm py-1.5 min-h-0"
+                            className="text-sm py-1.5 min-h-0 w-[220px]"
                           />
                         </td>
                         <td className="px-2 py-1.5 min-w-[140px]">
@@ -832,7 +1102,7 @@ export const AdminStudentsPage: React.FC = () => {
                             value={r.email}
                             onChange={(e) => updateImportRow(i, 'email', e.target.value)}
                             placeholder="Email"
-                            className="text-sm py-1.5 min-h-0 w-full min-w-0"
+                            className="text-sm py-1.5 min-h-0 w-[360px]"
                           />
                         </td>
                         <td className="px-2 py-1.5">
@@ -840,8 +1110,65 @@ export const AdminStudentsPage: React.FC = () => {
                             value={r.phone}
                             onChange={(e) => updateImportRow(i, 'phone', e.target.value)}
                             placeholder="Phone"
-                            className="text-sm py-1.5 min-h-0"
+                            className="text-sm py-1.5 min-h-0 w-[160px]"
                           />
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <Input
+                            value={r.qualification_code ?? ''}
+                            onChange={(e) => updateImportRow(i, 'qualification_code', e.target.value)}
+                            placeholder="Qualification code"
+                            className="text-sm py-1.5 min-h-0 w-[220px]"
+                          />
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <Input
+                            value={r.activity_start_date ?? ''}
+                            onChange={(e) => updateImportRow(i, 'activity_start_date', e.target.value)}
+                            placeholder="YYYY-MM-DD"
+                            className="text-sm py-1.5 min-h-0 w-[200px]"
+                          />
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <Input
+                            value={r.activity_end_date ?? ''}
+                            onChange={(e) => updateImportRow(i, 'activity_end_date', e.target.value)}
+                            placeholder="YYYY-MM-DD"
+                            className="text-sm py-1.5 min-h-0 w-[200px]"
+                          />
+                        </td>
+                        <td className="px-2 py-1.5">
+                          {!existing ? (
+                            <span className="text-xs text-gray-500">New</span>
+                          ) : !hasConflict ? (
+                            <span className="text-xs text-emerald-700">Exists</span>
+                          ) : (
+                            <div className="space-y-1">
+                              <div className="text-[11px] text-amber-700">
+                                ID differs: <span className="font-medium">{existingId}</span> → <span className="font-medium">{candidateId}</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <label className="inline-flex items-center gap-1.5 text-[11px] text-gray-700">
+                                  <input
+                                    type="radio"
+                                    name={`id-decision-${i}`}
+                                    checked={decision === 'keep_existing'}
+                                    onChange={() => setImportIdDecisionByEmail((p) => ({ ...p, [emailKey]: 'keep_existing' }))}
+                                  />
+                                  Keep
+                                </label>
+                                <label className="inline-flex items-center gap-1.5 text-[11px] text-gray-700">
+                                  <input
+                                    type="radio"
+                                    name={`id-decision-${i}`}
+                                    checked={decision === 'use_new'}
+                                    onChange={() => setImportIdDecisionByEmail((p) => ({ ...p, [emailKey]: 'use_new' }))}
+                                  />
+                                  Use new
+                                </label>
+                              </div>
+                            </div>
+                          )}
                         </td>
                         <td className="px-2 py-1.5">
                           <button
@@ -854,12 +1181,20 @@ export const AdminStudentsPage: React.FC = () => {
                           </button>
                         </td>
                       </tr>
+                        );
+                      })()
                     ))}
                   </tbody>
                 </table>
               </div>
               <div className="flex justify-end gap-2 pt-2">
-                <Button variant="outline" onClick={() => setIsImportOpen(false)}>Cancel</Button>
+                {lastImportLinksPayload && (
+                  <Button variant="outline" onClick={() => void downloadLastImportPdf()}>
+                    <FileText className="w-4 h-4 mr-2 inline" />
+                    Download PDF
+                  </Button>
+                )}
+                <Button variant="outline" onClick={() => setIsImportOpen(false)}>Close</Button>
                 <Button
                   onClick={handleBulkImport}
                   disabled={importing}

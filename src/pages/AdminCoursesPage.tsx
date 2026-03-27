@@ -43,8 +43,13 @@ export const AdminCoursesPage: React.FC = () => {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
-  const [draft, setDraft] = useState({ name: '' });
-  const [editDraft, setEditDraft] = useState<{ name: string; form_ids: number[]; batch_ids: number[] } | null>(null);
+  const [draft, setDraft] = useState({ name: '', qualification_code: '' });
+  const [editDraft, setEditDraft] = useState<{
+    name: string;
+    qualification_code: string;
+    form_ids: number[];
+    batch_ids: number[];
+  } | null>(null);
 
   const [sendCourseId, setSendCourseId] = useState<number | null>(null);
   const [sendOpen, setSendOpen] = useState(false);
@@ -364,11 +369,11 @@ export const AdminCoursesPage: React.FC = () => {
       return;
     }
     setCreating(true);
-    const created = await createCourse(draft.name.trim());
+    const created = await createCourse(draft.name.trim(), draft.qualification_code);
     setCreating(false);
     if (created) {
       await loadCourses(currentPage);
-      setDraft({ name: '' });
+      setDraft({ name: '', qualification_code: '' });
       setIsCreateOpen(false);
       toast.success('Course added');
     } else {
@@ -388,6 +393,7 @@ export const AdminCoursesPage: React.FC = () => {
     ]).then(([courseForms, courseBatches]) => {
       setEditDraft({
         name: editingCourse.name,
+        qualification_code: (editingCourse.qualification_code ?? '').trim(),
         form_ids: courseForms.map((f) => f.id),
         batch_ids: courseBatches.map((b) => b.id),
       });
@@ -401,7 +407,10 @@ export const AdminCoursesPage: React.FC = () => {
       return;
     }
     setSavingEdit(true);
-    const updated = await updateCourse(editingId, { name: editDraft.name.trim() });
+    const updated = await updateCourse(editingId, {
+      name: editDraft.name.trim(),
+      qualification_code: editDraft.qualification_code,
+    });
     const formsOk = await setCourseForms(editingId, editDraft.form_ids);
     const batchesOk = await setCourseBatches(editingId, editDraft.batch_ids);
     setSavingEdit(false);
@@ -429,10 +438,24 @@ export const AdminCoursesPage: React.FC = () => {
   };
 
   const [formCountMap, setFormCountMap] = useState<Record<number, number>>({});
+  const [qualificationCodeMap, setQualificationCodeMap] = useState<Record<number, string>>({});
   useEffect(() => {
     if (courses.length === 0) return;
-    Promise.all(courses.map(async (c) => [c.id, (await getFormsForCourse(c.id, { asAdmin: true })).length] as const)).then((pairs) => {
-      setFormCountMap(Object.fromEntries(pairs));
+    Promise.all(
+      courses.map(async (c) => {
+        const forms = await getFormsForCourse(c.id, { asAdmin: true });
+        const codes = Array.from(
+          new Set(
+            forms
+              .map((f) => String((f as { qualification_code?: string | null }).qualification_code ?? '').trim())
+              .filter(Boolean)
+          )
+        );
+        return [c.id, forms.length, codes.join(', ')] as const;
+      })
+    ).then((rows) => {
+      setFormCountMap(Object.fromEntries(rows.map(([id, count]) => [id, count])));
+      setQualificationCodeMap(Object.fromEntries(rows.map(([id, _count, codes]) => [id, codes || '-'])));
     });
   }, [courses]);
 
@@ -489,10 +512,11 @@ export const AdminCoursesPage: React.FC = () => {
             <p className="text-gray-500">No courses yet. Create a course and assign forms to it.</p>
           ) : (
             <div className="overflow-x-auto">
-              <table className="min-w-[600px] w-full text-sm border border-[var(--border)] rounded-lg overflow-hidden">
+              <table className="min-w-[760px] w-full text-sm border border-[var(--border)] rounded-lg overflow-hidden">
                 <thead className="bg-gray-50 text-gray-700">
                   <tr>
                     <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Course</th>
+                    <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Qualification Code</th>
                     <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Forms</th>
                     <th className="text-right px-4 py-3 font-semibold border-b border-[var(--border)]">Action</th>
                   </tr>
@@ -505,6 +529,9 @@ export const AdminCoursesPage: React.FC = () => {
                           <FileText className="w-4 h-4 text-gray-400" />
                           <span className="font-medium">{course.name}</span>
                         </div>
+                      </td>
+                      <td className="px-4 py-3 border-b border-[var(--border)] text-gray-700">
+                        {course.qualification_code?.trim() || qualificationCodeMap[course.id] || '-'}
                       </td>
                       <td className="px-4 py-3 border-b border-[var(--border)] text-gray-700">
                         {formCountMap[course.id] ?? '...'} form{formCountMap[course.id] !== 1 ? 's' : ''}
@@ -588,6 +615,15 @@ export const AdminCoursesPage: React.FC = () => {
               className="mt-1"
             />
           </label>
+          <label className="block">
+            <span className="text-sm font-medium text-gray-700">Qualification code</span>
+            <Input
+              value={draft.qualification_code}
+              onChange={(e) => setDraft((p) => ({ ...p, qualification_code: e.target.value }))}
+              placeholder="e.g. CPC30620"
+              className="mt-1"
+            />
+          </label>
         </div>
         <div className="flex items-center justify-end gap-2 pt-4 mt-4 border-t border-[var(--border)]">
           <Button variant="outline" onClick={() => setIsCreateOpen(false)} disabled={creating}>
@@ -613,6 +649,17 @@ export const AdminCoursesPage: React.FC = () => {
                 value={editDraft.name}
                 onChange={(e) => setEditDraft((p) => (p ? { ...p, name: e.target.value } : null))}
                 placeholder="e.g. Certificate III in Painting"
+                className="mt-1"
+              />
+            </label>
+            <label className="block">
+              <span className="text-sm font-medium text-gray-700">Qualification code</span>
+              <Input
+                value={editDraft.qualification_code}
+                onChange={(e) =>
+                  setEditDraft((p) => (p ? { ...p, qualification_code: e.target.value } : null))
+                }
+                placeholder="e.g. CPC30620"
                 className="mt-1"
               />
             </label>

@@ -9,6 +9,7 @@ import { Input } from '../components/ui/Input';
 import { SelectAsync } from '../components/ui/SelectAsync';
 import { Modal } from '../components/ui/Modal';
 import { Loader } from '../components/ui/Loader';
+import { toast } from '../utils/toast';
 
 export const AdminFormsListPage: React.FC = () => {
   const PAGE_SIZE = 20;
@@ -29,6 +30,7 @@ export const AdminFormsListPage: React.FC = () => {
   const [duplicating, setDuplicating] = useState<number | null>(null);
   const [togglingActive, setTogglingActive] = useState<number | null>(null);
   const [openMenuId, setOpenMenuId] = useState<number | null>(null);
+  const [openMenuPlacement, setOpenMenuPlacement] = useState<'up' | 'down'>('down');
   const [courseFilter, setCourseFilter] = useState<string>('');
   const [searchTerm, setSearchTerm] = useState('');
   const [formCoursesMap, setFormCoursesMap] = useState<Map<number, { id: number; name: string }[]>>(new Map());
@@ -117,6 +119,38 @@ export const AdminFormsListPage: React.FC = () => {
     }
   };
 
+  const handleCopyGenericLink = async (formId: number) => {
+    const url = `${window.location.origin}/forms/${formId}/student-access`;
+    await navigator.clipboard.writeText(url);
+    toast.success('Generic student link copied');
+    setOpenMenuId(null);
+  };
+
+  const toggleMenuFor = (formId: number, triggerEl: HTMLElement | null) => {
+    if (openMenuId === formId) {
+      setOpenMenuId(null);
+      return;
+    }
+    // Decide whether to open up or down based on viewport space.
+    try {
+      const rect = triggerEl?.getBoundingClientRect?.();
+      if (rect) {
+        const viewportH = window.innerHeight || document.documentElement.clientHeight || 0;
+        const margin = 8;
+        const spaceBelow = Math.max(0, viewportH - rect.bottom - margin);
+        const spaceAbove = Math.max(0, rect.top - margin);
+        // Approx menu height ~110; if not enough below and more above, open up.
+        const openUp = spaceBelow < 140 && spaceAbove > spaceBelow;
+        setOpenMenuPlacement(openUp ? 'up' : 'down');
+      } else {
+        setOpenMenuPlacement('down');
+      }
+    } catch {
+      setOpenMenuPlacement('down');
+    }
+    setOpenMenuId(formId);
+  };
+
   const handleToggleActive = async (formId: number, currentlyActive: boolean) => {
     setTogglingActive(formId);
     const { error } = await updateForm(formId, { active: !currentlyActive });
@@ -193,7 +227,8 @@ export const AdminFormsListPage: React.FC = () => {
             <p className="text-gray-500 py-8">No forms yet. Click "Add Form" to create one.</p>
           ) : (
             <div className="overflow-x-auto">
-              <table className="min-w-[700px] w-full text-sm border border-[var(--border)] rounded-lg overflow-hidden">
+              <div className="min-w-[700px] border border-[var(--border)] rounded-lg overflow-visible">
+              <table className="w-full text-sm">
                 <thead className="bg-gray-50 text-gray-700">
                   <tr>
                     <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Form Name</th>
@@ -265,7 +300,7 @@ export const AdminFormsListPage: React.FC = () => {
                               size="sm"
                               className="inline-flex w-9 shrink-0 items-center justify-center !px-0"
                               data-menu-trigger
-                              onClick={() => setOpenMenuId(openMenuId === form.id ? null : form.id)}
+                              onClick={(e) => toggleMenuFor(form.id, e.currentTarget)}
                               disabled={duplicating !== null}
                               aria-label="More options"
                             >
@@ -276,7 +311,22 @@ export const AdminFormsListPage: React.FC = () => {
                               )}
                             </Button>
                             {openMenuId === form.id && (
-                              <div className="absolute right-0 top-full mt-1 z-10 min-w-[140px] rounded-md border border-[var(--border)] bg-white py-1 shadow-lg" role="menu">
+                              <div
+                                className={`absolute right-0 z-50 min-w-[190px] rounded-md border border-[var(--border)] bg-white py-1 shadow-lg ${
+                                  openMenuPlacement === 'up' ? 'bottom-full mb-1' : 'top-full mt-1'
+                                }`}
+                                role="menu"
+                              >
+                                <button
+                                  type="button"
+                                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--text)] hover:bg-gray-100"
+                                  onClick={() => void handleCopyGenericLink(form.id)}
+                                  role="menuitem"
+                                >
+                                  <Copy className="w-4 h-4" />
+                                  Copy generic link
+                                </button>
+                                <div className="my-1 h-px bg-gray-100" />
                                 <button
                                   type="button"
                                   className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--text)] hover:bg-gray-100"
@@ -295,6 +345,7 @@ export const AdminFormsListPage: React.FC = () => {
                   ))}
                 </tbody>
               </table>
+              </div>
             </div>
           )}
           {!loading && totalForms > PAGE_SIZE && (

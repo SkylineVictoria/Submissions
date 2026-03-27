@@ -1,25 +1,26 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Copy, ExternalLink, Send, RefreshCw, Ban, CheckCircle, User, CalendarClock, CalendarDays } from 'lucide-react';
-import { listSubmittedInstancesPaged, updateInstanceRole, updateInstanceWorkflowStatus, issueInstanceAccessLink, getOrIssueInstanceAccessLink, revokeRoleAccessTokens, extendInstanceAccessTokens, extendInstanceAccessTokensToDate, allowStudentResubmission, listTrainers, updateFormInstanceDates } from '../lib/formEngine';
+import { listSubmittedInstancesPaged, updateInstanceRole, updateInstanceWorkflowStatus, issueInstanceAccessLink, getOrIssueInstanceAccessLink, revokeRoleAccessTokens, extendInstanceAccessTokens, extendInstanceAccessTokensToDate, allowStudentResubmission, listTrainers, updateFormInstanceDates, listCoursesPaged, listFormsPaged } from '../lib/formEngine';
 import type { SubmittedInstanceRow, Trainer } from '../lib/formEngine';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { DatePicker } from '../components/ui/DatePicker';
+import { SelectAsync } from '../components/ui/SelectAsync';
 import { Loader } from '../components/ui/Loader';
 import { Modal } from '../components/ui/Modal';
 import { toast } from '../utils/toast';
 
-const formatDateTime = (value: string | null): string => {
-  if (!value) return '-';
-  const dt = new Date(value);
-  if (Number.isNaN(dt.getTime())) return '-';
-  return dt.toLocaleString();
-};
+const pad2 = (n: number) => String(n).padStart(2, '0');
 
-const formatDate = (value: string | null): string => {
+const formatDDMMYYYY = (value: string | null): string => {
   const v = (value ?? '').trim();
-  return v ? v : '-';
+  if (!v) return '-';
+  const m = v.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[3]}/${m[2]}/${m[1]}`;
+  const dt = new Date(v);
+  if (Number.isNaN(dt.getTime())) return v;
+  return `${pad2(dt.getDate())}/${pad2(dt.getMonth() + 1)}/${dt.getFullYear()}`;
 };
 
 const getWorkflowLabel = (row: SubmittedInstanceRow): string => {
@@ -49,6 +50,8 @@ export const AdminAssessmentsPage: React.FC = () => {
   const [sendingId, setSendingId] = useState<number | null>(null);
   const [managingId, setManagingId] = useState<number | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [courseFilter, setCourseFilter] = useState('');
+  const [formFilter, setFormFilter] = useState('');
   const [sendToTrainerRow, setSendToTrainerRow] = useState<SubmittedInstanceRow | null>(null);
   const [trainers, setTrainers] = useState<Trainer[]>([]);
   const [trainersLoading, setTrainersLoading] = useState(false);
@@ -63,18 +66,39 @@ export const AdminAssessmentsPage: React.FC = () => {
 
   const loadRows = useCallback(async (page: number, search: string, opts?: { silent?: boolean }) => {
     if (!opts?.silent) setLoading(true);
-    const res = await listSubmittedInstancesPaged(page, PAGE_SIZE, search);
+    const courseId = courseFilter ? Number(courseFilter) : undefined;
+    const formId = formFilter ? Number(formFilter) : undefined;
+    const res = await listSubmittedInstancesPaged(page, PAGE_SIZE, search, courseId, formId);
     setRows(res.data);
     setTotalRows(res.total);
     setLoading(false);
+  }, [courseFilter, formFilter]);
+
+  const loadCoursesOptions = useCallback(async (page: number, search: string) => {
+    const res = await listCoursesPaged(page, 20, search ? search.trim() : undefined);
+    const opts = res.data.map((c) => ({ value: String(c.id), label: c.name }));
+    const withAll = page === 1 && !search?.trim() ? [{ value: '', label: 'All courses' }, ...opts] : opts;
+    return { options: withAll, hasMore: page * 20 < res.total };
   }, []);
+
+  const loadFormsOptions = useCallback(async (page: number, search: string) => {
+    const cid = courseFilter ? Number(courseFilter) : undefined;
+    const res = await listFormsPaged(page, 20, undefined, cid, search || undefined, { asAdmin: true });
+    const opts = res.data.map((f) => ({ value: String(f.id), label: `${f.name} (v${f.version ?? '1.0.0'})` }));
+    const withAll = page === 1 && !search?.trim() ? [{ value: '', label: 'All forms' }, ...opts] : opts;
+    return { options: withAll, hasMore: page * 20 < res.total };
+  }, [courseFilter]);
 
   useEffect(() => {
     const t = setTimeout(() => {
       loadRows(currentPage, searchTerm);
     }, 250);
     return () => clearTimeout(t);
-  }, [currentPage, searchTerm, loadRows]);
+  }, [currentPage, searchTerm, courseFilter, formFilter, loadRows]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, courseFilter, formFilter]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -196,14 +220,14 @@ export const AdminAssessmentsPage: React.FC = () => {
     <div className="min-h-screen bg-[var(--bg)]">
       <div className="w-full px-4 md:px-6 lg:px-8 py-6">
         <Card className="mb-6">
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+          <div className="space-y-4">
             <div>
               <h2 className="text-lg font-bold text-[var(--text)]">Assessments</h2>
               <p className="text-sm text-gray-600 mt-1">
                 View all assessments sent to students (pending and submitted) and send completed ones to trainer.
               </p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-col lg:flex-row lg:flex-nowrap lg:items-center lg:justify-start gap-2 lg:gap-2">
               <Input
                 value={searchTerm}
                 onChange={(e) => {
@@ -211,14 +235,35 @@ export const AdminAssessmentsPage: React.FC = () => {
                   setCurrentPage(1);
                 }}
                 placeholder="Search student, form, or workflow..."
-                className="w-[260px]"
+                className="w-full lg:flex-1 lg:min-w-[220px] lg:max-w-none"
               />
+              <div className="w-full lg:w-52 lg:shrink-0">
+                <SelectAsync
+                  value={courseFilter}
+                  onChange={(v) => {
+                    setCourseFilter(v);
+                    setFormFilter('');
+                  }}
+                  loadOptions={loadCoursesOptions}
+                  placeholder="All courses"
+                  selectedLabel={courseFilter ? undefined : 'All courses'}
+                />
+              </div>
+              <div className="w-full lg:w-60 lg:shrink-0">
+                <SelectAsync
+                  value={formFilter}
+                  onChange={(v) => setFormFilter(v)}
+                  loadOptions={loadFormsOptions}
+                  placeholder="All forms"
+                  selectedLabel={formFilter ? undefined : 'All forms'}
+                />
+              </div>
               <Button
                 type="button"
                 variant="outline"
                 onClick={handleRefresh}
                 disabled={refreshing}
-                className="inline-flex items-center gap-2 whitespace-nowrap"
+                className="inline-flex items-center justify-center gap-2 whitespace-nowrap w-full lg:w-auto"
               >
                 <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
                 <span>Refresh</span>
@@ -259,9 +304,9 @@ export const AdminAssessmentsPage: React.FC = () => {
                         <div className="font-medium text-gray-900">{row.form_name}</div>
                         <div className="text-xs text-gray-500">Version {row.form_version ?? '1.0.0'}</div>
                       </td>
-                      <td className="py-3 pr-3 text-gray-700">{formatDate(row.start_date)}</td>
-                      <td className="py-3 pr-3 text-gray-700">{formatDate(row.end_date)}</td>
-                      <td className="py-3 pr-3 text-gray-700">{formatDateTime(row.submitted_at || row.created_at)}</td>
+                      <td className="py-3 pr-3 text-gray-700">{formatDDMMYYYY(row.start_date)}</td>
+                      <td className="py-3 pr-3 text-gray-700">{formatDDMMYYYY(row.end_date)}</td>
+                      <td className="py-3 pr-3 text-gray-700">{formatDDMMYYYY(row.submitted_at || row.created_at)}</td>
                       <td className="py-3 pr-3">
                         <span className={`inline-flex rounded-md px-2.5 py-1 text-xs font-medium ${getWorkflowBadgeClass(row)}`}>
                           {getWorkflowLabel(row)}

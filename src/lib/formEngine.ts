@@ -1813,6 +1813,36 @@ export async function listStudentsPaged(
   };
 }
 
+export async function getStudentsByEmails(emails: string[]): Promise<Student[]> {
+  const cleaned = Array.from(
+    new Set(
+      (emails || [])
+        .map((e) => String(e ?? '').trim().toLowerCase())
+        .filter(Boolean)
+    )
+  );
+  if (cleaned.length === 0) return [];
+  const out: Student[] = [];
+  const chunkSize = 200;
+  for (let i = 0; i < cleaned.length; i += chunkSize) {
+    const chunk = cleaned.slice(i, i + chunkSize);
+    const { data, error } = await supabase
+      .from('skyline_students')
+      .select('*, skyline_batches(name)')
+      .in('email', chunk);
+    if (error) {
+      console.error('getStudentsByEmails error', error);
+      continue;
+    }
+    const rows = ((data as Record<string, unknown>[]) || []).map((r) => {
+      const batch = r.skyline_batches as { name?: string } | null;
+      return mapStudentRow({ ...r, batch_name: batch?.name ?? null });
+    });
+    out.push(...rows);
+  }
+  return out;
+}
+
 export async function listSubmittedInstances(): Promise<SubmittedInstanceRow[]> {
   const { data: instances, error } = await supabase
     .from('skyline_form_instances')
@@ -1900,7 +1930,9 @@ export async function listSubmittedInstances(): Promise<SubmittedInstanceRow[]> 
 export async function listSubmittedInstancesPaged(
   page = 1,
   pageSize = 20,
-  search?: string
+  search?: string,
+  courseId?: number,
+  formId?: number
 ): Promise<PaginatedResult<SubmittedInstanceRow>> {
   const from = Math.max(0, (page - 1) * pageSize);
   const to = from + pageSize - 1;
@@ -1909,6 +1941,31 @@ export async function listSubmittedInstancesPaged(
     .select('id, form_id, student_id, status, role_context, created_at, submitted_at, submission_count, start_date, end_date', { count: 'exact' })
     .not('student_id', 'is', null)
     .order('created_at', { ascending: false });
+
+  const normalizedFormId = Number.isFinite(Number(formId)) && Number(formId) > 0 ? Number(formId) : null;
+  if (normalizedFormId) {
+    query = query.eq('form_id', normalizedFormId);
+  }
+
+  const normalizedCourseId = Number.isFinite(Number(courseId)) && Number(courseId) > 0 ? Number(courseId) : null;
+  if (normalizedCourseId) {
+    const { data: links } = await supabase
+      .from('skyline_course_forms')
+      .select('form_id')
+      .eq('course_id', normalizedCourseId);
+    const courseFormIds = Array.from(
+      new Set(
+        ((links as Array<{ form_id: number }> | null) ?? [])
+          .map((r) => Number(r.form_id))
+          .filter((n) => Number.isFinite(n) && n > 0)
+      )
+    );
+    if (courseFormIds.length === 0) return { data: [], total: 0, page, pageSize };
+    if (normalizedFormId && !courseFormIds.includes(normalizedFormId)) {
+      return { data: [], total: 0, page, pageSize };
+    }
+    query = query.in('form_id', courseFormIds);
+  }
 
   const q = (search ?? '').trim();
   if (q) {
@@ -3205,6 +3262,8 @@ export async function listFormsPaged(
 export interface Course {
   id: number;
   name: string;
+  /** Stored on the course row; may be absent from API before migration. */
+  qualification_code?: string | null;
   sort_order: number;
   created_at: string;
 }
@@ -3242,8 +3301,10 @@ export async function listCoursesPaged(
     .select('*', { count: 'exact' })
     .order('sort_order', { ascending: true })
     .order('name', { ascending: true });
-  if (search && search.trim()) {
-    query = query.ilike('name', `%${search.trim()}%`);
+  const q = (search ?? '').trim();
+  if (q) {
+    const like = `%${q.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')}%`;
+    query = query.or(`name.ilike.${like},qualification_code.ilike.${like}`);
   }
   const { data, error, count } = await query.range(from, to);
   if (error) {
@@ -3258,13 +3319,17 @@ export async function listCoursesPaged(
   };
 }
 
-export async function createCourse(name: string): Promise<Course | null> {
+export async function createCourse(
+  name: string,
+  qualificationCode?: string | null
+): Promise<Course | null> {
   const trimmed = name.trim();
   if (!trimmed) return null;
+  const code = (qualificationCode ?? '').trim() || null;
   const { created_by } = getAuditFields();
   const { data, error } = await supabase
     .from('skyline_courses')
-    .insert({ name: trimmed, created_by })
+    .insert({ name: trimmed, qualification_code: code, created_by })
     .select('*')
     .single();
   if (error) {
@@ -3274,9 +3339,16 @@ export async function createCourse(name: string): Promise<Course | null> {
   return data as Course;
 }
 
-export async function updateCourse(id: number, input: { name?: string; sort_order?: number }): Promise<Course | null> {
+export async function updateCourse(
+  id: number,
+  input: { name?: string; qualification_code?: string | null; sort_order?: number }
+): Promise<Course | null> {
   const payload: Record<string, unknown> = {};
   if (input.name !== undefined) payload.name = input.name.trim();
+  if (input.qualification_code !== undefined) {
+    const c = input.qualification_code;
+    payload.qualification_code = c == null || String(c).trim() === '' ? null : String(c).trim();
+  }
   if (input.sort_order !== undefined) payload.sort_order = input.sort_order;
   payload.updated_by = getAuditFields().updated_by;
   const { data, error } = await supabase
