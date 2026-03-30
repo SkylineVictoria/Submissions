@@ -18,6 +18,7 @@ export const AdminLayout: React.FC = () => {
   const baseNavItems = isTrainerOrOffice
     ? [{ to: '/admin/dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-5 h-5 shrink-0" />, end: true }]
     : [
+        { to: '/admin/overview', label: 'Dashboard', icon: <LayoutDashboard className="w-5 h-5 shrink-0" />, end: true },
         { to: '/admin/forms', label: 'Forms', icon: <FileText className="w-5 h-5 shrink-0" />, end: true },
         { to: '/admin/students', label: 'Students', icon: <Users className="w-5 h-5 shrink-0" />, end: true },
         { to: '/admin/batches', label: 'Batches', icon: <Layers className="w-5 h-5 shrink-0" />, end: true },
@@ -47,7 +48,7 @@ export const AdminLayout: React.FC = () => {
           )}
         >
           <Link
-            to={isTrainerOrOffice ? '/admin/dashboard' : '/admin/forms'}
+            to={isTrainerOrOffice ? '/admin/dashboard' : '/admin/overview'}
             className="flex shrink-0 items-center justify-center overflow-hidden no-underline text-[var(--text)]"
             aria-label={isTrainerOrOffice ? 'Dashboard' : 'Forms'}
           >

@@ -3961,6 +3961,49 @@ export interface SkylineInductionSubmissionRow {
   guest_email: string | null;
 }
 
+export interface AdminDashboardStats {
+  totals: { assessments: number; students: number; trainers: number; admins: number };
+  workflow: { awaiting_student: number; awaiting_trainer: number; awaiting_office: number; completed: number };
+  top_pending_by_student: Array<{ student_id: number; student_name: string; student_email: string; pending_count: number }>;
+  top_pending_by_trainer: Array<{ trainer_id: number; trainer_name: string; trainer_email: string; pending_count: number }>;
+}
+
+export async function getAdminDashboardStats(input: {
+  startAt?: string | null; // timestamptz ISO
+  endAt?: string | null; // timestamptz ISO
+  status?: 'all' | 'awaiting_student' | 'awaiting_trainer' | 'awaiting_office' | 'completed';
+}): Promise<{ ok: true; stats: AdminDashboardStats } | { ok: false; error: string }> {
+  const { data, error } = await supabase.rpc('skyline_admin_dashboard_stats', {
+    p_start_at: input.startAt ?? null,
+    p_end_at: input.endAt ?? null,
+    p_status: input.status ?? 'all',
+  });
+  if (error) return { ok: false, error: error.message };
+  const j = data as { ok?: boolean; error?: string } & Partial<AdminDashboardStats> | null;
+  if (!j?.ok) return { ok: false, error: (j as { error?: string } | null)?.error || 'Could not load dashboard stats.' };
+  const totals = (j.totals ?? {}) as AdminDashboardStats['totals'];
+  const workflow = (j.workflow ?? {}) as AdminDashboardStats['workflow'];
+  return {
+    ok: true,
+    stats: {
+      totals: {
+        assessments: Number((totals as any).assessments ?? 0) || 0,
+        students: Number((totals as any).students ?? 0) || 0,
+        trainers: Number((totals as any).trainers ?? 0) || 0,
+        admins: Number((totals as any).admins ?? 0) || 0,
+      },
+      workflow: {
+        awaiting_student: Number((workflow as any).awaiting_student ?? 0) || 0,
+        awaiting_trainer: Number((workflow as any).awaiting_trainer ?? 0) || 0,
+        awaiting_office: Number((workflow as any).awaiting_office ?? 0) || 0,
+        completed: Number((workflow as any).completed ?? 0) || 0,
+      },
+      top_pending_by_student: Array.isArray((j as any).top_pending_by_student) ? ((j as any).top_pending_by_student as any[]) : [],
+      top_pending_by_trainer: Array.isArray((j as any).top_pending_by_trainer) ? ((j as any).top_pending_by_trainer as any[]) : [],
+    },
+  };
+}
+
 function parseInductionSubmissionsRpcPayload(data: unknown): SkylineInductionSubmissionRow[] {
   if (data == null) return [];
   if (Array.isArray(data)) return data as SkylineInductionSubmissionRow[];

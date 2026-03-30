@@ -22,6 +22,7 @@ const AdminUsersPage = lazy(() => import('./pages/AdminUsersPage').then(m => ({ 
 const AdminBatchesPage = lazy(() => import('./pages/AdminBatchesPage').then(m => ({ default: m.AdminBatchesPage })));
 const AdminCoursesPage = lazy(() => import('./pages/AdminCoursesPage').then(m => ({ default: m.AdminCoursesPage })));
 const DashboardPage = lazy(() => import('./pages/DashboardPage').then(m => ({ default: m.DashboardPage })));
+const AdminDashboardPage = lazy(() => import('./pages/AdminDashboardPage').then(m => ({ default: m.AdminDashboardPage })));
 const MyProfilePage = lazy(() => import('./pages/MyProfilePage').then(m => ({ default: m.MyProfilePage })));
 const AdminEnrollmentPage = lazy(() => import('./pages/AdminEnrollmentPage').then(m => ({ default: m.AdminEnrollmentPage })));
 const AdminInductionPage = lazy(() => import('./pages/AdminInductionPage'));
@@ -36,7 +37,7 @@ function DashboardOrFormsRedirect() {
   const { user } = useAuth();
   if (!user) return <Navigate to="/login" replace />;
   const isTrainerOrOffice = user.role === 'trainer' || user.role === 'office';
-  return <Navigate to={isTrainerOrOffice ? '/admin/dashboard' : '/admin/forms'} replace />;
+  return <Navigate to={isTrainerOrOffice ? '/admin/dashboard' : '/admin/overview'} replace />;
 }
 
 function App() {
@@ -63,6 +64,7 @@ function App() {
             <Route path="/admin" element={<ProtectedRoute><AdminLayout /></ProtectedRoute>}>
             <Route index element={<DashboardOrFormsRedirect />} />
             <Route path="dashboard" element={<DashboardPage />} />
+            <Route path="overview" element={<AdminOnlyRoute><AdminDashboardPage /></AdminOnlyRoute>} />
             <Route path="profile" element={<MyProfilePage />} />
             <Route path="enrollment" element={<AdminOnlyRoute><AdminEnrollmentPage /></AdminOnlyRoute>} />
             <Route path="enrollment/induction" element={<AdminOnlyRoute><AdminInductionPage /></AdminOnlyRoute>} />
