@@ -2,11 +2,12 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { config } from 'dotenv';
-import express from 'express';
+import express, { type Response } from 'express';
 import { createClient } from '@supabase/supabase-js';
 import { chromium } from 'playwright';
 import { PDFDocument } from 'pdf-lib';
 import { renderAppendixAMatrixHtml } from './appendixAMatrixData.js';
+import { buildInductionPdfHtml, resolveSlitLogoDataUrls } from './inductionHtml.js';
 
 // Load .env from project root (parent of pdf-server)
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -14,6 +15,8 @@ config({ path: path.join(__dirname, '..', '.env') });
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+app.use(express.json({ limit: '2mb' }));
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -28,12 +31,171 @@ const supabase = createClient(supabaseUrl, supabaseServiceKey);
 // Allow cross-origin requests (frontend may be on different domain, e.g. Vercel)
 app.use((_req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   next();
+});
+
+app.options('*', (_req, res) => {
+  res.sendStatus(204);
 });
 
 // Lightweight health check for Render: ping this every 5–14 min to avoid cold starts (e.g. UptimeRobot)
 app.get('/health', (_req, res) => {
   res.status(200).send('ok');
+});
+
+/** Induction pack PDF — HTML includes SLIT header + inner footers per page; no Playwright header/footer (avoids duplicate footers). */
+app.get('/pdf/induction/:token', async (req, res) => {
+  const token = String(req.params.token || '').trim();
+  const download = req.query.download === '1';
+  if (!token) {
+    res.status(400).send('Invalid token');
+    return;
+  }
+
+  try {
+    const { data: row, error } = await supabase
+      .from('skyline_inductions')
+      .select('id, title, start_at, end_at')
+      .eq('access_token', token)
+      .maybeSingle();
+    if (error || !row) {
+      res.status(404).send('Induction not found');
+      return;
+    }
+
+    const { crestImg, textImg } = resolveSlitLogoDataUrls(__dirname);
+    const { html } = buildInductionPdfHtml({
+      title: String((row as { title: string }).title),
+      startAt: String((row as { start_at: string }).start_at),
+      endAt: String((row as { end_at: string }).end_at),
+      crestImg,
+      textImg,
+    });
+
+    const pdf = await renderInductionHtmlToPdfBuffer(html);
+    const safeTitle = String((row as { title: string }).title || 'induction')
+      .replace(/[/\\:*?"<>|]/g, '_')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 80);
+    if (download) {
+      res.setHeader('Content-Disposition', `attachment; filename="${safeTitle || 'skyline-induction'}.pdf"`);
+    }
+    sendInductionPdfResponse(res, pdf);
+  } catch (err) {
+    console.error('Induction PDF error:', err);
+    res.status(500).send('Failed to generate induction PDF');
+  }
+});
+
+async function renderInductionHtmlToPdfBuffer(html: string): Promise<Uint8Array> {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.setContent(html, { waitUntil: 'networkidle' });
+    await page.waitForLoadState('domcontentloaded');
+    await page.evaluate(() => {
+      return Promise.all(
+        Array.from(document.images).map(
+          (img) =>
+            new Promise<void>((resolve) => {
+              if (img.complete) resolve();
+              else {
+                img.onload = () => resolve();
+                img.onerror = () => resolve();
+              }
+            })
+        )
+      );
+    });
+    await page.evaluate(() => document.fonts.ready);
+
+    return await page.pdf({
+      format: 'A4',
+      printBackground: true,
+      preferCSSPageSize: false,
+      margin: { top: '12mm', right: '15mm', bottom: '12mm', left: '15mm' },
+      displayHeaderFooter: false,
+      scale: 1,
+    });
+  } finally {
+    await browser.close();
+  }
+}
+
+function sendInductionPdfResponse(res: Response, pdf: Uint8Array): void {
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.send(Buffer.from(pdf));
+}
+
+/** Download name: "{full name} induction form.pdf" (checklist header, else enrolment names). */
+function inductionFilledPdfFilename(payload: Record<string, unknown>): string {
+  const ch = payload.checklistHeader as { fullName?: string } | undefined;
+  let name = String(ch?.fullName ?? '').trim();
+  if (!name) {
+    const e = payload.enrolment as { givenNames?: string; familyName?: string } | undefined;
+    const parts = [e?.givenNames, e?.familyName].map((s) => String(s ?? '').trim()).filter(Boolean);
+    name = parts.join(' ');
+  }
+  if (!name) name = 'Student';
+  const safe = name
+    .replace(/[/\\:*?"<>|]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80);
+  const base = safe || 'Student';
+  return `${base} induction form.pdf`;
+}
+
+/** Filled induction pack from submitted JSON (admin export). Body: { payload }. */
+app.post('/pdf/induction/:token/filled', async (req, res) => {
+  const token = String(req.params.token || '').trim();
+  if (!token) {
+    res.status(400).send('Invalid token');
+    return;
+  }
+  const body = req.body as { payload?: unknown } | null;
+  const payload = body?.payload;
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    res.status(400).send('Missing or invalid payload object');
+    return;
+  }
+
+  try {
+    const { data: row, error } = await supabase
+      .from('skyline_inductions')
+      .select('id, title, start_at, end_at')
+      .eq('access_token', token)
+      .maybeSingle();
+    if (error || !row) {
+      res.status(404).send('Induction not found');
+      return;
+    }
+
+    const { crestImg, textImg } = resolveSlitLogoDataUrls(__dirname);
+    const { html } = buildInductionPdfHtml({
+      title: String((row as { title: string }).title),
+      startAt: String((row as { start_at: string }).start_at),
+      endAt: String((row as { end_at: string }).end_at),
+      crestImg,
+      textImg,
+      formPayload: payload as Record<string, unknown>,
+    });
+
+    const pdf = await renderInductionHtmlToPdfBuffer(html);
+    const pl = payload as Record<string, unknown>;
+    const filename = inductionFilledPdfFilename(pl).replace(/"/g, "'");
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    sendInductionPdfResponse(res, pdf);
+  } catch (err) {
+    console.error('Induction filled PDF error:', err);
+    res.status(500).send('Failed to generate filled induction PDF');
+  }
 });
 
 interface FormAnswer {

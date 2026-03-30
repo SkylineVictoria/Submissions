@@ -24,12 +24,13 @@ const AdminCoursesPage = lazy(() => import('./pages/AdminCoursesPage').then(m =>
 const DashboardPage = lazy(() => import('./pages/DashboardPage').then(m => ({ default: m.DashboardPage })));
 const MyProfilePage = lazy(() => import('./pages/MyProfilePage').then(m => ({ default: m.MyProfilePage })));
 const AdminEnrollmentPage = lazy(() => import('./pages/AdminEnrollmentPage').then(m => ({ default: m.AdminEnrollmentPage })));
-const AdminInductionPage = lazy(() => import('./pages/AdminInductionPage').then(m => ({ default: m.AdminInductionPage })));
+const AdminInductionPage = lazy(() => import('./pages/AdminInductionPage'));
 const FormStartPage = lazy(() => import('./pages/FormStartPage').then(m => ({ default: m.FormStartPage })));
 const StudentAccessPage = lazy(() => import('./pages/StudentAccessPage').then(m => ({ default: m.StudentAccessPage })));
 const InstanceFillPage = lazy(() => import('./pages/InstanceFillPage').then(m => ({ default: m.InstanceFillPage })));
 const FormWizardPage = lazy(() => import('./pages/FormWizardPage').then(m => ({ default: m.FormWizardPage })));
 const LoginPage = lazy(() => import('./pages/LoginPage').then(m => ({ default: m.LoginPage })));
+const PublicInductionPage = lazy(() => import('./pages/PublicInductionPage').then(m => ({ default: m.PublicInductionPage })));
 
 function DashboardOrFormsRedirect() {
   const { user } = useAuth();
@@ -58,6 +59,7 @@ function App() {
             <Route path="/forms/:formId/student-access" element={<StudentAccessPage />} />
             <Route path="/student-access" element={<StudentAccessPage />} />
             <Route path="/instances/:instanceId" element={<InstanceFillPage />} />
+            <Route path="/induction/:token" element={<PublicInductionPage />} />
             <Route path="/admin" element={<ProtectedRoute><AdminLayout /></ProtectedRoute>}>
             <Route index element={<DashboardOrFormsRedirect />} />
             <Route path="dashboard" element={<DashboardPage />} />

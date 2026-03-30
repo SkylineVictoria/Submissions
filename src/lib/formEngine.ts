@@ -1270,6 +1270,37 @@ export async function studentLoginWithOtpForForm(formId: number, email: string, 
   return studentFormAccessFromId(formId, studentId);
 }
 
+/**
+ * Verify student OTP for public induction pages. Only enrolled students (skyline_students) who pass OTP may view;
+ * does not require a form instance.
+ */
+export async function verifyStudentOtpForInduction(
+  email: string,
+  otp: string
+): Promise<{ success: boolean; error?: string }> {
+  const { data: authData, error: authError } = await supabase.rpc('skyline_verify_student_otp', {
+    p_email: email.trim(),
+    p_otp: otp.trim(),
+  });
+  if (authError) {
+    return { success: false, error: 'Authentication failed.' };
+  }
+  const authRows = authData as Array<{ id: number; email: string }> | null;
+  if (!authRows || authRows.length === 0) {
+    return { success: false, error: 'Invalid or expired OTP.' };
+  }
+  const studentId = authRows[0].id;
+  const { data: student } = await supabase.from('skyline_students').select('status').eq('id', studentId).maybeSingle();
+  const studentStatus = (student as { status?: string | null } | null)?.status;
+  if (studentStatus === 'inactive') {
+    return {
+      success: false,
+      error: 'Your account is inactive. Contact your administrator to restore access.',
+    };
+  }
+  return { success: true };
+}
+
 export async function setStudentPassword(studentId: number, password: string): Promise<{ success: boolean; message: string }> {
   const { data, error } = await supabase.rpc('skyline_student_set_password', {
     p_student_id: studentId,
@@ -3792,4 +3823,212 @@ export async function updateInstanceWorkflowStatus(instanceId: number, workflowS
   }
   const { error } = await supabase.from('skyline_form_instances').update(payload).eq('id', instanceId);
   if (error) console.error('updateInstanceWorkflowStatus error', error);
+}
+
+/** Skyline induction windows (enrollment hub). */
+export interface SkylineInductionRow {
+  id: number;
+  title: string;
+  start_at: string;
+  end_at: string;
+  access_token: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function listSkylineInductions(): Promise<SkylineInductionRow[]> {
+  const { data, error } = await supabase
+    .from('skyline_inductions')
+    .select('id, title, start_at, end_at, access_token, created_at, updated_at')
+    .order('start_at', { ascending: false });
+  if (error) {
+    console.error('listSkylineInductions error', error);
+    return [];
+  }
+  return (data as SkylineInductionRow[]) ?? [];
+}
+
+export async function createSkylineInduction(input: {
+  title: string;
+  start_at_iso: string;
+  end_at_iso: string;
+}): Promise<{ row: SkylineInductionRow | null; error: Error | null }> {
+  const audit = getAuditFields();
+  const { data, error } = await supabase
+    .from('skyline_inductions')
+    .insert({
+      title: input.title.trim() || 'Induction',
+      start_at: input.start_at_iso,
+      end_at: input.end_at_iso,
+      created_by: audit.created_by,
+      updated_by: audit.updated_by,
+    })
+    .select('id, title, start_at, end_at, access_token, created_at, updated_at')
+    .single();
+  if (error) return { row: null, error: new Error(error.message) };
+  return { row: data as SkylineInductionRow, error: null };
+}
+
+export async function deleteSkylineInduction(id: number): Promise<{ error: Error | null }> {
+  const { error } = await supabase.from('skyline_inductions').delete().eq('id', id);
+  return { error: error ? new Error(error.message) : null };
+}
+
+export async function getSkylineInductionByToken(
+  accessToken: string
+): Promise<SkylineInductionRow | null> {
+  const { data, error } = await supabase
+    .from('skyline_inductions')
+    .select('id, title, start_at, end_at, access_token, created_at, updated_at')
+    .eq('access_token', accessToken)
+    .maybeSingle();
+  if (error) {
+    console.error('getSkylineInductionByToken error', error);
+    return null;
+  }
+  return (data as SkylineInductionRow) ?? null;
+}
+
+export async function unlockSkylineInductionSession(input: {
+  accessToken: string;
+  email: string;
+  otp: string;
+}): Promise<{ ok: true; sessionToken: string; studentEmail: string } | { ok: false; error: string }> {
+  const { data, error } = await supabase.rpc('skyline_induction_unlock', {
+    p_access_token: input.accessToken,
+    p_email: input.email.trim(),
+    p_otp: input.otp.trim(),
+  });
+  if (error) return { ok: false, error: error.message };
+  const j = data as { ok?: boolean; error?: string; session_token?: string; student_email?: string } | null;
+  if (!j?.ok) return { ok: false, error: j?.error || 'Unlock failed.' };
+  if (!j.session_token) return { ok: false, error: 'No session issued.' };
+  return { ok: true, sessionToken: j.session_token, studentEmail: String(j.student_email || '') };
+}
+
+export async function getSkylineInductionSubmissionState(input: {
+  accessToken: string;
+  sessionToken: string;
+}): Promise<
+  | { ok: true; submitted: false; outsideWindow?: boolean }
+  | { ok: true; submitted: true; payload: Record<string, unknown> }
+  | { ok: false; error: string }
+> {
+  const { data, error } = await supabase.rpc('skyline_induction_submission_state', {
+    p_access_token: input.accessToken,
+    p_session_token: input.sessionToken,
+  });
+  if (error) return { ok: false, error: error.message };
+  const j = data as {
+    ok?: boolean;
+    error?: string;
+    submitted?: boolean;
+    payload?: Record<string, unknown>;
+    outside_window?: boolean;
+  } | null;
+  if (!j?.ok) return { ok: false, error: j?.error || 'Could not load submission state.' };
+  if (j.submitted && j.payload) return { ok: true, submitted: true, payload: j.payload };
+  return {
+    ok: true,
+    submitted: false,
+    outsideWindow: j.outside_window === true,
+  };
+}
+
+export async function submitSkylineInductionForm(input: {
+  accessToken: string;
+  sessionToken: string;
+  payload: Record<string, unknown>;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { data, error } = await supabase.rpc('skyline_induction_submit', {
+    p_access_token: input.accessToken,
+    p_session_token: input.sessionToken,
+    p_payload: input.payload,
+  });
+  if (error) return { ok: false, error: error.message };
+  const j = data as { ok?: boolean; error?: string } | null;
+  if (!j?.ok) return { ok: false, error: j?.error || 'Submit failed.' };
+  return { ok: true };
+}
+
+/** Admin: one row per student/guest who submitted for an induction window. */
+export interface SkylineInductionSubmissionRow {
+  id: number;
+  student_email: string;
+  submitted_at: string;
+  payload: Record<string, unknown>;
+  student_id: number | null;
+  guest_email: string | null;
+}
+
+function parseInductionSubmissionsRpcPayload(data: unknown): SkylineInductionSubmissionRow[] {
+  if (data == null) return [];
+  if (Array.isArray(data)) return data as SkylineInductionSubmissionRow[];
+  if (typeof data === 'string') {
+    try {
+      return parseInductionSubmissionsRpcPayload(JSON.parse(data) as unknown);
+    } catch {
+      return [];
+    }
+  }
+  if (typeof data === 'object') {
+    const o = data as Record<string, unknown>;
+    if ('id' in o && 'payload' in o) return [data as SkylineInductionSubmissionRow];
+    const vals = Object.values(o);
+    if (
+      vals.length > 0 &&
+      vals.every((v) => v !== null && typeof v === 'object' && !Array.isArray(v))
+    ) {
+      return vals as SkylineInductionSubmissionRow[];
+    }
+  }
+  return [];
+}
+
+export async function countSkylineInductionSubmissions(
+  inductionId: number,
+): Promise<{ count: number; error?: string }> {
+  const { data, error } = await supabase.rpc('skyline_admin_count_induction_submissions', {
+    p_induction_id: inductionId,
+  });
+  if (error) {
+    console.error('countSkylineInductionSubmissions error', error);
+    return { count: 0, error: error.message };
+  }
+  return { count: Number(data ?? 0) || 0 };
+}
+
+export async function listSkylineInductionSubmissions(
+  inductionId: number,
+): Promise<{ rows: SkylineInductionSubmissionRow[]; error?: string }> {
+  const { data, error } = await supabase.rpc('skyline_admin_list_induction_submissions', {
+    p_induction_id: inductionId,
+  });
+  if (error) {
+    console.error('listSkylineInductionSubmissions error', error);
+    return { rows: [], error: error.message };
+  }
+  return { rows: parseInductionSubmissionsRpcPayload(data) };
+}
+
+export async function patchSkylineInductionSubmissionOffice(input: {
+  submissionId: number;
+  officeSmsBy: string;
+  officeSmsDate: string;
+  officePrismsBy: string;
+  officePrismsDate: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { data, error } = await supabase.rpc('skyline_admin_patch_induction_submission_office', {
+    p_submission_id: input.submissionId,
+    p_office: {
+      officeSmsBy: input.officeSmsBy,
+      officeSmsDate: input.officeSmsDate,
+      officePrismsBy: input.officePrismsBy,
+      officePrismsDate: input.officePrismsDate,
+    },
+  });
+  if (error) return { ok: false, error: error.message };
+  const j = data as { ok?: boolean; error?: string } | null;
+  if (!j?.ok) return { ok: false, error: j?.error || 'Could not update office fields.' };
+  return { ok: true };
 }
