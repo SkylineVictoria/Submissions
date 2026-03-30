@@ -44,11 +44,11 @@ export function formatMelbourneDateTime(iso: string | null | undefined): string 
       hour: '2-digit',
       minute: '2-digit',
       second: '2-digit',
-      hour12: false,
+      hour12: true,
       timeZoneName: 'short',
     }).format(d);
   } catch {
     const dt = DateTime.fromISO(iso, { zone: 'utc' }).setZone(ZONE);
-    return dt.isValid ? dt.toFormat('dd/MM/yyyy HH:mm:ss z') : '—';
+    return dt.isValid ? dt.toFormat('dd/MM/yyyy h:mm:ss a z') : '—';
   }
 }

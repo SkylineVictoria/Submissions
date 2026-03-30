@@ -61,6 +61,8 @@ export const AdminInductionPage: React.FC = () => {
   const [submissionsLoadError, setSubmissionsLoadError] = useState<string | null>(null);
   const [submissionCountsRpcError, setSubmissionCountsRpcError] = useState<string | null>(null);
   const [pdfGeneratingId, setPdfGeneratingId] = useState<number | null>(null);
+  const [submissionsPage, setSubmissionsPage] = useState(1);
+  const SUBMISSIONS_PAGE_SIZE = 10;
   const [officeModalSub, setOfficeModalSub] = useState<SkylineInductionSubmissionRow | null>(null);
   const [officeSmsBy, setOfficeSmsBy] = useState('');
   const [officeSmsDate, setOfficeSmsDate] = useState('');
@@ -133,6 +135,7 @@ export const AdminInductionPage: React.FC = () => {
     setSubmissionsModal(induction);
     setSubmissionsLoading(true);
     setSubmissionsList([]);
+    setSubmissionsPage(1);
     setSubmissionsLoadError(null);
     try {
       const { rows: list, error: listErr } = await listSkylineInductionSubmissions(induction.id);
@@ -188,6 +191,13 @@ export const AdminInductionPage: React.FC = () => {
       setPdfGeneratingId(null);
     }
   };
+
+  useEffect(() => {
+    // Keep page within range after filtering/refetch.
+    const totalPages = Math.max(1, Math.ceil(submissionsList.length / SUBMISSIONS_PAGE_SIZE));
+    setSubmissionsPage((p) => Math.min(Math.max(1, p), totalPages));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [submissionsList.length, submissionsModal?.id]);
 
   const payloadDisplayName = (payload: Record<string, unknown>): string => {
     const h = payload.checklistHeader as { fullName?: string } | undefined;
@@ -390,7 +400,7 @@ export const AdminInductionPage: React.FC = () => {
 
         {submissionsModal ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 overflow-y-auto" role="dialog">
-            <Card className="w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col shadow-xl my-4">
+            <Card className="w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col shadow-xl my-4">
               <div className="p-4 border-b border-gray-200 flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <h3 className="text-lg font-bold text-[var(--text)]">Submitted inductions</h3>
@@ -430,20 +440,87 @@ export const AdminInductionPage: React.FC = () => {
                 ) : submissionsList.length === 0 ? (
                   <div className="py-12 text-center text-sm text-gray-600">No submissions yet for this window.</div>
                 ) : (
-                  <div className="overflow-x-auto border border-gray-200 rounded-lg">
-                    <table className="w-full min-w-[880px] text-sm border-collapse">
+                  <>
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                      <div className="text-xs text-gray-600">
+                        {(() => {
+                          const total = submissionsList.length;
+                          const totalPages = Math.max(1, Math.ceil(total / SUBMISSIONS_PAGE_SIZE));
+                          const start = (submissionsPage - 1) * SUBMISSIONS_PAGE_SIZE + 1;
+                          const end = Math.min(total, submissionsPage * SUBMISSIONS_PAGE_SIZE);
+                          return (
+                            <span>
+                              Showing <strong className="text-gray-900">{start}</strong>–<strong className="text-gray-900">{end}</strong> of{' '}
+                              <strong className="text-gray-900">{total}</strong> submissions (page{' '}
+                              <strong className="text-gray-900">{submissionsPage}</strong> / <strong className="text-gray-900">{totalPages}</strong>)
+                            </span>
+                          );
+                        })()}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setSubmissionsPage(1)}
+                          disabled={submissionsPage <= 1}
+                        >
+                          First
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setSubmissionsPage((p) => Math.max(1, p - 1))}
+                          disabled={submissionsPage <= 1}
+                        >
+                          Prev
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            const totalPages = Math.max(1, Math.ceil(submissionsList.length / SUBMISSIONS_PAGE_SIZE));
+                            setSubmissionsPage((p) => Math.min(totalPages, p + 1));
+                          }}
+                          disabled={submissionsPage >= Math.max(1, Math.ceil(submissionsList.length / SUBMISSIONS_PAGE_SIZE))}
+                        >
+                          Next
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            const totalPages = Math.max(1, Math.ceil(submissionsList.length / SUBMISSIONS_PAGE_SIZE));
+                            setSubmissionsPage(totalPages);
+                          }}
+                          disabled={submissionsPage >= Math.max(1, Math.ceil(submissionsList.length / SUBMISSIONS_PAGE_SIZE))}
+                        >
+                          Last
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="border border-gray-200 rounded-lg overflow-hidden">
+                    <table className="w-full table-fixed text-sm border-collapse">
                       <thead>
                         <tr className="bg-gray-50 border-b border-gray-200 text-left">
-                          <th className="py-2 px-3 font-semibold text-gray-800">Submitted (Melbourne)</th>
-                          <th className="py-2 px-3 font-semibold text-gray-800">Type</th>
-                          <th className="py-2 px-3 font-semibold text-gray-800">Email</th>
+                          <th className="py-2 px-3 font-semibold text-gray-800 w-[180px]">Submitted (Melbourne)</th>
+                          <th className="py-2 px-3 font-semibold text-gray-800 w-[90px]">Type</th>
+                          <th className="py-2 px-3 font-semibold text-gray-800 w-[260px]">Email</th>
                           <th className="py-2 px-3 font-semibold text-gray-800">Name (checklist)</th>
                           <th className="py-2 px-3 font-semibold text-gray-800 w-[120px]">PDF</th>
                           <th className="py-2 px-3 font-semibold text-gray-800 w-[130px]">Office use</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {submissionsList.map((sub) => (
+                        {submissionsList
+                          .slice(
+                            (submissionsPage - 1) * SUBMISSIONS_PAGE_SIZE,
+                            submissionsPage * SUBMISSIONS_PAGE_SIZE
+                          )
+                          .map((sub) => (
                           <tr key={sub.id} className="border-b border-gray-100 hover:bg-gray-50/80">
                             <td className="py-2 px-3 text-gray-700 whitespace-nowrap">{formatMelbourneDateTime(sub.submitted_at)}</td>
                             <td className="py-2 px-3 whitespace-nowrap">
@@ -459,10 +536,12 @@ export const AdminInductionPage: React.FC = () => {
                                 <span className="text-gray-500">—</span>
                               )}
                             </td>
-                            <td className="py-2 px-3 text-gray-800 break-all max-w-[200px]">
+                            <td className="py-2 px-3 text-gray-800 break-all">
                               {sub.student_email || sub.guest_email || '—'}
                             </td>
-                            <td className="py-2 px-3 text-gray-800">{payloadDisplayName(sub.payload)}</td>
+                            <td className="py-2 px-3 text-gray-800 truncate" title={payloadDisplayName(sub.payload)}>
+                              {payloadDisplayName(sub.payload)}
+                            </td>
                             <td className="py-2 px-3">
                               <Button
                                 type="button"
@@ -485,6 +564,7 @@ export const AdminInductionPage: React.FC = () => {
                       </tbody>
                     </table>
                   </div>
+                  </>
                 )}
                 <p className="text-xs text-gray-500 mt-4">
                   <strong>Download</strong> saves the four-page induction pack with this submission&apos;s checklist, enrolment, and media fields.
