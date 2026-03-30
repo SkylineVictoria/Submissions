@@ -6,8 +6,8 @@ import express, { type Response } from 'express';
 import { createClient } from '@supabase/supabase-js';
 import { chromium } from 'playwright';
 import { PDFDocument } from 'pdf-lib';
-import { renderAppendixAMatrixHtml } from './appendixAMatrixData.js';
-import { buildInductionPdfHtml, resolveSlitLogoDataUrls } from './inductionHtml.js';
+import { renderAppendixAMatrixHtml } from './appendixAMatrixData';
+import { buildInductionPdfHtml, resolveSlitLogoDataUrls } from './inductionHtml';
 
 // Load .env from project root (parent of pdf-server)
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
