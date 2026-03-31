@@ -1,5 +1,6 @@
 import React from 'react';
 import { SlitDocumentHeader } from '../SlitDocumentHeader';
+import { Checkbox } from '../ui/Checkbox';
 import { DatePicker } from '../ui/DatePicker';
 import { DateTime } from 'luxon';
 import type { ChecklistRowState, ChecklistTopicKey, InductionFormPayload } from '../../lib/inductionForm';
@@ -203,13 +204,13 @@ function EnrolmentFormTable({ interactive }: { interactive?: InductionInteractiv
           </td>
         </tr>
         <tr>
-          <td className="border border-black px-2 py-1 font-semibold">Visa Number</td>
+          <td className="border border-black px-2 py-1 font-semibold">Visa Number (optional)</td>
           <td className="border border-black px-2 py-1" style={{ backgroundColor: FORM_INPUT_BG }}>
             {textCell('visaNumber')}
           </td>
         </tr>
         <tr>
-          <td className="border border-black px-2 py-1 font-semibold">Visa Expiry Date</td>
+          <td className="border border-black px-2 py-1 font-semibold">Visa Expiry Date (optional)</td>
           <td className="border border-black px-2 py-1" style={{ backgroundColor: FORM_INPUT_BG }}>
             {interactive && e ? (
               <InductionInlineDatePicker
@@ -241,7 +242,7 @@ function EnrolmentFormTable({ interactive }: { interactive?: InductionInteractiv
           </td>
         </tr>
         <tr>
-          <td className="border border-black px-2 py-1 font-semibold">USI Number (if known)</td>
+          <td className="border border-black px-2 py-1 font-semibold">USI Number</td>
           <td className="border border-black px-2 py-1" style={{ backgroundColor: FORM_INPUT_BG }}>
             {textCell('usiNumber')}
           </td>
@@ -405,7 +406,7 @@ function MediaConsentContent({ interactive }: { interactive?: InductionInteracti
   return (
     <div className="induction-media-consent mt-2 text-[10pt] leading-snug">
       <div>
-        <p className="mb-2 text-center text-[11pt] font-bold underline">ACKNOWLEDGEMENT</p>
+        <p className="mb-2 text-center text-[11pt] font-bold underline">ACKNOWLEDGEMENT (required)</p>
         <p className="mb-1">I acknowledge and understand that:</p>
         <ul className="list-disc space-y-1 pl-5">
           <li>
@@ -466,10 +467,10 @@ function MediaConsentContent({ interactive }: { interactive?: InductionInteracti
       </div>
 
       <div className="mt-5">
-        <p className="mb-2 text-center text-[11pt] font-bold underline">CONSENT FORM</p>
+        <p className="mb-2 text-center text-[11pt] font-bold underline">CONSENT FORM (optional)</p>
         <p className="mb-2 leading-snug">
-          This section is voluntary. You may choose to consent or decline. Your decision will not affect your enrolment,
-          academic standing, or access to services.
+          This section is voluntary — you do not need to complete it to submit your induction. You may choose to consent or
+          decline. Your decision will not affect your enrolment, academic standing, or access to services.
         </p>
         <p className="mt-2">
           I{' '}
@@ -839,6 +840,41 @@ export const InductionDocumentPages: React.FC<{
           </p>
         </div>
 
+        {interactive && !interactive.readOnly ? (
+          <div className="mt-3 rounded border border-amber-200 bg-amber-50/80 px-3 py-2.5 text-[9pt] leading-snug text-gray-800">
+            <Checkbox
+              label="Use the same initials for every topic (recommended). Type in any initials box once — all rows update. Untick to enter different initials per row."
+              checked={interactive.value.checklistSyncInitials !== false}
+              onChange={(checked) => {
+                const v = interactive.value;
+                if (checked) {
+                  let seed = '';
+                  for (const k of CHECKLIST_TOPIC_KEYS) {
+                    const t = String(v.checklistRows[k]?.initial ?? '').trim();
+                    if (t) {
+                      seed = t;
+                      break;
+                    }
+                  }
+                  const nextRows = { ...v.checklistRows };
+                  if (seed) {
+                    for (const k of CHECKLIST_TOPIC_KEYS) {
+                      nextRows[k] = { ...nextRows[k], initial: seed };
+                    }
+                  }
+                  interactive.onChange({
+                    ...v,
+                    checklistSyncInitials: true,
+                    checklistRows: seed ? nextRows : v.checklistRows,
+                  });
+                } else {
+                  interactive.onChange({ ...v, checklistSyncInitials: false });
+                }
+              }}
+            />
+          </div>
+        ) : null}
+
         <div className="mt-3 overflow-x-auto">
           <table className="induction-checklist-table w-full border-collapse border border-black">
             <thead>
@@ -850,65 +886,78 @@ export const InductionDocumentPages: React.FC<{
               </tr>
             </thead>
             <tbody>
-              {CHECKLIST_TOPIC_KEYS.map((rowKey) => {
-                const hi = checklistRowHighlight(rowKey);
-                const row = interactive?.value.checklistRows[rowKey];
-                const ro = interactive?.readOnly;
-                const patchRow = (p: Partial<ChecklistRowState>) => {
+              {(() => {
+                const patchChecklistRow = (rowKey: ChecklistTopicKey, p: Partial<ChecklistRowState>) => {
                   if (!interactive) return;
+                  const v = interactive.value;
+                  const sync = v.checklistSyncInitials !== false;
+                  if (sync && p.initial !== undefined && p.answer === undefined) {
+                    const nextRows = { ...v.checklistRows };
+                    const val = String(p.initial ?? '');
+                    for (const k of CHECKLIST_TOPIC_KEYS) {
+                      nextRows[k] = { ...nextRows[k], initial: val };
+                    }
+                    interactive.onChange({ ...v, checklistRows: nextRows });
+                    return;
+                  }
                   interactive.onChange({
-                    ...interactive.value,
+                    ...v,
                     checklistRows: {
-                      ...interactive.value.checklistRows,
-                      [rowKey]: { ...interactive.value.checklistRows[rowKey], ...p },
+                      ...v.checklistRows,
+                      [rowKey]: { ...v.checklistRows[rowKey], ...p },
                     },
                   });
                 };
-                return (
-                  <tr key={rowKey}>
-                    <td className="border border-black px-1.5 py-1 align-top">{inductionChecklistTopicCell(rowKey)}</td>
-                    <td className={`border border-black text-center align-middle ${hi ? 'bg-blue-50/50' : ''}`}>
-                      {interactive && row ? (
-                        <input
-                          type="radio"
-                          name={`chk-${rowKey}-yn`}
-                          aria-label={`Yes — ${rowKey}`}
-                          checked={row.answer === 'yes'}
-                          onChange={() => patchRow({ answer: 'yes' })}
-                          disabled={ro}
-                          className="h-3.5 w-3.5"
-                        />
-                      ) : null}
-                    </td>
-                    <td className={`border border-black text-center align-middle ${hi ? 'bg-blue-50/50' : ''}`}>
-                      {interactive && row ? (
-                        <input
-                          type="radio"
-                          name={`chk-${rowKey}-yn`}
-                          aria-label={`No — ${rowKey}`}
-                          checked={row.answer === 'no'}
-                          onChange={() => patchRow({ answer: 'no' })}
-                          disabled={ro}
-                          className="h-3.5 w-3.5"
-                        />
-                      ) : null}
-                    </td>
-                    <td className={`border border-black px-0.5 align-middle ${hi ? 'bg-blue-50/50' : ''}`}>
-                      {interactive && row ? (
-                        <input
-                          type="text"
-                          maxLength={8}
-                          className="w-full min-w-0 border-0 bg-transparent px-0.5 py-0.5 text-center text-[8pt] outline-none focus:ring-1 focus:ring-blue-400 disabled:opacity-80"
-                          value={row.initial}
-                          onChange={(ev) => patchRow({ initial: ev.target.value })}
-                          disabled={ro}
-                          autoComplete="off"
-                        />
-                      ) : null}
-                    </td>
-                  </tr>
-                );
-              })}
+                return CHECKLIST_TOPIC_KEYS.map((rowKey) => {
+                  const hi = checklistRowHighlight(rowKey);
+                  const row = interactive?.value.checklistRows[rowKey];
+                  const ro = interactive?.readOnly;
+                  return (
+                    <tr key={rowKey}>
+                      <td className="border border-black px-1.5 py-1 align-top">{inductionChecklistTopicCell(rowKey)}</td>
+                      <td className={`border border-black text-center align-middle ${hi ? 'bg-blue-50/50' : ''}`}>
+                        {interactive && row ? (
+                          <input
+                            type="radio"
+                            name={`chk-${rowKey}-yn`}
+                            aria-label={`Yes — ${rowKey}`}
+                            checked={row.answer === 'yes'}
+                            onChange={() => patchChecklistRow(rowKey, { answer: 'yes' })}
+                            disabled={ro}
+                            className="h-3.5 w-3.5"
+                          />
+                        ) : null}
+                      </td>
+                      <td className={`border border-black text-center align-middle ${hi ? 'bg-blue-50/50' : ''}`}>
+                        {interactive && row ? (
+                          <input
+                            type="radio"
+                            name={`chk-${rowKey}-yn`}
+                            aria-label={`No — ${rowKey}`}
+                            checked={row.answer === 'no'}
+                            onChange={() => patchChecklistRow(rowKey, { answer: 'no' })}
+                            disabled={ro}
+                            className="h-3.5 w-3.5"
+                          />
+                        ) : null}
+                      </td>
+                      <td className={`border border-black px-0.5 align-middle ${hi ? 'bg-blue-50/50' : ''}`}>
+                        {interactive && row ? (
+                          <input
+                            type="text"
+                            maxLength={8}
+                            className="w-full min-w-0 border-0 bg-transparent px-0.5 py-0.5 text-center text-[8pt] outline-none focus:ring-1 focus:ring-blue-400 disabled:opacity-80"
+                            value={row.initial}
+                            onChange={(ev) => patchChecklistRow(rowKey, { initial: ev.target.value })}
+                            disabled={ro}
+                            autoComplete="off"
+                          />
+                        ) : null}
+                      </td>
+                    </tr>
+                  );
+                });
+              })()}
             </tbody>
           </table>
         </div>

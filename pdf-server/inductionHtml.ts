@@ -367,7 +367,7 @@ function buildEnrolmentTableBody(P: Record<string, unknown> | null): string {
         <tr><td class="form-lbl">Residential Address</td><td class="form-inp">${fi(e, 'residentialAddress')}</td></tr>
         <tr><td class="form-lbl">Phone</td><td class="form-inp">${fi(e, 'phone')}</td></tr>
         <tr><td class="form-lbl">Email</td><td class="form-inp">${fi(e, 'email')}</td></tr>
-        <tr><td class="form-lbl">USI Number (if known)</td><td class="form-inp">${fi(e, 'usiNumber')}</td></tr>
+        <tr><td class="form-lbl">USI Number</td><td class="form-inp">${fi(e, 'usiNumber')}</td></tr>
         <tr><td colspan="2" class="form-hdr">Emergency Contact Details</td></tr>
         <tr><td class="form-lbl">Name</td><td class="form-inp">${fi(e, 'emergencyName')}</td></tr>
         <tr><td class="form-lbl">Address</td><td class="form-inp">${fi(e, 'emergencyAddress')}</td></tr>
@@ -409,7 +409,7 @@ function buildMediaPageHtml(P: Record<string, unknown> | null): string {
     <p style="margin:7px 0 0 0;"><strong>Student Signature:</strong> <span class="media-sig media-sig-ww">${inkSig(gv(a, 'studentSignature'))}</span></p>
     <p style="margin:7px 0 0 0;"><strong>Date:</strong> <span class="media-sig media-sig-w">${inkDate(gv(a, 'date'))}</span></p>
     <p style="text-align:center;font-size:11pt;font-weight:bold;text-decoration:underline;margin:18px 0 10px 0;">CONSENT FORM</p>
-    <p style="margin:0 0 7px 0;">This section is voluntary. You may choose to consent or decline. Your decision will not affect your enrolment, academic standing, or access to services.</p>
+    <p style="margin:0 0 7px 0;">This section is voluntary — you do not need to complete it to submit your induction. You may choose to consent or decline. Your decision will not affect your enrolment, academic standing, or access to services.</p>
     <p style="margin:8px 0 0 0;">I <span class="media-sig media-sig-ww">${ink(gv(m, 'consentorNameOnLine'))}</span></p>
     <p style="margin:2px 0 0 0;text-align:left;font-size:8.5pt;font-weight:600;">Name of person giving consent</p>
     <p style="margin:8px 0 0 0;">Consent to the use of photographs or video footage for use on the SKYLINE INSTITUTE OF TECHNOLOGY website, social media, in newsletters and publications as well as promotional material for the Institute.</p>

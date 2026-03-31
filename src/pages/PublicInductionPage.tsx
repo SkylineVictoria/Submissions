@@ -168,7 +168,8 @@ export const PublicInductionPage: React.FC = () => {
     () => (row ? inductionWindowStatus(row.start_at, row.end_at) : 'ended'),
     [row, row?.start_at, row?.end_at, windowTick],
   );
-  const submitBlocked = submitted || outsideWindowServer || windowStatus !== 'open';
+  /** Only client window + already submitted disable the button — not `outsideWindowServer` (server can disagree with browser time; submit still validates server-side). */
+  const submitBlocked = submitted || windowStatus !== 'open';
 
   const handleSendOtp = async () => {
     if (!email.trim() || !emailOkForInduction) return;
@@ -408,11 +409,18 @@ export const PublicInductionPage: React.FC = () => {
           <Card className="mb-4 border-red-200 bg-red-50/90 p-4 text-sm text-gray-800">
             <p className="font-semibold text-red-900">Submission closed</p>
             <p className="mt-1">
-              {outsideWindowServer && windowStatus === 'open'
-                ? 'This induction is not accepting submissions at this time. Refresh the page or contact the office if this persists.'
-                : windowStatus === 'upcoming'
-                  ? `This induction opens at ${formatMelbourneDateTime(row.start_at)} (Melbourne time). You cannot submit until then.`
-                  : `This induction period ended at ${formatMelbourneDateTime(row.end_at)} (Melbourne time). Submissions are no longer accepted.`}
+              {windowStatus === 'upcoming'
+                ? `This induction opens at ${formatMelbourneDateTime(row.start_at)} (Melbourne time). You cannot submit until then.`
+                : `This induction period ended at ${formatMelbourneDateTime(row.end_at)} (Melbourne time). Submissions are no longer accepted.`}
+            </p>
+          </Card>
+        ) : null}
+        {!submitted && !submitBlocked && outsideWindowServer ? (
+          <Card className="mb-4 border-sky-200 bg-sky-50/90 p-4 text-sm text-gray-800">
+            <p className="font-semibold text-sky-900">Server time check</p>
+            <p className="mt-1">
+              The server reported a possible mismatch with the induction window. You can still try <strong>Submit induction</strong>
+              — if it fails, refresh the page or contact the office.
             </p>
           </Card>
         ) : null}
@@ -428,8 +436,9 @@ export const PublicInductionPage: React.FC = () => {
           <Card className="mb-4 border-amber-100 bg-amber-50/80 p-4 text-sm text-gray-800">
             <p className="font-semibold text-amber-950">Before you submit</p>
             <p className="mt-1">
-              Complete every field on the checklist, enrolment form, and media consent (including Yes + initials for each
-              checklist topic). You only get one submission per induction link.
+              Complete all required student fields: checklist (Yes + initials on every topic), full enrolment details, and
+              the CCTV acknowledgement on the last page. Visa number and expiry are optional; the promotional consent block
+              at the bottom of the last page is optional. You only get one submission per induction link.
             </p>
           </Card>
         ) : null}
@@ -443,15 +452,31 @@ export const PublicInductionPage: React.FC = () => {
 
       {!submitted ? (
         <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-gray-200 bg-white/95 px-4 py-3 shadow-[0_-4px_12px_rgba(0,0,0,0.06)] backdrop-blur-sm">
-          <div className="mx-auto flex max-w-[220mm] flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-end">
-            <Button
-              type="button"
-              onClick={handleSubmitForm}
-              disabled={submitting || submitBlocked}
-              className="w-full sm:w-auto sm:min-w-[200px]"
-            >
-              {submitting ? 'Submitting…' : 'Submit induction'}
-            </Button>
+          <div className="mx-auto flex max-w-[220mm] flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+            {submitBlocked ? (
+              <p className="text-xs text-gray-600 sm:max-w-[min(100%,28rem)]">
+                {windowStatus === 'upcoming'
+                  ? 'Submit unlocks when this induction window opens (see dates at the top).'
+                  : 'Submit is not available — this induction window has ended.'}
+              </p>
+            ) : (
+              <span className="hidden sm:block" aria-hidden />
+            )}
+            <div className="flex flex-col items-stretch gap-1 sm:items-end">
+              <Button
+                type="button"
+                onClick={handleSubmitForm}
+                disabled={submitting || submitBlocked}
+                className="w-full sm:w-auto sm:min-w-[200px]"
+              >
+                {submitting ? 'Submitting…' : 'Submit induction'}
+              </Button>
+              {!submitBlocked ? (
+                <p className="text-center text-[11px] text-gray-500 sm:text-right">
+                  Missing fields? You&apos;ll see an error after you tap submit.
+                </p>
+              ) : null}
+            </div>
           </div>
         </div>
       ) : null}

@@ -57,16 +57,18 @@ function pickPrimaryMirrorSource(orderedValues: string[]): string {
 
 /**
  * Mirror target should update to primary when identical, or still a prefix of primary (user typing ahead).
- * For empty targets: only mirror when at most one field in the group is non-empty — otherwise clearing one field
- * while siblings still hold text would immediately refill from the longest value (backspace/delete broken).
+ * For empty targets: mirror when all non-empty siblings agree (one distinct value), so e.g. checklist + enrolment
+ * can both show the same signature and the third field still receives it. If multiple different values exist,
+ * do not fill empties (avoids fighting intentional edits or deletes).
  */
 function shouldMirrorFromPrimary(primary: string, fieldValue: string, allValues: string[]): boolean {
   const p = primary.trim();
   const f = String(fieldValue ?? '').trim();
   if (!p) return false;
   if (!f) {
-    const nonEmpty = allValues.filter((v) => String(v ?? '').trim()).length;
-    return nonEmpty <= 1;
+    const nonEmptyVals = allValues.map((v) => String(v ?? '').trim()).filter(Boolean);
+    const unique = new Set(nonEmptyVals);
+    return unique.size <= 1;
   }
   if (f === p) return true;
   if (p.startsWith(f)) return true;
@@ -86,11 +88,11 @@ function mirrorTextGroup(
 
 function mirrorDeclDates(next: InductionFormPayload, primary: string): void {
   if (!primary.trim()) return;
+  /* Exclude optional consent date — clearing it must not be overwritten by mirrored student/ack dates. */
   const mutators = [
     { read: () => next.checklistDeclaration.date, write: (v: string) => { next.checklistDeclaration.date = v; } },
     { read: () => next.enrolment.declarationDate, write: (v: string) => { next.enrolment.declarationDate = v; } },
     { read: () => next.mediaAck.date, write: (v: string) => { next.mediaAck.date = v; } },
-    { read: () => next.mediaConsent.date, write: (v: string) => { next.mediaConsent.date = v; } },
   ];
   const allValues = mutators.map((m) => m.read());
   for (const { read, write } of mutators) {
@@ -99,8 +101,8 @@ function mirrorDeclDates(next: InductionFormPayload, primary: string): void {
 }
 
 /**
- * Copy name / signature / declaration dates across matching fields. Uses longest value as source so partial copies
- * update as the user types. Distinct values (not a prefix of primary) are kept so the student can override one field.
+ * Copy student name / signatures / declaration dates across matching fields (checklist ↔ enrolment ↔ CCTV ack).
+ * Optional consent block names and consent date are not mirrored so users can clear or edit them independently.
  */
 export function synchronizeInductionDerivedFields(p: InductionFormPayload): InductionFormPayload {
   const next: InductionFormPayload = {
@@ -112,37 +114,30 @@ export function synchronizeInductionDerivedFields(p: InductionFormPayload): Indu
     mediaConsent: { ...p.mediaConsent },
   };
 
-  const namePrimary = pickPrimaryMirrorSource([
-    next.checklistHeader.fullName,
-    next.mediaAck.studentName,
-    next.mediaConsent.consentorNameOnLine,
-    next.mediaConsent.name,
-  ]);
+  /* Student identity only — optional consent “I …” / printed name lines are independent (otherwise clearing them
+   * refills from checklist / acknowledgement via mirror). */
+  const namePrimary = pickPrimaryMirrorSource([next.checklistHeader.fullName, next.mediaAck.studentName]);
   mirrorTextGroup(namePrimary, [
     { read: () => next.checklistHeader.fullName, write: (v) => { next.checklistHeader.fullName = v; } },
     { read: () => next.mediaAck.studentName, write: (v) => { next.mediaAck.studentName = v; } },
-    { read: () => next.mediaConsent.consentorNameOnLine, write: (v) => { next.mediaConsent.consentorNameOnLine = v; } },
-    { read: () => next.mediaConsent.name, write: (v) => { next.mediaConsent.name = v; } },
   ]);
 
+  /* Student signatures only — optional media consent signature may be a different person; do not mirror. */
   const sigPrimary = pickPrimaryMirrorSource([
     next.checklistDeclaration.signature,
     next.enrolment.declarationSignature,
     next.mediaAck.studentSignature,
-    next.mediaConsent.signature,
   ]);
   mirrorTextGroup(sigPrimary, [
     { read: () => next.checklistDeclaration.signature, write: (v) => { next.checklistDeclaration.signature = v; } },
     { read: () => next.enrolment.declarationSignature, write: (v) => { next.enrolment.declarationSignature = v; } },
     { read: () => next.mediaAck.studentSignature, write: (v) => { next.mediaAck.studentSignature = v; } },
-    { read: () => next.mediaConsent.signature, write: (v) => { next.mediaConsent.signature = v; } },
   ]);
 
   const declDatePrimary = pickPrimaryMirrorSource([
     next.checklistDeclaration.date,
     next.enrolment.declarationDate,
     next.mediaAck.date,
-    next.mediaConsent.date,
   ]);
   mirrorDeclDates(next, declDatePrimary);
 
@@ -233,6 +228,8 @@ export interface InductionFormPayload {
   version: 1;
   checklistHeader: ChecklistHeaderState;
   checklistRows: Record<ChecklistTopicKey, ChecklistRowState>;
+  /** When true (default), typing initials in any row updates every topic — same as assessment forms. */
+  checklistSyncInitials?: boolean;
   checklistDeclaration: ChecklistDeclarationState;
   enrolment: EnrolmentFormState;
   mediaAck: MediaAckState;
@@ -250,6 +247,7 @@ export function emptyInductionFormPayload(): InductionFormPayload {
     version: 1,
     checklistHeader: { fullName: '', studentId: '', email: '', mobile: '', course: '' },
     checklistRows: rows,
+    checklistSyncInitials: true,
     checklistDeclaration: { signature: '', date: '' },
     enrolment: {
       familyName: '',
@@ -318,11 +316,13 @@ export function validateInductionFormPayload(p: InductionFormPayload): string | 
   if (e.gender !== 'male' && e.gender !== 'female') return 'Select gender on the enrolment form.';
   if (!nonEmpty(e.studentId)) return 'Enter student ID on the enrolment form.';
   if (!nonEmpty(e.passportNumber)) return 'Enter passport number.';
-  if (!nonEmpty(e.visaNumber)) return 'Enter visa number.';
-  if (!nonEmptyIsoDate(e.visaExpiry)) return 'Choose a valid visa expiry date.';
+  if (nonEmpty(e.visaExpiry) && !nonEmptyIsoDate(e.visaExpiry)) {
+    return 'Choose a valid visa expiry date, or clear it.';
+  }
   if (!nonEmpty(e.residentialAddress)) return 'Enter residential address.';
   if (!nonEmpty(e.phone)) return 'Enter phone on the enrolment form.';
   if (!nonEmpty(e.email)) return 'Enter email on the enrolment form.';
+  if (!nonEmpty(e.usiNumber)) return 'Enter your USI number on the enrolment form.';
   if (!nonEmpty(e.emergencyName)) return 'Enter emergency contact name.';
   if (!nonEmpty(e.emergencyAddress)) return 'Enter emergency contact address.';
   if (!nonEmpty(e.emergencyPhone)) return 'Enter emergency contact telephone.';
@@ -331,15 +331,15 @@ export function validateInductionFormPayload(p: InductionFormPayload): string | 
   if (!nonEmptyIsoDate(e.declarationDate)) return 'Choose a valid date on the enrolment declaration.';
 
   const a = p.mediaAck;
-  if (!nonEmpty(a.studentName)) return 'Enter your name in the media acknowledgement section.';
-  if (!nonEmpty(a.studentSignature)) return 'Sign the media acknowledgement.';
-  if (!nonEmptyIsoDate(a.date)) return 'Choose a valid date in the media acknowledgement section.';
+  if (!nonEmpty(a.studentName)) return 'Enter your name in the CCTV / surveillance acknowledgement section.';
+  if (!nonEmpty(a.studentSignature)) return 'Sign the CCTV / surveillance acknowledgement.';
+  if (!nonEmptyIsoDate(a.date)) return 'Choose a valid date in the acknowledgement section.';
 
+  /* Media consent (promotional use) — optional; entire block may be left blank. */
   const m = p.mediaConsent;
-  if (!nonEmpty(m.consentorNameOnLine)) return 'Enter your name on the consent line (I …).';
-  if (!nonEmpty(m.name)) return 'Enter name of person giving consent.';
-  if (!nonEmpty(m.signature)) return 'Sign the media consent form.';
-  if (!nonEmptyIsoDate(m.date)) return 'Choose a valid date on the media consent form.';
+  if (nonEmpty(m.date) && !nonEmptyIsoDate(m.date)) {
+    return 'Choose a valid date on the optional consent form, or clear it.';
+  }
 
   return null;
 }
@@ -367,6 +367,7 @@ export function parseInductionPayload(raw: unknown): InductionFormPayload | null
       ...base,
       checklistHeader: { ...base.checklistHeader, ...(o.checklistHeader as ChecklistHeaderState) },
       checklistRows: rows,
+      checklistSyncInitials: o.checklistSyncInitials === false ? false : true,
       checklistDeclaration: { ...base.checklistDeclaration, ...(o.checklistDeclaration as ChecklistDeclarationState) },
       enrolment: { ...base.enrolment, ...(o.enrolment as EnrolmentFormState) },
       mediaAck: { ...base.mediaAck, ...(o.mediaAck as MediaAckState) },
