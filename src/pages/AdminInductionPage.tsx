@@ -4,19 +4,21 @@ import QRCode from 'qrcode';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { DatePicker } from '../components/ui/DatePicker';
+import { MelbourneTime12hSelect } from '../components/induction/MelbourneTime12hSelect';
 import {
   countSkylineInductionSubmissions,
   createSkylineInduction,
   deleteSkylineInduction,
   listSkylineInductions,
   listSkylineInductionSubmissions,
+  patchSkylineInductionEndAt,
   patchSkylineInductionSubmissionOffice,
   type SkylineInductionRow,
   type SkylineInductionSubmissionRow,
 } from '../lib/formEngine';
 import { normalizeInductionDateToIso } from '../lib/inductionForm';
 import { toast } from '../utils/toast';
-import { formatMelbourneDateTime, melbourneLocalToUtcIso } from '../utils/melbourneTime';
+import { formatMelbourneDateTime, melbourneLocalToUtcIso, utcIsoToMelbourneDateAndTime } from '../utils/melbourneTime';
 
 const PDF_BASE = import.meta.env.VITE_PDF_API_URL ?? '';
 
@@ -69,6 +71,10 @@ export const AdminInductionPage: React.FC = () => {
   const [officePrismsBy, setOfficePrismsBy] = useState('');
   const [officePrismsDate, setOfficePrismsDate] = useState('');
   const [officeSaving, setOfficeSaving] = useState(false);
+  const [editEndInduction, setEditEndInduction] = useState<SkylineInductionRow | null>(null);
+  const [editEndDate, setEditEndDate] = useState('');
+  const [editEndTime, setEditEndTime] = useState('17:00');
+  const [savingEnd, setSavingEnd] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -275,14 +281,46 @@ export const AdminInductionPage: React.FC = () => {
   };
 
   const onDelete = async (id: number) => {
-    if (!window.confirm('Delete this induction window? Links will stop working.')) return;
+    if (
+      !window.confirm(
+        'Remove this induction window from the list? The public link will stop working. Student submissions are kept in the database.'
+      )
+    )
+      return;
     const { error } = await deleteSkylineInduction(id);
     if (error) {
       toast.error(error.message);
       return;
     }
-    toast.success('Induction deleted.');
+    toast.success('Induction window removed.');
     await load();
+  };
+
+  const openEditEnd = (r: SkylineInductionRow) => {
+    setEditEndInduction(r);
+    const { date, time } = utcIsoToMelbourneDateAndTime(r.end_at);
+    setEditEndDate(date);
+    setEditEndTime(time || '17:00');
+  };
+
+  const saveEditEnd = async () => {
+    if (!editEndInduction || !editEndDate.trim()) return;
+    setSavingEnd(true);
+    try {
+      const endIso = melbourneLocalToUtcIso(editEndDate, editEndTime);
+      const res = await patchSkylineInductionEndAt({ inductionId: editEndInduction.id, end_at_iso: endIso });
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
+      toast.success('End time updated. The public link is unchanged.');
+      setEditEndInduction(null);
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Invalid date or time.');
+    } finally {
+      setSavingEnd(false);
+    }
   };
 
   return (
@@ -330,7 +368,7 @@ export const AdminInductionPage: React.FC = () => {
                   <th className="py-3 px-3 font-semibold text-gray-800">End (Melbourne)</th>
                   <th className="py-3 px-3 font-semibold text-gray-800">Share &amp; PDF</th>
                   <th className="py-3 px-3 font-semibold text-gray-800 whitespace-nowrap">Submissions</th>
-                  <th className="py-3 px-3 font-semibold text-gray-800 w-[100px]">Actions</th>
+                  <th className="py-3 px-3 font-semibold text-gray-800 whitespace-nowrap min-w-[132px]">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -387,9 +425,20 @@ export const AdminInductionPage: React.FC = () => {
                       </div>
                     </td>
                     <td className="py-3 px-3 align-top">
-                      <Button type="button" variant="outline" size="sm" className="text-red-700 border-red-200" onClick={() => void onDelete(r.id)}>
-                        Delete
-                      </Button>
+                      <div className="flex flex-col gap-2">
+                        <Button type="button" variant="outline" size="sm" onClick={() => openEditEnd(r)}>
+                          Edit end time
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="text-red-700 border-red-200"
+                          onClick={() => void onDelete(r.id)}
+                        >
+                          Remove
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -628,6 +677,47 @@ export const AdminInductionPage: React.FC = () => {
           </div>
         ) : null}
 
+        {editEndInduction ? (
+          <div className="fixed inset-0 z-[55] flex items-center justify-center bg-black/40 p-4" role="dialog" aria-labelledby="edit-end-title">
+            <Card className="w-full max-w-md p-6 shadow-xl">
+              <h3 id="edit-end-title" className="text-lg font-bold text-[var(--text)]">
+                Change end time
+              </h3>
+              <p className="text-sm text-gray-600 mt-1">
+                The public link and QR code stay the same. Only the window closing time changes.
+              </p>
+              <p className="text-xs text-gray-500 mt-2">
+                Current start (Melbourne):{' '}
+                <span className="font-medium text-gray-800">{formatMelbourneDateTime(editEndInduction.start_at)}</span>
+              </p>
+              <div className="mt-4 space-y-3">
+                <DatePicker
+                  label="End date (Melbourne)"
+                  value={editEndDate}
+                  onChange={setEditEndDate}
+                  placement="below"
+                  required
+                  className="w-full"
+                />
+                <MelbourneTime12hSelect
+                  label="End time (Melbourne)"
+                  value={editEndTime}
+                  onChange={setEditEndTime}
+                  disabled={savingEnd}
+                />
+              </div>
+              <div className="mt-6 flex justify-end gap-2">
+                <Button type="button" variant="outline" onClick={() => setEditEndInduction(null)} disabled={savingEnd}>
+                  Cancel
+                </Button>
+                <Button type="button" onClick={() => void saveEditEnd()} disabled={savingEnd || !editEndDate.trim()}>
+                  {savingEnd ? 'Saving…' : 'Save'}
+                </Button>
+              </div>
+            </Card>
+          </div>
+        ) : null}
+
         {showCreate && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog">
             <Card className="w-full max-w-md p-6 shadow-xl">
@@ -655,17 +745,7 @@ export const AdminInductionPage: React.FC = () => {
                   required
                   className="w-full"
                 />
-                <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">Start time</label>
-                  <input
-                    type="time"
-                    className="w-full rounded border border-gray-300 px-3 py-2 text-sm"
-                    value={startTime}
-                    onChange={(e) => setStartTime(e.target.value)}
-                    autoComplete="off"
-                    required
-                  />
-                </div>
+                <MelbourneTime12hSelect label="Start time" value={startTime} onChange={setStartTime} />
                 <DatePicker
                   label="End date"
                   value={endDate}
@@ -674,17 +754,7 @@ export const AdminInductionPage: React.FC = () => {
                   required
                   className="w-full"
                 />
-                <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">End time</label>
-                  <input
-                    type="time"
-                    className="w-full rounded border border-gray-300 px-3 py-2 text-sm"
-                    value={endTime}
-                    onChange={(e) => setEndTime(e.target.value)}
-                    autoComplete="off"
-                    required
-                  />
-                </div>
+                <MelbourneTime12hSelect label="End time" value={endTime} onChange={setEndTime} />
                 <div className="flex justify-end gap-2 pt-2">
                   <Button type="button" variant="outline" onClick={() => setShowCreate(false)}>
                     Cancel

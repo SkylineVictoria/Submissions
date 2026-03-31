@@ -61,6 +61,7 @@ app.get('/pdf/induction/:token', async (req, res) => {
       .from('skyline_inductions')
       .select('id, title, start_at, end_at')
       .eq('access_token', token)
+      .is('deleted_at', null)
       .maybeSingle();
     if (error || !row) {
       res.status(404).send('Induction not found');
@@ -173,6 +174,7 @@ app.post('/pdf/induction/:token/filled', async (req, res) => {
       .from('skyline_inductions')
       .select('id, title, start_at, end_at')
       .eq('access_token', token)
+      .is('deleted_at', null)
       .maybeSingle();
     if (error || !row) {
       res.status(404).send('Induction not found');

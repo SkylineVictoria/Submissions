@@ -9,7 +9,7 @@ import { InductionDocumentPages } from '../components/induction/InductionDocumen
 import {
   getSkylineInductionByToken,
   getSkylineInductionSubmissionState,
-  requestStudentOtp,
+  requestInductionOtp,
   submitSkylineInductionForm,
   unlockSkylineInductionSession,
   type SkylineInductionRow,
@@ -46,7 +46,7 @@ interface ClientInductionSession {
   email: string;
 }
 
-/** Student-facing induction: valid link + OTP (registered student email) to view and submit the pack. */
+/** Public induction: valid link + OTP (student or staff on file) to view and submit the pack. */
 export const PublicInductionPage: React.FC = () => {
   const { token } = useParams<{ token: string }>();
   const [row, setRow] = useState<SkylineInductionRow | null | undefined>(undefined);
@@ -182,7 +182,7 @@ export const PublicInductionPage: React.FC = () => {
       return;
     }
     setSubmitting(true);
-    const res = await requestStudentOtp(email.trim());
+    const res = await requestInductionOtp(email.trim());
     setSubmitting(false);
     if (res.success) {
       setOtpSent(true);
@@ -307,8 +307,9 @@ export const PublicInductionPage: React.FC = () => {
             <h1 className="text-xl font-bold text-[var(--text)] mb-2">Verify to view induction</h1>
             <p className="text-sm text-gray-600 mb-1">{row.title}</p>
             <p className="text-xs text-gray-500 mb-6">
-              Enter your institutional student email and use the one-time code we send you. Only students on file can open
-              this pack. You can submit once; all fields must be completed before submit.
+              Enter your institutional email (@student.slit.edu.au or @slit.edu.au) and use the one-time code we send you.
+              You must be on file as an enrolled student or staff user. You can submit once; complete all fields before
+              submit.
             </p>
             <div>
               <Input

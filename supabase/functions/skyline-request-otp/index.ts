@@ -27,7 +27,10 @@ Deno.serve(async (req) => {
   }
 
   const email = typeof body?.email === 'string' ? body.email.trim() : '';
-  const type = (body?.type === 'student' ? 'student' : 'staff') as 'staff' | 'student';
+  const type = (body?.type === 'staff' ? 'staff' : body?.type === 'induction' ? 'induction' : 'student') as
+    | 'staff'
+    | 'student'
+    | 'induction';
 
   if (!email) {
     return Response.json({ success: false, message: 'Email is required.' }, { status: 400, headers: corsHeaders });
@@ -47,7 +50,12 @@ Deno.serve(async (req) => {
 
   const supabase = createClient(supabaseUrl, serviceRoleKey);
 
-  const rpcName = type === 'student' ? 'skyline_request_student_otp' : 'skyline_request_otp';
+  const rpcName =
+    type === 'staff'
+      ? 'skyline_request_otp'
+      : type === 'induction'
+        ? 'skyline_request_induction_otp'
+        : 'skyline_request_student_otp';
   const { data, error } = await supabase.rpc(rpcName, { p_email: email });
 
   if (error) {

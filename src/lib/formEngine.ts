@@ -1146,7 +1146,10 @@ export interface StudentLoginResult {
 }
 
 /** Request OTP via Edge Function (OTP is created and email sent server-side; never exposed to client). */
-async function requestOtpViaEdgeFunction(email: string, type: 'staff' | 'student'): Promise<{ success: boolean; message: string }> {
+async function requestOtpViaEdgeFunction(
+  email: string,
+  type: 'staff' | 'student' | 'induction'
+): Promise<{ success: boolean; message: string }> {
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
   const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
   if (!supabaseUrl?.trim() || !anonKey?.trim()) {
@@ -1175,6 +1178,11 @@ async function requestOtpViaEdgeFunction(email: string, type: 'staff' | 'student
 /** Request OTP for student form access. Uses Edge Function so OTP is never sent to the client. */
 export async function requestStudentOtp(email: string): Promise<{ success: boolean; message: string }> {
   return requestOtpViaEdgeFunction(email.trim(), 'student');
+}
+
+/** Request OTP for public induction: enrolled student or active staff user (skyline_users). */
+export async function requestInductionOtp(email: string): Promise<{ success: boolean; message: string }> {
+  return requestOtpViaEdgeFunction(email.trim(), 'induction');
 }
 
 async function studentFormAccessFromId(formId: number, studentId: number): Promise<StudentLoginResult> {
@@ -1271,32 +1279,36 @@ export async function studentLoginWithOtpForForm(formId: number, email: string, 
 }
 
 /**
- * Verify student OTP for public induction pages. Only enrolled students (skyline_students) who pass OTP may view;
- * does not require a form instance.
+ * Verify induction OTP (consumes the code). Matches enrolled students or active staff users.
+ * Prefer using `unlockSkylineInductionSession` for the real flow so OTP is not verified twice.
  */
 export async function verifyStudentOtpForInduction(
   email: string,
   otp: string
 ): Promise<{ success: boolean; error?: string }> {
-  const { data: authData, error: authError } = await supabase.rpc('skyline_verify_student_otp', {
+  const { data: authData, error: authError } = await supabase.rpc('skyline_verify_induction_otp', {
     p_email: email.trim(),
     p_otp: otp.trim(),
   });
   if (authError) {
     return { success: false, error: 'Authentication failed.' };
   }
-  const authRows = authData as Array<{ id: number; email: string }> | null;
+  const authRows = authData as
+    | Array<{ student_id: number | null; guest_email: string | null; email_out: string | null }>
+    | null;
   if (!authRows || authRows.length === 0) {
     return { success: false, error: 'Invalid or expired OTP.' };
   }
-  const studentId = authRows[0].id;
-  const { data: student } = await supabase.from('skyline_students').select('status').eq('id', studentId).maybeSingle();
-  const studentStatus = (student as { status?: string | null } | null)?.status;
-  if (studentStatus === 'inactive') {
-    return {
-      success: false,
-      error: 'Your account is inactive. Contact your administrator to restore access.',
-    };
+  const row = authRows[0];
+  if (row.student_id != null) {
+    const { data: student } = await supabase.from('skyline_students').select('status').eq('id', row.student_id).maybeSingle();
+    const studentStatus = (student as { status?: string | null } | null)?.status;
+    if (studentStatus === 'inactive') {
+      return {
+        success: false,
+        error: 'Your account is inactive. Contact your administrator to restore access.',
+      };
+    }
   }
   return { success: true };
 }
@@ -3834,12 +3846,15 @@ export interface SkylineInductionRow {
   access_token: string;
   created_at: string;
   updated_at: string;
+  /** Set when admin removes the window from the list; submissions keep their rows; public link disabled. */
+  deleted_at?: string | null;
 }
 
 export async function listSkylineInductions(): Promise<SkylineInductionRow[]> {
   const { data, error } = await supabase
     .from('skyline_inductions')
     .select('id, title, start_at, end_at, access_token, created_at, updated_at')
+    .is('deleted_at', null)
     .order('start_at', { ascending: false });
   if (error) {
     console.error('listSkylineInductions error', error);
@@ -3869,9 +3884,30 @@ export async function createSkylineInduction(input: {
   return { row: data as SkylineInductionRow, error: null };
 }
 
+/** Soft-delete: keeps induction row and all submissions; public link stops working. */
 export async function deleteSkylineInduction(id: number): Promise<{ error: Error | null }> {
-  const { error } = await supabase.from('skyline_inductions').delete().eq('id', id);
+  const audit = getAuditFields();
+  const { error } = await supabase
+    .from('skyline_inductions')
+    .update({ deleted_at: new Date().toISOString(), updated_by: audit.updated_by })
+    .eq('id', id)
+    .is('deleted_at', null);
   return { error: error ? new Error(error.message) : null };
+}
+
+/** Update induction window end time (Melbourne date+time → UTC); link token unchanged. */
+export async function patchSkylineInductionEndAt(input: {
+  inductionId: number;
+  end_at_iso: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { data, error } = await supabase.rpc('skyline_admin_patch_induction_end_at', {
+    p_induction_id: input.inductionId,
+    p_end_at: input.end_at_iso,
+  });
+  if (error) return { ok: false, error: error.message };
+  const j = data as { ok?: boolean; error?: string } | null;
+  if (!j?.ok) return { ok: false, error: j?.error || 'Could not update end time.' };
+  return { ok: true };
 }
 
 export async function getSkylineInductionByToken(
@@ -3881,6 +3917,7 @@ export async function getSkylineInductionByToken(
     .from('skyline_inductions')
     .select('id, title, start_at, end_at, access_token, created_at, updated_at')
     .eq('access_token', accessToken)
+    .is('deleted_at', null)
     .maybeSingle();
   if (error) {
     console.error('getSkylineInductionByToken error', error);
