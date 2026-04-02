@@ -1,16 +1,14 @@
-// OTP request Edge Function: creates OTP in DB and sends email via Power Automate server-side.
-// The OTP is never returned to the client, so it does not appear in the network tab.
+// Induction OTP only: always calls skyline_request_induction_otp (institutional email + OTP; no staff/student mix-ups).
 
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-skyline-otp-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
 Deno.serve(async (req) => {
-  // CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
@@ -19,7 +17,7 @@ Deno.serve(async (req) => {
     return Response.json({ success: false, message: 'Method not allowed.' }, { status: 405, headers: corsHeaders });
   }
 
-  let body: { email?: string; type?: string };
+  let body: { email?: string };
   try {
     body = await req.json();
   } catch {
@@ -27,14 +25,6 @@ Deno.serve(async (req) => {
   }
 
   const email = typeof body?.email === 'string' ? body.email.trim() : '';
-  const headerKind = req.headers.get('x-skyline-otp-type')?.trim().toLowerCase() ?? '';
-  const bodyKind = typeof body?.type === 'string' ? body.type.trim().toLowerCase() : '';
-  const kind = bodyKind || headerKind;
-  const type = (kind === 'staff' ? 'staff' : kind === 'induction' ? 'induction' : 'student') as
-    | 'staff'
-    | 'student'
-    | 'induction';
-
   if (!email) {
     return Response.json({ success: false, message: 'Email is required.' }, { status: 400, headers: corsHeaders });
   }
@@ -52,36 +42,25 @@ Deno.serve(async (req) => {
   }
 
   const supabase = createClient(supabaseUrl, serviceRoleKey);
-
-  const rpcName =
-    type === 'staff'
-      ? 'skyline_request_otp'
-      : type === 'induction'
-        ? 'skyline_request_induction_otp'
-        : 'skyline_request_student_otp';
-  const { data, error } = await supabase.rpc(rpcName, { p_email: email });
-  const failFallback =
-    rpcName === 'skyline_request_induction_otp'
-      ? 'Use your @student.slit.edu.au or @slit.edu.au email, or contact your administrator.'
-      : rpcName === 'skyline_request_student_otp'
-        ? 'Student not found. Contact your administrator.'
-        : 'User not found. Contact your administrator.';
+  const { data, error } = await supabase.rpc('skyline_request_induction_otp', { p_email: email });
 
   if (error) {
-    console.error('RPC error:', error);
+    console.error('skyline_request_induction_otp RPC error:', error);
     return Response.json(
-      { success: false, message: error.message || 'Failed to request OTP.' },
+      { success: false, message: error.message || 'Failed to request induction code.' },
       { status: 200, headers: corsHeaders }
     );
   }
 
-  const row = (data as Array<{ success: boolean; otp: string | null; message: string }>)?.[0];
+  const row = (data as Array<{ success: boolean; otp: string | null; message: string | null }>)?.[0];
   if (!row) {
-    return Response.json({ success: false, message: 'Unexpected response.' }, { status: 200, headers: corsHeaders });
+    return Response.json({ success: false, message: 'Unexpected response from server.' }, { status: 200, headers: corsHeaders });
   }
   if (!row.success) {
     const msg =
-      typeof row.message === 'string' && row.message.trim() ? row.message : failFallback;
+      typeof row.message === 'string' && row.message.trim()
+        ? row.message
+        : 'Use your @student.slit.edu.au or @slit.edu.au email, or contact your administrator.';
     return Response.json({ success: false, message: msg }, { status: 200, headers: corsHeaders });
   }
 

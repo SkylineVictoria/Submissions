@@ -1155,16 +1155,34 @@ async function requestOtpViaEdgeFunction(
   if (!supabaseUrl?.trim() || !anonKey?.trim()) {
     return { success: false, message: 'App is not configured. Contact your administrator.' };
   }
-  const url = `${supabaseUrl.replace(/\/$/, '')}/functions/v1/skyline-request-otp`;
+  const base = `${supabaseUrl.replace(/\/$/, '')}/functions/v1`;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${anonKey}`,
+  };
   try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${anonKey}`,
-      },
-      body: JSON.stringify({ email: email.trim(), type }),
-    });
+    let res: Response;
+    if (type === 'induction') {
+      res = await fetch(`${base}/skyline-request-induction-otp`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ email: email.trim() }),
+      });
+      // Older projects may not have deployed the induction-only function yet.
+      if (res.status === 404) {
+        res = await fetch(`${base}/skyline-request-otp`, {
+          method: 'POST',
+          headers: { ...headers, 'X-Skyline-Otp-Type': 'induction' },
+          body: JSON.stringify({ email: email.trim(), type: 'induction' }),
+        });
+      }
+    } else {
+      res = await fetch(`${base}/skyline-request-otp`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ email: email.trim(), type }),
+      });
+    }
     const json = (await res.json().catch(() => ({}))) as { success?: boolean; message?: string };
     const success = !!json.success;
     const message = typeof json.message === 'string' ? json.message : (success ? 'OTP sent. Check your email. Valid for 10 minutes.' : 'Failed to request OTP.');
@@ -1180,7 +1198,7 @@ export async function requestStudentOtp(email: string): Promise<{ success: boole
   return requestOtpViaEdgeFunction(email.trim(), 'student');
 }
 
-/** Request OTP for public induction: enrolled student or active staff user (skyline_users). */
+/** Request OTP for public induction (@slit.edu.au / @student.slit.edu.au via skyline_request_induction_otp). */
 export async function requestInductionOtp(email: string): Promise<{ success: boolean; message: string }> {
   return requestOtpViaEdgeFunction(email.trim(), 'induction');
 }
