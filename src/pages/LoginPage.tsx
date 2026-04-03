@@ -58,9 +58,9 @@ export const LoginPage: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen flex">
+    <div className="flex min-h-[100dvh] min-h-screen w-full max-w-[100vw] flex-col overflow-x-hidden lg:flex-row">
       {/* Left: Branded panel with crest in circle */}
-      <div className="hidden lg:flex lg:w-1/2 bg-gradient-to-br from-[#F47A1F] via-[#ea580c] to-[#c2410c] items-start justify-center pt-16 p-12 relative overflow-hidden">
+      <div className="relative hidden items-start justify-center overflow-hidden bg-gradient-to-br from-[#F47A1F] via-[#ea580c] to-[#c2410c] p-12 pt-16 lg:flex lg:w-1/2">
         <div className="absolute inset-0 opacity-10">
           <div className="absolute bottom-32 right-20 w-48 h-48 rounded-full bg-white" />
         </div>
@@ -91,9 +91,9 @@ export const LoginPage: React.FC = () => {
       </div>
 
       {/* Right: Login form */}
-      <div className="flex-1 flex items-center justify-center p-6 sm:p-12 bg-[var(--bg)]">
-        <div className="w-full max-w-md">
-          <div className="lg:hidden flex justify-center mb-8">
+      <div className="flex min-h-0 flex-1 items-center justify-center bg-[var(--bg)] px-4 py-8 pb-[max(2rem,env(safe-area-inset-bottom,0px))] pt-[max(1.5rem,env(safe-area-inset-top,0px))] sm:px-6 sm:py-12 lg:p-12">
+        <div className="w-full min-w-0 max-w-md">
+          <div className="mb-6 flex justify-center lg:mb-8 lg:hidden">
             {!logoError ? (
               <img
                 src="/logo-crest.png"
@@ -107,14 +107,14 @@ export const LoginPage: React.FC = () => {
               </div>
             )}
           </div>
-          <div className="bg-white rounded-2xl shadow-xl border border-[var(--border)] p-8 sm:p-10">
-            <div className="text-center mb-8">
-              <h1 className="text-2xl font-bold text-[var(--text)]">Welcome back</h1>
-              <p className="text-gray-600 mt-2">Sign in with your Skyline email to access the app</p>
+          <div className="rounded-2xl border border-[var(--border)] bg-white p-5 shadow-xl sm:p-8 md:p-10">
+            <div className="mb-6 text-center sm:mb-8">
+              <h1 className="text-xl font-bold text-[var(--text)] sm:text-2xl">Welcome back</h1>
+              <p className="mt-2 text-sm text-gray-600 sm:text-base">Sign in with your Skyline email to access the app</p>
             </div>
 
-            <div>
-              <label htmlFor="login-email" className="block text-sm font-medium text-gray-700 mb-1.5">
+            <div className="min-w-0">
+              <label htmlFor="login-email" className="mb-1.5 block text-sm font-medium text-gray-700">
                 Email
               </label>
               <Input
@@ -125,13 +125,15 @@ export const LoginPage: React.FC = () => {
                   setEmail(e.target.value);
                   if (otpSent) setOtpSent(false);
                 }}
-                placeholder="name@slit.edu.au or name@student.slit.edu.au"
+                placeholder="you@slit.edu.au"
                 required
                 autoComplete="email"
-                className={`h-12 ${email.trim() && !emailValid ? 'border-amber-500 focus:ring-amber-500' : ''}`}
+                className={`h-12 min-w-0 ${email.trim() && !emailValid ? 'border-amber-500 focus:ring-amber-500' : ''}`}
               />
               {email.trim() && !emailValid && (
-                <p className="mt-1.5 text-sm text-amber-600">Only @slit.edu.au or @student.slit.edu.au emails can sign in.</p>
+                <p className="mt-1.5 break-words text-sm text-amber-600">
+                  Only @slit.edu.au or @student.slit.edu.au emails can sign in.
+                </p>
               )}
             </div>
 
@@ -190,7 +192,7 @@ export const LoginPage: React.FC = () => {
                         }}
                         placeholder="000000"
                         autoComplete="one-time-code"
-                        className="h-12 text-center text-lg tracking-widest"
+                        className="h-12 min-w-0 text-center text-lg tracking-widest"
                       />
                     </div>
                     <Button
@@ -209,8 +211,11 @@ export const LoginPage: React.FC = () => {
                     </Button>
                     <button
                       type="button"
-                      onClick={() => { setOtpSent(false); setOtp(''); }}
-                      className="w-full text-sm text-gray-500 hover:text-gray-700"
+                      onClick={() => {
+                        setOtpSent(false);
+                        setOtp('');
+                      }}
+                      className="w-full py-2 text-left text-sm text-gray-500 hover:text-gray-700 sm:text-center"
                     >
                       Use a different email or resend OTP
                     </button>

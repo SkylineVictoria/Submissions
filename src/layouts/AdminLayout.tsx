@@ -62,7 +62,7 @@ export const AdminLayout: React.FC = () => {
   const showSidebarLabels = isMdUp ? !sidebarCollapsed : true;
 
   return (
-    <div className="min-h-screen bg-[var(--bg)] flex">
+    <div className="flex min-h-[100dvh] min-h-screen w-full max-w-[100vw] overflow-x-hidden bg-[var(--bg)]">
       {/* Mobile: tap outside to close nav */}
       {mobileNavOpen && !isMdUp ? (
         <button
@@ -76,7 +76,8 @@ export const AdminLayout: React.FC = () => {
       {/* Single navbar/sidebar: crest (sized by expand/collapse) + toggle + nav links */}
       <aside
         className={cn(
-          'fixed top-0 bottom-0 left-0 z-40 flex flex-col border-r border-[var(--border)] bg-white shadow-sm transition-[width,transform] duration-200 ease-out',
+          'fixed bottom-0 left-0 top-0 z-40 flex h-[100dvh] max-h-[100dvh] min-h-0 flex-col overflow-hidden border-r border-[var(--border)] bg-white shadow-sm transition-[width,transform] duration-200 ease-out',
+          !isMdUp && 'pt-[env(safe-area-inset-top,0px)]',
           !isMdUp && !mobileNavOpen && '-translate-x-full',
           !isMdUp && mobileNavOpen && 'translate-x-0',
           isMdUp && 'translate-x-0'
@@ -129,8 +130,9 @@ export const AdminLayout: React.FC = () => {
             {sidebarCollapsed ? <ChevronRight className="w-5 h-5" /> : <ChevronLeft className="w-5 h-5" />}
           </button>
         </div>
-        <nav className="flex-1 overflow-x-hidden overflow-y-auto py-4">
-          <ul className="space-y-0.5 px-2">
+        {/* Scroll only the link list; keep logout pinned to the drawer bottom (flex min-height bugs on mobile). */}
+        <nav className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <ul className="min-h-0 flex-1 space-y-0.5 overflow-x-hidden overflow-y-auto px-2 py-4">
             {navItems.map((item) => (
               <li key={item.to}>
                 <NavLink
@@ -149,44 +151,47 @@ export const AdminLayout: React.FC = () => {
               </li>
             ))}
           </ul>
+          {user ? (
+            <div className="shrink-0 border-t border-[var(--border)] p-2 pb-[max(0.5rem,env(safe-area-inset-bottom,0px))]">
+              <button
+                type="button"
+                onClick={() => {
+                  logout();
+                  navigate('/login', { replace: true });
+                }}
+                className={cn(
+                  'flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100',
+                  !showSidebarLabels ? 'justify-center' : ''
+                )}
+              >
+                <LogOut className="h-5 w-5 shrink-0" />
+                {showSidebarLabels && <span className="min-w-0">Logout</span>}
+              </button>
+            </div>
+          ) : null}
         </nav>
-        {user && (
-          <div className="shrink-0 border-t border-[var(--border)] p-2">
-            <button
-              type="button"
-              onClick={() => { logout(); navigate('/login', { replace: true }); }}
-              className={cn(
-                'flex items-center gap-3 w-full rounded-lg px-3 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors',
-                !showSidebarLabels ? 'justify-center' : ''
-              )}
-            >
-              <LogOut className="w-5 h-5 shrink-0" />
-              {showSidebarLabels && <span>Logout</span>}
-            </button>
-          </div>
-        )}
       </aside>
 
       {/* Main: full width on small screens; offset by sidebar width on md+ */}
       <main
-        className="flex min-h-screen min-w-0 flex-1 flex-col transition-[margin-left] duration-200 ease-out"
+        className="flex min-h-[100dvh] min-h-screen min-w-0 flex-1 flex-col overflow-x-hidden transition-[margin-left] duration-200 ease-out"
         style={{ marginLeft: isMdUp ? width : 0 }}
       >
         {/* Mobile top bar — opens drawer nav (sidebar toggle is desktop-only) */}
         {!isMdUp ? (
-          <header className="sticky top-0 z-20 flex shrink-0 items-center gap-3 border-b border-[var(--border)] bg-white px-3 py-2.5 shadow-sm">
+          <header className="sticky top-0 z-20 flex shrink-0 items-center gap-3 border-b border-[var(--border)] bg-white px-3 py-2.5 pt-[max(0.625rem,env(safe-area-inset-top,0px))] pl-[max(0.75rem,env(safe-area-inset-left,0px))] pr-[max(0.75rem,env(safe-area-inset-right,0px))] shadow-sm">
             <button
               type="button"
               onClick={() => setMobileNavOpen(true)}
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-gray-700 hover:bg-gray-100"
+              className="flex h-11 min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-md text-gray-700 hover:bg-gray-100"
               aria-label="Open menu"
             >
               <Menu className="h-6 w-6" />
             </button>
-            <span className="truncate text-base font-semibold text-[var(--text)]">Skyline</span>
+            <span className="min-w-0 truncate text-base font-semibold text-[var(--text)]">Skyline</span>
           </header>
         ) : null}
-        <div className="min-h-0 min-w-0 flex-1">
+        <div className="min-h-0 min-w-0 flex-1 pb-[env(safe-area-inset-bottom,0px)]">
           <Outlet />
         </div>
       </main>
