@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronDown } from 'lucide-react';
 import { cn } from '../utils/cn';
@@ -45,7 +45,13 @@ export const MultiSelectAsync: React.FC<MultiSelectAsyncProps> = ({
   const selectRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const [dropdownStyle, setDropdownStyle] = useState<{ top: number; left: number; minWidth: number } | null>(null);
+  const [dropdownStyle, setDropdownStyle] = useState<{
+    top: number;
+    left: number;
+    minWidth: number;
+    maxWidth: number;
+    maxHeight: number;
+  } | null>(null);
   const [options, setOptions] = useState<MultiSelectAsyncOption[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -117,18 +123,47 @@ export const MultiSelectAsync: React.FC<MultiSelectAsyncProps> = ({
     }
   }, [page, search, loadPage, loadingMore, hasMore, loading]);
 
-  useEffect(() => {
-    if (isOpen && triggerRef.current) {
-      const rect = triggerRef.current.getBoundingClientRect();
-      setDropdownStyle({
-        top: rect.bottom + 4,
-        left: rect.left,
-        minWidth: Math.max(rect.width, 280),
-      });
-    } else {
+  const updateDropdownPosition = useCallback(() => {
+    if (!isOpen || !triggerRef.current) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    const viewportH = window.innerHeight || document.documentElement.clientHeight || 0;
+    const viewportW = window.innerWidth || document.documentElement.clientWidth || 0;
+    const margin = 8;
+    const gap = 4;
+    const spaceBelow = Math.max(0, viewportH - rect.bottom - margin);
+    const spaceAbove = Math.max(0, rect.top - margin);
+    const openDown = spaceBelow >= 200 || spaceBelow >= spaceAbove;
+    const available = openDown ? spaceBelow - gap : spaceAbove - gap;
+    const panelMax = Math.min(Math.max(200, maxHeight + 80), Math.max(160, available));
+    const top = openDown
+      ? rect.bottom + gap
+      : Math.max(margin, rect.top - panelMax - gap);
+    let left = rect.left;
+    const minW = Math.max(rect.width, 280);
+    if (left + minW > viewportW - margin) left = Math.max(margin, viewportW - minW - margin);
+    if (left < margin) left = margin;
+    setDropdownStyle({
+      top,
+      left,
+      minWidth: minW,
+      maxWidth: Math.min(400, viewportW - 16),
+      maxHeight: panelMax,
+    });
+  }, [isOpen, maxHeight]);
+
+  useLayoutEffect(() => {
+    if (!isOpen) {
       setDropdownStyle(null);
+      return;
     }
-  }, [isOpen]);
+    updateDropdownPosition();
+    window.addEventListener('scroll', updateDropdownPosition, true);
+    window.addEventListener('resize', updateDropdownPosition);
+    return () => {
+      window.removeEventListener('scroll', updateDropdownPosition, true);
+      window.removeEventListener('resize', updateDropdownPosition);
+    };
+  }, [isOpen, updateDropdownPosition]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -205,24 +240,26 @@ export const MultiSelectAsync: React.FC<MultiSelectAsyncProps> = ({
           createPortal(
             <div
               data-multiselect-async-dropdown
-              className="fixed z-[9999] bg-white border-2 border-gray-200 rounded-lg shadow-lg overflow-hidden flex flex-col"
+              className="fixed z-[10000] flex max-h-[min(360px,calc(100vh-16px))] flex-col overflow-hidden rounded-lg border-2 border-gray-200 bg-white shadow-lg"
               style={{
                 top: dropdownStyle.top,
                 left: dropdownStyle.left,
                 minWidth: dropdownStyle.minWidth,
+                maxWidth: dropdownStyle.maxWidth,
+                maxHeight: dropdownStyle.maxHeight,
               }}
             >
-              <div className="p-2 border-b border-gray-100">
+              <div className="shrink-0 border-b border-gray-100 p-2">
                 <input
                   type="text"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   placeholder={searchPlaceholder}
-                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-[var(--brand)] focus:border-[var(--brand)]"
+                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-[var(--brand)] focus:outline-none focus:ring-1 focus:ring-[var(--brand)]"
                   autoFocus
                 />
               </div>
-              <div className="overflow-y-auto py-1" ref={listRef} onScroll={handleScroll} style={{ maxHeight }}>
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain py-1" ref={listRef} onScroll={handleScroll} style={{ maxHeight }}>
                 {loading && options.length === 0 ? (
                   <div className="flex justify-center py-8">
                     <Loader variant="dots" size="sm" message="Loading..." />

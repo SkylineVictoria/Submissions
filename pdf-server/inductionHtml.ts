@@ -100,6 +100,100 @@ function esc(s: string): string {
     .replace(/"/g, '&quot;');
 }
 
+const INDUCTION_INSTRUCTION_DOC_KEYS = [
+  'health_insurance',
+  'passport_photo',
+  'academic_records',
+  'visa_copy',
+  'pte_ielts',
+] as const;
+
+const INDUCTION_INSTRUCTION_DOC_LABELS: Record<(typeof INDUCTION_INSTRUCTION_DOC_KEYS)[number], string> = {
+  health_insurance: 'Health insurance',
+  passport_photo: 'Passport sized photograph for student ID card',
+  academic_records: 'Academic records (previous from grade 10)',
+  visa_copy: 'Current visa copy',
+  pte_ielts: 'PTE or IELTS score (if given any)',
+};
+
+/** Yes/No as radio-style dots in PDF (filled black = selected, hollow ring = not). */
+function ynRadioPairPdf(value: unknown): string {
+  const v = value === 'yes' ? 'yes' : value === 'no' ? 'no' : '';
+  const yesOn = v === 'yes';
+  const noOn = v === 'no';
+  const dot = (filled: boolean) =>
+    filled
+      ? '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#000;vertical-align:1px;margin-right:3px;"></span>'
+      : '<span style="display:inline-block;width:5px;height:5px;border-radius:50%;border:1.5px solid #000;background:#fff;vertical-align:1px;margin-right:3px;"></span>';
+  return `<span style="white-space:nowrap;font-size:10pt;">${dot(yesOn)}Yes &nbsp; ${dot(noOn)}No</span>`;
+}
+
+/** Step 4 list — blank template, or inline Yes/No + Download (when submitted yes + URL) beside each label. */
+function buildStep4DocumentListHtml(P: Record<string, unknown> | null): string {
+  const docs =
+    P && typeof P.documents === 'object' && P.documents ? (P.documents as Record<string, Record<string, unknown>>) : null;
+  if (!docs) {
+    return `<li><strong>Health insurance</strong></li>
+      <li><strong>Passport sized photograph</strong> for student ID card</li>
+      <li><strong>Academic records</strong> (previous from grade 10)</li>
+      <li><strong>Current visa copy</strong></li>
+      <li><strong>PTE or IELTS score</strong> (if given any)</li>`;
+  }
+  return INDUCTION_INSTRUCTION_DOC_KEYS.map((key) => {
+    const row = docs[key];
+    const url = row?.fileUrl ? String(row.fileUrl).trim() : '';
+    const filePart =
+      row?.submitted === 'yes' && url
+        ? ` (<a href="${esc(url)}" style="color:#2563eb;text-decoration:underline;">Download</a>)`
+        : '';
+    return `<li style="font-size:10pt;margin:3px 0;line-height:1.45;"><strong>${esc(INDUCTION_INSTRUCTION_DOC_LABELS[key])}</strong> — Submitted: ${ynRadioPairPdf(row?.submitted)}${filePart}</li>`;
+  }).join('');
+}
+
+/** Page 1 instruction body — matches web `InductionDocumentPages` step order. */
+function buildInductionInstructionWatermarkHtml(period: string, P: Record<string, unknown> | null): string {
+  const login = P && typeof P.loginSetup === 'object' && P.loginSetup ? (P.loginSetup as Record<string, unknown>) : null;
+
+  return `
+    <h2 style="text-align:center;font-size:16pt;font-weight:bold;text-transform:uppercase;text-decoration:underline;margin:0 0 10px 0;line-height:1.15;">Induction instruction</h2>
+    <p class="step-title">Step 1: Login setup</p>
+    <ul class="induction-ul"><li>Install the following apps.</li></ul>
+    <ul class="induction-nested" style="margin-left:12px;">
+      <li style="line-height:1.45;"><strong>Microsoft Outlook</strong> — Logged in? ${ynRadioPairPdf(P ? login?.outlookLoggedIn : '')}</li>
+      <li style="line-height:1.45;"><strong>Microsoft Teams</strong> — Logged in? ${ynRadioPairPdf(P ? login?.teamsLoggedIn : '')}</li>
+    </ul>
+    <ul class="induction-ul"><li>Log in using the student login details sent to your personal email with the subject &quot;Student Login&quot;.</li></ul>
+    <p class="step-title">Step 2: Forms</p>
+    <ul class="induction-ul">
+      <li><strong>Fill out and sign</strong> the following forms:
+        <ul class="induction-nested">
+          <li><strong>Student Induction Checklist</strong></li>
+          <li><strong>Student Enrolment Form</strong></li>
+          <li><strong>Media Consent Form</strong></li>
+        </ul>
+      </li>
+    </ul>
+    <p class="step-title">Step 3: LLN quiz</p>
+    <ul class="induction-ul"><li>Complete the <strong>LLN quiz</strong></li></ul>
+    <p style="margin:4px 0 0 4px;font-size:11pt;line-height:1.35;"><strong>Note:</strong> Link to the quiz is shared via email. If unable to find it, please contact the administrator.</p>
+    <p class="step-title">Step 4: Submit documents</p>
+    <ul class="induction-ul"><li>Share the following documents to the email address <a href="mailto:studentsupport@slit.edu.au" style="color:#2563eb;">studentsupport@slit.edu.au</a>. Attachment is optional; you must record Yes or No for each item.</li></ul>
+    <ul class="induction-nested" style="margin-left:12px;">
+      ${buildStep4DocumentListHtml(P)}
+    </ul>
+    <div style="border:1px solid #000;padding:10px 12px;margin-top:12px;">
+      <p style="text-align:center;font-size:12pt;font-weight:bold;text-transform:uppercase;text-decoration:underline;margin:0 0 6px 0;">Important information</p>
+      <ul class="induction-ul" style="margin:0;line-height:1.35;">
+        <li>From now onwards, every email regarding the course or related to the student will be sent to the institutional email. So, always check emails regularly.</li>
+        <li>Training plan and payment plan will be shared via the institutional email after the induction.</li>
+        <li>Instructions and link to LMS will be provided shortly after induction.</li>
+        <li>In case of any query, please contact <strong>03 9125 1661</strong> or email us on <a href="mailto:studentsupport@slit.edu.au" style="color:#2563eb;font-weight:bold;">studentsupport@slit.edu.au</a></li>
+      </ul>
+    </div>
+    <p style="text-align:center;font-size:9pt;font-weight:600;text-transform:uppercase;color:#4b5563;margin-top:12px;">${esc(period)}</p>
+  `;
+}
+
 /** PDF display: ISO yyyy-MM-dd → dd/MM/yyyy; otherwise return trimmed text for escaping upstream. */
 function formatDatePdf(raw: string): string {
   const t = String(raw ?? '').trim();
@@ -293,7 +387,7 @@ function buildBlankChecklistTbody(policyRowsHtml: string, handbookRowsHtml: stri
 
 function buildChecklistHeaderHtml(P: Record<string, unknown> | null): string {
   return `<p style="margin:3px 0;font-size:10pt;"><span style="font-weight:600;">Student full name:</span> ${inlineField(P, ['checklistHeader', 'fullName'], '200px')}</p>
-    <p style="margin:3px 0;font-size:10pt;"><span style="font-weight:600;">Student ID:</span> ${inlineField(P, ['checklistHeader', 'studentId'], '200px')}</p>
+    <p style="margin:3px 0;font-size:10pt;"><span style="font-weight:600;">Student ID (optional):</span> ${inlineField(P, ['checklistHeader', 'studentId'], '200px')}</p>
     <p style="margin:3px 0;font-size:10pt;"><span style="font-weight:600;">Email:</span> ${inlineField(P, ['checklistHeader', 'email'], '180px')}
     <span style="font-weight:600;margin-left:12px;">Mobile:</span> ${inlineField(P, ['checklistHeader', 'mobile'], '120px')}</p>
     <p style="margin:3px 0;font-size:10pt;"><span style="font-weight:600;">Course:</span> ${inlineField(P, ['checklistHeader', 'course'], '240px')}</p>`;
@@ -360,7 +454,7 @@ function buildEnrolmentTableBody(P: Record<string, unknown> | null): string {
         <tr><td class="form-lbl">Family Name</td><td class="form-inp">${fi(e, 'familyName')}</td></tr>
         <tr><td class="form-lbl">Given Name/s</td><td class="form-inp">${fi(e, 'givenNames')}</td></tr>
         <tr><td class="form-lbl">Date of Birth</td><td class="form-inp">${dobLine}</td></tr>
-        <tr><td class="form-lbl">Student ID</td><td class="form-inp">${fi(e, 'studentId')}</td></tr>
+        <tr><td class="form-lbl">Student ID (optional)</td><td class="form-inp">${fi(e, 'studentId')}</td></tr>
         <tr><td class="form-lbl">Passport Number</td><td class="form-inp">${fi(e, 'passportNumber')}</td></tr>
         <tr><td class="form-lbl">Visa Number</td><td class="form-inp">${fi(e, 'visaNumber')}</td></tr>
         <tr><td class="form-lbl">Visa Expiry Date</td><td class="form-inp">${fiDate(e, 'visaExpiry')}</td></tr>
@@ -548,48 +642,7 @@ export function buildInductionPdfHtml(input: {
   <div class="induction-pdf-page induction-pdf-page--instruction">
     <div class="induction-pdf-page-body">
     ${inlineHeader}
-    ${watermark(`
-    <h2 style="text-align:center;font-size:16pt;font-weight:bold;text-transform:uppercase;text-decoration:underline;margin:0 0 10px 0;line-height:1.15;">Induction instruction</h2>
-    <p class="step-title">Step 1: Forms</p>
-    <ul class="induction-ul">
-      <li><strong>Fill out and sign</strong> the following forms:
-        <ul class="induction-nested">
-          <li><strong>Student Induction Checklist</strong></li>
-          <li><strong>Student Enrolment Form</strong></li>
-          <li><strong>Media Consent Form</strong></li>
-        </ul>
-      </li>
-    </ul>
-    <p class="step-title">Step 2: LLN quiz</p>
-    <ul class="induction-ul"><li>Complete the <strong>LLN quiz</strong></li></ul>
-    <p style="margin:4px 0 0 4px;font-size:11pt;line-height:1.35;"><strong>Note:</strong> Link to the quiz is shared via email. If unable to find it, please contact the administrator.</p>
-    <p class="step-title">Step 3: Submit documents</p>
-    <ul class="induction-ul"><li>Share the following documents to the email address <a href="mailto:studentsupport@slit.edu.au" style="color:#2563eb;">studentsupport@slit.edu.au</a>:</li></ul>
-    <ul class="induction-nested" style="margin-left:12px;">
-      <li><strong>Health insurance</strong></li>
-      <li><strong>Passport sized photograph</strong> for student ID card</li>
-      <li><strong>Academic records</strong> (previous from grade 10)</li>
-      <li><strong>Current visa copy</strong></li>
-      <li><strong>PTE or IELTS score</strong> (if given any)</li>
-    </ul>
-    <p class="step-title">Step 4: Login setup</p>
-    <ul class="induction-ul"><li>Install the following apps</li></ul>
-    <ul class="induction-nested" style="margin-left:12px;">
-      <li><strong>Microsoft Outlook</strong></li>
-      <li><strong>Microsoft Teams</strong></li>
-    </ul>
-    <ul class="induction-ul"><li>Log in using the student login details sent to your personal email with the subject &quot;Student Login&quot;.</li></ul>
-    <div style="border:1px solid #000;padding:10px 12px;margin-top:12px;">
-      <p style="text-align:center;font-size:12pt;font-weight:bold;text-transform:uppercase;text-decoration:underline;margin:0 0 6px 0;">Important information</p>
-      <ul class="induction-ul" style="margin:0;line-height:1.35;">
-        <li>From now onwards, every email regarding the course or related to the student will be sent to the institutional email. So, always check emails regularly.</li>
-        <li>Training plan and payment plan will be shared via the institutional email after the induction.</li>
-        <li>Instructions and link to LMS will be provided shortly after induction.</li>
-        <li>In case of any query, please contact <strong>03 9125 1661</strong> or email us on <a href="mailto:studentsupport@slit.edu.au" style="color:#2563eb;font-weight:bold;">studentsupport@slit.edu.au</a></li>
-      </ul>
-    </div>
-    <p style="text-align:center;font-size:9pt;font-weight:600;text-transform:uppercase;color:#4b5563;margin-top:12px;">${esc(period)}</p>
-    `)}
+    ${watermark(buildInductionInstructionWatermarkHtml(period, P))}
     <div class="induction-pdf-page-spacer" aria-hidden="true"></div>
     </div>
     <div class="induction-inner-footer"><span>Induction instructions</span><span>Page 1 of 4</span></div>

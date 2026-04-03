@@ -159,6 +159,50 @@ export const DatePicker: React.FC<DatePickerProps> = ({
     }
   }, [open, placement]);
 
+  useEffect(() => {
+    if (!open) return;
+    const update = () => {
+      if (!inputRef.current) return;
+      const rect = inputRef.current.getBoundingClientRect();
+      const viewportH = window.innerHeight || document.documentElement.clientHeight || 0;
+      const margin = 8;
+      const gap = 8;
+      const spaceBelow = Math.max(0, viewportH - rect.bottom - margin);
+      const spaceAbove = Math.max(0, rect.top - margin);
+      const preferred = placement;
+      const effectivePlacement =
+        preferred === 'above'
+          ? (spaceAbove < POPOVER_EST_HEIGHT && spaceBelow > spaceAbove ? 'below' : 'above')
+          : (spaceBelow < POPOVER_EST_HEIGHT && spaceAbove > spaceBelow ? 'above' : 'below');
+      let left = rect.left;
+      if (left + POPOVER_WIDTH > window.innerWidth - 8) {
+        left = Math.max(8, window.innerWidth - POPOVER_WIDTH - 8);
+      } else if (left < 8) {
+        left = 8;
+      }
+      const top =
+        effectivePlacement === 'below'
+          ? rect.bottom + gap
+          : Math.max(margin, rect.top - POPOVER_EST_HEIGHT - gap);
+
+      setPopoverStyle({
+        position: 'fixed',
+        top,
+        left,
+        width: POPOVER_WIDTH,
+        minWidth: POPOVER_WIDTH,
+        zIndex: 99999,
+        overflow: 'visible',
+      });
+    };
+    window.addEventListener('scroll', update, true);
+    window.addEventListener('resize', update);
+    return () => {
+      window.removeEventListener('scroll', update, true);
+      window.removeEventListener('resize', update);
+    };
+  }, [open, placement]);
+
   const handleSelect = (date: Date | undefined) => {
     if (!date) return;
     const iso = format(date, ISO_FORMAT);

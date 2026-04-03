@@ -9,6 +9,7 @@ import { Input } from '../components/ui/Input';
 import { Select } from '../components/ui/Select';
 import { Loader } from '../components/ui/Loader';
 import { toast } from '../utils/toast';
+import { AdminListPagination } from '../components/admin/AdminListPagination';
 
 const formatDateTime = (value: string | null): string => {
   if (!value) return '-';
@@ -229,6 +230,18 @@ export const DashboardPage: React.FC = () => {
             </div>
           </div>
 
+          {!loading && (
+            <AdminListPagination
+              placement="top"
+              totalItems={totalRows}
+              pageSize={PAGE_SIZE}
+              currentPage={currentPage}
+              totalPages={totalPages}
+              onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              onNext={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              itemLabel="items"
+            />
+          )}
           {loading ? (
             <Loader variant="dots" size="lg" message="Loading assessments..." />
           ) : rows.length === 0 ? (
@@ -291,30 +304,17 @@ export const DashboardPage: React.FC = () => {
             </div>
           )}
 
-          {!loading && totalRows > PAGE_SIZE && (
-            <div className="mt-4 flex justify-between items-center">
-              <span className="text-xs text-gray-500">
-                Page {currentPage} of {totalPages} ({totalRows} total)
-              </span>
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                  disabled={currentPage <= 1}
-                >
-                  Previous
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                  disabled={currentPage >= totalPages}
-                >
-                  Next
-                </Button>
-              </div>
-            </div>
+          {!loading && (
+            <AdminListPagination
+              placement="bottom"
+              totalItems={totalRows}
+              pageSize={PAGE_SIZE}
+              currentPage={currentPage}
+              totalPages={totalPages}
+              onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              onNext={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              itemLabel="items"
+            />
           )}
         </Card>
       </div>

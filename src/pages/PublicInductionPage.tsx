@@ -404,7 +404,7 @@ export const PublicInductionPage: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[var(--bg)] pb-28">
-      <div className="mx-auto w-full max-w-[220mm] px-4 py-8">
+      <div className="mx-auto w-full max-w-full px-3 py-6 sm:max-w-[220mm] sm:px-4 sm:py-8">
         {!submitted && submitBlocked ? (
           <Card className="mb-4 border-red-200 bg-red-50/90 p-4 text-sm text-gray-800">
             <p className="font-semibold text-red-900">Submission closed</p>
@@ -436,9 +436,10 @@ export const PublicInductionPage: React.FC = () => {
           <Card className="mb-4 border-amber-100 bg-amber-50/80 p-4 text-sm text-gray-800">
             <p className="font-semibold text-amber-950">Before you submit</p>
             <p className="mt-1">
-              Complete all required student fields: checklist (Yes + initials on every topic), full enrolment details, and
-              the CCTV acknowledgement on the last page. Visa number and expiry are optional; the promotional consent block
-              at the bottom of the last page is optional. You only get one submission per induction link.
+              Complete all required student fields: Step 1 login (Yes/No for Outlook and Teams), Step 4 documents (Yes/No for
+              each line; file attach is optional), checklist (Yes + initials on every topic), full enrolment details, and the
+              CCTV acknowledgement on the last page. Visa number and expiry are optional; the promotional consent block at
+              the bottom of the last page is optional. You only get one submission per induction link.
             </p>
           </Card>
         ) : null}
@@ -446,7 +447,12 @@ export const PublicInductionPage: React.FC = () => {
           title={row.title}
           startAt={row.start_at}
           endAt={row.end_at}
-          interactive={{ value: form, onChange: mergeInductionForm, readOnly: submitted }}
+          interactive={{
+            value: form,
+            onChange: mergeInductionForm,
+            readOnly: submitted,
+            inductionId: row.id,
+          }}
         />
       </div>
 

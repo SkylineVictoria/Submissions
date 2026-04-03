@@ -60,19 +60,19 @@ export const AdminFormPreviewPage: React.FC = () => {
   return (
     <div className="min-h-screen bg-[var(--bg)]">
       <header className="bg-white border-b border-[var(--border)] shadow-sm sticky top-0 z-20">
-        <div className="w-full px-4 md:px-6 py-4">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <h1 className="text-xl font-bold text-[var(--text)]">{template.form.name}</h1>
+        <div className="w-full px-3 py-3 sm:px-4 md:px-6 md:py-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              <h1 className="text-lg sm:text-xl font-bold text-[var(--text)] break-words">{template.form.name}</h1>
               <p className="text-xs text-gray-500 mt-1">Admin preview mode (non-persistent): no instance record is created.</p>
             </div>
-            <Button variant="outline" onClick={() => navigate(-1)}>Back</Button>
+            <Button variant="outline" className="w-full shrink-0 sm:w-auto" onClick={() => navigate(-1)}>Back</Button>
           </div>
         </div>
       </header>
 
-      <div className="w-full px-4 md:px-6 py-6">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+      <div className="w-full px-3 py-4 sm:px-4 md:px-6 md:py-6">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
           <div className="lg:col-span-9 space-y-6">
             <Card>
               <Stepper steps={steps} currentStep={currentStep} />
@@ -109,11 +109,11 @@ export const AdminFormPreviewPage: React.FC = () => {
               </Card>
             )}
 
-            <div className="mt-4 flex gap-2">
-              <Button variant="outline" onClick={() => setCurrentStep((p) => Math.max(1, p - 1))} disabled={currentStep <= 1}>
+            <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+              <Button variant="outline" className="w-full sm:w-auto" onClick={() => setCurrentStep((p) => Math.max(1, p - 1))} disabled={currentStep <= 1}>
                 Previous
               </Button>
-              <Button onClick={() => setCurrentStep((p) => Math.min(steps.length, p + 1))} disabled={currentStep >= steps.length}>
+              <Button className="w-full sm:w-auto" onClick={() => setCurrentStep((p) => Math.min(steps.length, p + 1))} disabled={currentStep >= steps.length}>
                 Next
               </Button>
             </div>
@@ -155,7 +155,7 @@ export const AdminFormPreviewPage: React.FC = () => {
                   </Button>
                 </a>
               </div>
-              <div className="mt-4 relative min-h-96 bg-gray-50 border border-[var(--border)] rounded-lg overflow-hidden">
+              <div className="mt-4 relative min-h-[50vh] sm:min-h-96 bg-gray-50 border border-[var(--border)] rounded-lg overflow-hidden">
                 {pdfLoading && (
                   <div className="absolute inset-0 flex items-center justify-center bg-white/80 z-10 select-none cursor-wait">
                     <Loader variant="spinner" size="lg" />
@@ -165,7 +165,7 @@ export const AdminFormPreviewPage: React.FC = () => {
                   key={pdfCacheBust}
                   src={`${PDF_BASE}/pdf/preview/form/${numericFormId}?t=${pdfCacheBust}#toolbar=0`}
                   title="Admin Preview PDF"
-                  className="w-full h-96 border-0 rounded-lg"
+                  className="h-[min(50vh,400px)] w-full border-0 rounded-lg sm:h-96"
                   onLoad={() => setPdfLoading(false)}
                 />
               </div>

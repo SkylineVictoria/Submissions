@@ -325,144 +325,231 @@ export const AdminInductionPage: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[var(--bg)]">
-      <div className="w-full px-4 md:px-6 lg:px-8 py-6">
-        <Card className="mb-6 p-6">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
+      <div className="w-full max-w-[100vw] px-3 sm:px-4 md:px-6 lg:px-8 py-4 sm:py-6">
+        <Card className="mb-4 sm:mb-6 p-4 sm:p-6">
+          <div className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between">
+            <div className="min-w-0 flex-1">
               <h2 className="text-lg font-bold text-[var(--text)]">Skyline inductions</h2>
-              <p className="text-sm text-gray-600 mt-1">
+              <p className="text-sm text-gray-600 mt-1 break-words">
                 Start and end times use Australian Eastern time (Melbourne). Share the link or QR so students can complete
                 induction online. Use <strong>View submissions</strong> to download each response as a{' '}
                 <strong>filled PDF</strong> (same four-page pack). Download the <strong>blank PDF pack</strong> from the Share column or inside the
                 submissions window to email or print for students; the public page has no PDF download.
               </p>
-
             </div>
-            <div className="flex flex-wrap gap-2">
-              <Button type="button" onClick={() => setShowCreate(true)}>
+            <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:shrink-0">
+              <Button type="button" className="w-full sm:w-auto" onClick={() => setShowCreate(true)}>
                 New induction
               </Button>
-              <Link to="/admin/enrollment">
-                <Button variant="outline">Back</Button>
+              <Link to="/admin/enrollment" className="w-full sm:w-auto">
+                <Button variant="outline" className="w-full sm:w-auto">
+                  Back
+                </Button>
               </Link>
             </div>
           </div>
         </Card>
 
-        <Card className="overflow-x-auto">
+        <Card className="overflow-x-auto" padding="none">
           {submissionCountsRpcError ? (
             <div className="mx-4 mt-4 mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
               Submission counts could not be loaded. Refresh the page or contact your administrator if this continues.
             </div>
           ) : null}
           {loading ? (
-            <div className="py-10 text-center text-sm text-gray-600">Loading…</div>
+            <div className="px-4 py-10 text-center text-sm text-gray-600">Loading…</div>
           ) : rows.length === 0 ? (
-            <div className="py-10 text-center text-sm text-gray-600">No induction windows yet. Create one to get a link and QR.</div>
+            <div className="px-4 py-10 text-center text-sm text-gray-600">No induction windows yet. Create one to get a link and QR.</div>
           ) : (
-            <table className="w-full min-w-[900px] text-sm border-collapse">
-              <thead>
-                <tr className="border-b border-gray-200 bg-gray-50 text-left">
-                  <th className="py-3 px-3 font-semibold text-gray-800">Title</th>
-                  <th className="py-3 px-3 font-semibold text-gray-800">Start (Melbourne)</th>
-                  <th className="py-3 px-3 font-semibold text-gray-800">End (Melbourne)</th>
-                  <th className="py-3 px-3 font-semibold text-gray-800">Share &amp; PDF</th>
-                  <th className="py-3 px-3 font-semibold text-gray-800 whitespace-nowrap">Submissions</th>
-                  <th className="py-3 px-3 font-semibold text-gray-800 whitespace-nowrap min-w-[132px]">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
+            <>
+              {/* Mobile: stacked cards (readable without horizontal scroll) */}
+              <div className="divide-y divide-gray-100 lg:hidden">
                 {rows.map((r) => (
-                  <tr key={r.id} className="border-b border-gray-100 hover:bg-gray-50/80">
-                    <td className="py-3 px-3 font-medium text-[var(--text)]">{r.title}</td>
-                    <td className="py-3 px-3 text-gray-700 whitespace-nowrap">{formatMelbourneDateTime(r.start_at)}</td>
-                    <td className="py-3 px-3 text-gray-700 whitespace-nowrap">{formatMelbourneDateTime(r.end_at)}</td>
-                    <td className="py-3 px-3">
-                      <div className="flex flex-wrap items-center gap-3">
+                  <div key={r.id} className="space-y-4 p-4">
+                    <div>
+                      <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Title</div>
+                      <div className="mt-0.5 font-medium text-[var(--text)] break-words">{r.title}</div>
+                    </div>
+                    <div className="grid grid-cols-1 gap-2 text-sm text-gray-700 sm:grid-cols-2">
+                      <div>
+                        <div className="text-xs font-medium text-gray-500">Start (Melbourne)</div>
+                        <div className="break-words">{formatMelbourneDateTime(r.start_at)}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs font-medium text-gray-500">End (Melbourne)</div>
+                        <div className="break-words">{formatMelbourneDateTime(r.end_at)}</div>
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs font-semibold text-gray-500 mb-2">Share &amp; PDF</div>
+                      <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
                         {qrByToken[r.access_token] ? (
                           <img
                             src={qrByToken[r.access_token]}
                             alt=""
-                            className="h-[120px] w-[120px] border border-gray-200 rounded bg-white"
+                            className="h-[120px] w-[120px] shrink-0 border border-gray-200 rounded bg-white"
                           />
                         ) : (
-                          <div className="h-[120px] w-[120px] border border-dashed border-gray-200 rounded bg-gray-50" />
+                          <div className="h-[120px] w-[120px] shrink-0 border border-dashed border-gray-200 rounded bg-gray-50" />
                         )}
-                        <div className="flex flex-col gap-2 min-w-0">
-                          <Button type="button" variant="outline" size="sm" onClick={() => void copyLink(r.access_token)}>
+                        <div className="flex min-w-0 w-full flex-col gap-2">
+                          <Button type="button" variant="outline" size="sm" className="w-full sm:w-auto" onClick={() => void copyLink(r.access_token)}>
                             Copy link
                           </Button>
                           {PDF_BASE ? (
                             <a
                               href={`${PDF_BASE}/pdf/induction/${r.access_token}?download=1`}
-                              className="text-sm font-medium text-blue-600 underline decoration-blue-600/80 hover:text-blue-700"
+                              className="text-sm font-medium text-blue-600 underline decoration-blue-600/80 hover:text-blue-700 break-words"
                             >
                               Download PDF pack
                             </a>
                           ) : null}
-                          <code className="text-xs text-gray-600 break-all max-w-[280px]">
-                            {publicInductionUrl(r.access_token)}
-                          </code>
+                          <code className="block text-xs text-gray-600 break-all">{publicInductionUrl(r.access_token)}</code>
                         </div>
                       </div>
-                    </td>
-                    <td className="py-3 px-3 align-top">
-                      <div className="flex flex-col gap-2">
-                        <span className="text-xs text-gray-600">
-                          {submissionCountsRpcError ? (
-                            '—'
-                          ) : submissionCountById[r.id] !== undefined ? (
-                            <>
-                              <strong className="text-gray-900">{submissionCountById[r.id]}</strong> received
-                            </>
-                          ) : (
-                            '…'
-                          )}
-                        </span>
-                        <Button type="button" variant="outline" size="sm" onClick={() => void openSubmissions(r)}>
-                          View submissions
-                        </Button>
+                    </div>
+                    <div className="flex flex-col gap-2 border-t border-gray-100 pt-3">
+                      <div className="text-xs text-gray-600">
+                        Submissions:{' '}
+                        {submissionCountsRpcError ? (
+                          '—'
+                        ) : submissionCountById[r.id] !== undefined ? (
+                          <>
+                            <strong className="text-gray-900">{submissionCountById[r.id]}</strong> received
+                          </>
+                        ) : (
+                          '…'
+                        )}
                       </div>
-                    </td>
-                    <td className="py-3 px-3 align-top">
-                      <div className="flex flex-col gap-2">
-                        <Button type="button" variant="outline" size="sm" onClick={() => openEditEnd(r)}>
-                          Edit end time
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="text-red-700 border-red-200"
-                          onClick={() => void onDelete(r.id)}
-                        >
-                          Remove
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
+                      <Button type="button" variant="outline" size="sm" className="w-full" onClick={() => void openSubmissions(r)}>
+                        View submissions
+                      </Button>
+                    </div>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <Button type="button" variant="outline" size="sm" className="w-full sm:flex-1" onClick={() => openEditEnd(r)}>
+                        Edit end time
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="w-full border-red-200 text-red-700 sm:flex-1"
+                        onClick={() => void onDelete(r.id)}
+                      >
+                        Remove
+                      </Button>
+                    </div>
+                  </div>
                 ))}
-              </tbody>
-            </table>
+              </div>
+
+              {/* Desktop: wide table */}
+              <div className="hidden lg:block overflow-x-auto">
+                <table className="w-full min-w-[900px] text-sm border-collapse">
+                  <thead>
+                    <tr className="border-b border-gray-200 bg-gray-50 text-left">
+                      <th className="py-3 px-3 font-semibold text-gray-800">Title</th>
+                      <th className="py-3 px-3 font-semibold text-gray-800">Start (Melbourne)</th>
+                      <th className="py-3 px-3 font-semibold text-gray-800">End (Melbourne)</th>
+                      <th className="py-3 px-3 font-semibold text-gray-800">Share &amp; PDF</th>
+                      <th className="py-3 px-3 font-semibold text-gray-800 whitespace-nowrap">Submissions</th>
+                      <th className="py-3 px-3 font-semibold text-gray-800 whitespace-nowrap min-w-[132px]">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((r) => (
+                      <tr key={r.id} className="border-b border-gray-100 hover:bg-gray-50/80">
+                        <td className="py-3 px-3 font-medium text-[var(--text)]">{r.title}</td>
+                        <td className="py-3 px-3 text-gray-700 whitespace-nowrap">{formatMelbourneDateTime(r.start_at)}</td>
+                        <td className="py-3 px-3 text-gray-700 whitespace-nowrap">{formatMelbourneDateTime(r.end_at)}</td>
+                        <td className="py-3 px-3">
+                          <div className="flex flex-wrap items-center gap-3">
+                            {qrByToken[r.access_token] ? (
+                              <img
+                                src={qrByToken[r.access_token]}
+                                alt=""
+                                className="h-[120px] w-[120px] border border-gray-200 rounded bg-white"
+                              />
+                            ) : (
+                              <div className="h-[120px] w-[120px] border border-dashed border-gray-200 rounded bg-gray-50" />
+                            )}
+                            <div className="flex flex-col gap-2 min-w-0">
+                              <Button type="button" variant="outline" size="sm" onClick={() => void copyLink(r.access_token)}>
+                                Copy link
+                              </Button>
+                              {PDF_BASE ? (
+                                <a
+                                  href={`${PDF_BASE}/pdf/induction/${r.access_token}?download=1`}
+                                  className="text-sm font-medium text-blue-600 underline decoration-blue-600/80 hover:text-blue-700"
+                                >
+                                  Download PDF pack
+                                </a>
+                              ) : null}
+                              <code className="text-xs text-gray-600 break-all max-w-[280px]">
+                                {publicInductionUrl(r.access_token)}
+                              </code>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="py-3 px-3 align-top">
+                          <div className="flex flex-col gap-2">
+                            <span className="text-xs text-gray-600">
+                              {submissionCountsRpcError ? (
+                                '—'
+                              ) : submissionCountById[r.id] !== undefined ? (
+                                <>
+                                  <strong className="text-gray-900">{submissionCountById[r.id]}</strong> received
+                                </>
+                              ) : (
+                                '…'
+                              )}
+                            </span>
+                            <Button type="button" variant="outline" size="sm" onClick={() => void openSubmissions(r)}>
+                              View submissions
+                            </Button>
+                          </div>
+                        </td>
+                        <td className="py-3 px-3 align-top">
+                          <div className="flex flex-col gap-2">
+                            <Button type="button" variant="outline" size="sm" onClick={() => openEditEnd(r)}>
+                              Edit end time
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="text-red-700 border-red-200"
+                              onClick={() => void onDelete(r.id)}
+                            >
+                              Remove
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </Card>
 
         {submissionsModal ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 overflow-y-auto" role="dialog">
-            <Card className="w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col shadow-xl my-4">
-              <div className="p-4 border-b border-gray-200 flex flex-wrap items-start justify-between gap-3">
-                <div>
+            <Card className="w-full max-w-[min(100vw-1rem,72rem)] max-h-[90vh] overflow-hidden flex flex-col shadow-xl my-4">
+              <div className="p-4 border-b border-gray-200 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0">
                   <h3 className="text-lg font-bold text-[var(--text)]">Submitted inductions</h3>
-                  <p className="text-sm text-gray-600 mt-1">{submissionsModal.title}</p>
-                  <p className="text-xs text-gray-500 mt-2">
+                  <p className="text-sm text-gray-600 mt-1 break-words">{submissionsModal.title}</p>
+                  <p className="text-xs text-gray-500 mt-2 break-words">
                     Melbourne: {formatMelbourneDateTime(submissionsModal.start_at)} → {formatMelbourneDateTime(submissionsModal.end_at)}
                   </p>
                 </div>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:justify-end">
                   {PDF_BASE ? (
                     <a
                       href={`${PDF_BASE}/pdf/induction/${submissionsModal.access_token}?download=1`}
-                      className="inline-flex items-center justify-center rounded-lg px-3 py-2 text-sm font-medium bg-[var(--brand)] text-white hover:opacity-95"
+                      className="inline-flex w-full items-center justify-center rounded-lg px-3 py-2 text-sm font-medium bg-[var(--brand)] text-white hover:opacity-95 sm:w-auto"
                     >
                       Download blank PDF pack
                     </a>
@@ -470,6 +557,7 @@ export const AdminInductionPage: React.FC = () => {
                   <Button
                     type="button"
                     variant="outline"
+                    className="w-full sm:w-auto"
                     onClick={() => {
                       setOfficeModalSub(null);
                       setSubmissionsModal(null);
@@ -490,8 +578,8 @@ export const AdminInductionPage: React.FC = () => {
                   <div className="py-12 text-center text-sm text-gray-600">No submissions yet for this window.</div>
                 ) : (
                   <>
-                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                      <div className="text-xs text-gray-600">
+                    <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0 text-center text-xs text-gray-600 sm:text-left">
                         {(() => {
                           const total = submissionsList.length;
                           const totalPages = Math.max(1, Math.ceil(total / SUBMISSIONS_PAGE_SIZE));
@@ -506,11 +594,12 @@ export const AdminInductionPage: React.FC = () => {
                           );
                         })()}
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-nowrap sm:justify-end">
                         <Button
                           type="button"
                           variant="outline"
                           size="sm"
+                          className="min-w-0"
                           onClick={() => setSubmissionsPage(1)}
                           disabled={submissionsPage <= 1}
                         >
@@ -520,6 +609,7 @@ export const AdminInductionPage: React.FC = () => {
                           type="button"
                           variant="outline"
                           size="sm"
+                          className="min-w-0"
                           onClick={() => setSubmissionsPage((p) => Math.max(1, p - 1))}
                           disabled={submissionsPage <= 1}
                         >
@@ -529,6 +619,7 @@ export const AdminInductionPage: React.FC = () => {
                           type="button"
                           variant="outline"
                           size="sm"
+                          className="min-w-0"
                           onClick={() => {
                             const totalPages = Math.max(1, Math.ceil(submissionsList.length / SUBMISSIONS_PAGE_SIZE));
                             setSubmissionsPage((p) => Math.min(totalPages, p + 1));
@@ -541,6 +632,7 @@ export const AdminInductionPage: React.FC = () => {
                           type="button"
                           variant="outline"
                           size="sm"
+                          className="min-w-0"
                           onClick={() => {
                             const totalPages = Math.max(1, Math.ceil(submissionsList.length / SUBMISSIONS_PAGE_SIZE));
                             setSubmissionsPage(totalPages);
@@ -551,68 +643,107 @@ export const AdminInductionPage: React.FC = () => {
                         </Button>
                       </div>
                     </div>
-                    <div className="border border-gray-200 rounded-lg overflow-hidden">
-                    <table className="w-full table-fixed text-sm border-collapse">
-                      <thead>
-                        <tr className="bg-gray-50 border-b border-gray-200 text-left">
-                          <th className="py-2 px-3 font-semibold text-gray-800 w-[180px]">Submitted (Melbourne)</th>
-                          <th className="py-2 px-3 font-semibold text-gray-800 w-[90px]">Type</th>
-                          <th className="py-2 px-3 font-semibold text-gray-800 w-[260px]">Email</th>
-                          <th className="py-2 px-3 font-semibold text-gray-800">Name (checklist)</th>
-                          <th className="py-2 px-3 font-semibold text-gray-800 w-[120px]">PDF</th>
-                          <th className="py-2 px-3 font-semibold text-gray-800 w-[130px]">Office use</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {submissionsList
-                          .slice(
-                            (submissionsPage - 1) * SUBMISSIONS_PAGE_SIZE,
-                            submissionsPage * SUBMISSIONS_PAGE_SIZE
-                          )
-                          .map((sub) => (
-                          <tr key={sub.id} className="border-b border-gray-100 hover:bg-gray-50/80">
-                            <td className="py-2 px-3 text-gray-700 whitespace-nowrap">{formatMelbourneDateTime(sub.submitted_at)}</td>
-                            <td className="py-2 px-3 whitespace-nowrap">
-                              {sub.guest_email ? (
-                                <span className="inline-flex rounded px-2 py-0.5 text-xs font-medium bg-amber-100 text-amber-900">
-                                  Guest
-                                </span>
-                              ) : sub.student_id != null ? (
-                                <span className="inline-flex rounded px-2 py-0.5 text-xs font-medium bg-slate-100 text-slate-800">
-                                  Student
-                                </span>
-                              ) : (
-                                <span className="text-gray-500">—</span>
-                              )}
-                            </td>
-                            <td className="py-2 px-3 text-gray-800 break-all">
-                              {sub.student_email || sub.guest_email || '—'}
-                            </td>
-                            <td className="py-2 px-3 text-gray-800 truncate" title={payloadDisplayName(sub.payload)}>
-                              {payloadDisplayName(sub.payload)}
-                            </td>
-                            <td className="py-2 px-3">
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                disabled={pdfGeneratingId === sub.id || !PDF_BASE}
-                                title={!PDF_BASE ? 'Set VITE_PDF_API_URL to the PDF server URL' : undefined}
-                                onClick={() => void downloadSubmissionPdf(sub, submissionsModal.access_token)}
-                              >
-                                {pdfGeneratingId === sub.id ? '…' : 'Download'}
-                              </Button>
-                            </td>
-                            <td className="py-2 px-3">
-                              <Button type="button" variant="outline" size="sm" onClick={() => openOfficeModal(sub)}>
-                                Edit
-                              </Button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                    {(() => {
+                      const pageSlice = submissionsList.slice(
+                        (submissionsPage - 1) * SUBMISSIONS_PAGE_SIZE,
+                        submissionsPage * SUBMISSIONS_PAGE_SIZE
+                      );
+                      return (
+                        <>
+                          <div className="space-y-3 lg:hidden">
+                            {pageSlice.map((sub) => (
+                              <div key={sub.id} className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+                                <div className="text-xs font-medium uppercase tracking-wide text-gray-500">Submitted (Melbourne)</div>
+                                <div className="mt-0.5 text-sm text-gray-800 break-words">{formatMelbourneDateTime(sub.submitted_at)}</div>
+                                <div className="mt-3 text-xs font-medium text-gray-500">Type</div>
+                                <div className="mt-0.5">
+                                  {sub.guest_email ? (
+                                    <span className="inline-flex rounded px-2 py-0.5 text-xs font-medium bg-amber-100 text-amber-900">Guest</span>
+                                  ) : sub.student_id != null ? (
+                                    <span className="inline-flex rounded px-2 py-0.5 text-xs font-medium bg-slate-100 text-slate-800">Student</span>
+                                  ) : (
+                                    <span className="text-sm text-gray-500">—</span>
+                                  )}
+                                </div>
+                                <div className="mt-3 text-xs font-medium text-gray-500">Email</div>
+                                <div className="mt-0.5 text-sm text-gray-800 break-all">{sub.student_email || sub.guest_email || '—'}</div>
+                                <div className="mt-3 text-xs font-medium text-gray-500">Name (checklist)</div>
+                                <div className="mt-0.5 text-sm text-gray-800 break-words">{payloadDisplayName(sub.payload)}</div>
+                                <div className="mt-4 flex flex-col gap-2">
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    className="w-full justify-center"
+                                    disabled={pdfGeneratingId === sub.id || !PDF_BASE}
+                                    title={!PDF_BASE ? 'Set VITE_PDF_API_URL to the PDF server URL' : undefined}
+                                    onClick={() => void downloadSubmissionPdf(sub, submissionsModal.access_token)}
+                                  >
+                                    {pdfGeneratingId === sub.id ? '…' : 'Download PDF'}
+                                  </Button>
+                                  <Button type="button" variant="outline" size="sm" className="w-full justify-center" onClick={() => openOfficeModal(sub)}>
+                                    Office use — Edit
+                                  </Button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                          <div className="hidden overflow-x-auto rounded-lg border border-gray-200 lg:block">
+                            <table className="w-full min-w-[920px] text-sm border-collapse">
+                              <thead>
+                                <tr className="bg-gray-50 border-b border-gray-200 text-left">
+                                  <th className="whitespace-nowrap py-2 px-3 font-semibold text-gray-800">Submitted (Melbourne)</th>
+                                  <th className="whitespace-nowrap py-2 px-3 font-semibold text-gray-800">Type</th>
+                                  <th className="min-w-[12rem] py-2 px-3 font-semibold text-gray-800">Email</th>
+                                  <th className="min-w-[10rem] py-2 px-3 font-semibold text-gray-800">Name (checklist)</th>
+                                  <th className="whitespace-nowrap py-2 px-3 font-semibold text-gray-800">PDF</th>
+                                  <th className="whitespace-nowrap py-2 px-3 font-semibold text-gray-800">Office use</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {pageSlice.map((sub) => (
+                                  <tr key={sub.id} className="border-b border-gray-100 hover:bg-gray-50/80">
+                                    <td className="py-2 px-3 align-top text-gray-700">
+                                      <span className="whitespace-nowrap">{formatMelbourneDateTime(sub.submitted_at)}</span>
+                                    </td>
+                                    <td className="py-2 px-3 align-top whitespace-nowrap">
+                                      {sub.guest_email ? (
+                                        <span className="inline-flex rounded px-2 py-0.5 text-xs font-medium bg-amber-100 text-amber-900">Guest</span>
+                                      ) : sub.student_id != null ? (
+                                        <span className="inline-flex rounded px-2 py-0.5 text-xs font-medium bg-slate-100 text-slate-800">Student</span>
+                                      ) : (
+                                        <span className="text-gray-500">—</span>
+                                      )}
+                                    </td>
+                                    <td className="py-2 px-3 align-top text-gray-800 break-all">{sub.student_email || sub.guest_email || '—'}</td>
+                                    <td className="max-w-[16rem] py-2 px-3 align-top text-gray-800 break-words" title={payloadDisplayName(sub.payload)}>
+                                      {payloadDisplayName(sub.payload)}
+                                    </td>
+                                    <td className="py-2 px-3 align-top">
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        disabled={pdfGeneratingId === sub.id || !PDF_BASE}
+                                        title={!PDF_BASE ? 'Set VITE_PDF_API_URL to the PDF server URL' : undefined}
+                                        onClick={() => void downloadSubmissionPdf(sub, submissionsModal.access_token)}
+                                      >
+                                        {pdfGeneratingId === sub.id ? '…' : 'Download'}
+                                      </Button>
+                                    </td>
+                                    <td className="py-2 px-3 align-top">
+                                      <Button type="button" variant="outline" size="sm" onClick={() => openOfficeModal(sub)}>
+                                        Edit
+                                      </Button>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </>
+                      );
+                    })()}
                   </>
                 )}
                 <p className="text-xs text-gray-500 mt-4">

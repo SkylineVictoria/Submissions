@@ -36,6 +36,7 @@ import { toast } from '../utils/toast';
 import { pdf } from '@react-pdf/renderer';
 import { GenericLinksPdf } from '../components/pdf/GenericLinksPdf';
 import { registerPdfFonts } from '../utils/fontLoader';
+import { AdminListPagination } from '../components/admin/AdminListPagination';
 
 const STATUS_OPTIONS = [
   { value: 'active', label: 'Active' },
@@ -722,8 +723,8 @@ export const AdminStudentsPage: React.FC = () => {
               <p className="text-sm text-gray-600 mt-1">Manage learner profiles and send form links. Students must be in a batch.</p>
               {!hasBatches && <p className="text-amber-600 text-sm mt-1">Create batches first (Batches page).</p>}
             </div>
-            <div className="flex flex-nowrap items-center gap-3 shrink-0 overflow-x-auto">
-              <div className="flex items-center gap-2">
+            <div className="flex w-full min-w-0 flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+              <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
                 <span className="text-sm text-gray-600 shrink-0">Status:</span>
                 <Select
                   value={statusFilter}
@@ -732,44 +733,57 @@ export const AdminStudentsPage: React.FC = () => {
                     setCurrentPage(1);
                   }}
                   options={STATUS_FILTER_OPTIONS}
-                  className="min-w-[120px]"
-                  portal
+                  className="min-w-0 w-full sm:min-w-[120px] sm:w-[140px]"
+                />
+                <Input
+                  value={searchTerm}
+                  onChange={(e) => {
+                    setSearchTerm(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  placeholder="Search..."
+                  className="w-full min-w-0 sm:w-48 sm:shrink-0"
                 />
               </div>
-              <Input
-                value={searchTerm}
-                onChange={(e) => {
-                  setSearchTerm(e.target.value);
-                  setCurrentPage(1);
-                }}
-                placeholder="Search..."
-                className="w-48 shrink-0"
-              />
-              <Button onClick={() => setIsCreateOpen(true)} disabled={!hasBatches} className="shrink-0">
-                <Plus className="w-4 h-4 mr-2 inline" />
-                Add Student
-              </Button>
-              <Button variant="outline" onClick={() => { setIsImportOpen(true); setImportRows([]); setImportFileName(''); }} disabled={!hasBatches} className="shrink-0">
-                <Upload className="w-4 h-4 mr-2 inline" />
-                Import Students
-              </Button>
-              {lastImportLinksPayload && (
-                <Button
-                  variant="outline"
-                  onClick={() => void downloadLastImportPdf()}
-                  className="shrink-0"
-                  title="Download generic links PDF from last import"
-                >
-                  <FileText className="w-4 h-4 mr-2 inline" />
-                  Download import PDF
+              <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:justify-end">
+                <Button onClick={() => setIsCreateOpen(true)} disabled={!hasBatches} className="w-full sm:w-auto">
+                  <Plus className="w-4 h-4 mr-2 inline" />
+                  Add Student
                 </Button>
-              )}
+                <Button variant="outline" onClick={() => { setIsImportOpen(true); setImportRows([]); setImportFileName(''); }} disabled={!hasBatches} className="w-full sm:w-auto">
+                  <Upload className="w-4 h-4 mr-2 inline" />
+                  Import Students
+                </Button>
+                {lastImportLinksPayload && (
+                  <Button
+                    variant="outline"
+                    onClick={() => void downloadLastImportPdf()}
+                    className="w-full sm:w-auto"
+                    title="Download generic links PDF from last import"
+                  >
+                    <FileText className="w-4 h-4 mr-2 inline" />
+                    Download import PDF
+                  </Button>
+                )}
+              </div>
             </div>
           </div>
         </Card>
 
         <Card>
           <h2 className="text-lg font-bold text-[var(--text)] mb-4">Student Directory</h2>
+          {!loading && (
+            <AdminListPagination
+              placement="top"
+              totalItems={totalStudents}
+              pageSize={PAGE_SIZE}
+              currentPage={currentPage}
+              totalPages={totalPages}
+              onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              onNext={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              itemLabel="students"
+            />
+          )}
           {loading ? (
             <div className="py-12">
               <Loader variant="dots" size="lg" message="Loading students..." />
@@ -777,7 +791,88 @@ export const AdminStudentsPage: React.FC = () => {
           ) : students.length === 0 ? (
             <p className="text-gray-500">No students found.</p>
           ) : (
-            <div className="overflow-x-auto">
+            <>
+              <div className="space-y-3 lg:hidden">
+                {students.map((student) => (
+                  <div
+                    key={student.id}
+                    className="rounded-lg border border-[var(--border)] bg-white p-4 shadow-sm"
+                  >
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-orange-100 text-sm font-semibold text-orange-700">
+                        {`${student.first_name?.[0] ?? ''}${student.last_name?.[0] ?? ''}`.toUpperCase() || (student.first_name?.[0] ?? student.email?.[0] ?? 'S').toUpperCase()}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="font-semibold text-[var(--text)] break-words">
+                          {[student.first_name, student.last_name].filter(Boolean).join(' ') || student.email}
+                        </div>
+                        <div className="text-xs text-gray-500">ID: {student.student_id || '—'}</div>
+                        <div className="mt-2 text-sm text-gray-700 break-words">
+                          <span className="font-medium text-gray-600">Batch: </span>
+                          {student.batch_name ?? '—'}
+                        </div>
+                        <div className="mt-1">
+                          <span
+                            className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
+                              (student.status || 'active') === 'active' ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600'
+                            }`}
+                          >
+                            {student.status || 'active'}
+                          </span>
+                        </div>
+                        <div className="mt-2 space-y-1 text-sm text-gray-700 break-all">
+                          <div className="flex items-start gap-2">
+                            <Mail className="mt-0.5 h-4 w-4 shrink-0 text-gray-400" />
+                            <span>{student.email}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Phone className="h-4 w-4 shrink-0 text-gray-400" />
+                            <span>{student.phone || 'No phone'}</span>
+                          </div>
+                        </div>
+                        <div className="mt-3">
+                          <SelectAsync
+                            value={rowFormMap[student.id] || (displayForms[0] ? String(displayForms[0].id) : '')}
+                            onChange={(v) => setRowFormMap((prev) => ({ ...prev, [student.id]: v }))}
+                            loadOptions={loadFormsOptions}
+                            placeholder="Select form"
+                            selectedLabel={
+                              (() => {
+                                const fid = rowFormMap[student.id] || (displayForms[0] ? String(displayForms[0].id) : '');
+                                const f = displayForms.find((x) => String(x.id) === fid);
+                                return f ? `${f.name} (${f.version ?? '1.0.0'})` : undefined;
+                              })()
+                            }
+                            className="w-full max-w-full"
+                          />
+                        </div>
+                        <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="w-full justify-center sm:w-auto"
+                            onClick={() => setEditingId(student.id)}
+                          >
+                            <Pencil className="mr-1 h-4 w-4" />
+                            Edit
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="w-full justify-center sm:w-auto"
+                            onClick={() => openSendDates(student.id)}
+                            disabled={sending !== null || displayForms.length === 0}
+                          >
+                            <Send className="mr-1 h-4 w-4" />
+                            {sending === student.id ? 'Saving...' : 'Send form'}
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="hidden overflow-x-auto lg:block">
               <table className="min-w-[1000px] w-full text-sm border border-[var(--border)] rounded-lg overflow-hidden">
                 <thead className="bg-gray-50 text-gray-700">
                   <tr>
@@ -872,30 +967,20 @@ export const AdminStudentsPage: React.FC = () => {
                   ))}
                 </tbody>
               </table>
-            </div>
-          )}
-          {!loading && totalStudents > PAGE_SIZE && (
-            <div className="mt-4 flex items-center justify-between gap-2">
-              <div className="text-xs text-gray-500">Page {currentPage} of {totalPages} ({totalStudents} total)</div>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                  disabled={currentPage <= 1}
-                >
-                  Previous
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                  disabled={currentPage >= totalPages}
-                >
-                  Next
-                </Button>
               </div>
-            </div>
+            </>
+          )}
+          {!loading && (
+            <AdminListPagination
+              placement="bottom"
+              totalItems={totalStudents}
+              pageSize={PAGE_SIZE}
+              currentPage={currentPage}
+              totalPages={totalPages}
+              onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              onNext={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              itemLabel="students"
+            />
           )}
         </Card>
       </div>

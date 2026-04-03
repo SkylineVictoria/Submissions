@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useLayoutEffect, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronDown } from 'lucide-react';
 import { cn } from '../utils/cn';
@@ -18,8 +18,44 @@ interface SelectProps {
   disabled?: boolean;
   className?: string;
   required?: boolean;
-  /** Render dropdown in a portal (good for tables); default false (inline inside container). */
+  /**
+   * @deprecated Dropdown always renders in a portal to avoid clipping in modals / overflow containers.
+   */
   portal?: boolean;
+}
+
+const DROPDOWN_MAX_HEIGHT = 240;
+
+type DropdownPosition = {
+  top: number;
+  left: number;
+  minWidth: number;
+  maxWidth: number;
+  maxHeight: number;
+};
+
+function computeDropdownPosition(trigger: DOMRect): DropdownPosition {
+  const margin = 8;
+  const gap = 4;
+  const viewportH = window.innerHeight || document.documentElement.clientHeight || 0;
+  const viewportW = window.innerWidth || document.documentElement.clientWidth || 0;
+  const spaceBelow = Math.max(0, viewportH - trigger.bottom - margin);
+  const spaceAbove = Math.max(0, trigger.top - margin);
+  const openDown = spaceBelow >= 160 || spaceBelow >= spaceAbove;
+  const available = openDown ? spaceBelow - gap : spaceAbove - gap;
+  const maxHeight = Math.min(DROPDOWN_MAX_HEIGHT, Math.max(120, available));
+  const top = openDown
+    ? trigger.bottom + gap
+    : Math.max(margin, trigger.top - maxHeight - gap);
+  let left = trigger.left;
+  const minWidth = Math.max(trigger.width, 180);
+  const maxWidth = Math.min(360, viewportW - 16);
+  const clampedMin = Math.min(minWidth, maxWidth);
+  if (left + clampedMin > viewportW - margin) {
+    left = Math.max(margin, viewportW - clampedMin - margin);
+  }
+  if (left < margin) left = margin;
+  return { top, left, minWidth: clampedMin, maxWidth, maxHeight };
 }
 
 export const Select: React.FC<SelectProps> = ({
@@ -32,26 +68,34 @@ export const Select: React.FC<SelectProps> = ({
   disabled,
   className,
   required,
-  portal = false,
+  portal: _portal,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const selectRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const [dropdownStyle, setDropdownStyle] = useState<{ top: number; left: number; minWidth: number } | null>(null);
+  const [dropdownStyle, setDropdownStyle] = useState<DropdownPosition | null>(null);
   const selectId = `select-${Math.random().toString(36).substr(2, 9)}`;
 
-  useEffect(() => {
-    if (isOpen && triggerRef.current) {
-      const rect = triggerRef.current.getBoundingClientRect();
-      setDropdownStyle({
-        top: rect.bottom + 4,
-        left: rect.left,
-        minWidth: rect.width,
-      });
-    } else {
-      setDropdownStyle(null);
-    }
+  const updatePosition = useCallback(() => {
+    if (!isOpen || !triggerRef.current) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    setDropdownStyle(computeDropdownPosition(rect));
   }, [isOpen]);
+
+  useLayoutEffect(() => {
+    if (!isOpen) {
+      setDropdownStyle(null);
+      return;
+    }
+    updatePosition();
+    window.addEventListener('scroll', updatePosition, true);
+    window.addEventListener('resize', updatePosition);
+    return () => {
+      window.removeEventListener('scroll', updatePosition, true);
+      window.removeEventListener('resize', updatePosition);
+    };
+  }, [isOpen, updatePosition]);
+
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -106,66 +150,45 @@ export const Select: React.FC<SelectProps> = ({
           />
         </button>
 
-        {portal && isOpen && dropdownStyle && typeof document !== 'undefined' &&
+        {isOpen && dropdownStyle && typeof document !== 'undefined' &&
           createPortal(
             <div
               data-select-dropdown
-              className="fixed z-[9999] max-h-60 overflow-auto bg-white border border-gray-200 rounded-lg py-1 shadow-xl ring-1 ring-black/5"
+              className="fixed z-[10000] flex flex-col overflow-hidden rounded-lg border border-gray-200 bg-white py-1 shadow-xl ring-1 ring-black/5"
               style={{
                 top: dropdownStyle.top,
                 left: dropdownStyle.left,
-                minWidth: 180,
-                maxWidth: 260,
+                minWidth: dropdownStyle.minWidth,
+                maxWidth: dropdownStyle.maxWidth,
+                maxHeight: dropdownStyle.maxHeight,
               }}
             >
-              {options.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={() => {
-                    onChange(option.value);
-                    setIsOpen(false);
-                  }}
-                  className={cn(
-                    'w-full px-4 py-2.5 text-left text-sm transition-colors whitespace-nowrap overflow-hidden text-ellipsis',
-                    'hover:bg-[var(--brand)] hover:text-white',
-                    value === option.value && 'bg-orange-50 text-[var(--brand)] font-semibold'
-                  )}
-                  title={option.label}
-                >
-                  {option.label}
-                </button>
-              ))}
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+                {options.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => {
+                      onChange(option.value);
+                      setIsOpen(false);
+                    }}
+                    className={cn(
+                      'w-full px-4 py-2.5 text-left text-sm transition-colors whitespace-nowrap overflow-hidden text-ellipsis',
+                      'hover:bg-[var(--brand)] hover:text-white',
+                      value === option.value && 'bg-orange-50 text-[var(--brand)] font-semibold'
+                    )}
+                    title={option.label}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
             </div>,
             document.body
-          )
-        }
-        {!portal && isOpen && (
-          <div className="absolute z-[100] left-1/2 -translate-x-1/2 mt-1 min-w-full bg-white border border-gray-200 rounded-lg max-h-60 overflow-auto shadow-xl ring-1 ring-black/5">
-            {options.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                onClick={() => {
-                  onChange(option.value);
-                  setIsOpen(false);
-                }}
-                className={cn(
-                  'w-full px-4 py-2.5 text-left text-sm transition-colors whitespace-nowrap overflow-hidden text-ellipsis',
-                  'hover:bg-[var(--brand)] hover:text-white',
-                  value === option.value && 'bg-orange-50 text-[var(--brand)] font-semibold'
-                )}
-                title={option.label}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        )}
+          )}
       </div>
       {error && <p className="mt-1.5 text-sm text-red-600">{error}</p>}
       {helperText && !error && <p className="mt-1.5 text-sm text-gray-500">{helperText}</p>}
     </div>
   );
 };
-

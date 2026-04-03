@@ -287,45 +287,83 @@ export const AdminDashboardPage: React.FC = () => {
             </div>
           </div>
 
-          <div className="border border-gray-200 rounded-lg overflow-hidden">
-            <table className="w-full table-fixed text-sm border-collapse">
-              <thead>
-                <tr className="bg-gray-50 border-b border-gray-200 text-left">
-                  <th className="py-2.5 px-3 font-semibold text-gray-800 w-[80px]">Count</th>
-                  <th className="py-2.5 px-3 font-semibold text-gray-800">Name</th>
-                  <th className="py-2.5 px-3 font-semibold text-gray-800 w-[320px]">Email</th>
-                </tr>
-              </thead>
-              <tbody>
-                {breakdownView === 'students'
-                  ? (stats?.top_pending_by_student ?? []).map((r) => (
-                      <tr key={r.student_id} className="border-b border-gray-100 hover:bg-gray-50/70">
-                        <td className="py-2.5 px-3 text-gray-900 font-semibold">{r.pending_count}</td>
-                        <td className="py-2.5 px-3 text-gray-900 truncate" title={r.student_name}>
-                          {r.student_name || '—'}
-                        </td>
-                        <td className="py-2.5 px-3 text-gray-700 break-all">{r.student_email || '—'}</td>
-                      </tr>
+          {(() => {
+            const studentRows = stats?.top_pending_by_student ?? [];
+            const trainerRows = stats?.top_pending_by_trainer ?? [];
+            const empty = breakdownView === 'students' ? studentRows.length === 0 : trainerRows.length === 0;
+            return (
+              <>
+                <div className="space-y-3 lg:hidden">
+                  {empty ? (
+                    <div className="rounded-lg border border-dashed border-gray-200 py-10 text-center text-sm text-gray-500">No rows for this filter.</div>
+                  ) : breakdownView === 'students' ? (
+                    studentRows.map((r) => (
+                      <div key={r.student_id} className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+                        <div className="flex items-baseline justify-between gap-2">
+                          <span className="text-xs font-medium uppercase tracking-wide text-gray-500">Pending</span>
+                          <span className="text-2xl font-bold tabular-nums text-gray-900">{r.pending_count}</span>
+                        </div>
+                        <div className="mt-2 text-sm font-semibold text-gray-900 break-words">{r.student_name || '—'}</div>
+                        <div className="mt-1 text-xs text-gray-600 break-all">{r.student_email || '—'}</div>
+                      </div>
                     ))
-                  : (stats?.top_pending_by_trainer ?? []).map((r) => (
-                      <tr key={r.trainer_id} className="border-b border-gray-100 hover:bg-gray-50/70">
-                        <td className="py-2.5 px-3 text-gray-900 font-semibold">{r.pending_count}</td>
-                        <td className="py-2.5 px-3 text-gray-900 truncate" title={r.trainer_name}>
-                          {r.trainer_name || '—'}
-                        </td>
-                        <td className="py-2.5 px-3 text-gray-700 break-all">{r.trainer_email || '—'}</td>
-                      </tr>
-                    ))}
-                {(breakdownView === 'students' ? (stats?.top_pending_by_student ?? []) : (stats?.top_pending_by_trainer ?? [])).length === 0 ? (
-                  <tr>
-                    <td className="py-10 px-3 text-center text-gray-500 text-sm" colSpan={3}>
-                      No rows for this filter.
-                    </td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </div>
+                  ) : (
+                    trainerRows.map((r) => (
+                      <div key={r.trainer_id} className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+                        <div className="flex items-baseline justify-between gap-2">
+                          <span className="text-xs font-medium uppercase tracking-wide text-gray-500">Pending</span>
+                          <span className="text-2xl font-bold tabular-nums text-gray-900">{r.pending_count}</span>
+                        </div>
+                        <div className="mt-2 text-sm font-semibold text-gray-900 break-words">{r.trainer_name || '—'}</div>
+                        <div className="mt-1 text-xs text-gray-600 break-all">{r.trainer_email || '—'}</div>
+                      </div>
+                    ))
+                  )}
+                </div>
+                <div className="hidden overflow-x-auto lg:block">
+                  <div className="border border-gray-200 rounded-lg overflow-hidden">
+                    <table className="w-full min-w-[520px] text-sm border-collapse">
+                      <thead>
+                        <tr className="bg-gray-50 border-b border-gray-200 text-left">
+                          <th className="py-2.5 px-3 font-semibold text-gray-800 whitespace-nowrap w-[4.5rem]">Count</th>
+                          <th className="py-2.5 px-3 font-semibold text-gray-800 min-w-[8rem]">Name</th>
+                          <th className="py-2.5 px-3 font-semibold text-gray-800 min-w-[12rem]">Email</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {breakdownView === 'students'
+                          ? studentRows.map((r) => (
+                              <tr key={r.student_id} className="border-b border-gray-100 hover:bg-gray-50/70">
+                                <td className="py-2.5 px-3 text-gray-900 font-semibold tabular-nums align-top">{r.pending_count}</td>
+                                <td className="py-2.5 px-3 text-gray-900 break-words min-w-0 max-w-[14rem]" title={r.student_name}>
+                                  {r.student_name || '—'}
+                                </td>
+                                <td className="py-2.5 px-3 text-gray-700 break-all min-w-0">{r.student_email || '—'}</td>
+                              </tr>
+                            ))
+                          : trainerRows.map((r) => (
+                              <tr key={r.trainer_id} className="border-b border-gray-100 hover:bg-gray-50/70">
+                                <td className="py-2.5 px-3 text-gray-900 font-semibold tabular-nums align-top">{r.pending_count}</td>
+                                <td className="py-2.5 px-3 text-gray-900 break-words min-w-0 max-w-[14rem]" title={r.trainer_name}>
+                                  {r.trainer_name || '—'}
+                                </td>
+                                <td className="py-2.5 px-3 text-gray-700 break-all min-w-0">{r.trainer_email || '—'}</td>
+                              </tr>
+                            ))}
+                        {empty ? (
+                          <tr>
+                            <td className="py-10 px-3 text-center text-gray-500 text-sm" colSpan={3}>
+                              No rows for this filter.
+                            </td>
+                          </tr>
+                        ) : null}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
+            );
+          })()}
         </Card>
       </div>
     </div>

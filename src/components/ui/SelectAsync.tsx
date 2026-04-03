@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronDown } from 'lucide-react';
 import { cn } from '../utils/cn';
@@ -126,33 +126,43 @@ export const SelectAsync: React.FC<SelectAsyncProps> = ({
     }
   }, [page, search, loadPage, loadingMore, hasMore, loading]);
 
-  useEffect(() => {
-    if (isOpen && triggerRef.current) {
-      const rect = triggerRef.current.getBoundingClientRect();
-      const viewportH = window.innerHeight || document.documentElement.clientHeight || 0;
-      const margin = 8;
-      const gap = 4;
-      const spaceBelow = Math.max(0, viewportH - rect.bottom - margin);
-      const spaceAbove = Math.max(0, rect.top - margin);
-      // Target height for the whole dropdown (search + list). We'll clamp to what's available.
-      const desiredMax = 360;
-      const minUsable = 180;
-      const openDown = spaceBelow >= 220 || spaceBelow >= spaceAbove;
-      const available = openDown ? spaceBelow : spaceAbove;
-      const maxHeight = Math.max(minUsable, Math.min(desiredMax, available));
-      const maxAllowed = window.innerWidth - rect.left - 16;
-      const maxW = Math.min(360, maxAllowed);
-      setDropdownStyle({
-        top: openDown ? rect.bottom + gap : Math.max(margin, rect.top - maxHeight - gap),
-        left: rect.left,
-        minWidth: Math.min(rect.width, maxW),
-        maxWidth: maxW,
-        maxHeight,
-      });
-    } else {
-      setDropdownStyle(null);
-    }
+  const updateDropdownPosition = useCallback(() => {
+    if (!isOpen || !triggerRef.current) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    const viewportH = window.innerHeight || document.documentElement.clientHeight || 0;
+    const margin = 8;
+    const gap = 4;
+    const spaceBelow = Math.max(0, viewportH - rect.bottom - margin);
+    const spaceAbove = Math.max(0, rect.top - margin);
+    const desiredMax = 360;
+    const minUsable = 180;
+    const openDown = spaceBelow >= 220 || spaceBelow >= spaceAbove;
+    const available = openDown ? spaceBelow : spaceAbove;
+    const maxHeight = Math.max(minUsable, Math.min(desiredMax, available));
+    const maxAllowed = window.innerWidth - rect.left - 16;
+    const maxW = Math.min(360, maxAllowed);
+    setDropdownStyle({
+      top: openDown ? rect.bottom + gap : Math.max(margin, rect.top - maxHeight - gap),
+      left: rect.left,
+      minWidth: Math.min(rect.width, maxW),
+      maxWidth: maxW,
+      maxHeight,
+    });
   }, [isOpen]);
+
+  useLayoutEffect(() => {
+    if (!isOpen) {
+      setDropdownStyle(null);
+      return;
+    }
+    updateDropdownPosition();
+    window.addEventListener('scroll', updateDropdownPosition, true);
+    window.addEventListener('resize', updateDropdownPosition);
+    return () => {
+      window.removeEventListener('scroll', updateDropdownPosition, true);
+      window.removeEventListener('resize', updateDropdownPosition);
+    };
+  }, [isOpen, updateDropdownPosition]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -211,7 +221,7 @@ export const SelectAsync: React.FC<SelectAsyncProps> = ({
           createPortal(
             <div
               data-select-async-dropdown
-              className="fixed z-[9999] bg-white border-2 border-gray-200 rounded-lg shadow-lg overflow-hidden flex flex-col"
+              className="fixed z-[10000] bg-white border-2 border-gray-200 rounded-lg shadow-lg overflow-hidden flex flex-col"
               style={{
                 top: dropdownStyle.top,
                 left: dropdownStyle.left,

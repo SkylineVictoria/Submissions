@@ -10,6 +10,7 @@ import { SelectAsync } from '../components/ui/SelectAsync';
 import { Modal } from '../components/ui/Modal';
 import { Loader } from '../components/ui/Loader';
 import { toast } from '../utils/toast';
+import { AdminListPagination } from '../components/admin/AdminListPagination';
 
 export const AdminFormsListPage: React.FC = () => {
   const PAGE_SIZE = 20;
@@ -185,7 +186,7 @@ export const AdminFormsListPage: React.FC = () => {
                 Create and manage assessment forms. Inactive forms are only visible to admins.
               </p>
             </div>
-            <Button onClick={() => setIsCreateOpen(true)} className="min-w-[140px]">
+            <Button onClick={() => setIsCreateOpen(true)} className="w-full md:w-auto md:min-w-[140px]">
               <Plus className="w-4 h-4 mr-2 inline" />
               Add Form
             </Button>
@@ -194,19 +195,19 @@ export const AdminFormsListPage: React.FC = () => {
 
         <Card>
           <div className="mb-4 flex flex-col gap-4">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <h2 className="text-lg font-bold text-[var(--text)]">All Forms</h2>
-              <div className="flex flex-wrap items-center gap-3">
-                <div className="relative flex-1 sm:flex-initial sm:min-w-[240px]">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <h2 className="text-lg font-bold text-[var(--text)]">Form directory</h2>
+              <div className="flex w-full flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center lg:w-auto lg:justify-end">
+                <div className="relative w-full min-w-0 sm:flex-1 sm:min-w-[220px] lg:max-w-md">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none shrink-0" />
                   <Input
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                     placeholder="Search forms..."
-                    className="!pl-10 min-w-0"
+                    className="!pl-10 min-w-0 w-full"
                   />
                 </div>
-                <div className="w-48 sm:w-56">
+                <div className="w-full min-w-0 sm:w-56 lg:w-56">
                   <SelectAsync
                     value={courseFilter}
                     onChange={(v) => setCourseFilter(v)}
@@ -215,10 +216,22 @@ export const AdminFormsListPage: React.FC = () => {
                     selectedLabel={courseFilter ? undefined : 'All courses'}
                   />
                 </div>
-                <div className="text-xs text-gray-500 shrink-0">Page {currentPage} of {totalPages} ({totalForms} total)</div>
+                <div className="hidden shrink-0 text-xs text-gray-500 lg:block">Page {currentPage} of {totalPages} ({totalForms} total)</div>
               </div>
             </div>
           </div>
+          {!loading && (
+            <AdminListPagination
+              placement="top"
+              totalItems={totalForms}
+              pageSize={PAGE_SIZE}
+              currentPage={currentPage}
+              totalPages={totalPages}
+              onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              onNext={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              itemLabel="forms"
+            />
+          )}
           {loading ? (
             <div className="py-12">
               <Loader variant="dots" size="lg" message="Loading forms..." />
@@ -226,147 +239,216 @@ export const AdminFormsListPage: React.FC = () => {
           ) : forms.length === 0 ? (
             <p className="text-gray-500 py-8">No forms yet. Click "Add Form" to create one.</p>
           ) : (
-            <div className="overflow-x-auto">
-              <div className="min-w-[700px] border border-[var(--border)] rounded-lg overflow-visible">
-              <table className="w-full text-sm">
-                <thead className="bg-gray-50 text-gray-700">
-                  <tr>
-                    <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Form Name</th>
-                    <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)] w-24">Active</th>
-                    <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)] w-28">Status</th>
-                    <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)] w-24">Version</th>
-                    <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Courses</th>
-                    <th className="text-right px-4 py-3 font-semibold border-b border-[var(--border)]">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {forms.map((form) => (
-                    <tr key={form.id} className="hover:bg-gray-50">
-                      <td className="px-4 py-3 border-b border-[var(--border)]">
-                        <div className="flex items-center gap-2">
-                          <FileText className="w-4 h-4 text-gray-400 shrink-0" />
-                          <span className="font-medium text-[var(--text)]">{form.name}</span>
+            <>
+              <div className="space-y-3 lg:hidden">
+                {forms.map((form) => (
+                  <div key={form.id} className="rounded-lg border border-[var(--border)] bg-white p-4 shadow-sm">
+                    <div className="flex items-start gap-3">
+                      <FileText className="mt-0.5 h-5 w-5 shrink-0 text-gray-400" />
+                      <div className="min-w-0 flex-1">
+                        <div className="font-semibold text-[var(--text)] break-words">{form.name}</div>
+                        <div className="mt-2">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleActive(form.id, form.active !== false)}
+                            disabled={togglingActive !== null}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-white px-2.5 py-1.5 text-sm font-medium hover:bg-gray-50 disabled:opacity-50"
+                            title={form.active !== false ? 'Click to make inactive' : 'Click to make active'}
+                          >
+                            {togglingActive === form.id ? (
+                              <Loader variant="dots" size="sm" />
+                            ) : form.active !== false ? (
+                              <>
+                                <ToggleRight className="w-4 h-4 text-green-600" />
+                                <span className="text-green-700">Active</span>
+                              </>
+                            ) : (
+                              <>
+                                <ToggleLeft className="w-4 h-4 text-gray-400" />
+                                <span className="text-gray-500">Inactive</span>
+                              </>
+                            )}
+                          </button>
                         </div>
-                      </td>
-                      <td className="px-4 py-3 border-b border-[var(--border)]">
-                        <button
-                          type="button"
-                          onClick={() => handleToggleActive(form.id, form.active !== false)}
-                          disabled={togglingActive !== null}
-                          className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-white px-2.5 py-1.5 text-sm font-medium hover:bg-gray-50 disabled:opacity-50"
-                          title={form.active !== false ? 'Click to make inactive' : 'Click to make active'}
-                        >
-                          {togglingActive === form.id ? (
-                            <Loader variant="dots" size="sm" />
-                          ) : form.active !== false ? (
-                            <>
-                              <ToggleRight className="w-4 h-4 text-green-600" />
-                              <span className="text-green-700">Active</span>
-                            </>
-                          ) : (
-                            <>
-                              <ToggleLeft className="w-4 h-4 text-gray-400" />
-                              <span className="text-gray-500">Inactive</span>
-                            </>
-                          )}
-                        </button>
-                      </td>
-                      <td className="px-4 py-3 border-b border-[var(--border)] text-gray-700">{form.status}</td>
-                      <td className="px-4 py-3 border-b border-[var(--border)] text-gray-700">{form.version || '-'}</td>
-                      <td className="px-4 py-3 border-b border-[var(--border)] text-gray-600 max-w-[200px] truncate" title={formCoursesMap.get(form.id)?.map((c) => c.name).join(', ') ?? ''}>
-                        {formCoursesMap.get(form.id)?.map((c) => c.name).join(', ') || '-'}
-                      </td>
-                      <td className="px-4 py-3 border-b border-[var(--border)] text-right">
-                        <div className="flex items-center justify-end gap-2">
+                        <div className="mt-2 text-sm text-gray-700">
+                          <span className="font-medium text-gray-600">Status: </span>
+                          {form.status}
+                        </div>
+                        <div className="text-sm text-gray-700">
+                          <span className="font-medium text-gray-600">Version: </span>
+                          {form.version || '-'}
+                        </div>
+                        <div className="mt-1 text-sm text-gray-600 break-words">
+                          <span className="font-medium text-gray-600">Courses: </span>
+                          {formCoursesMap.get(form.id)?.map((c) => c.name).join(', ') || '—'}
+                        </div>
+                        <div className="mt-3 flex flex-col gap-2">
                           <Button
                             variant="outline"
                             size="sm"
-                            className="inline-flex min-w-[90px] items-center justify-center gap-1.5"
+                            className="w-full justify-center"
                             onClick={() => handlePreview(form.id)}
                             disabled={previewing !== null}
                           >
-                            {previewing === form.id ? <Loader variant="dots" size="sm" inline /> : <Eye className="w-4 h-4 shrink-0" />}
+                            {previewing === form.id ? <Loader variant="dots" size="sm" inline /> : <Eye className="mr-2 h-4 w-4 shrink-0" />}
                             Preview
                           </Button>
-                          <Link to={`/admin/forms/${form.id}/builder`}>
-                            <Button variant="outline" size="sm" className="inline-flex min-w-[90px] items-center justify-center gap-1.5">
-                              <Edit className="w-4 h-4 shrink-0" />
-                              Edit
+                          <Link to={`/admin/forms/${form.id}/builder`} className="block w-full">
+                            <Button variant="outline" size="sm" className="w-full justify-center">
+                              <Edit className="mr-2 h-4 w-4 shrink-0" />
+                              Edit in builder
                             </Button>
                           </Link>
-                          <div ref={openMenuId === form.id ? menuRef : undefined} className="relative">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="inline-flex w-9 shrink-0 items-center justify-center !px-0"
-                              data-menu-trigger
-                              onClick={(e) => toggleMenuFor(form.id, e.currentTarget)}
-                              disabled={duplicating !== null}
-                              aria-label="More options"
-                            >
-                              {duplicating === form.id ? (
-                                <Loader variant="dots" size="sm" />
-                              ) : (
-                                <MoreVertical className="w-4 h-4" />
-                              )}
+                          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                            <Button variant="outline" size="sm" className="w-full justify-center" onClick={() => void handleCopyGenericLink(form.id)} disabled={duplicating !== null}>
+                              <Copy className="mr-2 h-4 w-4 shrink-0" />
+                              Copy link
                             </Button>
-                            {openMenuId === form.id && (
-                              <div
-                                className={`absolute right-0 z-50 min-w-[190px] rounded-md border border-[var(--border)] bg-white py-1 shadow-lg ${
-                                  openMenuPlacement === 'up' ? 'bottom-full mb-1' : 'top-full mt-1'
-                                }`}
-                                role="menu"
-                              >
-                                <button
-                                  type="button"
-                                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--text)] hover:bg-gray-100"
-                                  onClick={() => void handleCopyGenericLink(form.id)}
-                                  role="menuitem"
-                                >
-                                  <Copy className="w-4 h-4" />
-                                  Copy generic link
-                                </button>
-                                <div className="my-1 h-px bg-gray-100" />
-                                <button
-                                  type="button"
-                                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--text)] hover:bg-gray-100"
-                                  onClick={() => handleDuplicate(form.id)}
-                                  role="menuitem"
-                                >
-                                  <Copy className="w-4 h-4" />
-                                  Duplicate
-                                </button>
-                              </div>
-                            )}
+                            <Button variant="outline" size="sm" className="w-full justify-center" onClick={() => handleDuplicate(form.id)} disabled={duplicating !== null}>
+                              {duplicating === form.id ? <Loader variant="dots" size="sm" inline className="mr-2" /> : <Copy className="mr-2 h-4 w-4 shrink-0" />}
+                              Duplicate
+                            </Button>
                           </div>
                         </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
-            </div>
+              <div className="hidden overflow-x-auto lg:block">
+                <div className="min-w-[700px] border border-[var(--border)] rounded-lg overflow-visible">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 text-gray-700">
+                      <tr>
+                        <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Form Name</th>
+                        <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)] w-24">Active</th>
+                        <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)] w-28">Status</th>
+                        <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)] w-24">Version</th>
+                        <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Courses</th>
+                        <th className="text-right px-4 py-3 font-semibold border-b border-[var(--border)]">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {forms.map((form) => (
+                        <tr key={form.id} className="hover:bg-gray-50">
+                          <td className="px-4 py-3 border-b border-[var(--border)]">
+                            <div className="flex items-center gap-2">
+                              <FileText className="w-4 h-4 text-gray-400 shrink-0" />
+                              <span className="font-medium text-[var(--text)]">{form.name}</span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 border-b border-[var(--border)]">
+                            <button
+                              type="button"
+                              onClick={() => handleToggleActive(form.id, form.active !== false)}
+                              disabled={togglingActive !== null}
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-white px-2.5 py-1.5 text-sm font-medium hover:bg-gray-50 disabled:opacity-50"
+                              title={form.active !== false ? 'Click to make inactive' : 'Click to make active'}
+                            >
+                              {togglingActive === form.id ? (
+                                <Loader variant="dots" size="sm" />
+                              ) : form.active !== false ? (
+                                <>
+                                  <ToggleRight className="w-4 h-4 text-green-600" />
+                                  <span className="text-green-700">Active</span>
+                                </>
+                              ) : (
+                                <>
+                                  <ToggleLeft className="w-4 h-4 text-gray-400" />
+                                  <span className="text-gray-500">Inactive</span>
+                                </>
+                              )}
+                            </button>
+                          </td>
+                          <td className="px-4 py-3 border-b border-[var(--border)] text-gray-700">{form.status}</td>
+                          <td className="px-4 py-3 border-b border-[var(--border)] text-gray-700">{form.version || '-'}</td>
+                          <td className="px-4 py-3 border-b border-[var(--border)] text-gray-600 max-w-[200px] truncate" title={formCoursesMap.get(form.id)?.map((c) => c.name).join(', ') ?? ''}>
+                            {formCoursesMap.get(form.id)?.map((c) => c.name).join(', ') || '-'}
+                          </td>
+                          <td className="px-4 py-3 border-b border-[var(--border)] text-right">
+                            <div className="flex items-center justify-end gap-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="inline-flex min-w-[90px] items-center justify-center gap-1.5"
+                                onClick={() => handlePreview(form.id)}
+                                disabled={previewing !== null}
+                              >
+                                {previewing === form.id ? <Loader variant="dots" size="sm" inline /> : <Eye className="w-4 h-4 shrink-0" />}
+                                Preview
+                              </Button>
+                              <Link to={`/admin/forms/${form.id}/builder`}>
+                                <Button variant="outline" size="sm" className="inline-flex min-w-[90px] items-center justify-center gap-1.5">
+                                  <Edit className="w-4 h-4 shrink-0" />
+                                  Edit
+                                </Button>
+                              </Link>
+                              <div ref={openMenuId === form.id ? menuRef : undefined} className="relative">
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="inline-flex w-9 shrink-0 items-center justify-center !px-0"
+                                  data-menu-trigger
+                                  onClick={(e) => toggleMenuFor(form.id, e.currentTarget)}
+                                  disabled={duplicating !== null}
+                                  aria-label="More options"
+                                >
+                                  {duplicating === form.id ? (
+                                    <Loader variant="dots" size="sm" />
+                                  ) : (
+                                    <MoreVertical className="w-4 h-4" />
+                                  )}
+                                </Button>
+                                {openMenuId === form.id && (
+                                  <div
+                                    className={`absolute right-0 z-50 min-w-[190px] rounded-md border border-[var(--border)] bg-white py-1 shadow-lg ${
+                                      openMenuPlacement === 'up' ? 'bottom-full mb-1' : 'top-full mt-1'
+                                    }`}
+                                    role="menu"
+                                  >
+                                    <button
+                                      type="button"
+                                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--text)] hover:bg-gray-100"
+                                      onClick={() => void handleCopyGenericLink(form.id)}
+                                      role="menuitem"
+                                    >
+                                      <Copy className="w-4 h-4" />
+                                      Copy generic link
+                                    </button>
+                                    <div className="my-1 h-px bg-gray-100" />
+                                    <button
+                                      type="button"
+                                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--text)] hover:bg-gray-100"
+                                      onClick={() => handleDuplicate(form.id)}
+                                      role="menuitem"
+                                    >
+                                      <Copy className="w-4 h-4" />
+                                      Duplicate
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
           )}
-          {!loading && totalForms > PAGE_SIZE && (
-            <div className="mt-4 flex items-center justify-end gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                disabled={currentPage <= 1}
-              >
-                Previous
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                disabled={currentPage >= totalPages}
-              >
-                Next
-              </Button>
-            </div>
+          {!loading && (
+            <AdminListPagination
+              placement="bottom"
+              totalItems={totalForms}
+              pageSize={PAGE_SIZE}
+              currentPage={currentPage}
+              totalPages={totalPages}
+              onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              onNext={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              itemLabel="forms"
+            />
           )}
         </Card>
       </div>

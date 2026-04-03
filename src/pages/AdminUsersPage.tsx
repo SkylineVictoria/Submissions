@@ -19,6 +19,7 @@ import { EmailWithDomainPicker } from '../components/ui/EmailWithDomainPicker';
 import { Modal } from '../components/ui/Modal';
 import { Loader } from '../components/ui/Loader';
 import { toast } from '../utils/toast';
+import { AdminListPagination } from '../components/admin/AdminListPagination';
 
 const ROLE_OPTIONS = [
   { value: 'admin', label: 'Admin' },
@@ -227,8 +228,8 @@ export const AdminUsersPage: React.FC = () => {
               Manage user directory. Add Admin, Trainer, or Office Use. Batches are assigned to trainers on the Batches page.
             </p>
           </div>
-          <div className="flex flex-nowrap items-center gap-3 mt-4 overflow-x-auto">
-              <div className="flex items-center gap-2">
+          <div className="mt-4 flex w-full min-w-0 flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+              <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
                 <span className="text-sm text-gray-600 shrink-0">Role:</span>
                 <Select
                   value={roleFilter}
@@ -237,11 +238,8 @@ export const AdminUsersPage: React.FC = () => {
                     setCurrentPage(1);
                   }}
                   options={ROLE_FILTER_OPTIONS}
-                  className="min-w-[120px]"
-                  portal
+                  className="min-w-0 w-full sm:w-[140px]"
                 />
-              </div>
-              <div className="flex items-center gap-2">
                 <span className="text-sm text-gray-600 shrink-0">Status:</span>
                 <Select
                   value={statusFilter}
@@ -250,20 +248,19 @@ export const AdminUsersPage: React.FC = () => {
                     setCurrentPage(1);
                   }}
                   options={STATUS_FILTER_OPTIONS}
-                  className="min-w-[120px]"
-                  portal
+                  className="min-w-0 w-full sm:w-[140px]"
+                />
+                <Input
+                  value={searchTerm}
+                  onChange={(e) => {
+                    setSearchTerm(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  placeholder="Search..."
+                  className="w-full min-w-0 sm:w-48"
                 />
               </div>
-              <Input
-                value={searchTerm}
-                onChange={(e) => {
-                  setSearchTerm(e.target.value);
-                  setCurrentPage(1);
-                }}
-                placeholder="Search..."
-                className="w-48 shrink-0"
-              />
-              <Button onClick={() => setIsCreateOpen(true)} className="shrink-0">
+              <Button onClick={() => setIsCreateOpen(true)} className="w-full shrink-0 sm:w-auto">
                 <Plus className="w-4 h-4 mr-2 inline" />
                 Add User
               </Button>
@@ -272,6 +269,18 @@ export const AdminUsersPage: React.FC = () => {
 
         <Card>
           <h2 className="text-lg font-bold text-[var(--text)] mb-4">User Directory</h2>
+          {!loading && (
+            <AdminListPagination
+              placement="top"
+              totalItems={totalUsers}
+              pageSize={PAGE_SIZE}
+              currentPage={currentPage}
+              totalPages={totalPages}
+              onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              onNext={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              itemLabel="users"
+            />
+          )}
           {loading ? (
             <div className="py-12">
               <Loader variant="dots" size="lg" message="Loading users..." />
@@ -279,7 +288,65 @@ export const AdminUsersPage: React.FC = () => {
           ) : users.length === 0 ? (
             <p className="text-gray-500">No users found.</p>
           ) : (
-            <div className="overflow-x-auto">
+            <>
+              <div className="space-y-3 lg:hidden">
+                {users.map((user) => (
+                  <div key={user.id} className="rounded-lg border border-[var(--border)] bg-white p-4 shadow-sm">
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-orange-100 text-sm font-semibold text-orange-700">
+                        {user.full_name.slice(0, 2).toUpperCase()}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="font-semibold text-[var(--text)] break-words">{user.full_name}</div>
+                        <div className="text-xs text-gray-500">ID: {user.id}</div>
+                        <div className="mt-2 flex items-center gap-2 text-sm text-gray-700">
+                          <RoleIcon role={user.role} />
+                          <span className="font-medium">{roleLabel(user.role)}</span>
+                        </div>
+                        <div className="mt-2 space-y-1 text-sm break-all text-gray-700">
+                          <div className="flex items-start gap-2">
+                            <Mail className="mt-0.5 h-4 w-4 shrink-0 text-gray-400" />
+                            <span>{user.email}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Phone className="h-4 w-4 shrink-0 text-gray-400" />
+                            <span>{user.phone || '-'}</span>
+                          </div>
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {(user.role === 'trainer' || user.role === 'admin') &&
+                            batches
+                              .filter((b) => b.trainer_id === user.id)
+                              .map((b) => (
+                                <span key={b.id} className="inline-flex rounded bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
+                                  {b.name}
+                                </span>
+                              ))}
+                          {((user.role !== 'trainer' && user.role !== 'admin') || batches.filter((b) => b.trainer_id === user.id).length === 0) && (
+                            <span className="text-xs text-gray-400">—</span>
+                          )}
+                        </div>
+                        <div className="mt-2">
+                          <span
+                            className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
+                              (user.status || 'active') === 'active' ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600'
+                            }`}
+                          >
+                            {user.status || 'active'}
+                          </span>
+                        </div>
+                        <div className="mt-3">
+                          <Button variant="outline" size="sm" className="w-full" onClick={() => setEditingId(user.id)}>
+                            <Pencil className="mr-1 h-4 w-4" />
+                            Edit
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="hidden overflow-x-auto lg:block">
               <table className="min-w-[900px] w-full text-sm border border-[var(--border)] rounded-lg overflow-hidden">
                 <thead className="bg-gray-50 text-gray-700">
                   <tr>
@@ -365,32 +432,20 @@ export const AdminUsersPage: React.FC = () => {
                   ))}
                 </tbody>
               </table>
-            </div>
+              </div>
+            </>
           )}
-          {!loading && totalUsers > PAGE_SIZE && (
-            <div className="mt-4 flex items-center justify-between gap-2">
-              <div className="text-xs text-gray-500">
-                Page {currentPage} of {totalPages} ({totalUsers} total)
-              </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                  disabled={currentPage <= 1}
-                >
-                  Previous
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                  disabled={currentPage >= totalPages}
-                >
-                  Next
-                </Button>
-              </div>
-            </div>
+          {!loading && (
+            <AdminListPagination
+              placement="bottom"
+              totalItems={totalUsers}
+              pageSize={PAGE_SIZE}
+              currentPage={currentPage}
+              totalPages={totalPages}
+              onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              onNext={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              itemLabel="users"
+            />
           )}
         </Card>
       </div>

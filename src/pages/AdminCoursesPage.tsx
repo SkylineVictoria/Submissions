@@ -470,7 +470,7 @@ export const AdminCoursesPage: React.FC = () => {
                 Categories for forms. One course can have many forms; one form can belong to many courses.
               </p>
             </div>
-            <Button onClick={() => setIsCreateOpen(true)} className="min-w-[140px]">
+            <Button onClick={() => setIsCreateOpen(true)} className="w-full md:w-auto md:min-w-[140px]">
               <Plus className="w-4 h-4 mr-2 inline" />
               Add Course
             </Button>
@@ -481,26 +481,30 @@ export const AdminCoursesPage: React.FC = () => {
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
             <h2 className="text-lg font-bold text-[var(--text)]">Course Directory</h2>
             {!loading && totalCourses > COURSE_PAGE_SIZE && (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-gray-500">
+              <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:justify-end sm:gap-3">
+                <span className="text-center text-xs text-gray-500 sm:text-left">
                   Page {currentPage} of {totalPages} ({totalCourses} total)
                 </span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                  disabled={currentPage <= 1}
-                >
-                  Previous
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                  disabled={currentPage >= totalPages}
-                >
-                  Next
-                </Button>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="min-w-0 flex-1 sm:flex-initial"
+                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                    disabled={currentPage <= 1}
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="min-w-0 flex-1 sm:flex-initial"
+                    onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={currentPage >= totalPages}
+                  >
+                    Next
+                  </Button>
+                </div>
               </div>
             )}
           </div>
@@ -511,7 +515,62 @@ export const AdminCoursesPage: React.FC = () => {
           ) : courses.length === 0 ? (
             <p className="text-gray-500">No courses yet. Create a course and assign forms to it.</p>
           ) : (
-            <div className="overflow-x-auto">
+            <>
+              <div className="space-y-3 lg:hidden">
+                {courses.map((course) => (
+                  <div key={course.id} className="rounded-lg border border-[var(--border)] bg-white p-4 shadow-sm">
+                    <div className="flex items-start gap-2">
+                      <FileText className="mt-0.5 h-5 w-5 shrink-0 text-gray-400" />
+                      <div className="min-w-0 flex-1">
+                        <div className="font-medium text-[var(--text)] break-words">{course.name}</div>
+                        <div className="mt-1 text-sm text-gray-700">
+                          Code: {course.qualification_code?.trim() || qualificationCodeMap[course.id] || '-'}
+                        </div>
+                        <div className="mt-1 text-sm text-gray-700">
+                          {formCountMap[course.id] ?? '...'} form{formCountMap[course.id] !== 1 ? 's' : ''}
+                        </div>
+                        <div className="mt-3 flex flex-col gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="w-full justify-center"
+                            onClick={() => {
+                              setSendCourseId(course.id);
+                              setSendOpen(true);
+                              setSendFormIds([]);
+                              setSendBatchId('');
+                              setSendStudents([]);
+                              setSelectedStudentIds([]);
+                            }}
+                          >
+                            <Send className="mr-1 h-4 w-4" />
+                            Send units
+                          </Button>
+                          <Button variant="outline" size="sm" className="w-full justify-center" onClick={() => void openDownloads(course.id)}>
+                            <FileText className="mr-1 h-4 w-4" />
+                            Downloads
+                          </Button>
+                          <Button variant="outline" size="sm" className="w-full justify-center" onClick={() => setEditingId(course.id)}>
+                            <Pencil className="mr-1 h-4 w-4" />
+                            Edit
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="w-full justify-center text-red-600 hover:border-red-300"
+                            onClick={() => handleDelete(course.id, course.name)}
+                            disabled={deletingId === course.id}
+                          >
+                            {deletingId === course.id ? <Loader variant="dots" size="sm" inline /> : <Trash2 className="mr-1 h-4 w-4" />}
+                            Delete
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="hidden overflow-x-auto lg:block">
               <table className="min-w-[760px] w-full text-sm border border-[var(--border)] rounded-lg overflow-hidden">
                 <thead className="bg-gray-50 text-gray-700">
                   <tr>
@@ -594,7 +653,8 @@ export const AdminCoursesPage: React.FC = () => {
                   ))}
                 </tbody>
               </table>
-            </div>
+              </div>
+            </>
           )}
         </Card>
       </div>

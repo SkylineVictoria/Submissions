@@ -436,7 +436,6 @@ function SortableSectionItem({
               value={section.pdf_render_mode}
               onChange={onPdfModeChange}
               options={PDF_RENDER_MODES}
-              portal
             />
             {(section.pdf_render_mode === 'task_instructions' || section.pdf_render_mode === 'task_questions' || section.pdf_render_mode === 'task_written_evidence_checklist' || section.pdf_render_mode === 'task_marking_checklist' || section.pdf_render_mode === 'task_results') && assessmentTaskRows.length > 0 && (
               <Select
@@ -444,7 +443,6 @@ function SortableSectionItem({
                 value={String((section as { assessment_task_row_id?: number | null }).assessment_task_row_id ?? '')}
                 onChange={(v) => onAssessmentTaskRowChange?.(v ? Number(v) : null)}
                 options={[{ value: '', label: '— Select task —' }, ...assessmentTaskRows.map((r) => ({ value: String(r.id), label: r.row_label }))]}
-                portal
               />
             )}
           </div>
@@ -1573,8 +1571,8 @@ export const AdminFormBuilderPage: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-[var(--bg)]">
-      <header className="bg-white border-b border-[var(--border)] shadow-sm sticky top-0 z-20 min-w-0">
+    <div className="flex min-h-screen flex-col bg-[var(--bg)]">
+      <header className="shrink-0 bg-white border-b border-[var(--border)] shadow-sm sticky top-0 z-20 min-w-0">
         <div className="w-full px-4 md:px-6 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 min-w-0">
           <div className="flex flex-col gap-2 min-w-0 flex-1 sm:min-w-0">
             <div className="flex items-start gap-3 min-w-0">
@@ -1644,7 +1642,7 @@ export const AdminFormBuilderPage: React.FC = () => {
                 </span>
             </div>
           </div>
-          <div className="flex items-center gap-2 shrink-0 self-start sm:self-center">
+          <div className="flex flex-wrap items-center gap-2 shrink-0 self-start sm:self-center">
               <input
                 ref={coverInputRef}
                 type="file"
@@ -1728,9 +1726,9 @@ export const AdminFormBuilderPage: React.FC = () => {
         </div>
       </header>
 
-      <div className="flex h-[calc(100vh-65px)]">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:h-[calc(100dvh-5.5rem)] lg:flex-row">
         {/* Left: Steps */}
-        <div className="w-56 border-r border-[var(--border)] bg-white p-4 overflow-y-auto">
+        <div className="w-full max-h-[min(40vh,320px)] shrink-0 overflow-y-auto border-b border-[var(--border)] bg-white p-3 sm:p-4 lg:h-auto lg:max-h-none lg:w-56 lg:shrink-0 lg:border-b-0 lg:border-r">
           <div className="flex justify-between items-center mb-3">
             <h2 className="font-semibold text-sm">Steps</h2>
             <Button variant="outline" size="sm" onClick={addStep}>
@@ -1767,7 +1765,7 @@ export const AdminFormBuilderPage: React.FC = () => {
         </div>
 
         {/* Middle: Sections */}
-        <div className="w-72 min-w-[16rem] border-r border-[var(--border)] bg-white p-4 overflow-y-auto">
+        <div className="w-full max-h-[min(38vh,300px)] shrink-0 overflow-y-auto border-b border-[var(--border)] bg-white p-3 sm:p-4 lg:h-auto lg:max-h-none lg:w-72 lg:min-w-[16rem] lg:shrink-0 lg:border-b-0 lg:border-r">
           <div className="flex justify-between items-center mb-3">
             <h2 className="font-semibold text-sm">Sections</h2>
             <Button
@@ -1814,8 +1812,8 @@ export const AdminFormBuilderPage: React.FC = () => {
         </div>
 
         {/* Right: Content (Questions or Instructions) + Editor */}
-        <div className="flex-1 flex overflow-hidden">
-          <div className="w-72 border-r border-[var(--border)] bg-white p-4 overflow-y-auto">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
+          <div className="w-full max-h-[min(36vh,280px)] shrink-0 overflow-y-auto border-b border-[var(--border)] bg-white p-3 sm:p-4 lg:h-auto lg:max-h-none lg:w-72 lg:shrink-0 lg:border-b-0 lg:border-r">
             <div className="flex justify-between items-center mb-3">
               <h2 className="font-semibold text-sm">
                 {selectedSection?.pdf_render_mode === 'task_instructions'
@@ -1923,7 +1921,7 @@ export const AdminFormBuilderPage: React.FC = () => {
             )}
           </div>
 
-          <div className="flex-1 p-6 overflow-y-auto bg-gray-50">
+          <div className="min-h-0 flex-1 overflow-y-auto bg-gray-50 p-4 sm:p-6">
             {selectedSection?.pdf_render_mode === 'task_instructions' ? (
               <SectionInstructionsEditor
                 section={selectedSection}

@@ -1,10 +1,12 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { SlitDocumentHeader } from '../SlitDocumentHeader';
 import { Checkbox } from '../ui/Checkbox';
 import { DatePicker } from '../ui/DatePicker';
 import { DateTime } from 'luxon';
-import type { ChecklistRowState, ChecklistTopicKey, InductionFormPayload } from '../../lib/inductionForm';
-import { CHECKLIST_TOPIC_KEYS } from '../../lib/inductionForm';
+import type { ChecklistRowState, ChecklistTopicKey, InductionDocumentKey, InductionFormPayload } from '../../lib/inductionForm';
+import { CHECKLIST_TOPIC_KEYS, INDUCTION_DOCUMENT_KEYS, INDUCTION_DOCUMENT_LABELS } from '../../lib/inductionForm';
+import { uploadInductionDocument } from '../../lib/storage';
+import { toast } from '../../utils/toast';
 const ZONE = 'Australia/Melbourne';
 
 export interface InductionInteractiveBindings {
@@ -13,6 +15,8 @@ export interface InductionInteractiveBindings {
   readOnly?: boolean;
   /** When false (default), OFFICE USE ONLY is read-only (student induction). Set true for admin/trainer tools. */
   allowOfficeUseEdit?: boolean;
+  /** Skyline induction row id — uploads go to `photomedia/skyline/induction/{id}/`. */
+  inductionId?: number;
 }
 
 function melbourneMonthYear(iso: string | null | undefined): string {
@@ -38,7 +42,7 @@ function DocPage({
 }) {
   return (
     <section
-      className={`relative mx-auto mb-8 w-full max-w-[210mm] min-h-0 border border-gray-300 bg-white px-5 pt-3 pb-5 shadow-sm print:break-after-page print:shadow-none md:px-10 md:pt-4 md:pb-6 ${allowBreakInside ? 'induction-doc-page-breakable' : ''}`}
+      className={`relative mx-auto mb-6 w-full max-w-full min-h-0 border border-gray-300 bg-white px-3 pt-3 pb-4 shadow-sm print:mb-8 print:max-w-[210mm] print:break-after-page print:px-10 print:pb-6 print:pt-4 print:shadow-none sm:mb-8 sm:px-5 sm:pb-5 md:px-10 md:pt-4 md:pb-6 ${allowBreakInside ? 'induction-doc-page-breakable' : ''}`}
       aria-label={`Page ${pageNum} of ${totalPages}`}
     >
       {showWatermark ? (
@@ -127,7 +131,7 @@ function EnrolmentFormTable({ interactive }: { interactive?: InductionInteractiv
     );
 
   return (
-    <table className="mt-2 w-full border-collapse border border-black text-[10pt] [font-family:Calibri,'Calibri_Light',Arial,Helvetica,sans-serif]">
+    <table className="induction-enrol-table mt-2 w-full border-collapse border border-black text-[10pt] [font-family:Calibri,'Calibri_Light',Arial,Helvetica,sans-serif]">
       <tbody>
         <tr>
           <td colSpan={2} className="border border-black px-2 py-1.5 font-bold text-white" style={{ backgroundColor: FORM_RED }}>
@@ -155,7 +159,7 @@ function EnrolmentFormTable({ interactive }: { interactive?: InductionInteractiv
                   value={e.dateOfBirth}
                   onChange={(iso) => patch({ dateOfBirth: iso })}
                   disabled={ro}
-                  className="max-w-[160px]"
+                  className="w-full max-w-full sm:max-w-[160px]"
                 />
                 <span className="flex flex-wrap items-center gap-x-3 text-[9pt]">
                   Gender:
@@ -192,7 +196,7 @@ function EnrolmentFormTable({ interactive }: { interactive?: InductionInteractiv
           </td>
         </tr>
         <tr>
-          <td className="border border-black px-2 py-1 font-semibold">Student ID</td>
+          <td className="border border-black px-2 py-1 font-semibold">Student ID (optional)</td>
           <td className="border border-black px-2 py-1" style={{ backgroundColor: FORM_INPUT_BG }}>
             {textCell('studentId')}
           </td>
@@ -622,6 +626,26 @@ export const InductionDocumentPages: React.FC<{
 }> = ({ startAt, interactive }) => {
   const period = melbourneMonthYear(startAt);
   const totalPages = 4;
+  const [uploadingDoc, setUploadingDoc] = useState<InductionDocumentKey | null>(null);
+
+  const patchLogin = (p: Partial<InductionFormPayload['loginSetup']>) => {
+    if (!interactive) return;
+    interactive.onChange({
+      ...interactive.value,
+      loginSetup: { ...interactive.value.loginSetup, ...p },
+    });
+  };
+
+  const patchDoc = (key: InductionDocumentKey, p: Partial<InductionFormPayload['documents'][InductionDocumentKey]>) => {
+    if (!interactive) return;
+    interactive.onChange({
+      ...interactive.value,
+      documents: {
+        ...interactive.value.documents,
+        [key]: { ...interactive.value.documents[key], ...p },
+      },
+    });
+  };
 
   return (
     <div className="induction-doc-print text-[12pt] leading-snug text-black [font-family:Calibri,'Calibri_Light',Arial,Helvetica,sans-serif]">
@@ -640,6 +664,28 @@ export const InductionDocumentPages: React.FC<{
         .induction-doc-print .induction-checklist-table { font-size: 8pt; }
         .induction-doc-print .induction-checklist-table th,
         .induction-doc-print .induction-checklist-table td { padding: 3px 5px; }
+        /* Screen-only: stack enrolment-style tables on narrow viewports */
+        @media screen and (max-width: 640px) {
+          .induction-enrol-table { display: block; width: 100%; }
+          .induction-enrol-table tbody { display: block; width: 100%; }
+          .induction-enrol-table tr { display: block; width: 100%; border-bottom: 1px solid #000; }
+          .induction-enrol-table td {
+            display: block;
+            width: 100% !important;
+            border: none !important;
+            border-left: 1px solid #000 !important;
+            border-right: 1px solid #000 !important;
+            box-sizing: border-box;
+          }
+          .induction-enrol-table tr:first-child td { border-top: 1px solid #000 !important; }
+          .induction-enrol-table td[colspan="2"] { border: 1px solid #000 !important; }
+          .induction-enrol-table td:first-child:not([colspan]) {
+            font-weight: 600;
+            background: #f8fafc;
+            padding-top: 0.5rem;
+          }
+          .induction-enrol-table td + td { border-top: 1px dashed #e5e7eb !important; }
+        }
       `}</style>
 
       {/* Page 1 — full induction instructions (single sheet) */}
@@ -647,7 +693,75 @@ export const InductionDocumentPages: React.FC<{
         <SlitDocumentHeader />
         <h2 className="mt-2 text-center text-[16pt] font-bold uppercase underline">Induction instruction</h2>
         <div className="mt-3 text-[12pt]">
-          <p className="induction-step-title">Step 1: Forms</p>
+          <p className="induction-step-title">Step 1: Login setup</p>
+          <ul className="induction-ul">
+            <li>Install the following apps.</li>
+          </ul>
+          <ul className="induction-ul-nested ml-4 space-y-2">
+            <li className="list-none pl-0">
+              <strong>Microsoft Outlook</strong>
+              {interactive ? (
+                <span className="mt-1 block sm:mt-0 sm:ml-2 sm:inline sm:align-middle">
+                  <span className="mr-2 text-[10pt] font-semibold">Logged in?</span>
+                  <label className="mr-3 inline-flex items-center gap-1">
+                    <input
+                      type="radio"
+                      name="induction-login-outlook"
+                      checked={interactive.value.loginSetup.outlookLoggedIn === 'yes'}
+                      onChange={() => patchLogin({ outlookLoggedIn: 'yes' })}
+                      disabled={interactive.readOnly}
+                    />
+                    Yes
+                  </label>
+                  <label className="inline-flex items-center gap-1">
+                    <input
+                      type="radio"
+                      name="induction-login-outlook"
+                      checked={interactive.value.loginSetup.outlookLoggedIn === 'no'}
+                      onChange={() => patchLogin({ outlookLoggedIn: 'no' })}
+                      disabled={interactive.readOnly}
+                    />
+                    No
+                  </label>
+                </span>
+              ) : null}
+            </li>
+            <li className="list-none pl-0">
+              <strong>Microsoft Teams</strong>
+              {interactive ? (
+                <span className="mt-1 block sm:mt-0 sm:ml-2 sm:inline sm:align-middle">
+                  <span className="mr-2 text-[10pt] font-semibold">Logged in?</span>
+                  <label className="mr-3 inline-flex items-center gap-1">
+                    <input
+                      type="radio"
+                      name="induction-login-teams"
+                      checked={interactive.value.loginSetup.teamsLoggedIn === 'yes'}
+                      onChange={() => patchLogin({ teamsLoggedIn: 'yes' })}
+                      disabled={interactive.readOnly}
+                    />
+                    Yes
+                  </label>
+                  <label className="inline-flex items-center gap-1">
+                    <input
+                      type="radio"
+                      name="induction-login-teams"
+                      checked={interactive.value.loginSetup.teamsLoggedIn === 'no'}
+                      onChange={() => patchLogin({ teamsLoggedIn: 'no' })}
+                      disabled={interactive.readOnly}
+                    />
+                    No
+                  </label>
+                </span>
+              ) : null}
+            </li>
+          </ul>
+          <ul className="induction-ul mt-1">
+            <li>
+              Log in using the student login details sent to your personal email with the subject &quot;Student Login&quot;.
+            </li>
+          </ul>
+
+          <p className="induction-step-title">Step 2: Forms</p>
           <ul className="induction-ul">
             <li>
               <strong>Fill out and sign</strong> the following forms:
@@ -665,7 +779,7 @@ export const InductionDocumentPages: React.FC<{
             </li>
           </ul>
 
-          <p className="induction-step-title">Step 2: LLN quiz</p>
+          <p className="induction-step-title">Step 3: LLN quiz</p>
           <ul className="induction-ul">
             <li>
               Complete the <strong>LLN quiz</strong>
@@ -676,47 +790,127 @@ export const InductionDocumentPages: React.FC<{
             administrator.
           </p>
 
-          <p className="induction-step-title">Step 3: Submit documents</p>
+          <p className="induction-step-title">Step 4: Submit documents</p>
           <ul className="induction-ul">
             <li>
-              Share the following documents to the email address {linkMail('studentsupport@slit.edu.au')}:
+              Share the following documents to the email address {linkMail('studentsupport@slit.edu.au')}. Attachment below is
+              optional; you must select <strong>Yes</strong> or <strong>No</strong> for each line (whether you have submitted
+              or shared that item).
             </li>
           </ul>
-          <ul className="induction-ul-nested ml-4">
-            <li>
-              <strong>Health insurance</strong>
-            </li>
-            <li>
-              <strong>Passport sized photograph</strong> for student ID card
-            </li>
-            <li>
-              <strong>Academic records</strong> (previous from grade 10)
-            </li>
-            <li>
-              <strong>Current visa copy</strong>
-            </li>
-            <li>
-              <strong>PTE or IELTS score</strong> (if given any)
-            </li>
-          </ul>
-
-          <p className="induction-step-title">Step 4: Login setup</p>
-          <ul className="induction-ul">
-            <li>Install the following apps</li>
-          </ul>
-          <ul className="induction-ul-nested ml-4">
-            <li>
-              <strong>Microsoft Outlook</strong>
-            </li>
-            <li>
-              <strong>Microsoft Teams</strong>
-            </li>
-          </ul>
-          <ul className="induction-ul mt-1">
-            <li>
-              Log in using the student login details sent to your personal email with the subject &quot;Student Login&quot;.
-            </li>
-          </ul>
+          {interactive ? (
+            <ul className="mt-2 list-none space-y-3 pl-0">
+              {INDUCTION_DOCUMENT_KEYS.map((key) => {
+                const label = INDUCTION_DOCUMENT_LABELS[key];
+                const row = interactive.value.documents[key];
+                const iid = interactive.inductionId;
+                const canUpload = !interactive.readOnly && typeof iid === 'number' && iid > 0;
+                return (
+                  <li key={key} className="border-b border-gray-200 pb-3">
+                    <div className="flex flex-col gap-2">
+                      <strong>{label}</strong>
+                      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-4 sm:gap-y-2">
+                        <div className="flex min-w-0 flex-wrap items-center gap-2 text-[11pt]">
+                          <input
+                            id={`ind-doc-${key}`}
+                            type="file"
+                            className="hidden"
+                            accept="image/*,.pdf,.doc,.docx,application/pdf"
+                            disabled={!canUpload || uploadingDoc === key}
+                            onChange={async (ev) => {
+                              const f = ev.target.files?.[0];
+                              ev.target.value = '';
+                              if (!f || !canUpload || iid == null) return;
+                              setUploadingDoc(key);
+                              const { url, error } = await uploadInductionDocument(iid, key, f);
+                              setUploadingDoc(null);
+                              if (error || !url) {
+                                toast.error(error || 'Upload failed.');
+                                return;
+                              }
+                              patchDoc(key, { fileUrl: url, fileName: f.name });
+                              toast.success('File attached.');
+                            }}
+                          />
+                          <label
+                            htmlFor={`ind-doc-${key}`}
+                            className={`rounded border border-gray-400 bg-gray-50 px-2 py-0.5 text-[10pt] ${
+                              canUpload ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'
+                            }`}
+                          >
+                            {uploadingDoc === key ? 'Uploading…' : 'Attach'}
+                          </label>
+                          {row.fileUrl && canUpload ? (
+                            <button
+                              type="button"
+                              className="text-[10pt] text-red-600 underline"
+                              onClick={() => patchDoc(key, { fileUrl: '', fileName: '' })}
+                            >
+                              Remove file
+                            </button>
+                          ) : (
+                            <span className="text-[9pt] text-gray-500">Optional</span>
+                          )}
+                        </div>
+                        <div className="flex flex-shrink-0 flex-wrap items-center gap-2 text-[11pt]">
+                          <span className="text-[10pt] font-semibold">Submitted?</span>
+                          <label className="inline-flex items-center gap-1">
+                            <input
+                              type="radio"
+                              name={`ind-doc-sub-${key}`}
+                              checked={row.submitted === 'yes'}
+                              onChange={() => patchDoc(key, { submitted: 'yes' })}
+                              disabled={interactive.readOnly}
+                            />
+                            Yes
+                          </label>
+                          <label className="inline-flex items-center gap-1">
+                            <input
+                              type="radio"
+                              name={`ind-doc-sub-${key}`}
+                              checked={row.submitted === 'no'}
+                              onChange={() => patchDoc(key, { submitted: 'no' })}
+                              disabled={interactive.readOnly}
+                            />
+                            No
+                          </label>
+                          {row.submitted === 'yes' && row.fileUrl ? (
+                            <a
+                              href={row.fileUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              download={row.fileName || undefined}
+                              className="text-blue-600 underline"
+                            >
+                              Download
+                            </a>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : (
+            <ul className="induction-ul-nested ml-4">
+              <li>
+                <strong>Health insurance</strong>
+              </li>
+              <li>
+                <strong>Passport sized photograph</strong> for student ID card
+              </li>
+              <li>
+                <strong>Academic records</strong> (previous from grade 10)
+              </li>
+              <li>
+                <strong>Current visa copy</strong>
+              </li>
+              <li>
+                <strong>PTE or IELTS score</strong> (if given any)
+              </li>
+            </ul>
+          )}
 
           <div className="mx-auto mt-4 border border-black p-3 text-[11pt]">
             <p className="text-center text-[12pt] font-bold uppercase underline">Important information</p>
@@ -763,7 +957,7 @@ export const InductionDocumentPages: React.FC<{
             )}
           </p>
           <p>
-            <span className="font-semibold">Student ID:</span>{' '}
+            <span className="font-semibold">Student ID (optional):</span>{' '}
             {interactive ? (
               <input
                 type="text"

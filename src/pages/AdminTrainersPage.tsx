@@ -9,6 +9,7 @@ import { Select } from '../components/ui/Select';
 import { Modal } from '../components/ui/Modal';
 import { Loader } from '../components/ui/Loader';
 import { toast } from '../utils/toast';
+import { AdminListPagination } from '../components/admin/AdminListPagination';
 
 export const AdminTrainersPage: React.FC = () => {
   const PAGE_SIZE = 20;
@@ -158,6 +159,18 @@ export const AdminTrainersPage: React.FC = () => {
 
         <Card>
           <h2 className="text-lg font-bold text-[var(--text)] mb-4">Trainer Directory</h2>
+          {!loading && (
+            <AdminListPagination
+              placement="top"
+              totalItems={totalTrainers}
+              pageSize={PAGE_SIZE}
+              currentPage={currentPage}
+              totalPages={totalPages}
+              onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              onNext={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              itemLabel="trainers"
+            />
+          )}
           {loading ? (
             <div className="py-12">
               <Loader variant="dots" size="lg" message="Loading trainers..." />
@@ -241,28 +254,17 @@ export const AdminTrainersPage: React.FC = () => {
               </table>
             </div>
           )}
-          {!loading && totalTrainers > PAGE_SIZE && (
-            <div className="mt-4 flex items-center justify-between gap-2">
-              <div className="text-xs text-gray-500">Page {currentPage} of {totalPages} ({totalTrainers} total)</div>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                  disabled={currentPage <= 1}
-                >
-                  Previous
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                  disabled={currentPage >= totalPages}
-                >
-                  Next
-                </Button>
-              </div>
-            </div>
+          {!loading && (
+            <AdminListPagination
+              placement="bottom"
+              totalItems={totalTrainers}
+              pageSize={PAGE_SIZE}
+              currentPage={currentPage}
+              totalPages={totalPages}
+              onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              onNext={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              itemLabel="trainers"
+            />
           )}
         </Card>
       </div>

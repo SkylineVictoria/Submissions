@@ -57,7 +57,6 @@ export const MelbourneTime12hSelect: React.FC<MelbourneTime12hSelectProps> = ({
               onChange={(v) => apply({ hour12: Number(v) })}
               options={HOUR_OPTIONS}
               disabled={disabled}
-              portal
               className="[&_label]:text-xs [&_label]:mb-1 [&_label]:font-medium"
             />
           </div>
@@ -71,7 +70,6 @@ export const MelbourneTime12hSelect: React.FC<MelbourneTime12hSelectProps> = ({
               onChange={(v) => apply({ minute: v })}
               options={MINUTE_OPTIONS}
               disabled={disabled}
-              portal
               className="[&_label]:text-xs [&_label]:mb-1 [&_label]:font-medium"
             />
           </div>
@@ -82,7 +80,6 @@ export const MelbourneTime12hSelect: React.FC<MelbourneTime12hSelectProps> = ({
               onChange={(v) => apply({ ampm: v as 'AM' | 'PM' })}
               options={AMPM_OPTIONS}
               disabled={disabled}
-              portal
               className="[&_label]:text-xs [&_label]:mb-1 [&_label]:font-medium"
             />
           </div>

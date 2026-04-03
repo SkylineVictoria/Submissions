@@ -151,7 +151,7 @@ export const AdminBatchesPage: React.FC = () => {
                 Create batches and assign them to trainers. Students must belong to a batch.
               </p>
             </div>
-            <Button onClick={() => setIsCreateOpen(true)} className="min-w-[140px]">
+            <Button onClick={() => setIsCreateOpen(true)} className="w-full md:w-auto md:min-w-[140px]">
               <Plus className="w-4 h-4 mr-2 inline" />
               Add Batch
             </Button>
@@ -162,26 +162,30 @@ export const AdminBatchesPage: React.FC = () => {
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
             <h2 className="text-lg font-bold text-[var(--text)]">Batch Directory</h2>
             {!loading && totalBatches > BATCH_PAGE_SIZE && (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-gray-500">
+              <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:justify-end sm:gap-3">
+                <span className="text-center text-xs text-gray-500 sm:text-left">
                   Page {currentPage} of {totalPages} ({totalBatches} total)
                 </span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                  disabled={currentPage <= 1}
-                >
-                  Previous
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                  disabled={currentPage >= totalPages}
-                >
-                  Next
-                </Button>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="min-w-0 flex-1 sm:flex-initial"
+                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                    disabled={currentPage <= 1}
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="min-w-0 flex-1 sm:flex-initial"
+                    onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={currentPage >= totalPages}
+                  >
+                    Next
+                  </Button>
+                </div>
               </div>
             )}
           </div>
@@ -192,7 +196,34 @@ export const AdminBatchesPage: React.FC = () => {
           ) : batches.length === 0 ? (
             <p className="text-gray-500">No batches yet. Create a batch to assign students.</p>
           ) : (
-            <div className="overflow-x-auto">
+            <>
+              <div className="space-y-3 lg:hidden">
+                {batches.map((batch) => (
+                  <div key={batch.id} className="rounded-lg border border-[var(--border)] bg-white p-4 shadow-sm">
+                    <div className="flex items-start gap-2">
+                      <Users className="mt-0.5 h-5 w-5 shrink-0 text-gray-400" />
+                      <div className="min-w-0 flex-1">
+                        <div className="font-medium text-[var(--text)] break-words">{batch.name}</div>
+                        <div className="mt-1 text-sm text-gray-600">
+                          <span className="font-medium text-gray-500">Course: </span>
+                          {batch.course_name ?? '—'}
+                        </div>
+                        <div className="mt-1 text-sm text-gray-600 break-words">
+                          <span className="font-medium text-gray-500">Trainer: </span>
+                          {batch.trainer_name ?? `ID: ${batch.trainer_id}`}
+                        </div>
+                        <div className="mt-3">
+                          <Button variant="outline" size="sm" className="w-full" onClick={() => setEditingId(batch.id)}>
+                            <Pencil className="mr-1 h-4 w-4" />
+                            Edit
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="hidden overflow-x-auto lg:block">
               <table className="min-w-[600px] w-full text-sm border border-[var(--border)] rounded-lg overflow-hidden">
                 <thead className="bg-gray-50 text-gray-700">
                   <tr>
@@ -232,7 +263,8 @@ export const AdminBatchesPage: React.FC = () => {
                   ))}
                 </tbody>
               </table>
-            </div>
+              </div>
+            </>
           )}
         </Card>
       </div>

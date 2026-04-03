@@ -57,33 +57,116 @@ function pickPrimaryMirrorSource(orderedValues: string[]): string {
 
 /**
  * Mirror target should update to primary when identical, or still a prefix of primary (user typing ahead).
- * For empty targets: mirror when all non-empty siblings agree (one distinct value), so e.g. checklist + enrolment
- * can both show the same signature and the third field still receives it. If multiple different values exist,
- * do not fill empties (avoids fighting intentional edits or deletes).
+ * For empty targets: mirror when siblings share one distinct non-empty value — except when a *later* field still
+ * holds that value while this field is empty: that means the user cleared this field (e.g. backspaced the
+ * signature) and we must not refill it from duplicate copies on later pages.
  */
-function shouldMirrorFromPrimary(primary: string, fieldValue: string, allValues: string[]): boolean {
+function shouldMirrorFromPrimary(primary: string, fieldValue: string, allValues: string[], fieldIndex: number): boolean {
   const p = primary.trim();
   const f = String(fieldValue ?? '').trim();
   if (!p) return false;
   if (!f) {
-    const nonEmptyVals = allValues.map((v) => String(v ?? '').trim()).filter(Boolean);
-    const unique = new Set(nonEmptyVals);
-    return unique.size <= 1;
+    const vals = allValues.map((v) => String(v ?? '').trim());
+    const unique = new Set(vals.filter(Boolean));
+    if (unique.size !== 1) return false;
+    for (let j = fieldIndex + 1; j < vals.length; j++) {
+      if (vals[j] === p) return false;
+    }
+    return true;
   }
   if (f === p) return true;
   if (p.startsWith(f)) return true;
   return false;
 }
 
-function mirrorTextGroup(
+/** Same longest-field / last-wins rule as pickPrimaryMirrorSource but uses raw strings (no trim) so spaces and partial edits sync correctly.
+ * When two+ fields still hold the longest value and another field is a strict prefix of it, treat that shorter value as
+ * canonical (user backspaced in one box — mirror the same length to all three). */
+function pickSignatureMirrorSource(orderedValues: string[]): string {
+  const raw = orderedValues.map((v) => String(v ?? ''));
+  let maxLen = 0;
+  for (const s of raw) {
+    if (s.length > maxLen) maxLen = s.length;
+  }
+  if (maxLen === 0) return '';
+  let L = '';
+  for (let i = raw.length - 1; i >= 0; i--) {
+    if (raw[i].length === maxLen) {
+      L = raw[i];
+      break;
+    }
+  }
+  const fullCount = raw.filter((v) => v === L).length;
+  if (fullCount >= 2) {
+    let shortestPrefix: string | null = null;
+    for (const s of raw) {
+      if (s.length === 0) continue;
+      if (s.length >= L.length) continue;
+      if (L.startsWith(s)) {
+        if (shortestPrefix === null || s.length < shortestPrefix.length) shortestPrefix = s;
+      }
+    }
+    if (shortestPrefix !== null) return shortestPrefix;
+  }
+  for (let i = raw.length - 1; i >= 0; i--) {
+    if (raw[i].length === maxLen) return raw[i];
+  }
+  return '';
+}
+
+function shouldMirrorSignaturePrimary(primary: string, fieldValue: string, allValues: string[], fieldIndex: number): boolean {
+  const p = primary;
+  const f = String(fieldValue ?? '');
+  if (!p.trim()) return false;
+  const fEmpty = !f.trim();
+  if (fEmpty) {
+    const vals = allValues.map((v) => String(v ?? ''));
+    const nonEmptyTrimmed = vals.map((s) => s.trim()).filter(Boolean);
+    const unique = new Set(nonEmptyTrimmed);
+    if (unique.size !== 1) return false;
+    const pTrim = p.trim();
+    for (let j = fieldIndex + 1; j < vals.length; j++) {
+      if (vals[j].trim() === pTrim) return false;
+    }
+    return true;
+  }
+  if (f === p) return true;
+  /* Shrink longer duplicates when primary is the shorter shared prefix (coordinated backspace). */
+  if (f.startsWith(p) && p.length < f.length) return true;
+  /* Forward typing: field is a prefix of primary. */
+  if (p.startsWith(f) && f.length < p.length) return true;
+  return false;
+}
+
+function mirrorSignatureGroup(
   primary: string,
   mutators: Array<{ read: () => string; write: (v: string) => void }>
 ): void {
   if (!primary.trim()) return;
   const allValues = mutators.map((m) => m.read());
-  for (const { read, write } of mutators) {
-    if (shouldMirrorFromPrimary(primary, read(), allValues)) write(primary);
-  }
+  mutators.forEach(({ read, write }, fieldIndex) => {
+    if (shouldMirrorSignaturePrimary(primary, read(), allValues, fieldIndex)) write(primary);
+  });
+}
+
+/** Combined enrolment name for mirror read (same logical string as checklist full name / media student name). */
+function joinEnrolmentNameRaw(e: EnrolmentFormState): string {
+  const g = String(e.givenNames ?? '');
+  const f = String(e.familyName ?? '');
+  if (!f.trim()) return g;
+  if (!g.trim()) return f;
+  return `${g} ${f}`;
+}
+
+/** Write mirrored full name into enrolment fields (last whitespace-separated token = family name). */
+function splitFullNameToEnrolment(primary: string): { givenNames: string; familyName: string } {
+  const t = String(primary ?? '').trim();
+  if (!t) return { givenNames: '', familyName: '' };
+  const parts = t.split(/\s+/).filter(Boolean);
+  if (parts.length === 1) return { givenNames: parts[0], familyName: '' };
+  const familyName = parts[parts.length - 1] ?? '';
+  const givenNames = parts.slice(0, -1).join(' ');
+  return { givenNames, familyName };
 }
 
 function mirrorDeclDates(next: InductionFormPayload, primary: string): void {
@@ -95,14 +178,16 @@ function mirrorDeclDates(next: InductionFormPayload, primary: string): void {
     { read: () => next.mediaAck.date, write: (v: string) => { next.mediaAck.date = v; } },
   ];
   const allValues = mutators.map((m) => m.read());
-  for (const { read, write } of mutators) {
-    if (shouldMirrorFromPrimary(primary, read(), allValues)) write(primary);
-  }
+  mutators.forEach(({ read, write }, fieldIndex) => {
+    if (shouldMirrorFromPrimary(primary, read(), allValues, fieldIndex)) write(primary);
+  });
 }
 
 /**
- * Copy student name / signatures / declaration dates across matching fields (checklist ↔ enrolment ↔ CCTV ack).
- * Optional consent block names and consent date are not mirrored so users can clear or edit them independently.
+ * Copy student full name (checklist header ↔ enrolment given+family ↔ CCTV student name), declaration signatures,
+ * and declaration dates across the three places each. Uses the same raw-string mirror rules for names as for
+ * signatures (backspace / spaces stay aligned). Enrolment stores the split last token as family name.
+ * Optional consent block names and consent date are not mirrored.
  */
 export function synchronizeInductionDerivedFields(p: InductionFormPayload): InductionFormPayload {
   const next: InductionFormPayload = {
@@ -112,23 +197,68 @@ export function synchronizeInductionDerivedFields(p: InductionFormPayload): Indu
     enrolment: { ...p.enrolment },
     mediaAck: { ...p.mediaAck },
     mediaConsent: { ...p.mediaConsent },
+    loginSetup: { ...mergeLoginSetup(p.loginSetup) },
+    documents: mergeInductionDocuments(p.documents),
   };
 
-  /* Student identity only — optional consent “I …” / printed name lines are independent (otherwise clearing them
-   * refills from checklist / acknowledgement via mirror). */
-  const namePrimary = pickPrimaryMirrorSource([next.checklistHeader.fullName, next.mediaAck.studentName]);
-  mirrorTextGroup(namePrimary, [
+  /* Mirrored student names (checklist ↔ enrolment given+family ↔ CCTV ack): same raw-string rules as signatures. */
+  {
+    const nameVals = [
+      String(next.checklistHeader.fullName ?? ''),
+      joinEnrolmentNameRaw(next.enrolment),
+      String(next.mediaAck.studentName ?? ''),
+    ];
+    const nameTrim = nameVals.map((s) => s.trim());
+    const non = nameTrim.filter(Boolean);
+    const emptyCount = nameTrim.filter((s) => !s).length;
+    if (non.length === 2 && emptyCount === 1 && new Set(non).size === 1) {
+      next.checklistHeader = { ...next.checklistHeader, fullName: '' };
+      next.enrolment = { ...next.enrolment, givenNames: '', familyName: '' };
+      next.mediaAck = { ...next.mediaAck, studentName: '' };
+    }
+  }
+
+  /* Mirrored student signatures (checklist ↔ enrolment ↔ CCTV): if one field is cleared but two copies still hold
+   * the same text, clear all three so backspace behaves like one shared field. */
+  {
+    const sigs = [
+      String(next.checklistDeclaration.signature ?? '').trim(),
+      String(next.enrolment.declarationSignature ?? '').trim(),
+      String(next.mediaAck.studentSignature ?? '').trim(),
+    ];
+    const non = sigs.filter(Boolean);
+    const emptyCount = sigs.filter((s) => !s).length;
+    if (non.length === 2 && emptyCount === 1 && new Set(non).size === 1) {
+      next.checklistDeclaration = { ...next.checklistDeclaration, signature: '' };
+      next.enrolment = { ...next.enrolment, declarationSignature: '' };
+      next.mediaAck = { ...next.mediaAck, studentSignature: '' };
+    }
+  }
+
+  const namePrimary = pickSignatureMirrorSource([
+    next.checklistHeader.fullName,
+    joinEnrolmentNameRaw(next.enrolment),
+    next.mediaAck.studentName,
+  ]);
+  mirrorSignatureGroup(namePrimary, [
     { read: () => next.checklistHeader.fullName, write: (v) => { next.checklistHeader.fullName = v; } },
+    {
+      read: () => joinEnrolmentNameRaw(next.enrolment),
+      write: (v) => {
+        const s = splitFullNameToEnrolment(v);
+        next.enrolment = { ...next.enrolment, givenNames: s.givenNames, familyName: s.familyName };
+      },
+    },
     { read: () => next.mediaAck.studentName, write: (v) => { next.mediaAck.studentName = v; } },
   ]);
 
   /* Student signatures only — optional media consent signature may be a different person; do not mirror. */
-  const sigPrimary = pickPrimaryMirrorSource([
+  const sigPrimary = pickSignatureMirrorSource([
     next.checklistDeclaration.signature,
     next.enrolment.declarationSignature,
     next.mediaAck.studentSignature,
   ]);
-  mirrorTextGroup(sigPrimary, [
+  mirrorSignatureGroup(sigPrimary, [
     { read: () => next.checklistDeclaration.signature, write: (v) => { next.checklistDeclaration.signature = v; } },
     { read: () => next.enrolment.declarationSignature, write: (v) => { next.enrolment.declarationSignature = v; } },
     { read: () => next.mediaAck.studentSignature, write: (v) => { next.mediaAck.studentSignature = v; } },
@@ -224,6 +354,38 @@ export interface MediaConsentState {
   date: string;
 }
 
+export type InductionYesNo = 'yes' | 'no';
+
+export const INDUCTION_DOCUMENT_KEYS = [
+  'health_insurance',
+  'passport_photo',
+  'academic_records',
+  'visa_copy',
+  'pte_ielts',
+] as const;
+export type InductionDocumentKey = (typeof INDUCTION_DOCUMENT_KEYS)[number];
+
+export const INDUCTION_DOCUMENT_LABELS: Record<InductionDocumentKey, string> = {
+  health_insurance: 'Health insurance',
+  passport_photo: 'Passport sized photograph for student ID card',
+  academic_records: 'Academic records (previous from grade 10)',
+  visa_copy: 'Current visa copy',
+  pte_ielts: 'PTE or IELTS score (if given any)',
+};
+
+export interface InductionDocumentRowState {
+  /** Public URL after optional upload — stored in submission JSON. */
+  fileUrl: string;
+  fileName: string;
+  /** Required: confirm whether this item was submitted (email and/or attachment). */
+  submitted: InductionYesNo | '';
+}
+
+export interface InductionLoginSetupState {
+  outlookLoggedIn: InductionYesNo | '';
+  teamsLoggedIn: InductionYesNo | '';
+}
+
 export interface InductionFormPayload {
   version: 1;
   checklistHeader: ChecklistHeaderState;
@@ -234,10 +396,52 @@ export interface InductionFormPayload {
   enrolment: EnrolmentFormState;
   mediaAck: MediaAckState;
   mediaConsent: MediaConsentState;
+  /** Step 1 on instruction sheet — mandatory Yes/No for each app. */
+  loginSetup: InductionLoginSetupState;
+  /** Step 4 document list — optional file URL; mandatory submitted Yes/No per row. */
+  documents: Record<InductionDocumentKey, InductionDocumentRowState>;
 }
 
 export function emptyChecklistRow(): ChecklistRowState {
   return { answer: '', initial: '' };
+}
+
+function emptyInductionDocuments(): Record<InductionDocumentKey, InductionDocumentRowState> {
+  const o = {} as Record<InductionDocumentKey, InductionDocumentRowState>;
+  for (const k of INDUCTION_DOCUMENT_KEYS) {
+    o[k] = { fileUrl: '', fileName: '', submitted: '' };
+  }
+  return o;
+}
+
+function mergeInductionDocuments(raw: unknown): Record<InductionDocumentKey, InductionDocumentRowState> {
+  const base = emptyInductionDocuments();
+  if (!raw || typeof raw !== 'object') return base;
+  const obj = raw as Record<string, unknown>;
+  for (const k of INDUCTION_DOCUMENT_KEYS) {
+    const row = obj[k];
+    if (!row || typeof row !== 'object') continue;
+    const r = row as Record<string, unknown>;
+    const sub = r.submitted;
+    base[k] = {
+      fileUrl: String(r.fileUrl ?? ''),
+      fileName: String(r.fileName ?? ''),
+      submitted: sub === 'yes' || sub === 'no' ? sub : '',
+    };
+  }
+  return base;
+}
+
+function mergeLoginSetup(raw: unknown): InductionLoginSetupState {
+  const empty: InductionLoginSetupState = { outlookLoggedIn: '', teamsLoggedIn: '' };
+  if (!raw || typeof raw !== 'object') return empty;
+  const o = raw as Record<string, unknown>;
+  const out = o.outlookLoggedIn;
+  const tm = o.teamsLoggedIn;
+  return {
+    outlookLoggedIn: out === 'yes' || out === 'no' ? out : '',
+    teamsLoggedIn: tm === 'yes' || tm === 'no' ? tm : '',
+  };
 }
 
 export function emptyInductionFormPayload(): InductionFormPayload {
@@ -275,6 +479,8 @@ export function emptyInductionFormPayload(): InductionFormPayload {
     },
     mediaAck: { studentName: '', studentSignature: '', date: '' },
     mediaConsent: { consentorNameOnLine: '', name: '', signature: '', date: '' },
+    loginSetup: { outlookLoggedIn: '', teamsLoggedIn: '' },
+    documents: emptyInductionDocuments(),
   };
 }
 
@@ -292,7 +498,6 @@ function nonEmptyIsoDate(s: string): boolean {
 export function validateInductionFormPayload(p: InductionFormPayload): string | null {
   const h = p.checklistHeader;
   if (!nonEmpty(h.fullName)) return 'Enter your full name on the checklist.';
-  if (!nonEmpty(h.studentId)) return 'Enter your student ID on the checklist.';
   if (!nonEmpty(h.email)) return 'Enter your email on the checklist.';
   if (!nonEmpty(h.mobile)) return 'Enter your mobile on the checklist.';
   if (!nonEmpty(h.course)) return 'Enter your course on the checklist.';
@@ -310,11 +515,13 @@ export function validateInductionFormPayload(p: InductionFormPayload): string | 
   if (!nonEmptyIsoDate(d.date)) return 'Choose a valid date on the checklist declaration.';
 
   const e = p.enrolment;
-  if (!nonEmpty(e.familyName)) return 'Enter family name on the enrolment form.';
   if (!nonEmpty(e.givenNames)) return 'Enter given name(s) on the enrolment form.';
+  /* Single-token legal names may leave family name empty; multi-word given without family still invalid. */
+  if (!nonEmpty(e.familyName) && /\s/.test(String(e.givenNames).trim())) {
+    return 'Enter family name on the enrolment form.';
+  }
   if (!nonEmptyIsoDate(e.dateOfBirth)) return 'Choose a valid date of birth on the enrolment form.';
   if (e.gender !== 'male' && e.gender !== 'female') return 'Select gender on the enrolment form.';
-  if (!nonEmpty(e.studentId)) return 'Enter student ID on the enrolment form.';
   if (!nonEmpty(e.passportNumber)) return 'Enter passport number.';
   if (nonEmpty(e.visaExpiry) && !nonEmptyIsoDate(e.visaExpiry)) {
     return 'Choose a valid visa expiry date, or clear it.';
@@ -334,6 +541,21 @@ export function validateInductionFormPayload(p: InductionFormPayload): string | 
   if (!nonEmpty(a.studentName)) return 'Enter your name in the CCTV / surveillance acknowledgement section.';
   if (!nonEmpty(a.studentSignature)) return 'Sign the CCTV / surveillance acknowledgement.';
   if (!nonEmptyIsoDate(a.date)) return 'Choose a valid date in the acknowledgement section.';
+
+  const ls = p.loginSetup;
+  if (ls.outlookLoggedIn !== 'yes' && ls.outlookLoggedIn !== 'no') {
+    return 'Under Step 1 (Login setup), select Yes or No for Microsoft Outlook.';
+  }
+  if (ls.teamsLoggedIn !== 'yes' && ls.teamsLoggedIn !== 'no') {
+    return 'Under Step 1 (Login setup), select Yes or No for Microsoft Teams.';
+  }
+
+  for (const k of INDUCTION_DOCUMENT_KEYS) {
+    const row = p.documents[k];
+    if (!row || (row.submitted !== 'yes' && row.submitted !== 'no')) {
+      return `Under Step 4 (Submit documents), select Yes or No for: ${INDUCTION_DOCUMENT_LABELS[k]}.`;
+    }
+  }
 
   /* Media consent (promotional use) — optional; entire block may be left blank. */
   const m = p.mediaConsent;
@@ -372,6 +594,8 @@ export function parseInductionPayload(raw: unknown): InductionFormPayload | null
       enrolment: { ...base.enrolment, ...(o.enrolment as EnrolmentFormState) },
       mediaAck: { ...base.mediaAck, ...(o.mediaAck as MediaAckState) },
       mediaConsent: { ...base.mediaConsent, ...(o.mediaConsent as MediaConsentState) },
+      loginSetup: mergeLoginSetup(o.loginSetup),
+      documents: mergeInductionDocuments(o.documents),
     };
     return normalizePayloadDates(merged);
   } catch {

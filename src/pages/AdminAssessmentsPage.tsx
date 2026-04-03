@@ -10,6 +10,7 @@ import { SelectAsync } from '../components/ui/SelectAsync';
 import { Loader } from '../components/ui/Loader';
 import { Modal } from '../components/ui/Modal';
 import { toast } from '../utils/toast';
+import { AdminListPagination } from '../components/admin/AdminListPagination';
 
 const pad2 = (n: number) => String(n).padStart(2, '0');
 
@@ -216,6 +217,150 @@ export const AdminAssessmentsPage: React.FC = () => {
 
   const totalPages = Math.max(1, Math.ceil(totalRows / PAGE_SIZE));
 
+  const renderAssessmentActions = (row: SubmittedInstanceRow, mode: 'toolbar' | 'stack') => {
+    const role = row.role_context === 'trainer' ? 'trainer' : row.role_context === 'office' ? 'office' : 'student';
+    const submissionCount = Number((row as unknown as { submission_count?: number }).submission_count ?? 0);
+    const showResubmit =
+      row.status !== 'locked' &&
+      (row.role_context === 'trainer' || row.role_context === 'office') &&
+      (submissionCount > 0 || !!row.submitted_at) &&
+      submissionCount < 3;
+
+    const actionBtn =
+      'group inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-gray-200 bg-white text-gray-600 hover:bg-[var(--brand)]/10 hover:border-[var(--brand)]/40 hover:text-[var(--brand)] transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:border-gray-200 disabled:hover:text-gray-600 text-xs font-medium';
+    const actionIcon = 'w-3 h-3 shrink-0';
+    const actionText = 'max-w-0 overflow-hidden group-hover:max-w-[8rem] transition-all duration-200 whitespace-nowrap';
+
+    const openLink = async () => {
+      const url = await getOrIssueInstanceAccessLink(row.id, role);
+      if (!url) {
+        toast.error('Failed to open secure link');
+        return;
+      }
+      window.open(url, '_blank');
+    };
+
+    if (mode === 'stack') {
+      return (
+        <div className="mt-3 flex flex-col gap-2">
+          <Button variant="outline" size="sm" className="w-full justify-center" onClick={openLink}>
+            <ExternalLink className="mr-2 h-4 w-4 shrink-0" />
+            Open
+          </Button>
+          <Button variant="outline" size="sm" className="w-full justify-center" onClick={() => void handleCopyLink(row.id, role)}>
+            <Copy className="mr-2 h-4 w-4 shrink-0" />
+            Copy link
+          </Button>
+          {!row.link_expired && (
+            <Button variant="outline" size="sm" className="w-full justify-center" onClick={() => void handleExpireLink(row.id, role)} disabled={managingId === row.id}>
+              <Ban className="mr-2 h-4 w-4 shrink-0" />
+              Expire link
+            </Button>
+          )}
+          {row.link_expired && (
+            <Button variant="outline" size="sm" className="w-full justify-center" onClick={() => void handleEnableLink(row.id, role)} disabled={managingId === row.id}>
+              <CheckCircle className="mr-2 h-4 w-4 shrink-0" />
+              Enable link
+            </Button>
+          )}
+          <Button variant="outline" size="sm" className="w-full justify-center" onClick={() => openExtendDeadline(row)}>
+            <CalendarClock className="mr-2 h-4 w-4 shrink-0" />
+            Extend end date
+          </Button>
+          <Button variant="outline" size="sm" className="w-full justify-center" onClick={() => openEditDates(row)}>
+            <CalendarDays className="mr-2 h-4 w-4 shrink-0" />
+            Edit dates
+          </Button>
+          {showResubmit && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full justify-center"
+              onClick={async () => {
+                setManagingId(row.id);
+                await allowStudentResubmission(row.id);
+                setManagingId(null);
+                await loadRows(currentPage, searchTerm, { silent: true });
+                const url = `${window.location.origin}/forms/${row.form_id}/student-access`;
+                await navigator.clipboard.writeText(url);
+                toast.success('Resubmission allowed. Generic link copied—student uses email and OTP.');
+              }}
+              disabled={managingId === row.id}
+            >
+              <CheckCircle className="mr-2 h-4 w-4 shrink-0" />
+              Allow resubmission
+            </Button>
+          )}
+          {(row.status === 'submitted' || row.status === 'draft') && (
+            <Button variant="outline" size="sm" className="w-full justify-center" onClick={() => openSendToTrainer(row)} disabled={sendingId === row.id}>
+              <Send className="mr-2 h-4 w-4 shrink-0" />
+              {sendingId === row.id ? 'Sending...' : row.role_context === 'trainer' ? 'Resend to Trainer' : 'Send to Trainer'}
+            </Button>
+          )}
+        </div>
+      );
+    }
+
+    return (
+      <div className="flex flex-wrap items-center justify-end gap-1">
+        <button type="button" onClick={openLink} className={actionBtn} title="Open">
+          <ExternalLink className={actionIcon} />
+          <span className={actionText}>Open</span>
+        </button>
+        <button type="button" onClick={() => void handleCopyLink(row.id, role)} className={actionBtn} title="Copy Link">
+          <Copy className={actionIcon} />
+          <span className={actionText}>Copy Link</span>
+        </button>
+        {!row.link_expired && (
+          <button type="button" onClick={() => void handleExpireLink(row.id, role)} disabled={managingId === row.id} className={actionBtn} title="Revoke link access">
+            <Ban className={actionIcon} />
+            <span className={actionText}>Expire</span>
+          </button>
+        )}
+        {row.link_expired && (
+          <button type="button" onClick={() => void handleEnableLink(row.id, role)} disabled={managingId === row.id} className={actionBtn} title="Re-enable link (30 days)">
+            <CheckCircle className={actionIcon} />
+            <span className={actionText}>Enable</span>
+          </button>
+        )}
+        <button type="button" onClick={() => openExtendDeadline(row)} className={actionBtn} title="Extend assessment end date">
+          <CalendarClock className={actionIcon} />
+          <span className={actionText}>Extend End Date</span>
+        </button>
+        <button type="button" onClick={() => openEditDates(row)} className={actionBtn} title="Edit assessment dates">
+          <CalendarDays className={actionIcon} />
+          <span className={actionText}>Edit dates</span>
+        </button>
+        {showResubmit && (
+          <button
+            type="button"
+            onClick={async () => {
+              setManagingId(row.id);
+              await allowStudentResubmission(row.id);
+              setManagingId(null);
+              await loadRows(currentPage, searchTerm, { silent: true });
+              const url = `${window.location.origin}/forms/${row.form_id}/student-access`;
+              await navigator.clipboard.writeText(url);
+              toast.success('Resubmission allowed. Generic link copied—student uses email and OTP.');
+            }}
+            disabled={managingId === row.id}
+            className={actionBtn}
+            title="Allow student to resubmit"
+          >
+            <CheckCircle className={actionIcon} />
+            <span className={actionText}>Allow Resubmission</span>
+          </button>
+        )}
+        {(row.status === 'submitted' || row.status === 'draft') && (
+          <button type="button" onClick={() => openSendToTrainer(row)} disabled={sendingId === row.id} className={actionBtn} title={row.role_context === 'trainer' ? 'Resend to Trainer' : 'Send to Trainer'}>
+            <Send className={actionIcon} />
+            <span className={actionText}>{sendingId === row.id ? 'Sending...' : row.role_context === 'trainer' ? 'Resend to Trainer' : 'Send to Trainer'}</span>
+          </button>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-[var(--bg)]">
       <div className="w-full px-4 md:px-6 lg:px-8 py-6">
@@ -273,6 +418,19 @@ export const AdminAssessmentsPage: React.FC = () => {
         </Card>
 
         <Card>
+          <h2 className="text-lg font-bold text-[var(--text)] mb-4">Assessment directory</h2>
+          {!loading && (
+            <AdminListPagination
+              placement="top"
+              totalItems={totalRows}
+              pageSize={PAGE_SIZE}
+              currentPage={currentPage}
+              totalPages={totalPages}
+              onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              onNext={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              itemLabel="assessments"
+            />
+          )}
           {loading ? (
             <Loader variant="dots" size="lg" message="Loading assessments..." />
           ) : rows.length === 0 ? (
@@ -280,129 +438,89 @@ export const AdminAssessmentsPage: React.FC = () => {
               No assessments sent to students yet.
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-gray-200 text-left text-xs uppercase tracking-wide text-gray-500">
-                    <th className="py-3 pr-3">Student</th>
-                    <th className="py-3 pr-3">Form</th>
-                    <th className="py-3 pr-3 w-[120px]">Start</th>
-                    <th className="py-3 pr-3 w-[120px]">End</th>
-                    <th className="py-3 pr-3">Date</th>
-                    <th className="py-3 pr-3 w-[140px]">Workflow</th>
-                    <th className="py-3 text-right min-w-[220px]">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((row) => (
-                    <tr key={row.id} className="border-b border-gray-100 hover:bg-gray-50/50 transition-colors">
-                      <td className="py-3 pr-3">
-                        <div className="font-medium text-gray-900">{row.student_name}</div>
-                        <div className="text-xs text-gray-500">{row.student_email || '-'}</div>
-                      </td>
-                      <td className="py-3 pr-3">
-                        <div className="font-medium text-gray-900">{row.form_name}</div>
+            <>
+              <div className="space-y-3 lg:hidden">
+                {rows.map((row) => (
+                  <div key={row.id} className="rounded-lg border border-[var(--border)] bg-white p-4 shadow-sm">
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gray-100 text-gray-600">
+                        <User className="h-5 w-5" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="font-semibold text-[var(--text)] break-words">{row.student_name}</div>
+                        <div className="text-xs text-gray-500 break-all">{row.student_email || '—'}</div>
+                        <div className="mt-2 font-medium text-gray-900 break-words">{row.form_name}</div>
                         <div className="text-xs text-gray-500">Version {row.form_version ?? '1.0.0'}</div>
-                      </td>
-                      <td className="py-3 pr-3 text-gray-700">{formatDDMMYYYY(row.start_date)}</td>
-                      <td className="py-3 pr-3 text-gray-700">{formatDDMMYYYY(row.end_date)}</td>
-                      <td className="py-3 pr-3 text-gray-700">{formatDDMMYYYY(row.submitted_at || row.created_at)}</td>
-                      <td className="py-3 pr-3">
-                        <span className={`inline-flex rounded-md px-2.5 py-1 text-xs font-medium ${getWorkflowBadgeClass(row)}`}>
-                          {getWorkflowLabel(row)}
-                        </span>
-                      </td>
-                      <td className="py-3 align-middle">
-                        <div className="flex flex-wrap items-center justify-end gap-1">
-                          {(() => {
-                            const actionBtn = 'group inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-gray-200 bg-white text-gray-600 hover:bg-[var(--brand)]/10 hover:border-[var(--brand)]/40 hover:text-[var(--brand)] transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:border-gray-200 disabled:hover:text-gray-600 text-xs font-medium';
-                            const actionIcon = 'w-3 h-3 shrink-0';
-                            const actionText = 'max-w-0 overflow-hidden group-hover:max-w-[8rem] transition-all duration-200 whitespace-nowrap';
-                            return (
-                              <>
-                                <button type="button" onClick={async () => { const role = row.role_context === 'trainer' ? 'trainer' : row.role_context === 'office' ? 'office' : 'student'; const url = await getOrIssueInstanceAccessLink(row.id, role); if (!url) { toast.error('Failed to open secure link'); return; } window.open(url, '_blank'); }} className={actionBtn} title="Open">
-                                  <ExternalLink className={actionIcon} />
-                                  <span className={actionText}>Open</span>
-                                </button>
-                                <button type="button" onClick={() => { const role = row.role_context === 'trainer' ? 'trainer' : row.role_context === 'office' ? 'office' : 'student'; handleCopyLink(row.id, role); }} className={actionBtn} title="Copy Link">
-                                  <Copy className={actionIcon} />
-                                  <span className={actionText}>Copy Link</span>
-                                </button>
-                                {!row.link_expired && (
-                                  <button type="button" onClick={() => { const role = row.role_context === 'trainer' ? 'trainer' : row.role_context === 'office' ? 'office' : 'student'; void handleExpireLink(row.id, role); }} disabled={managingId === row.id} className={actionBtn} title="Revoke link access">
-                                    <Ban className={actionIcon} />
-                                    <span className={actionText}>Expire</span>
-                                  </button>
-                                )}
-                                {row.link_expired && (
-                                  <button type="button" onClick={() => { const role = row.role_context === 'trainer' ? 'trainer' : row.role_context === 'office' ? 'office' : 'student'; void handleEnableLink(row.id, role); }} disabled={managingId === row.id} className={actionBtn} title="Re-enable link (30 days)">
-                                    <CheckCircle className={actionIcon} />
-                                    <span className={actionText}>Enable</span>
-                                  </button>
-                                )}
-                                <button type="button" onClick={() => openExtendDeadline(row)} className={actionBtn} title="Extend assessment end date">
-                                  <CalendarClock className={actionIcon} />
-                                  <span className={actionText}>Extend End Date</span>
-                                </button>
-                                <button type="button" onClick={() => openEditDates(row)} className={actionBtn} title="Edit assessment dates">
-                                  <CalendarDays className={actionIcon} />
-                                  <span className={actionText}>Edit dates</span>
-                                </button>
-                                {row.status !== 'locked' &&
-                                  (row.role_context === 'trainer' || row.role_context === 'office') &&
-                                  (Number((row as unknown as { submission_count?: number }).submission_count ?? 0) > 0 || !!row.submitted_at) &&
-                                  // Max 3 student submissions/attempts; don't show when all attempts used.
-                                  Number((row as unknown as { submission_count?: number }).submission_count ?? 0) < 3 && (
-                                  <button type="button" onClick={async () => { setManagingId(row.id); await allowStudentResubmission(row.id); setManagingId(null); await loadRows(currentPage, searchTerm, { silent: true }); const url = `${window.location.origin}/forms/${row.form_id}/student-access`; await navigator.clipboard.writeText(url); toast.success('Resubmission allowed. Generic link copied—student uses email and OTP.'); }} disabled={managingId === row.id} className={actionBtn} title="Allow student to resubmit">
-                                    <CheckCircle className={actionIcon} />
-                                    <span className={actionText}>Allow Resubmission</span>
-                                  </button>
-                                )}
-                                {(row.status === 'submitted' || row.status === 'draft') && (
-                                  <button
-                                    type="button"
-                                    onClick={() => openSendToTrainer(row)}
-                                    disabled={sendingId === row.id}
-                                    className={actionBtn}
-                                    title={row.role_context === 'trainer' ? 'Resend to Trainer' : 'Send to Trainer'}
-                                  >
-                                    <Send className={actionIcon} />
-                                    <span className={actionText}>{sendingId === row.id ? 'Sending...' : row.role_context === 'trainer' ? 'Resend to Trainer' : 'Send to Trainer'}</span>
-                                  </button>
-                                )}
-                              </>
-                            );
-                          })()}
+                        <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-xs text-gray-600">
+                          <dt className="text-gray-500">Start</dt>
+                          <dd>{formatDDMMYYYY(row.start_date)}</dd>
+                          <dt className="text-gray-500">End</dt>
+                          <dd>{formatDDMMYYYY(row.end_date)}</dd>
+                          <dt className="text-gray-500">Submitted</dt>
+                          <dd>{formatDDMMYYYY(row.submitted_at || row.created_at)}</dd>
+                        </dl>
+                        <div className="mt-2">
+                          <span className={`inline-flex rounded-md px-2.5 py-1 text-xs font-medium ${getWorkflowBadgeClass(row)}`}>
+                            {getWorkflowLabel(row)}
+                          </span>
                         </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-          {!loading && totalRows > PAGE_SIZE && (
-            <div className="mt-4 flex items-center justify-between gap-2">
-              <div className="text-xs text-gray-500">Page {currentPage} of {totalPages} ({totalRows} total)</div>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                  disabled={currentPage <= 1}
-                >
-                  Previous
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                  disabled={currentPage >= totalPages}
-                >
-                  Next
-                </Button>
+                        {renderAssessmentActions(row, 'stack')}
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
-            </div>
+              <div className="hidden overflow-x-auto lg:block">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-200 text-left text-xs uppercase tracking-wide text-gray-500">
+                      <th className="py-3 pr-3">Student</th>
+                      <th className="py-3 pr-3">Form</th>
+                      <th className="py-3 pr-3 w-[120px]">Start</th>
+                      <th className="py-3 pr-3 w-[120px]">End</th>
+                      <th className="py-3 pr-3">Date</th>
+                      <th className="py-3 pr-3 w-[140px]">Workflow</th>
+                      <th className="py-3 text-right min-w-[220px]">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((row) => (
+                      <tr key={row.id} className="border-b border-gray-100 hover:bg-gray-50/50 transition-colors">
+                        <td className="py-3 pr-3">
+                          <div className="font-medium text-gray-900">{row.student_name}</div>
+                          <div className="text-xs text-gray-500">{row.student_email || '-'}</div>
+                        </td>
+                        <td className="py-3 pr-3">
+                          <div className="font-medium text-gray-900">{row.form_name}</div>
+                          <div className="text-xs text-gray-500">Version {row.form_version ?? '1.0.0'}</div>
+                        </td>
+                        <td className="py-3 pr-3 text-gray-700">{formatDDMMYYYY(row.start_date)}</td>
+                        <td className="py-3 pr-3 text-gray-700">{formatDDMMYYYY(row.end_date)}</td>
+                        <td className="py-3 pr-3 text-gray-700">{formatDDMMYYYY(row.submitted_at || row.created_at)}</td>
+                        <td className="py-3 pr-3">
+                          <span className={`inline-flex rounded-md px-2.5 py-1 text-xs font-medium ${getWorkflowBadgeClass(row)}`}>
+                            {getWorkflowLabel(row)}
+                          </span>
+                        </td>
+                        <td className="py-3 align-middle">{renderAssessmentActions(row, 'toolbar')}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+          {!loading && (
+            <AdminListPagination
+              placement="bottom"
+              totalItems={totalRows}
+              pageSize={PAGE_SIZE}
+              currentPage={currentPage}
+              totalPages={totalPages}
+              onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              onNext={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              itemLabel="assessments"
+            />
           )}
         </Card>
 
