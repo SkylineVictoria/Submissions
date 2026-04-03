@@ -498,6 +498,7 @@ function nonEmptyIsoDate(s: string): boolean {
 export function validateInductionFormPayload(p: InductionFormPayload): string | null {
   const h = p.checklistHeader;
   if (!nonEmpty(h.fullName)) return 'Enter your full name on the checklist.';
+  if (!nonEmpty(h.studentId)) return 'Enter your Student ID on the checklist.';
   if (!nonEmpty(h.email)) return 'Enter your email on the checklist.';
   if (!nonEmpty(h.mobile)) return 'Enter your mobile on the checklist.';
   if (!nonEmpty(h.course)) return 'Enter your course on the checklist.';

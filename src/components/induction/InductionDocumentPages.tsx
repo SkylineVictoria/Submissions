@@ -196,7 +196,7 @@ function EnrolmentFormTable({ interactive }: { interactive?: InductionInteractiv
           </td>
         </tr>
         <tr>
-          <td className="border border-black px-2 py-1 font-semibold">Student ID (optional)</td>
+          <td className="border border-black px-2 py-1 font-semibold">Student ID</td>
           <td className="border border-black px-2 py-1" style={{ backgroundColor: FORM_INPUT_BG }}>
             {textCell('studentId')}
           </td>
@@ -957,7 +957,7 @@ export const InductionDocumentPages: React.FC<{
             )}
           </p>
           <p>
-            <span className="font-semibold">Student ID (optional):</span>{' '}
+            <span className="font-semibold">Student ID:</span>{' '}
             {interactive ? (
               <input
                 type="text"
@@ -970,6 +970,7 @@ export const InductionDocumentPages: React.FC<{
                   })
                 }
                 disabled={interactive.readOnly}
+                required
               />
             ) : (
               <span className="inline-block min-w-[200px] border-b border-dotted border-gray-400" />

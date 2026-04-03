@@ -387,7 +387,7 @@ function buildBlankChecklistTbody(policyRowsHtml: string, handbookRowsHtml: stri
 
 function buildChecklistHeaderHtml(P: Record<string, unknown> | null): string {
   return `<p style="margin:3px 0;font-size:10pt;"><span style="font-weight:600;">Student full name:</span> ${inlineField(P, ['checklistHeader', 'fullName'], '200px')}</p>
-    <p style="margin:3px 0;font-size:10pt;"><span style="font-weight:600;">Student ID (optional):</span> ${inlineField(P, ['checklistHeader', 'studentId'], '200px')}</p>
+    <p style="margin:3px 0;font-size:10pt;"><span style="font-weight:600;">Student ID:</span> ${inlineField(P, ['checklistHeader', 'studentId'], '200px')}</p>
     <p style="margin:3px 0;font-size:10pt;"><span style="font-weight:600;">Email:</span> ${inlineField(P, ['checklistHeader', 'email'], '180px')}
     <span style="font-weight:600;margin-left:12px;">Mobile:</span> ${inlineField(P, ['checklistHeader', 'mobile'], '120px')}</p>
     <p style="margin:3px 0;font-size:10pt;"><span style="font-weight:600;">Course:</span> ${inlineField(P, ['checklistHeader', 'course'], '240px')}</p>`;
@@ -454,7 +454,7 @@ function buildEnrolmentTableBody(P: Record<string, unknown> | null): string {
         <tr><td class="form-lbl">Family Name</td><td class="form-inp">${fi(e, 'familyName')}</td></tr>
         <tr><td class="form-lbl">Given Name/s</td><td class="form-inp">${fi(e, 'givenNames')}</td></tr>
         <tr><td class="form-lbl">Date of Birth</td><td class="form-inp">${dobLine}</td></tr>
-        <tr><td class="form-lbl">Student ID (optional)</td><td class="form-inp">${fi(e, 'studentId')}</td></tr>
+        <tr><td class="form-lbl">Student ID</td><td class="form-inp">${fi(e, 'studentId')}</td></tr>
         <tr><td class="form-lbl">Passport Number</td><td class="form-inp">${fi(e, 'passportNumber')}</td></tr>
         <tr><td class="form-lbl">Visa Number</td><td class="form-inp">${fi(e, 'visaNumber')}</td></tr>
         <tr><td class="form-lbl">Visa Expiry Date</td><td class="form-inp">${fiDate(e, 'visaExpiry')}</td></tr>
