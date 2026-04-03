@@ -1054,15 +1054,13 @@ function buildHtml(data: {
 <body>
 `;
 
-  // Group steps: put Student & Trainer + Qualification & Unit on the same page. Appendix A hidden from students.
-  const isAppendixAStep = (s: { title?: string | null }) => /Appendix\s*A/i.test((s.title ?? '').trim());
-  const stepsForPdf = role === 'student' ? steps.filter((g) => !isAppendixAStep(g.step)) : steps;
+  // Group steps: put Student & Trainer + Qualification & Unit on the same page. Appendix A is included for all roles so the PDF matches the workbook (trainer/office entries show when present).
   const isStudentTrainerStep = (s: { title: string }) => /student/i.test(s.title) && /trainer/i.test(s.title);
   const isQualificationStep = (s: { title: string }) => /qualification/i.test(s.title);
   const pageGroups: Array<typeof steps> = [];
-  for (let i = 0; i < stepsForPdf.length; i++) {
-    const curr = stepsForPdf[i];
-    const next = stepsForPdf[i + 1];
+  for (let i = 0; i < steps.length; i++) {
+    const curr = steps[i];
+    const next = steps[i + 1];
     if (next && isStudentTrainerStep(curr.step) && isQualificationStep(next.step)) {
       pageGroups.push([curr, next]);
       i++;
@@ -1571,6 +1569,13 @@ function buildHtml(data: {
         const renderableQs = questions.filter(
           (q) => q.question.type !== 'instruction_block' && !((q.question.pdf_meta as Record<string, unknown>)?.isAdditionalBlockOf)
         );
+        const taskQNumById = new Map<number, number>();
+        let qnAcc = 0;
+        for (const rq of renderableQs) {
+          if (rq.question.type === 'page_break') continue;
+          qnAcc++;
+          taskQNumById.set(rq.question.id, qnAcc);
+        }
         let qNum = 0;
         for (let i = 0; i < renderableQs.length; i++) {
           const { question, rows } = renderableQs[i];
@@ -1588,7 +1593,7 @@ function buildHtml(data: {
             html += `<div class="task-q-satisfactory-above"><span style="font-weight:600;margin-right:8px">Satisfactory response:</span><span class="grid-status-cb${satYes ? ' checked' : ''}"></span> Yes <span style="margin-left:12px" class="grid-status-cb${satNo ? ' checked' : ''}"></span> No</div>`;
           }
           if (isAssessment2Plus) {
-            html += `<div class="task-q-question-label" style="font-weight:bold;margin-bottom:8px">${labelToHtml(question.label)}</div>`;
+            html += `<div class="task-q-question-label" style="font-weight:bold;margin-bottom:8px"><span class="task-q-num-inline" style="margin-right:6px">Q${qNum}:</span>${labelToHtml(question.label)}</div>`;
             const pmTop = (question.pdf_meta as Record<string, unknown>) || {};
             const textAboveHeader = String(pmTop.textAboveHeader ?? '').trim();
             if (textAboveHeader) html += `<div class="task-q-text-above-header">${labelToHtml(textAboveHeader)}</div>`;
@@ -1691,7 +1696,9 @@ function buildHtml(data: {
                   const cqLayout = (cqPm?.imageLayout as string) || 'side_by_side';
                   const cqPct = Math.max(20, Math.min(80, (cqPm?.imageWidthPercent as number) || 50));
                   const cqImgTag = cqImgUrl ? `<img src="${cqImgUrl}" alt="" style="max-width:100%;max-height:280px;object-fit:contain;border:1px solid #ddd;border-radius:4px" />` : '';
-                  let labelHtml = `<div class="task-q-question-label">${labelToHtml(cq.label)}</div>`;
+                  const cqDisp = taskQNumById.get(cq.id);
+                  const cqNumPrefix = cqDisp != null ? `<span class="task-q-num-inline" style="margin-right:6px">Q${cqDisp}:</span>` : '';
+                  let labelHtml = `<div class="task-q-question-label">${cqNumPrefix}${labelToHtml(cq.label)}</div>`;
                   if (cqImgTag) {
                     if (cqLayout === 'above') labelHtml = `<div style="margin-bottom:8px">${cqImgTag}</div>${labelHtml}`;
                     else if (cqLayout === 'below') labelHtml += `<div style="margin-top:8px">${cqImgTag}</div>`;
@@ -1891,7 +1898,9 @@ function buildHtml(data: {
                 const cqLayout = (cqPm?.imageLayout as string) || 'side_by_side';
                 const cqPct = Math.max(20, Math.min(80, (cqPm?.imageWidthPercent as number) || 50));
                 const cqImgTag = cqImgUrl ? `<img src="${cqImgUrl}" alt="" style="max-width:100%;max-height:280px;object-fit:contain;border:1px solid #ddd;border-radius:4px" />` : '';
-                let labelHtml = `<div class="task-q-question-label">${labelToHtml(cq.label)}</div>`;
+                const cqDispA1 = taskQNumById.get(cq.id);
+                const cqNumPrefixA1 = cqDispA1 != null ? `<span class="task-q-num-inline" style="margin-right:6px">Q${cqDispA1}:</span>` : '';
+                let labelHtml = `<div class="task-q-question-label">${cqNumPrefixA1}${labelToHtml(cq.label)}</div>`;
                 if (cqImgTag) {
                   if (cqLayout === 'above') labelHtml = `<div style="margin-bottom:8px">${cqImgTag}</div>${labelHtml}`;
                   else if (cqLayout === 'below') labelHtml += `<div style="margin-top:8px">${cqImgTag}</div>`;
@@ -2116,9 +2125,7 @@ function buildHtml(data: {
       } else if (section.pdf_render_mode === 'reasonable_adjustment') {
         const stepTitle = (step?.title || '').trim();
         const isAppendixA = /Appendix\s*A/i.test(stepTitle);
-        if (isAppendixA && role === 'student') {
-          /* Appendix A - Trainer and Office only: skip entire section for students */
-        } else if (!isAppendixA && formHasAppendixA) {
+        if (!isAppendixA && formHasAppendixA) {
           html += `<h3>${headerNum}. Reasonable Adjustment</h3>`;
           headerNum++;
           html += '<p style="margin:0 0 10px 0;line-height:1.5">Reasonable Adjustment: See Appendix A – Reasonable Adjustments for details and to record any adjustments applied.</p>';

@@ -1574,10 +1574,10 @@ export const AdminFormBuilderPage: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[var(--bg)]">
-      <header className="bg-white border-b border-[var(--border)] shadow-sm sticky top-0 z-20 overflow-x-hidden">
-        <div className="w-full px-4 md:px-6 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <div className="flex flex-col gap-2 min-w-0">
-            <div className="flex items-center gap-3">
+      <header className="bg-white border-b border-[var(--border)] shadow-sm sticky top-0 z-20 min-w-0">
+        <div className="w-full px-4 md:px-6 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 min-w-0">
+          <div className="flex flex-col gap-2 min-w-0 flex-1 sm:min-w-0">
+            <div className="flex items-start gap-3 min-w-0">
               <button
                 type="button"
                 onClick={async (e) => {
@@ -1586,16 +1586,21 @@ export const AdminFormBuilderPage: React.FC = () => {
                   await flushAllPendingSaves();
                   navigate('/admin/forms');
                 }}
-                className="text-gray-600 hover:text-gray-900 bg-transparent border-none cursor-pointer font-inherit p-0 shrink-0"
+                className="text-gray-600 hover:text-gray-900 bg-transparent border-none cursor-pointer font-inherit p-0 shrink-0 mt-1"
               >
                 ← Back
               </button>
-              <input
-                type="text"
+              <textarea
                 value={form.name}
+                title={form.name || undefined}
+                rows={3}
+                spellCheck={false}
                 onChange={(e) => setForm((prev) => (prev ? { ...prev, name: e.target.value } : null))}
                 onBlur={async (e) => {
-                  const newName = (e.target.value || '').trim();
+                  const newName = (e.target.value || '')
+                    .replace(/\r?\n/g, ' ')
+                    .replace(/\s+/g, ' ')
+                    .trim();
                   if (!newName) {
                     setForm((prev) => (prev ? { ...prev, name: lastSavedFormNameRef.current } : null));
                     return;
@@ -1616,7 +1621,7 @@ export const AdminFormBuilderPage: React.FC = () => {
                   lastSavedFormNameRef.current = newName;
                   setForm((prev) => (prev ? { ...prev, name: newName } : null));
                 }}
-                className="text-xl font-bold text-[var(--text)] bg-transparent border-b-2 border-transparent hover:border-[var(--border)] focus:outline-none focus:border-[var(--brand)] py-0.5 px-0 min-w-0 flex-1 max-w-sm"
+                className="text-xl font-bold text-[var(--text)] bg-transparent border-b-2 border-transparent hover:border-[var(--border)] focus:outline-none focus:border-[var(--brand)] py-1 px-0 min-w-0 flex-1 w-full min-h-[4.5rem] max-h-40 resize-y leading-snug [field-sizing:content]"
                 placeholder="Form name"
               />
             </div>
@@ -2703,10 +2708,17 @@ const ROW_SAVE_DEBOUNCE_MS = 450;
 
 function QuestionRowsEditor({ questionId, sectionPdfMode, formId, steps, onStepsCreated, gridTableLayout, simpleLabelsOnly = false }: { questionId: number; sectionPdfMode?: string; formId?: number | null; steps?: { sort_order: number }[]; onStepsCreated?: () => void; gridTableLayout?: string; simpleLabelsOnly?: boolean }) {
   const [rows, setRows] = useState<QuestionRow[]>([]);
+  const [bulkRowCount, setBulkRowCount] = useState<string>('5');
+  const [bulkAdding, setBulkAdding] = useState(false);
   const [instructionsModalRow, setInstructionsModalRow] = useState<QuestionRow | null>(null);
   const [uploadingRowId, setUploadingRowId] = useState<number | null>(null);
+  const rowsRef = useRef<QuestionRow[]>([]);
   const rowPendingUpdates = useRef<Record<number, Partial<QuestionRow>>>({});
   const rowSaveTimers = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
+
+  useEffect(() => {
+    rowsRef.current = rows;
+  }, [rows]);
 
   useEffect(() => {
     supabase
@@ -2752,24 +2764,42 @@ function QuestionRowsEditor({ questionId, sectionPdfMode, formId, steps, onSteps
     return () => window.removeEventListener(FLUSH_PENDING_EVENT, handler);
   }, []);
 
+  const isAssessmentTasks = sectionPdfMode === 'assessment_tasks';
+
   const addRow = async () => {
+    const currentRows = rowsRef.current;
     const match = /Assessment\s+Task\s*-?\s*(\d+)/i;
     let maxNum = 0;
-    for (const r of rows) {
+    for (const r of currentRows) {
       const m = r.row_label?.match(match);
       if (m) maxNum = Math.max(maxNum, parseInt(m[1], 10));
     }
     const defaultLabel = sectionPdfMode === 'assessment_tasks' ? `Assessment Task - ${maxNum + 1}` : '';
     const { data } = await supabase
       .from('skyline_form_question_rows')
-      .insert({ question_id: questionId, row_label: defaultLabel, sort_order: rows.length })
+      .insert({ question_id: questionId, row_label: defaultLabel, sort_order: currentRows.length })
       .select('*')
       .single();
     if (data) {
-      setRows((prev) => [...prev, data]);
+      setRows((prev) => {
+        const next = [...prev, data];
+        rowsRef.current = next;
+        return next;
+      });
       if (sectionPdfMode === 'assessment_tasks' && formId && onStepsCreated) {
         const row = data as QuestionRow;
-        const maxStepOrder = steps?.length ? Math.max(...steps.map((s) => s.sort_order), 0) : 0;
+        const { data: maxStepRow } = await supabase
+          .from('skyline_form_steps')
+          .select('sort_order')
+          .eq('form_id', formId)
+          .order('sort_order', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        const maxStepOrder = maxStepRow && typeof (maxStepRow as { sort_order: number }).sort_order === 'number'
+          ? (maxStepRow as { sort_order: number }).sort_order
+          : steps?.length
+            ? Math.max(...steps.map((s) => s.sort_order), 0)
+            : 0;
         const { data: taskStep } = await supabase
           .from('skyline_form_steps')
           .insert({ form_id: formId, title: row.row_label, subtitle: 'Instructions, Questions & Results', sort_order: maxStepOrder + 1 })
@@ -2832,6 +2862,46 @@ function QuestionRowsEditor({ questionId, sectionPdfMode, formId, steps, onSteps
     }
   };
 
+  const addMultipleRows = async () => {
+    const parsed = Math.floor(Number.parseInt(String(bulkRowCount).trim(), 10));
+    const n = Math.min(100, Math.max(1, Number.isFinite(parsed) ? parsed : 1));
+    if (isAssessmentTasks) {
+      setBulkAdding(true);
+      try {
+        for (let i = 0; i < n; i++) {
+          await addRow();
+        }
+      } finally {
+        setBulkAdding(false);
+      }
+      return;
+    }
+    setBulkAdding(true);
+    try {
+      const start = rowsRef.current.length;
+      const inserts = Array.from({ length: n }, (_, i) => ({
+        question_id: questionId,
+        row_label: '',
+        sort_order: start + i,
+      }));
+      const { data, error } = await supabase.from('skyline_form_question_rows').insert(inserts).select('*');
+      if (error) {
+        console.error('Bulk insert rows failed:', error);
+        alert(`Could not add rows: ${error.message}`);
+        return;
+      }
+      if (data?.length) {
+        setRows((prev) => {
+          const next = [...prev, ...(data as QuestionRow[])];
+          rowsRef.current = next;
+          return next;
+        });
+      }
+    } finally {
+      setBulkAdding(false);
+    }
+  };
+
   const flushRowSave = useCallback(async (id: number) => {
     const pending = rowPendingUpdates.current[id];
     delete rowPendingUpdates.current[id];
@@ -2866,8 +2936,6 @@ function QuestionRowsEditor({ questionId, sectionPdfMode, formId, steps, onSteps
     await supabase.from('skyline_form_question_rows').update(updates).eq('id', rowId);
     setRows((prev) => prev.map((r) => (r.id === rowId ? { ...r, row_meta, row_help: updates.row_help ?? r.row_help } : r)));
   };
-
-  const isAssessmentTasks = sectionPdfMode === 'assessment_tasks';
 
   const removeRow = async (r: QuestionRow) => {
     if (!window.confirm('Remove this row? This cannot be undone.')) return;
@@ -3005,9 +3073,26 @@ function QuestionRowsEditor({ questionId, sectionPdfMode, formId, steps, onSteps
           </div>
         ))}
       </div>
-      <Button variant="outline" size="sm" onClick={addRow} className="mt-2">
-        + Add row
-      </Button>
+      <div className="mt-3 flex flex-wrap items-end gap-2">
+        <Button variant="outline" size="sm" onClick={() => void addRow()} disabled={bulkAdding}>
+          + Add row
+        </Button>
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-dashed border-gray-300 bg-gray-50/80 px-2 py-1.5">
+          <span className="text-xs text-gray-600 shrink-0">Or add many:</span>
+          <Input
+            type="number"
+            min={1}
+            max={100}
+            value={bulkRowCount}
+            onChange={(e) => setBulkRowCount(e.target.value)}
+            className="h-8 w-16 text-sm"
+            aria-label="Number of rows to add"
+          />
+          <Button variant="outline" size="sm" onClick={() => void addMultipleRows()} disabled={bulkAdding} className="shrink-0">
+            {bulkAdding ? 'Adding…' : 'Add rows'}
+          </Button>
+        </div>
+      </div>
       {instructionsModalRow && (
         <TaskInstructionsModal
           isOpen={!!instructionsModalRow}
