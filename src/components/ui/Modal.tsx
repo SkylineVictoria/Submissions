@@ -24,11 +24,12 @@ export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, 
 
   if (!isOpen) return null;
 
+  /* Full-bleed on small viewports; capped width on sm+ so laptop/desktop dialogs are not edge-to-edge. */
   const sizeClasses = {
-    sm: 'max-w-md',
-    md: 'max-w-2xl',
-    lg: 'max-w-4xl',
-    xl: 'max-w-6xl',
+    sm: 'w-full max-w-[100vw] sm:max-w-md',
+    md: 'w-full max-w-[100vw] sm:max-w-xl',
+    lg: 'w-full max-w-[100vw] sm:max-w-3xl',
+    xl: 'w-full max-w-[100vw] sm:max-w-5xl',
   };
 
   return (
@@ -38,15 +39,14 @@ export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, 
     >
       <div
         className={cn(
-          'bg-white shadow-2xl flex max-h-[min(92dvh,100%)] w-full flex-col rounded-t-xl sm:max-h-[90vh] sm:rounded-xl',
-          'max-w-[100vw] sm:max-w-none',
+          'bg-white shadow-2xl flex max-h-[min(92dvh,100%)] min-w-0 flex-col rounded-t-xl sm:max-h-[90vh] sm:rounded-xl',
           sizeClasses[size]
         )}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between shrink-0 px-5 py-4 border-b border-[var(--border)]">
-          <h2 className="text-lg font-bold text-[var(--text)]">{title}</h2>
+        <div className="flex items-center justify-between gap-3 shrink-0 px-4 py-3 border-b border-[var(--border)] sm:px-5 sm:py-4">
+          <h2 className="min-w-0 text-base font-bold text-[var(--text)] sm:text-lg pr-2">{title}</h2>
           <button
             onClick={onClose}
             className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors text-gray-500 hover:text-gray-700"
@@ -57,7 +57,9 @@ export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, 
         </div>
 
         {/* Content - scrollable */}
-        <div className="p-5 overflow-y-auto flex-1 min-h-0">{children}</div>
+        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-4 sm:px-5 sm:py-5">
+          {children}
+        </div>
       </div>
     </div>
   );

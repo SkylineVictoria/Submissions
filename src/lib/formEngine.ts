@@ -1368,7 +1368,7 @@ export interface CreateUserInput {
   email: string;
   phone?: string;
   status?: string;
-  role: 'admin' | 'trainer' | 'office';
+  role: 'superadmin' | 'admin' | 'trainer' | 'office';
   password?: string;
 }
 
@@ -1388,7 +1388,7 @@ export interface PaginatedResult<T> {
   pageSize: number;
 }
 
-export type AppUserRole = 'admin' | 'trainer' | 'office';
+export type AppUserRole = 'superadmin' | 'admin' | 'trainer' | 'office';
 
 export interface AppUser {
   id: number;
@@ -1553,7 +1553,7 @@ export async function listUsersPaged(
   page = 1,
   pageSize = 20,
   search?: string,
-  roleFilter?: '' | 'admin' | 'trainer' | 'office',
+  roleFilter?: '' | 'superadmin' | 'admin' | 'trainer' | 'office',
   statusFilter?: '' | 'active' | 'inactive'
 ): Promise<PaginatedResult<UserRow>> {
   const from = Math.max(0, (page - 1) * pageSize);
@@ -1588,7 +1588,7 @@ export async function listUsersForBatchAssignment(): Promise<UserRow[]> {
   const { data, error } = await supabase
     .from('skyline_users')
     .select('*')
-    .in('role', ['trainer', 'admin'])
+    .in('role', ['trainer', 'admin', 'superadmin'])
     .eq('status', 'active')
     .or('is_master.eq.false,is_master.is.null')
     .order('full_name');
@@ -1609,7 +1609,7 @@ export async function listUsersForBatchAssignmentPaged(
   let query = supabase
     .from('skyline_users')
     .select('*', { count: 'exact' })
-    .in('role', ['trainer', 'admin'])
+    .in('role', ['trainer', 'admin', 'superadmin'])
     .eq('status', 'active')
     .or('is_master.eq.false,is_master.is.null')
     .order('full_name');

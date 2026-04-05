@@ -20,8 +20,10 @@ import { Modal } from '../components/ui/Modal';
 import { Loader } from '../components/ui/Loader';
 import { toast } from '../utils/toast';
 import { AdminListPagination } from '../components/admin/AdminListPagination';
+import { useAuth } from '../contexts/AuthContext';
+import type { CreateUserInput } from '../lib/formEngine';
 
-const ROLE_OPTIONS = [
+const BASE_ROLE_OPTIONS = [
   { value: 'admin', label: 'Admin' },
   { value: 'trainer', label: 'Trainer' },
   { value: 'office', label: 'Office Use' },
@@ -34,7 +36,8 @@ const STATUS_OPTIONS = [
 
 const ROLE_FILTER_OPTIONS = [
   { value: '', label: 'All roles' },
-  ...ROLE_OPTIONS,
+  { value: 'superadmin', label: 'Super Admin' },
+  ...BASE_ROLE_OPTIONS,
 ];
 
 const STATUS_FILTER_OPTIONS = [
@@ -42,14 +45,28 @@ const STATUS_FILTER_OPTIONS = [
   ...STATUS_OPTIONS,
 ];
 
-const roleLabel = (role: string) => ROLE_OPTIONS.find((r) => r.value === role)?.label ?? role;
+const roleLabel = (role: string) =>
+  role === 'superadmin' ? 'Super Admin' : BASE_ROLE_OPTIONS.find((r) => r.value === role)?.label ?? role;
 
 export const AdminUsersPage: React.FC = () => {
   const PAGE_SIZE = 20;
+  const { user: authUser } = useAuth();
+  const viewerIsSuperadmin = authUser?.role === 'superadmin';
+  const assignableRoleOptions = React.useMemo(
+    () =>
+      viewerIsSuperadmin
+        ? [{ value: 'superadmin', label: 'Super Admin' }, ...BASE_ROLE_OPTIONS]
+        : BASE_ROLE_OPTIONS,
+    [viewerIsSuperadmin]
+  );
+  const assignableRoleValues = React.useMemo(
+    () => assignableRoleOptions.map((o) => o.value),
+    [assignableRoleOptions]
+  );
   const [users, setUsers] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
-  const [roleFilter, setRoleFilter] = useState<'' | 'admin' | 'trainer' | 'office'>('');
+  const [roleFilter, setRoleFilter] = useState<'' | 'superadmin' | 'admin' | 'trainer' | 'office'>('');
   const [statusFilter, setStatusFilter] = useState<'' | 'active' | 'inactive'>('');
   const [currentPage, setCurrentPage] = useState(1);
   const [totalUsers, setTotalUsers] = useState(0);
@@ -65,7 +82,7 @@ export const AdminUsersPage: React.FC = () => {
     email_domain: STAFF_DOMAIN as InstitutionalDomain,
     phone: '',
     status: 'active',
-    role: 'trainer' as 'admin' | 'trainer' | 'office',
+    role: 'trainer' as CreateUserInput['role'],
   });
 
   const [editDraft, setEditDraft] = useState<{
@@ -89,7 +106,8 @@ export const AdminUsersPage: React.FC = () => {
   const digitsOnly = (val: string) => val.replace(/\D/g, '');
 
   const validateUserForm = (
-    form: { first_name: string; last_name: string; email_local: string; phone: string; status: string; role: string }
+    form: { first_name: string; last_name: string; email_local: string; phone: string; status: string; role: string },
+    allowedRoles: readonly string[]
   ): string | null => {
     const fullName = `${(form.first_name || '').trim()} ${(form.last_name || '').trim()}`.trim();
     if (!fullName) return 'First name and last name are required.';
@@ -100,7 +118,7 @@ export const AdminUsersPage: React.FC = () => {
     if (!form.phone.trim()) return 'Phone is required.';
     if (!/^\d{10}$/.test(form.phone.trim())) return 'Phone must be exactly 10 digits.';
     if (!form.status.trim()) return 'Status is required.';
-    if (!form.role || !['admin', 'trainer', 'office'].includes(form.role)) return 'Role is required.';
+    if (!form.role || !allowedRoles.includes(form.role)) return 'Role is required.';
     return null;
   };
 
@@ -115,11 +133,14 @@ export const AdminUsersPage: React.FC = () => {
     return () => clearTimeout(t);
   }, [currentPage, searchTerm, roleFilter, statusFilter]);
 
-  const createError = useMemo(() => validateUserForm(draft), [draft]);
-  const editError = useMemo(() => (editDraft ? validateUserForm(editDraft) : null), [editDraft]);
+  const createError = useMemo(() => validateUserForm(draft, assignableRoleValues), [draft, assignableRoleValues]);
+  const editError = useMemo(
+    () => (editDraft ? validateUserForm(editDraft, assignableRoleValues) : null),
+    [editDraft, assignableRoleValues]
+  );
 
   const handleCreate = async () => {
-    const err = validateUserForm(draft);
+    const err = validateUserForm(draft, assignableRoleValues);
     if (err) {
       toast.error(err);
       return;
@@ -183,7 +204,7 @@ export const AdminUsersPage: React.FC = () => {
 
   const handleSaveEdit = async () => {
     if (!editingId || !editDraft) return;
-    const err = validateUserForm(editDraft);
+    const err = validateUserForm(editDraft, assignableRoleValues);
     if (err) {
       toast.error(err);
       return;
@@ -196,7 +217,7 @@ export const AdminUsersPage: React.FC = () => {
       email,
       phone: editDraft.phone,
       status: editDraft.status,
-      role: editDraft.role as 'admin' | 'trainer' | 'office',
+      role: editDraft.role as CreateUserInput['role'],
     });
     setSavingEdit(false);
     if (!updated) {
@@ -213,10 +234,13 @@ export const AdminUsersPage: React.FC = () => {
   const totalPages = Math.max(1, Math.ceil(totalUsers / PAGE_SIZE));
 
   const RoleIcon = ({ role }: { role: string }) => {
+    if (role === 'superadmin') return <Shield className="w-4 h-4 text-violet-700" />;
     if (role === 'admin') return <Shield className="w-4 h-4 text-amber-600" />;
     if (role === 'trainer') return <UserRound className="w-4 h-4 text-blue-600" />;
     return <Building2 className="w-4 h-4 text-emerald-600" />;
   };
+
+  const canEditDirectoryUser = (row: UserRow) => !(row.role === 'superadmin' && !viewerIsSuperadmin);
 
   return (
     <div className="min-h-screen bg-[var(--bg)]">
@@ -234,7 +258,7 @@ export const AdminUsersPage: React.FC = () => {
                 <Select
                   value={roleFilter}
                   onChange={(v) => {
-                    setRoleFilter(v as '' | 'admin' | 'trainer' | 'office');
+                    setRoleFilter(v as '' | 'superadmin' | 'admin' | 'trainer' | 'office');
                     setCurrentPage(1);
                   }}
                   options={ROLE_FILTER_OPTIONS}
@@ -314,7 +338,7 @@ export const AdminUsersPage: React.FC = () => {
                           </div>
                         </div>
                         <div className="mt-2 flex flex-wrap gap-1">
-                          {(user.role === 'trainer' || user.role === 'admin') &&
+                          {(user.role === 'trainer' || user.role === 'admin' || user.role === 'superadmin') &&
                             batches
                               .filter((b) => b.trainer_id === user.id)
                               .map((b) => (
@@ -322,7 +346,8 @@ export const AdminUsersPage: React.FC = () => {
                                   {b.name}
                                 </span>
                               ))}
-                          {((user.role !== 'trainer' && user.role !== 'admin') || batches.filter((b) => b.trainer_id === user.id).length === 0) && (
+                          {((user.role !== 'trainer' && user.role !== 'admin' && user.role !== 'superadmin') ||
+                            batches.filter((b) => b.trainer_id === user.id).length === 0) && (
                             <span className="text-xs text-gray-400">—</span>
                           )}
                         </div>
@@ -336,7 +361,19 @@ export const AdminUsersPage: React.FC = () => {
                           </span>
                         </div>
                         <div className="mt-3">
-                          <Button variant="outline" size="sm" className="w-full" onClick={() => setEditingId(user.id)}>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="w-full"
+                            disabled={!canEditDirectoryUser(user)}
+                            onClick={() => {
+                              if (!canEditDirectoryUser(user)) {
+                                toast.error('Only a super admin can edit this user.');
+                                return;
+                              }
+                              setEditingId(user.id);
+                            }}
+                          >
                             <Pencil className="mr-1 h-4 w-4" />
                             Edit
                           </Button>
@@ -392,7 +429,7 @@ export const AdminUsersPage: React.FC = () => {
                       </td>
                       <td className="px-4 py-3 border-b border-[var(--border)]">
                         <div className="flex flex-wrap gap-1">
-                          {(user.role === 'trainer' || user.role === 'admin') &&
+                          {(user.role === 'trainer' || user.role === 'admin' || user.role === 'superadmin') &&
                             batches
                               .filter((b) => b.trainer_id === user.id)
                               .map((b) => (
@@ -403,7 +440,8 @@ export const AdminUsersPage: React.FC = () => {
                                   {b.name}
                                 </span>
                               ))}
-                          {((user.role !== 'trainer' && user.role !== 'admin') || batches.filter((b) => b.trainer_id === user.id).length === 0) && (
+                          {((user.role !== 'trainer' && user.role !== 'admin' && user.role !== 'superadmin') ||
+                            batches.filter((b) => b.trainer_id === user.id).length === 0) && (
                             <span className="text-gray-400 text-xs">—</span>
                           )}
                         </div>
@@ -421,7 +459,14 @@ export const AdminUsersPage: React.FC = () => {
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => setEditingId(user.id)}
+                          disabled={!canEditDirectoryUser(user)}
+                          onClick={() => {
+                            if (!canEditDirectoryUser(user)) {
+                              toast.error('Only a super admin can edit this user.');
+                              return;
+                            }
+                            setEditingId(user.id);
+                          }}
                           className="inline-flex items-center justify-center gap-1.5 min-w-[96px] whitespace-nowrap"
                         >
                           <Pencil className="w-4 h-4" />
@@ -451,8 +496,8 @@ export const AdminUsersPage: React.FC = () => {
       </div>
 
       <Modal isOpen={isCreateOpen} onClose={() => setIsCreateOpen(false)} title="Add User" size="md">
-        <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-2">
+        <div className="min-w-0 space-y-3">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <Input
               value={draft.first_name}
               onChange={(e) => {
@@ -502,8 +547,8 @@ export const AdminUsersPage: React.FC = () => {
           />
           <Select
             value={draft.role}
-            onChange={(v) => setDraft((p) => ({ ...p, role: v as 'admin' | 'trainer' | 'office' }))}
-            options={ROLE_OPTIONS}
+            onChange={(v) => setDraft((p) => ({ ...p, role: v as CreateUserInput['role'] }))}
+            options={assignableRoleOptions}
             label="Role"
           />
           <Select
@@ -512,11 +557,11 @@ export const AdminUsersPage: React.FC = () => {
             options={STATUS_OPTIONS}
             label="Status"
           />
-          <div className="flex items-center justify-end gap-2 pt-1">
-            <Button variant="outline" size="sm" onClick={() => setIsCreateOpen(false)}>
+          <div className="flex flex-col gap-2 pt-2 sm:flex-row sm:items-center sm:justify-end sm:pt-1">
+            <Button variant="outline" size="sm" className="w-full sm:w-auto" onClick={() => setIsCreateOpen(false)}>
               Cancel
             </Button>
-            <Button size="sm" onClick={handleCreate} disabled={creating || !!createError}>
+            <Button size="sm" className="w-full sm:w-auto" onClick={handleCreate} disabled={creating || !!createError}>
               {creating ? (
                 <>
                   <Loader variant="dots" size="sm" inline className="mr-2" />
@@ -535,8 +580,8 @@ export const AdminUsersPage: React.FC = () => {
 
       {editingId && editDraft && (
         <Modal isOpen={!!editingId} onClose={() => setEditingId(null)} title="Edit User" size="md">
-          <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-2">
+          <div className="min-w-0 space-y-3">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <Input
                 value={editDraft.first_name}
                 onChange={(e) => setEditDraft((p) => (p ? { ...p, first_name: e.target.value } : p))}
@@ -567,7 +612,7 @@ export const AdminUsersPage: React.FC = () => {
             <Select
               value={editDraft.role}
               onChange={(v) => setEditDraft((p) => (p ? { ...p, role: v } : p))}
-              options={ROLE_OPTIONS}
+              options={assignableRoleOptions}
               label="Role"
             />
             <Select
@@ -576,11 +621,11 @@ export const AdminUsersPage: React.FC = () => {
               options={STATUS_OPTIONS}
               label="Status"
             />
-            <div className="flex items-center justify-end gap-2 pt-1">
-              <Button variant="outline" size="sm" onClick={() => setEditingId(null)}>
+            <div className="flex flex-col gap-2 pt-2 sm:flex-row sm:items-center sm:justify-end sm:pt-1">
+              <Button variant="outline" size="sm" className="w-full sm:w-auto" onClick={() => setEditingId(null)}>
                 Cancel
               </Button>
-              <Button size="sm" onClick={handleSaveEdit} disabled={savingEdit || !!editError}>
+              <Button size="sm" className="w-full sm:w-auto" onClick={handleSaveEdit} disabled={savingEdit || !!editError}>
                 {savingEdit ? (
                   <>
                     <Loader variant="dots" size="sm" inline className="mr-2" />

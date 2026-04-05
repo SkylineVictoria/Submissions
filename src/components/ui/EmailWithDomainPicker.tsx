@@ -40,21 +40,21 @@ export const EmailWithDomainPicker: React.FC<EmailWithDomainPickerProps> = ({
         placeholder={placeholder}
         className={cn('w-full', inputClassName)}
       />
-      <div className="flex gap-2">
+      <div className="flex flex-col gap-2 sm:flex-row">
         {domains.map((d) => (
           <button
             key={d.value}
             type="button"
             onClick={() => onDomainChange(d.value)}
             className={cn(
-              'flex-1 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
+              'w-full min-w-0 px-3 py-2.5 rounded-lg text-center text-xs font-medium transition-colors sm:flex-1 sm:text-sm',
               'border',
               domain === d.value
                 ? 'border-[var(--brand)] bg-[var(--brand)]/10 text-[var(--brand)]'
                 : 'border-gray-200 bg-gray-50 text-gray-600 hover:bg-gray-100 hover:border-gray-300'
             )}
           >
-            {d.label}
+            <span className="break-all leading-snug">{d.label}</span>
           </button>
         ))}
       </div>

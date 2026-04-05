@@ -7,6 +7,7 @@ import { Loader } from './components/ui/Loader';
 import { AuthProvider } from './contexts/AuthContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { AdminOnlyRoute } from './components/AdminOnlyRoute';
+import { SuperAdminOnlyRoute } from './components/SuperAdminOnlyRoute';
 import type { Toast } from './components/ui/Toast';
 
 // Layouts
@@ -69,7 +70,7 @@ function App() {
             <Route path="enrollment" element={<AdminOnlyRoute><AdminEnrollmentPage /></AdminOnlyRoute>} />
             <Route path="enrollment/induction" element={<AdminOnlyRoute><AdminInductionPage /></AdminOnlyRoute>} />
             <Route path="forms" element={<AdminOnlyRoute><AdminFormsListPage /></AdminOnlyRoute>} />
-            <Route path="forms/:formId/builder" element={<AdminOnlyRoute><AdminFormBuilderPage /></AdminOnlyRoute>} />
+            <Route path="forms/:formId/builder" element={<AdminOnlyRoute><SuperAdminOnlyRoute><AdminFormBuilderPage /></SuperAdminOnlyRoute></AdminOnlyRoute>} />
             <Route path="forms/:formId/preview" element={<AdminOnlyRoute><AdminFormPreviewPage /></AdminOnlyRoute>} />
             <Route path="students" element={<AdminOnlyRoute><AdminStudentsPage /></AdminOnlyRoute>} />
             <Route path="batches" element={<AdminOnlyRoute><AdminBatchesPage /></AdminOnlyRoute>} />

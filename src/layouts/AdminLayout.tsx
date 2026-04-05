@@ -54,7 +54,7 @@ export const AdminLayout: React.FC = () => {
   const navItems = [
     ...baseNavItems,
     { to: '/admin/profile', label: 'My Profile', icon: <User className="w-5 h-5 shrink-0" />, end: true },
-    ...(user?.role === 'admin'
+    ...(user?.role === 'admin' || user?.role === 'superadmin'
       ? [{ to: '/admin/enrollment', label: 'Enrollment', icon: <GraduationCap className="w-5 h-5 shrink-0" />, end: true }]
       : []),
   ];

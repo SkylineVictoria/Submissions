@@ -233,7 +233,7 @@ export const AdminDashboardPage: React.FC = () => {
               <div>
                 <p className="text-gray-600 text-sm font-medium">Admins</p>
                 <p className="text-3xl font-bold text-[var(--text)] mt-1">{stats?.totals.admins ?? 0}</p>
-                <p className="text-gray-500 text-xs mt-1">Users with admin role</p>
+                <p className="text-gray-500 text-xs mt-1">Users with admin or super admin role</p>
               </div>
               <ClipboardCheck className="w-10 h-10 text-gray-300" />
             </div>

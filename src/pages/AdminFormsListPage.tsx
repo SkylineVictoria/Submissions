@@ -11,8 +11,11 @@ import { Modal } from '../components/ui/Modal';
 import { Loader } from '../components/ui/Loader';
 import { toast } from '../utils/toast';
 import { AdminListPagination } from '../components/admin/AdminListPagination';
+import { useAuth } from '../contexts/AuthContext';
 
 export const AdminFormsListPage: React.FC = () => {
+  const { user } = useAuth();
+  const canManageForms = user?.role === 'superadmin';
   const PAGE_SIZE = 20;
   const navigate = useNavigate();
   const [forms, setForms] = useState<Form[]>([]);
@@ -186,10 +189,12 @@ export const AdminFormsListPage: React.FC = () => {
                 Create and manage assessment forms. Inactive forms are only visible to admins.
               </p>
             </div>
-            <Button onClick={() => setIsCreateOpen(true)} className="w-full md:w-auto md:min-w-[140px]">
-              <Plus className="w-4 h-4 mr-2 inline" />
-              Add Form
-            </Button>
+            {canManageForms ? (
+              <Button onClick={() => setIsCreateOpen(true)} className="w-full md:w-auto md:min-w-[140px]">
+                <Plus className="w-4 h-4 mr-2 inline" />
+                Add Form
+              </Button>
+            ) : null}
           </div>
         </Card>
 
@@ -237,7 +242,9 @@ export const AdminFormsListPage: React.FC = () => {
               <Loader variant="dots" size="lg" message="Loading forms..." />
             </div>
           ) : forms.length === 0 ? (
-            <p className="text-gray-500 py-8">No forms yet. Click "Add Form" to create one.</p>
+            <p className="text-gray-500 py-8">
+              {canManageForms ? 'No forms yet. Click "Add Form" to create one.' : 'No forms found.'}
+            </p>
           ) : (
             <>
               <div className="space-y-3 lg:hidden">
@@ -293,21 +300,25 @@ export const AdminFormsListPage: React.FC = () => {
                             {previewing === form.id ? <Loader variant="dots" size="sm" inline /> : <Eye className="mr-2 h-4 w-4 shrink-0" />}
                             Preview
                           </Button>
-                          <Link to={`/admin/forms/${form.id}/builder`} className="block w-full">
-                            <Button variant="outline" size="sm" className="w-full justify-center">
-                              <Edit className="mr-2 h-4 w-4 shrink-0" />
-                              Edit in builder
-                            </Button>
-                          </Link>
-                          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                          {canManageForms ? (
+                            <Link to={`/admin/forms/${form.id}/builder`} className="block w-full">
+                              <Button variant="outline" size="sm" className="w-full justify-center">
+                                <Edit className="mr-2 h-4 w-4 shrink-0" />
+                                Edit in builder
+                              </Button>
+                            </Link>
+                          ) : null}
+                          <div className={`grid gap-2 ${canManageForms ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'}`}>
                             <Button variant="outline" size="sm" className="w-full justify-center" onClick={() => void handleCopyGenericLink(form.id)} disabled={duplicating !== null}>
                               <Copy className="mr-2 h-4 w-4 shrink-0" />
                               Copy link
                             </Button>
-                            <Button variant="outline" size="sm" className="w-full justify-center" onClick={() => handleDuplicate(form.id)} disabled={duplicating !== null}>
-                              {duplicating === form.id ? <Loader variant="dots" size="sm" inline className="mr-2" /> : <Copy className="mr-2 h-4 w-4 shrink-0" />}
-                              Duplicate
-                            </Button>
+                            {canManageForms ? (
+                              <Button variant="outline" size="sm" className="w-full justify-center" onClick={() => handleDuplicate(form.id)} disabled={duplicating !== null}>
+                                {duplicating === form.id ? <Loader variant="dots" size="sm" inline className="mr-2" /> : <Copy className="mr-2 h-4 w-4 shrink-0" />}
+                                Duplicate
+                              </Button>
+                            ) : null}
                           </div>
                         </div>
                       </div>
@@ -377,12 +388,14 @@ export const AdminFormsListPage: React.FC = () => {
                                 {previewing === form.id ? <Loader variant="dots" size="sm" inline /> : <Eye className="w-4 h-4 shrink-0" />}
                                 Preview
                               </Button>
-                              <Link to={`/admin/forms/${form.id}/builder`}>
-                                <Button variant="outline" size="sm" className="inline-flex min-w-[90px] items-center justify-center gap-1.5">
-                                  <Edit className="w-4 h-4 shrink-0" />
-                                  Edit
-                                </Button>
-                              </Link>
+                              {canManageForms ? (
+                                <Link to={`/admin/forms/${form.id}/builder`}>
+                                  <Button variant="outline" size="sm" className="inline-flex min-w-[90px] items-center justify-center gap-1.5">
+                                    <Edit className="w-4 h-4 shrink-0" />
+                                    Edit
+                                  </Button>
+                                </Link>
+                              ) : null}
                               <div ref={openMenuId === form.id ? menuRef : undefined} className="relative">
                                 <Button
                                   variant="outline"
@@ -415,16 +428,20 @@ export const AdminFormsListPage: React.FC = () => {
                                       <Copy className="w-4 h-4" />
                                       Copy generic link
                                     </button>
-                                    <div className="my-1 h-px bg-gray-100" />
-                                    <button
-                                      type="button"
-                                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--text)] hover:bg-gray-100"
-                                      onClick={() => handleDuplicate(form.id)}
-                                      role="menuitem"
-                                    >
-                                      <Copy className="w-4 h-4" />
-                                      Duplicate
-                                    </button>
+                                    {canManageForms ? (
+                                      <>
+                                        <div className="my-1 h-px bg-gray-100" />
+                                        <button
+                                          type="button"
+                                          className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--text)] hover:bg-gray-100"
+                                          onClick={() => handleDuplicate(form.id)}
+                                          role="menuitem"
+                                        >
+                                          <Copy className="w-4 h-4" />
+                                          Duplicate
+                                        </button>
+                                      </>
+                                    ) : null}
                                   </div>
                                 )}
                               </div>

@@ -1466,9 +1466,9 @@ export const InstanceFillPage: React.FC = () => {
     return (
       <div className="min-h-screen bg-[var(--bg)]">
         <header className="bg-white border-b border-[var(--border)] shadow-sm sticky top-0 z-20">
-          <div className="w-full px-4 md:px-6 py-4">
+          <div className="w-full min-w-0 px-4 md:px-6 py-4">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <h1 className="text-xl font-bold text-[var(--text)]">{template.form.name}</h1>
+              <h1 className="min-w-0 text-lg sm:text-xl font-bold text-[var(--text)] break-words">{template.form.name}</h1>
               <div className="flex items-center gap-2 flex-wrap justify-end">
                 <span className="text-xs px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200">{workflowLabel}</span>
                 <span className="text-sm font-semibold text-gray-700 capitalize">{role}</span>
@@ -1518,11 +1518,11 @@ export const InstanceFillPage: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-[var(--bg)]">
+    <div className="min-h-screen bg-[var(--bg)] overflow-x-clip">
       <header className="bg-white border-b border-[var(--border)] shadow-sm sticky top-0 z-20">
-        <div className="w-full px-4 md:px-6 py-4">
+        <div className="w-full min-w-0 px-4 md:px-6 py-4">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-            <h1 className="text-xl font-bold text-[var(--text)]">{template.form.name}</h1>
+            <h1 className="min-w-0 text-lg sm:text-xl font-bold text-[var(--text)] break-words">{template.form.name}</h1>
             <div className="flex items-center gap-2 flex-wrap justify-end">
               <span className="text-xs px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200">{workflowLabel}</span>
               <span className="text-sm font-semibold text-gray-700 capitalize">{role}</span>
@@ -1531,11 +1531,14 @@ export const InstanceFillPage: React.FC = () => {
         </div>
       </header>
 
-      <div className="w-full px-4 md:px-6 py-6">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+      <div className="w-full min-w-0 max-w-[100vw] px-3 sm:px-4 md:px-6 py-4 sm:py-6 box-border">
+        <div className="grid min-w-0 grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6">
           <form
             ref={formScrollRef}
-            className={(canViewPdfPreview ? 'lg:col-span-9' : 'lg:col-span-12') + ' space-y-6 overflow-y-auto max-h-[calc(100vh-8rem)] pr-2'}
+            className={
+              (canViewPdfPreview ? 'lg:col-span-9' : 'lg:col-span-12') +
+              ' min-w-0 space-y-6 pr-0 sm:pr-2 lg:max-h-[min(calc(100dvh-8rem),100vh)] lg:overflow-y-auto'
+            }
             onSubmit={(e) => e.preventDefault()}
           >
             <Card>
@@ -1915,8 +1918,8 @@ export const InstanceFillPage: React.FC = () => {
                           );
                         })()
                       ) : section.pdf_render_mode === 'assessment_submission' ? (
-                        <div className="border border-black p-4 bg-white">
-                          <div className="grid grid-cols-2 gap-x-6 gap-y-3">
+                        <div className="border border-black p-3 sm:p-4 bg-white min-w-0">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
                             {section.questions
                               .filter((q) => isRoleVisible((q.role_visibility as Record<string, boolean>) || {}, role))
                               .map((q) =>
@@ -1933,7 +1936,7 @@ export const InstanceFillPage: React.FC = () => {
                                       return (
                                         <label
                                           key={opt.id}
-                                          className={`flex items-center gap-2 cursor-pointer ${spanFull ? 'col-span-2' : ''} ${!submissionEditable ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                          className={`flex items-center gap-2 cursor-pointer ${spanFull ? 'sm:col-span-2' : ''} ${!submissionEditable ? 'opacity-60 cursor-not-allowed' : ''}`}
                                         >
                                           <input
                                             type="checkbox"
@@ -1956,7 +1959,7 @@ export const InstanceFillPage: React.FC = () => {
                                     })}
                                   </React.Fragment>
                                 ) : q.type === 'short_text' ? (
-                                  <div key={q.id} className="col-span-2 mt-2 text-center">
+                                  <div key={q.id} className="sm:col-span-2 mt-2 text-center">
                                     <input
                                       type="text"
                                       value={(answers[getAnswerKey(q.id, null)] as string) ?? ''}
@@ -2175,7 +2178,17 @@ export const InstanceFillPage: React.FC = () => {
                                           if (!imgEl) blockContent = content;
                                           else if (layout === 'above') blockContent = <div><div className="mb-2">{imgEl}</div>{content}</div>;
                                           else if (layout === 'below') blockContent = <div>{content}<div className="mt-2">{imgEl}</div></div>;
-                                          else blockContent = <div className="flex gap-4 items-start"><div className="flex-1 min-w-0">{content}</div><div style={{ width: `${pct}%`, flexShrink: 0 }}>{imgEl}</div></div>;
+                                          else blockContent = (
+                                            <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+                                              <div className="order-2 min-w-0 flex-1 sm:order-1">{content}</div>
+                                              <div
+                                                className="order-1 w-full max-w-full shrink-0 sm:order-2 sm:w-[var(--side-img-pct)] sm:max-w-[min(100%,var(--side-img-pct))]"
+                                                style={{ ['--side-img-pct' as string]: `${pct}%` } as React.CSSProperties}
+                                              >
+                                                {imgEl}
+                                              </div>
+                                            </div>
+                                          );
                                           return wrapWithHeader(key, block.headerText, blockContent);
                                         }
                                         const childQ = block.questionId ? section.questions.find((x) => x.id === block.questionId) : null;
@@ -2207,7 +2220,7 @@ export const InstanceFillPage: React.FC = () => {
                                           const childSatNo = childSat === 'no';
                                           return wrapWithHeader(key, block.headerText, (
                                             <div>
-                                              <div className="mb-3 py-2 px-3 rounded bg-gray-50 border-b border-gray-200 flex items-center justify-end gap-2">
+                                              <div className="mb-3 py-2 px-3 rounded bg-gray-50 border-b border-gray-200 flex flex-wrap items-center justify-end gap-2">
                                                 <span className="text-sm font-semibold text-gray-700">Satisfactory response:</span>
                                                 <button
                                                   type="button"
@@ -2267,7 +2280,17 @@ export const InstanceFillPage: React.FC = () => {
                                                 if (!imgEl) return <>{q.label}</>;
                                                 if (layout === 'above') return <><div className="mb-2">{imgEl}</div><div>{q.label}</div></>;
                                                 if (layout === 'below') return <><div>{q.label}</div><div className="mt-2">{imgEl}</div></>;
-                                                return <div className="flex gap-4 items-start"><div className="flex-1 min-w-0">{q.label}</div><div style={{ width: `${pct}%`, flexShrink: 0 }}>{imgEl}</div></div>;
+                                                return (
+                                                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+                                                    <div className="order-2 min-w-0 flex-1 sm:order-1">{q.label}</div>
+                                                    <div
+                                                      className="order-1 w-full max-w-full shrink-0 sm:order-2 sm:w-[var(--side-img-pct)] sm:max-w-[min(100%,var(--side-img-pct))]"
+                                                      style={{ ['--side-img-pct' as string]: `${pct}%` } as React.CSSProperties}
+                                                    >
+                                                      {imgEl}
+                                                    </div>
+                                                  </div>
+                                                );
                                               })();
                                               return qn != null ? (
                                                 <div className="flex gap-2 items-start">
@@ -2309,7 +2332,7 @@ export const InstanceFillPage: React.FC = () => {
                                                 const satQNo = satQ === 'no';
                                                 return (
                                                   <div>
-                                                    <div className="mb-3 py-2 px-3 rounded bg-gray-50 border-b border-gray-200 flex items-center justify-end gap-2">
+                                                    <div className="mb-3 py-2 px-3 rounded bg-gray-50 border-b border-gray-200 flex flex-wrap items-center justify-end gap-2">
                                                       <span className="text-sm font-semibold text-gray-700">Satisfactory response:</span>
                                                       <button
                                                         type="button"
@@ -2352,7 +2375,7 @@ export const InstanceFillPage: React.FC = () => {
                                               })()
                                             ) : (
                                               <div>
-                                                <div className="mb-3 py-2 px-3 rounded bg-gray-50 border-b border-gray-200 flex items-center justify-end gap-2">
+                                                <div className="mb-3 py-2 px-3 rounded bg-gray-50 border-b border-gray-200 flex flex-wrap items-center justify-end gap-2">
                                                   <span className="text-sm font-semibold text-gray-700">Satisfactory response:</span>
                                                   <button
                                                     type="button"
@@ -2461,7 +2484,17 @@ export const InstanceFillPage: React.FC = () => {
                                                 if (!imgEl) blockContent = content;
                                                 else if (layout === 'above') blockContent = <div><div className="mb-2">{imgEl}</div>{content}</div>;
                                                 else if (layout === 'below') blockContent = <div>{content}<div className="mt-2">{imgEl}</div></div>;
-                                                else blockContent = <div className="flex gap-4 items-start"><div className="flex-1 min-w-0">{content}</div><div style={{ width: `${pct}%`, flexShrink: 0 }}>{imgEl}</div></div>;
+                                                else blockContent = (
+                                            <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+                                              <div className="order-2 min-w-0 flex-1 sm:order-1">{content}</div>
+                                              <div
+                                                className="order-1 w-full max-w-full shrink-0 sm:order-2 sm:w-[var(--side-img-pct)] sm:max-w-[min(100%,var(--side-img-pct))]"
+                                                style={{ ['--side-img-pct' as string]: `${pct}%` } as React.CSSProperties}
+                                              >
+                                                {imgEl}
+                                              </div>
+                                            </div>
+                                          );
                                                 return wrapWithHeader(key, block.headerText, blockContent);
                                               }
                                               const childQ = block.questionId ? section.questions.find((x) => x.id === block.questionId) : null;
@@ -2630,7 +2663,7 @@ export const InstanceFillPage: React.FC = () => {
                                   <td className="bg-white p-3 border border-gray-300 align-top">
                                     <div className="font-semibold mb-2">First attempt:</div>
                                     <div className="mb-2">Outcome (make sure to tick the correct checkbox):</div>
-                                    <div className="flex gap-4 mb-2">
+                                    <div className="flex flex-wrap gap-3 sm:gap-4 mb-2">
                                       <label className="flex items-center gap-2 cursor-pointer">
                                         <input
                                           type="radio"
@@ -2679,7 +2712,7 @@ export const InstanceFillPage: React.FC = () => {
                                   <td className="bg-white p-3 border border-gray-300 align-top">
                                     <div className="font-semibold mb-2">Second attempt:</div>
                                     <div className="mb-2">Outcome (make sure to tick the correct checkbox):</div>
-                                    <div className="flex gap-4 mb-2">
+                                    <div className="flex flex-wrap gap-3 sm:gap-4 mb-2">
                                       <label className="flex items-center gap-2 cursor-pointer">
                                         <input
                                           type="radio"
@@ -2728,7 +2761,7 @@ export const InstanceFillPage: React.FC = () => {
                                   <td className="bg-white p-3 border border-gray-300 align-top">
                                     <div className="font-semibold mb-2">Third attempt:</div>
                                     <div className="mb-2">Outcome (make sure to tick the correct checkbox):</div>
-                                    <div className="flex gap-4 mb-2">
+                                    <div className="flex flex-wrap gap-3 sm:gap-4 mb-2">
                                       <label className="flex items-center gap-2 cursor-pointer">
                                         <input
                                           type="radio"
@@ -2879,26 +2912,30 @@ export const InstanceFillPage: React.FC = () => {
                                 </tr>
                                 <tr>
                                   <td className="bg-[#f5f0e6] font-semibold italic text-gray-700 p-3 border border-gray-300">Office Use Only</td>
-                                  <td className="bg-white p-3 border border-gray-300 text-sm">
-                                    The outcome of this assessment has been entered into the Student Management System on{' '}
-                                    <DatePicker
-                                      value={resultsOffice[section.id]?.entered_date ?? ''}
-                                      onChange={(v) => handleResultsOfficeChange(section.id, 'entered_date', v || null)}
-                                      disabled={role !== 'office'}
-                                      compact
-                                      placement="above"
-                                      className="inline-block min-w-[120px]"
-                                    />{' '}
-                                    (insert date) by{' '}
-                                    <input
-                                      type="text"
-                                      value={resultsOffice[section.id]?.entered_by ?? ''}
-                                      onChange={(e) => handleResultsOfficeChange(section.id, 'entered_by', e.target.value || null)}
-                                      disabled={role !== 'office'}
-                                      placeholder="Name"
-                                      className="inline-block border-b border-gray-400 min-w-[140px] px-1 py-0.5 text-sm bg-transparent focus:outline-none focus:ring-1 focus:ring-gray-400 disabled:bg-gray-100 disabled:cursor-not-allowed"
-                                    />{' '}
-                                    (insert Name)
+                                  <td className="bg-white p-3 border border-gray-300 text-sm min-w-0">
+                                    <span className="inline sm:inline">
+                                      The outcome of this assessment has been entered into the Student Management System on{' '}
+                                    </span>
+                                    <span className="inline-flex flex-wrap items-center gap-x-1 gap-y-2 align-middle">
+                                      <DatePicker
+                                        value={resultsOffice[section.id]?.entered_date ?? ''}
+                                        onChange={(v) => handleResultsOfficeChange(section.id, 'entered_date', v || null)}
+                                        disabled={role !== 'office'}
+                                        compact
+                                        placement="above"
+                                        className="inline-block min-w-[120px] max-w-full"
+                                      />
+                                      <span className="shrink-0"> (insert date) by </span>
+                                      <input
+                                        type="text"
+                                        value={resultsOffice[section.id]?.entered_by ?? ''}
+                                        onChange={(e) => handleResultsOfficeChange(section.id, 'entered_by', e.target.value || null)}
+                                        disabled={role !== 'office'}
+                                        placeholder="Name"
+                                        className="inline-block border-b border-gray-400 min-w-[120px] max-w-[min(100%,280px)] px-1 py-0.5 text-sm bg-transparent focus:outline-none focus:ring-1 focus:ring-gray-400 disabled:bg-gray-100 disabled:cursor-not-allowed"
+                                      />
+                                      <span className="shrink-0"> (insert Name)</span>
+                                    </span>
                                   </td>
                                 </tr>
                               </tbody>
@@ -2972,7 +3009,7 @@ export const InstanceFillPage: React.FC = () => {
                           const unitCodeName = [unitCode, unitName].filter(Boolean).join(' ');
                           return (
                             <div className="border border-gray-200 rounded-lg overflow-hidden bg-white">
-                              <div className="bg-[#374151] text-white font-bold text-center px-4 py-4 text-lg">
+                              <div className="bg-[#374151] text-white font-bold text-center px-3 sm:px-4 py-3 sm:py-4 text-base sm:text-lg leading-tight">
                                 ASSESSMENT SUMMARY SHEET
                               </div>
                               <div className="bg-[#6b7280] text-white text-sm px-4 py-3 space-y-1">
@@ -2980,7 +3017,7 @@ export const InstanceFillPage: React.FC = () => {
                                 <p className="text-sm">All student submissions including any associated checklists (outlined below) are to be attached to this cover sheet before placing on the student&apos;s file.</p>
                                 <p className="text-sm">Student results are not to be entered onto the Student Database unless all relevant paperwork is completed and attached to this form.</p>
                               </div>
-                              <div className="p-4 space-y-4">
+                              <div className="p-3 sm:p-4 space-y-4 min-w-0 overflow-x-auto overscroll-x-contain">
                                 <table className="w-full border-collapse border border-gray-400 text-xs">
                                   <tbody>
                                     <tr><td className="border border-gray-400 bg-gray-100 font-semibold p-1.5 w-1/4 text-xs">Student Name:</td><td className="border border-gray-400 p-1.5 text-xs">{studentName || '—'}</td></tr>
@@ -3016,7 +3053,7 @@ export const InstanceFillPage: React.FC = () => {
                                   </tbody>
                                 </table>
                                 <div className="bg-gray-200 font-semibold text-gray-700 px-4 py-1.5 text-xs">Please attach the following evidence to this form</div>
-                                <table className="w-full border-collapse border border-gray-400 text-xs">
+                                <table className="w-full min-w-[520px] border-collapse border border-gray-400 text-xs">
                                   <thead>
                                     <tr><th className="border border-gray-400 bg-gray-200 p-1.5 text-left w-1/4 text-xs"></th><th colSpan={3} className="border border-gray-400 bg-[#5E5E5E] text-white font-bold p-1.5 text-center text-xs">Result</th></tr>
                                     <tr><th className="border border-gray-400 bg-gray-200 p-1.5"></th><th className="border border-gray-400 bg-[#5E5E5E] text-white font-bold p-1.5 text-center text-xs">1st Attempt</th><th className="border border-gray-400 bg-[#5E5E5E] text-white font-bold p-1.5 text-center text-xs">2nd Attempt</th><th className="border border-gray-400 bg-[#5E5E5E] text-white font-bold p-1.5 text-center text-xs">3rd Attempt</th></tr>
@@ -3080,13 +3117,13 @@ export const InstanceFillPage: React.FC = () => {
                                       <td className="border border-gray-400 bg-gray-100 font-semibold p-1.5 text-xs">Trainer/Assessor Signature</td>
                                       <td colSpan={3} className="border border-gray-400 p-1.5">
                                         <p className="text-[10px] text-gray-600 mb-1.5">I declare that I have conducted a fair, valid, reliable, and flexible assessment with this student, and I have provided appropriate feedback</p>
-                                        <div className="grid grid-cols-3 gap-4">
-                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_1 ?? null} onChange={(v) => { handleAssessmentSummaryChange('trainer_sig_1', v); const cur = String(sum.trainer_date_1 ?? '').trim(); if (!cur || (minTrainerDate1 && isCalendarBefore(cur, minTrainerDate1))) handleAssessmentSummaryChange('trainer_date_1', minTrainerDate1 ?? null); }} disabled={!trainerCanEdit || !sumFirstEditable} className="mt-0.5" highlight={role === 'trainer' && sumFirstEditable} suggestionFrom={trainerRefSig} onSuggestionClick={trainerRefSig ? () => { handleAssessmentSummaryChange('trainer_sig_1', trainerRefSig); const next = maxIsoDate(trainerRefDate, minTrainerDate1) ?? minTrainerDate1 ?? trainerRefDate; handleAssessmentSummaryChange('trainer_date_1', next || null); } : undefined} /></div>
-                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_2 ?? null} onChange={(v) => { handleAssessmentSummaryChange('trainer_sig_2', v); const cur = String(sum.trainer_date_2 ?? '').trim(); if (!cur || (minTrainerDate2 && isCalendarBefore(cur, minTrainerDate2))) handleAssessmentSummaryChange('trainer_date_2', minTrainerDate2 ?? null); }} disabled={!trainerCanEdit || !sumSecondEditable} className="mt-0.5" highlight={role === 'trainer' && sumSecondEditable} suggestionFrom={sumSecondEditable ? (sum.trainer_sig_1 ?? undefined) : undefined} onSuggestionClick={sumSecondEditable && sum.trainer_sig_1 ? () => { handleAssessmentSummaryChange('trainer_sig_2', sum.trainer_sig_1); const next = maxIsoDate(sum.trainer_date_1, sum.student_date_2, minTrainerDate2) ?? minTrainerDate2 ?? sum.trainer_date_1 ?? sum.student_date_2; handleAssessmentSummaryChange('trainer_date_2', next || null); } : undefined} /></div>
-                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_3 ?? null} onChange={(v) => { handleAssessmentSummaryChange('trainer_sig_3', v); const cur = String(sum.trainer_date_3 ?? '').trim(); if (!cur || (minTrainerDate3 && isCalendarBefore(cur, minTrainerDate3))) handleAssessmentSummaryChange('trainer_date_3', minTrainerDate3 ?? null); }} disabled={!trainerCanEdit || !sumThirdEditable} className="mt-0.5" highlight={role === 'trainer' && sumThirdEditable} suggestionFrom={sumThirdEditable ? (sum.trainer_sig_1 ?? undefined) : undefined} onSuggestionClick={sumThirdEditable && sum.trainer_sig_1 ? () => { handleAssessmentSummaryChange('trainer_sig_3', sum.trainer_sig_1); const next = maxIsoDate(sum.trainer_date_2, sum.student_date_3, minTrainerDate3) ?? minTrainerDate3 ?? sum.trainer_date_2 ?? sum.student_date_3; handleAssessmentSummaryChange('trainer_date_3', next || null); } : undefined} /></div>
-                                          <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_1 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_1', clampIsoToMin(v || null, minTrainerDate1))} disabled={!trainerCanEdit || !sumFirstEditable} highlight={role === 'trainer' && sumFirstEditable} compact placement="above" className="w-full" minDate={minTrainerDate1} /></div>
-                                          <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_2 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_2', clampIsoToMin(v || null, minTrainerDate2))} disabled={!trainerCanEdit || !sumSecondEditable} highlight={role === 'trainer' && sumSecondEditable} compact placement="above" className="w-full" minDate={minTrainerDate2} /></div>
-                                          <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_3 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_3', clampIsoToMin(v || null, minTrainerDate3))} disabled={!trainerCanEdit || !sumThirdEditable} highlight={role === 'trainer' && sumThirdEditable} compact placement="above" className="w-full" minDate={minTrainerDate3} /></div>
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 min-w-0">
+                                          <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_1 ?? null} onChange={(v) => { handleAssessmentSummaryChange('trainer_sig_1', v); const cur = String(sum.trainer_date_1 ?? '').trim(); if (!cur || (minTrainerDate1 && isCalendarBefore(cur, minTrainerDate1))) handleAssessmentSummaryChange('trainer_date_1', minTrainerDate1 ?? null); }} disabled={!trainerCanEdit || !sumFirstEditable} className="mt-0.5" highlight={role === 'trainer' && sumFirstEditable} suggestionFrom={trainerRefSig} onSuggestionClick={trainerRefSig ? () => { handleAssessmentSummaryChange('trainer_sig_1', trainerRefSig); const next = maxIsoDate(trainerRefDate, minTrainerDate1) ?? minTrainerDate1 ?? trainerRefDate; handleAssessmentSummaryChange('trainer_date_1', next || null); } : undefined} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_2 ?? null} onChange={(v) => { handleAssessmentSummaryChange('trainer_sig_2', v); const cur = String(sum.trainer_date_2 ?? '').trim(); if (!cur || (minTrainerDate2 && isCalendarBefore(cur, minTrainerDate2))) handleAssessmentSummaryChange('trainer_date_2', minTrainerDate2 ?? null); }} disabled={!trainerCanEdit || !sumSecondEditable} className="mt-0.5" highlight={role === 'trainer' && sumSecondEditable} suggestionFrom={sumSecondEditable ? (sum.trainer_sig_1 ?? undefined) : undefined} onSuggestionClick={sumSecondEditable && sum.trainer_sig_1 ? () => { handleAssessmentSummaryChange('trainer_sig_2', sum.trainer_sig_1); const next = maxIsoDate(sum.trainer_date_1, sum.student_date_2, minTrainerDate2) ?? minTrainerDate2 ?? sum.trainer_date_1 ?? sum.student_date_2; handleAssessmentSummaryChange('trainer_date_2', next || null); } : undefined} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_3 ?? null} onChange={(v) => { handleAssessmentSummaryChange('trainer_sig_3', v); const cur = String(sum.trainer_date_3 ?? '').trim(); if (!cur || (minTrainerDate3 && isCalendarBefore(cur, minTrainerDate3))) handleAssessmentSummaryChange('trainer_date_3', minTrainerDate3 ?? null); }} disabled={!trainerCanEdit || !sumThirdEditable} className="mt-0.5" highlight={role === 'trainer' && sumThirdEditable} suggestionFrom={sumThirdEditable ? (sum.trainer_sig_1 ?? undefined) : undefined} onSuggestionClick={sumThirdEditable && sum.trainer_sig_1 ? () => { handleAssessmentSummaryChange('trainer_sig_3', sum.trainer_sig_1); const next = maxIsoDate(sum.trainer_date_2, sum.student_date_3, minTrainerDate3) ?? minTrainerDate3 ?? sum.trainer_date_2 ?? sum.student_date_3; handleAssessmentSummaryChange('trainer_date_3', next || null); } : undefined} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_1 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_1', clampIsoToMin(v || null, minTrainerDate1))} disabled={!trainerCanEdit || !sumFirstEditable} highlight={role === 'trainer' && sumFirstEditable} compact placement="above" className="w-full" minDate={minTrainerDate1} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_2 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_2', clampIsoToMin(v || null, minTrainerDate2))} disabled={!trainerCanEdit || !sumSecondEditable} highlight={role === 'trainer' && sumSecondEditable} compact placement="above" className="w-full" minDate={minTrainerDate2} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_3 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_3', clampIsoToMin(v || null, minTrainerDate3))} disabled={!trainerCanEdit || !sumThirdEditable} highlight={role === 'trainer' && sumThirdEditable} compact placement="above" className="w-full" minDate={minTrainerDate3} /></div>
                                         </div>
                                       </td>
                                     </tr>
@@ -3094,13 +3131,13 @@ export const InstanceFillPage: React.FC = () => {
                                       <td className="border border-gray-400 bg-gray-100 font-semibold p-1.5 text-xs">Student:</td>
                                       <td colSpan={3} className="border border-gray-400 p-1.5">
                                         <p className="text-[10px] text-gray-600 mb-1.5">I declare that I have been assessed in this unit, and I have been advised of my result. I also am aware of my appeal rights.</p>
-                                        <div className="grid grid-cols-3 gap-4">
-                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_1 ?? null} onChange={(v) => { handleAssessmentSummaryChange('student_sig_1', v); const cur = String(sum.student_date_1 ?? '').trim(); if (!cur || (minStudentDate1 && isCalendarBefore(cur, minStudentDate1))) handleAssessmentSummaryChange('student_date_1', minStudentDate1 ?? null); }} disabled={!studentCanEdit || !sumFirstEditable} className="mt-0.5" highlight={role === 'student' && sumFirstEditable} suggestionFrom={studentRefSig} onSuggestionClick={studentRefSig ? () => { handleAssessmentSummaryChange('student_sig_1', studentRefSig); const next = maxIsoDate(studentRefDate, minStudentDate1) ?? minStudentDate1 ?? studentRefDate; handleAssessmentSummaryChange('student_date_1', next || null); } : undefined} /></div>
-                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_2 ?? null} onChange={(v) => { handleAssessmentSummaryChange('student_sig_2', v); const cur = String(sum.student_date_2 ?? '').trim(); if (!cur || (minStudentDate2 && isCalendarBefore(cur, minStudentDate2))) handleAssessmentSummaryChange('student_date_2', minStudentDate2 ?? null); }} disabled={!studentCanEdit || !sumSecondEditable} className="mt-0.5" highlight={role === 'student' && sumSecondEditable} suggestionFrom={sumSecondEditable ? (sum.student_sig_1 ?? undefined) : undefined} onSuggestionClick={sumSecondEditable && sum.student_sig_1 ? () => { handleAssessmentSummaryChange('student_sig_2', sum.student_sig_1); const next = maxIsoDate(sum.student_date_1, minStudentDate2) ?? minStudentDate2 ?? sum.student_date_1; handleAssessmentSummaryChange('student_date_2', next || null); } : undefined} /></div>
-                                          <div><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_3 ?? null} onChange={(v) => { handleAssessmentSummaryChange('student_sig_3', v); const cur = String(sum.student_date_3 ?? '').trim(); if (!cur || (minStudentDate3 && isCalendarBefore(cur, minStudentDate3))) handleAssessmentSummaryChange('student_date_3', minStudentDate3 ?? null); }} disabled={!studentCanEdit || !sumThirdEditable} className="mt-0.5" highlight={role === 'student' && sumThirdEditable} suggestionFrom={sumThirdEditable ? (sum.student_sig_1 ?? undefined) : undefined} onSuggestionClick={sumThirdEditable && sum.student_sig_1 ? () => { handleAssessmentSummaryChange('student_sig_3', sum.student_sig_1); const next = maxIsoDate(sum.student_date_2, minStudentDate3) ?? minStudentDate3 ?? sum.student_date_2; handleAssessmentSummaryChange('student_date_3', next || null); } : undefined} /></div>
-                                          <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_1 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_1', clampIsoToMin(v || null, minStudentDate1))} disabled={!studentCanEdit || !sumFirstEditable} highlight={role === 'student' && sumFirstEditable} compact placement="above" className="w-full" minDate={minStudentDate1} /></div>
-                                          <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_2 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_2', clampIsoToMin(v || null, minStudentDate2))} disabled={!studentCanEdit || !sumSecondEditable} highlight={role === 'student' && sumSecondEditable} compact placement="above" className="w-full" minDate={minStudentDate2} /></div>
-                                          <div><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_3 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_3', clampIsoToMin(v || null, minStudentDate3))} disabled={!studentCanEdit || !sumThirdEditable} highlight={role === 'student' && sumThirdEditable} compact placement="above" className="w-full" minDate={minStudentDate3} /></div>
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 min-w-0">
+                                          <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_1 ?? null} onChange={(v) => { handleAssessmentSummaryChange('student_sig_1', v); const cur = String(sum.student_date_1 ?? '').trim(); if (!cur || (minStudentDate1 && isCalendarBefore(cur, minStudentDate1))) handleAssessmentSummaryChange('student_date_1', minStudentDate1 ?? null); }} disabled={!studentCanEdit || !sumFirstEditable} className="mt-0.5" highlight={role === 'student' && sumFirstEditable} suggestionFrom={studentRefSig} onSuggestionClick={studentRefSig ? () => { handleAssessmentSummaryChange('student_sig_1', studentRefSig); const next = maxIsoDate(studentRefDate, minStudentDate1) ?? minStudentDate1 ?? studentRefDate; handleAssessmentSummaryChange('student_date_1', next || null); } : undefined} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_2 ?? null} onChange={(v) => { handleAssessmentSummaryChange('student_sig_2', v); const cur = String(sum.student_date_2 ?? '').trim(); if (!cur || (minStudentDate2 && isCalendarBefore(cur, minStudentDate2))) handleAssessmentSummaryChange('student_date_2', minStudentDate2 ?? null); }} disabled={!studentCanEdit || !sumSecondEditable} className="mt-0.5" highlight={role === 'student' && sumSecondEditable} suggestionFrom={sumSecondEditable ? (sum.student_sig_1 ?? undefined) : undefined} onSuggestionClick={sumSecondEditable && sum.student_sig_1 ? () => { handleAssessmentSummaryChange('student_sig_2', sum.student_sig_1); const next = maxIsoDate(sum.student_date_1, minStudentDate2) ?? minStudentDate2 ?? sum.student_date_1; handleAssessmentSummaryChange('student_date_2', next || null); } : undefined} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_3 ?? null} onChange={(v) => { handleAssessmentSummaryChange('student_sig_3', v); const cur = String(sum.student_date_3 ?? '').trim(); if (!cur || (minStudentDate3 && isCalendarBefore(cur, minStudentDate3))) handleAssessmentSummaryChange('student_date_3', minStudentDate3 ?? null); }} disabled={!studentCanEdit || !sumThirdEditable} className="mt-0.5" highlight={role === 'student' && sumThirdEditable} suggestionFrom={sumThirdEditable ? (sum.student_sig_1 ?? undefined) : undefined} onSuggestionClick={sumThirdEditable && sum.student_sig_1 ? () => { handleAssessmentSummaryChange('student_sig_3', sum.student_sig_1); const next = maxIsoDate(sum.student_date_2, minStudentDate3) ?? minStudentDate3 ?? sum.student_date_2; handleAssessmentSummaryChange('student_date_3', next || null); } : undefined} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_1 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_1', clampIsoToMin(v || null, minStudentDate1))} disabled={!studentCanEdit || !sumFirstEditable} highlight={role === 'student' && sumFirstEditable} compact placement="above" className="w-full" minDate={minStudentDate1} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_2 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_2', clampIsoToMin(v || null, minStudentDate2))} disabled={!studentCanEdit || !sumSecondEditable} highlight={role === 'student' && sumSecondEditable} compact placement="above" className="w-full" minDate={minStudentDate2} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_3 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_3', clampIsoToMin(v || null, minStudentDate3))} disabled={!studentCanEdit || !sumThirdEditable} highlight={role === 'student' && sumThirdEditable} compact placement="above" className="w-full" minDate={minStudentDate3} /></div>
                                         </div>
                                       </td>
                                     </tr>
@@ -3424,9 +3461,10 @@ export const InstanceFillPage: React.FC = () => {
           })()
             ) : null}
 
-            <div className="flex gap-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
               <Button
                 variant="outline"
+                className="w-full sm:w-auto shrink-0"
                 onClick={() => {
                   setErrors({});
                   setCurrentStep((s) => Math.max(1, s - 1));
@@ -3437,6 +3475,7 @@ export const InstanceFillPage: React.FC = () => {
               </Button>
               <Button
                 variant="primary"
+                className="w-full sm:w-auto shrink-0"
                 onClick={() => {
                   if (validateStep(currentStep)) {
                     setErrors({});
@@ -3450,17 +3489,17 @@ export const InstanceFillPage: React.FC = () => {
                 Next
               </Button>
               {currentStep >= steps.length && role === 'student' && workflowStatus === 'draft' && (
-                <Button variant="primary" onClick={handleFinalSubmitByRole} disabled={workflowSubmitting}>
+                <Button variant="primary" className="w-full sm:w-auto shrink-0" onClick={handleFinalSubmitByRole} disabled={workflowSubmitting}>
                   Final Submit
                 </Button>
               )}
               {currentStep >= steps.length && role === 'trainer' && workflowStatus === 'waiting_trainer' && (
-                <Button variant="primary" onClick={handleFinalSubmitByRole} disabled={workflowSubmitting}>
+                <Button variant="primary" className="w-full sm:w-auto shrink-0" onClick={handleFinalSubmitByRole} disabled={workflowSubmitting}>
                   Trainer Checked (Submit)
                 </Button>
               )}
               {currentStep >= steps.length && role === 'office' && workflowStatus === 'waiting_office' && (
-                <Button variant="primary" onClick={handleFinalSubmitByRole} disabled={workflowSubmitting}>
+                <Button variant="primary" className="w-full sm:w-auto shrink-0" onClick={handleFinalSubmitByRole} disabled={workflowSubmitting}>
                   Office Checked
                 </Button>
               )}
@@ -3468,7 +3507,7 @@ export const InstanceFillPage: React.FC = () => {
           </form>
 
           {canViewPdfPreview && (
-            <div className="lg:col-span-3">
+            <div className="min-w-0 lg:col-span-3">
               <div className="lg:sticky lg:top-3">
                 <Card>
                   <h3 className="font-bold text-[var(--text)] mb-4">PDF Preview</h3>
@@ -3516,7 +3555,7 @@ export const InstanceFillPage: React.FC = () => {
                       key={pdfCacheBust}
                       src={`${PDF_BASE}/pdf/${id}?role=${role}&t=${pdfCacheBust}#toolbar=0`}
                       title="PDF Preview"
-                      className="w-full h-96 border-0 rounded-lg"
+                      className="w-full h-64 sm:h-80 lg:h-96 min-h-[16rem] border-0 rounded-lg"
                       onLoad={() => setPdfLoading(false)}
                     />
                   </div>
