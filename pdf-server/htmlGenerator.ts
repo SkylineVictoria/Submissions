@@ -1059,25 +1059,26 @@ export function buildHtml(data: {
                 if (imgHtml) html += imgHtml;
               }
             }
-            return html;
           }
 
-          const blocks: { title: string; content: string }[] = [
-            { title: 'Assessment type', content: String(instr.assessment_type || '') },
-            { title: 'Instructions provided to the student:', content: String(instr.task_description || '') },
-            { title: 'Applicable conditions:', content: String(instr.applicable_conditions || '') },
-            { title: 'Resubmissions and reattempts:', content: String(instr.resubmissions || '') },
-            { title: 'Location:', content: (instr.location_intro || '') + (Array.isArray(instr.location_options) ? '<ul><li>' + instr.location_options.map((o: string) => o).join('</li><li>') + '</li></ul>' : '') + (instr.location_note || '') },
-            { title: 'Instructions for answering the written questions:', content: String(instr.answering_instructions || '') },
-            { title: 'Purpose of the assessment', content: String(instr.purpose_intro || '') + String(instr.purpose_bullets || '') },
-          ];
-          for (const b of blocks) {
-            if (b.content && b.content.replace(/<[^>]*>/g, '').trim()) {
-              html += `<div class="task-instructions-block"><div class="task-instructions-block-title">${b.title}</div><div class="task-instructions-block-content">${b.content}</div></div>`;
+          if (customBlocks.length === 0) {
+            const blocks: { title: string; content: string }[] = [
+              { title: 'Assessment type', content: String(instr.assessment_type || '') },
+              { title: 'Instructions provided to the student:', content: String(instr.task_description || '') },
+              { title: 'Applicable conditions:', content: String(instr.applicable_conditions || '') },
+              { title: 'Resubmissions and reattempts:', content: String(instr.resubmissions || '') },
+              { title: 'Location:', content: (instr.location_intro || '') + (Array.isArray(instr.location_options) ? '<ul><li>' + instr.location_options.map((o: string) => o).join('</li><li>') + '</li></ul>' : '') + (instr.location_note || '') },
+              { title: 'Instructions for answering the written questions:', content: String(instr.answering_instructions || '') },
+              { title: 'Purpose of the assessment', content: String(instr.purpose_intro || '') + String(instr.purpose_bullets || '') },
+            ];
+            for (const b of blocks) {
+              if (b.content && b.content.replace(/<[^>]*>/g, '').trim()) {
+                html += `<div class="task-instructions-block"><div class="task-instructions-block-title">${b.title}</div><div class="task-instructions-block-content">${b.content}</div></div>`;
+              }
             }
-          }
-          if (instr.task_instructions && String(instr.task_instructions).replace(/<[^>]*>/g, '').trim()) {
-            html += `<div class="task-instructions-block"><div class="task-instructions-block-title">Task instructions</div><div class="task-instructions-block-content">${instr.task_instructions}</div></div>`;
+            if (instr.task_instructions && String(instr.task_instructions).replace(/<[^>]*>/g, '').trim()) {
+              html += `<div class="task-instructions-block"><div class="task-instructions-block-title">Task instructions</div><div class="task-instructions-block-content">${instr.task_instructions}</div></div>`;
+            }
           }
         }
       } else if (section.pdf_render_mode === 'task_questions') {

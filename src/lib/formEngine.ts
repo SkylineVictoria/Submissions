@@ -2674,6 +2674,7 @@ export interface CreateStudentInput {
   email: string;
   phone?: string;
   batch_id?: number | null;
+  course_ids?: number[];
   date_of_birth?: string;
   address_line_1?: string;
   address_line_2?: string;
@@ -2685,6 +2686,111 @@ export interface CreateStudentInput {
   guardian_phone?: string;
   notes?: string;
   status?: string;
+}
+
+export async function setStudentCourses(studentId: number, courseIds: number[]): Promise<boolean> {
+  const sid = Number(studentId);
+  if (!Number.isFinite(sid) || sid <= 0) return false;
+  const ids = Array.from(new Set(courseIds.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0)));
+  const { created_by, updated_by } = getAuditFields();
+  try {
+    // Unassign all when empty.
+    if (ids.length === 0) {
+      const { error } = await supabase
+        .from('skyline_student_courses')
+        .delete()
+        .eq('student_id', sid);
+      if (error) {
+        console.error('setStudentCourses delete error', error);
+        return false;
+      }
+      return true;
+    }
+
+    // Remove courses not in new selection.
+    const { error: delErr } = await supabase
+      .from('skyline_student_courses')
+      .delete()
+      .eq('student_id', sid)
+      .not('course_id', 'in', `(${ids.join(',')})`);
+    if (delErr) {
+      console.error('setStudentCourses prune error', delErr);
+      return false;
+    }
+
+    // Upsert selected courses as active.
+    const payload = ids.map((cid) => ({
+      student_id: sid,
+      course_id: cid,
+      status: 'active',
+      created_by,
+      updated_by,
+    }));
+    const { error: upErr } = await supabase
+      .from('skyline_student_courses')
+      .upsert(payload, { onConflict: 'student_id,course_id' });
+    if (upErr) {
+      console.error('setStudentCourses upsert error', upErr);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.error('setStudentCourses error', e);
+    return false;
+  }
+}
+
+export async function getActiveStudentCountsByCourse(courseIds: number[]): Promise<Record<number, number>> {
+  const ids = Array.from(new Set(courseIds.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0)));
+  if (ids.length === 0) return {};
+  const { data, error } = await supabase
+    .from('skyline_student_courses')
+    .select('course_id', { count: 'exact' })
+    .in('course_id', ids)
+    .eq('status', 'active');
+  if (error) {
+    console.error('getActiveStudentCountsByCourse error', error);
+    return {};
+  }
+  const rows = (data as Array<{ course_id: number }> | null) || [];
+  const out: Record<number, number> = {};
+  for (const r of rows) {
+    const cid = Number(r.course_id);
+    out[cid] = (out[cid] ?? 0) + 1;
+  }
+  return out;
+}
+
+export async function getCoursesByQualificationCodes(
+  qualificationCodes: string[]
+): Promise<Record<string, { id: number; name: string; qualification_code: string | null }>> {
+  const codes = Array.from(
+    new Set(
+      (qualificationCodes || [])
+        .map((c) => String(c ?? '').trim().toUpperCase())
+        .filter(Boolean)
+    )
+  );
+  if (codes.length === 0) return {};
+  const out: Record<string, { id: number; name: string; qualification_code: string | null }> = {};
+  const chunkSize = 200;
+  for (let i = 0; i < codes.length; i += chunkSize) {
+    const chunk = codes.slice(i, i + chunkSize);
+    const { data, error } = await supabase
+      .from('skyline_courses')
+      .select('id, name, qualification_code')
+      .in('qualification_code', chunk);
+    if (error) {
+      console.error('getCoursesByQualificationCodes error', error);
+      continue;
+    }
+    for (const r of (data as Array<{ id: number; name: string; qualification_code: string | null }> | null) || []) {
+      const code = String(r.qualification_code ?? '').trim().toUpperCase();
+      if (!code) continue;
+      out[code] = { id: Number(r.id), name: String(r.name ?? ''), qualification_code: r.qualification_code };
+    }
+  }
+  return out;
 }
 
 export async function createStudent(input: CreateStudentInput): Promise<Student | null> {
@@ -2724,7 +2830,7 @@ export async function createStudent(input: CreateStudentInput): Promise<Student 
   const row = data as Record<string, unknown>;
   const firstName = String(row.first_name ?? '').trim();
   const lastName = String(row.last_name ?? '').trim();
-  return {
+  const createdStudent: Student = {
     id: Number(row.id),
     student_id: row.student_id ? String(row.student_id) : null,
     name: String(row.name ?? '') || [firstName, lastName].filter(Boolean).join(' '),
@@ -2747,6 +2853,12 @@ export async function createStudent(input: CreateStudentInput): Promise<Student 
     status: row.status ? String(row.status) : null,
     created_at: String(row.created_at ?? ''),
   };
+
+  if (Array.isArray(input.course_ids) && input.course_ids.length > 0) {
+    await setStudentCourses(createdStudent.id, input.course_ids);
+  }
+
+  return createdStudent;
 }
 
 export type UpdateStudentInput = Partial<Omit<CreateStudentInput, 'email'>> & { email?: string };

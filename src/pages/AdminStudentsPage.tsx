@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { Plus, Send, Mail, Phone, Pencil, Upload, Trash2, FileText } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { supabase } from '../lib/supabase';
 import {
   listStudentsPaged,
   createStudent,
@@ -13,6 +14,9 @@ import {
   updateFormInstanceDates,
   extendInstanceAccessTokensToDate,
   getStudentsByEmails,
+  listCoursesPaged,
+  getCoursesByQualificationCodes,
+  setStudentCourses,
 } from '../lib/formEngine';
 import {
   buildEmailFromLocalAndDomain,
@@ -29,6 +33,7 @@ import { Input } from '../components/ui/Input';
 import { EmailWithDomainPicker } from '../components/ui/EmailWithDomainPicker';
 import { Select } from '../components/ui/Select';
 import { SelectAsync } from '../components/ui/SelectAsync';
+import { MultiSelectAsync } from '../components/ui/MultiSelectAsync';
 import { Modal } from '../components/ui/Modal';
 import { Loader } from '../components/ui/Loader';
 import { DatePicker } from '../components/ui/DatePicker';
@@ -78,6 +83,7 @@ export const AdminStudentsPage: React.FC = () => {
     email_domain: STUDENT_DOMAIN as InstitutionalDomain,
     phone: '',
     batch_id: '',
+    course_ids: [] as number[],
     status: 'active' as 'active' | 'inactive',
   });
   const [isImportOpen, setIsImportOpen] = useState(false);
@@ -112,9 +118,12 @@ export const AdminStudentsPage: React.FC = () => {
     email_local: string;
     phone: string;
     batch_id?: string;
+    course_ids?: number[];
   }): string | null => {
     if (!String(form.student_id ?? '').trim()) return 'Student ID is required.';
     if (!String(form.first_name ?? '').trim()) return 'First name is required.';
+    const courseIds = Array.isArray(form.course_ids) ? form.course_ids : [];
+    if (courseIds.filter((n) => Number.isFinite(Number(n)) && Number(n) > 0).length === 0) return 'Select at least one course.';
     const email = buildEmailFromLocalAndDomain(
       form.email_local?.trim() || form.student_id,
       (form as { email_domain?: typeof STUDENT_DOMAIN }).email_domain ?? STUDENT_DOMAIN
@@ -124,6 +133,17 @@ export const AdminStudentsPage: React.FC = () => {
     if (form.phone && !/^\d{10}$/.test(form.phone.trim())) return 'Phone must be exactly 10 digits when provided.';
     return null;
   };
+
+  const loadCoursesOptions = useCallback(async (page: number, search: string) => {
+    const res = await listCoursesPaged(page, 20, search || undefined);
+    return {
+      options: res.data.map((c) => ({
+        value: c.id,
+        label: c.qualification_code?.trim() ? `${c.qualification_code} — ${c.name}` : c.name,
+      })),
+      hasMore: page * 20 < res.total,
+    };
+  }, []);
 
   useEffect(() => {
     listForms('published', { asAdmin: false }).then((f) => setForms(f));
@@ -201,6 +221,7 @@ export const AdminStudentsPage: React.FC = () => {
       phone: studentDraft.phone || undefined,
       email,
       batch_id: batchId ?? undefined,
+      course_ids: studentDraft.course_ids,
       status: studentDraft.status,
     });
     if (created) {
@@ -216,6 +237,7 @@ export const AdminStudentsPage: React.FC = () => {
         email_domain: STUDENT_DOMAIN,
         phone: '',
         batch_id: '',
+        course_ids: [],
         status: 'active',
       });
       setIsCreateOpen(false);
@@ -425,6 +447,19 @@ export const AdminStudentsPage: React.FC = () => {
     setImporting(true);
     let success = 0;
     let failed = 0;
+    const importQualCodes = Array.from(
+      new Set(
+        importRows
+          .flatMap((r) =>
+            String(r.qualification_code ?? '')
+              .toUpperCase()
+              .split(/[;,|]/g)
+              .map((x) => x.trim())
+              .filter(Boolean)
+          )
+      )
+    );
+    const courseByQual = await getCoursesByQualificationCodes(importQualCodes);
     const unitToFormIds = new Map<string, number[]>();
     const qualToFormIds = new Map<string, number[]>();
     for (const f of displayForms) {
@@ -492,6 +527,21 @@ export const AdminStudentsPage: React.FC = () => {
         [];
       const start = (row.activity_start_date ?? '').trim() || '';
       const end = (row.activity_end_date ?? '').trim() || '';
+
+      // Assign course(s) from qualification code (course.qualification_code).
+      if (student?.id) {
+        const codes = String(row.qualification_code ?? '')
+          .toUpperCase()
+          .split(/[;,|]/g)
+          .map((x) => x.trim())
+          .filter(Boolean);
+        const courseIds = codes
+          .map((c) => courseByQual[c]?.id)
+          .filter((n): n is number => typeof n === 'number' && Number.isFinite(n) && n > 0);
+        if (courseIds.length > 0) {
+          await setStudentCourses(student.id, courseIds);
+        }
+      }
       if (student?.id && matchedFormIds.length > 0) {
         for (const formId of matchedFormIds) {
           if (!Number.isFinite(formId) || formId <= 0) continue;
@@ -633,8 +683,10 @@ export const AdminStudentsPage: React.FC = () => {
     email_domain: InstitutionalDomain;
     phone: string;
     batch_id: string;
+    course_ids: number[];
     status: string;
   } | null>(null);
+  const [editCourseLoading, setEditCourseLoading] = useState(false);
 
   useEffect(() => {
     if (editingStudent) {
@@ -648,12 +700,31 @@ export const AdminStudentsPage: React.FC = () => {
         email_domain: domain,
         phone: editingStudent.phone ?? '',
         batch_id: editingStudent.batch_id != null ? String(editingStudent.batch_id) : '',
+        course_ids: [],
         status: editingStudent.status ?? 'active',
       });
     } else {
       setEditForm(null);
     }
   }, [editingStudent]);
+
+  useEffect(() => {
+    if (!editingStudent?.id) return;
+    setEditCourseLoading(true);
+    supabase
+      .from('skyline_student_courses')
+      .select('course_id')
+      .eq('student_id', editingStudent.id)
+      .eq('status', 'active')
+      .then(({ data, error }: { data: unknown; error: { message: string } | null }) => {
+        setEditCourseLoading(false);
+        if (error) return;
+        const ids = ((data as Array<{ course_id: number }> | null) || [])
+          .map((r) => Number(r.course_id))
+          .filter((n) => Number.isFinite(n) && n > 0);
+        setEditForm((p) => (p ? { ...p, course_ids: Array.from(new Set(ids)) } : p));
+      });
+  }, [editingStudent?.id]);
 
   const handleSaveEdit = async () => {
     if (!editingId || !editForm) return;
@@ -677,6 +748,9 @@ export const AdminStudentsPage: React.FC = () => {
       batch_id: batchId ?? undefined,
       status: editForm.status,
     });
+    if (updated) {
+      await setStudentCourses(updated.id, editForm.course_ids);
+    }
     setSavingEdit(false);
     if (updated) {
       const res = await listStudentsPaged(currentPage, PAGE_SIZE, searchTerm, statusFilter || undefined);
@@ -696,9 +770,12 @@ export const AdminStudentsPage: React.FC = () => {
     email_local: string;
     phone: string;
     batch_id?: string;
+    course_ids?: number[];
   }): string | null => {
     if (!String(form.student_id ?? '').trim()) return 'Student ID is required.';
     if (!String(form.first_name ?? '').trim()) return 'First name is required.';
+    const courseIds = Array.isArray(form.course_ids) ? form.course_ids : [];
+    if (courseIds.filter((n) => Number.isFinite(Number(n)) && Number(n) > 0).length === 0) return 'Select at least one course.';
     const email = buildEmailFromLocalAndDomain(
       form.email_local?.trim() || form.student_id,
       (form as { email_domain?: typeof STUDENT_DOMAIN }).email_domain ?? STUDENT_DOMAIN
@@ -988,29 +1065,45 @@ export const AdminStudentsPage: React.FC = () => {
       <Modal isOpen={isCreateOpen} onClose={() => setIsCreateOpen(false)} title="Add Student" size="lg">
         <div className="space-y-3">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            <div className="md:col-span-2">
+              <Input
+                label="Student ID"
+                value={studentDraft.student_id}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setStudentDraft((p) => {
+                    const syncEmail = !p.email_local || p.email_local === p.student_id;
+                    return { ...p, student_id: v, email_local: syncEmail ? v : p.email_local };
+                  });
+                }}
+                placeholder="Student ID *"
+                required
+              />
+            </div>
             <Input
-              value={studentDraft.student_id}
-              onChange={(e) => {
-                const v = e.target.value;
-                setStudentDraft((p) => {
-                  const syncEmail = !p.email_local || p.email_local === p.student_id;
-                  return { ...p, student_id: v, email_local: syncEmail ? v : p.email_local };
-                });
-              }}
-              placeholder="Student ID *"
-              required
-            />
-            <Input
+              label="First Name"
               value={studentDraft.first_name}
               onChange={(e) => setStudentDraft((p) => ({ ...p, first_name: e.target.value }))}
               placeholder="First name *"
               required
             />
             <Input
+              label="Last Name"
               value={studentDraft.last_name}
               onChange={(e) => setStudentDraft((p) => ({ ...p, last_name: e.target.value }))}
               placeholder="Last name"
             />
+            <div className="md:col-span-2">
+              <label className="block text-xs font-medium text-gray-600 mb-1">Course *</label>
+              <MultiSelectAsync
+                value={studentDraft.course_ids}
+                onChange={(vals) => setStudentDraft((p) => ({ ...p, course_ids: vals }))}
+                loadOptions={loadCoursesOptions}
+                placeholder="Select course(s)"
+                className="w-full"
+              />
+              <p className="text-xs text-gray-500 mt-1">A student can be assigned to multiple courses.</p>
+            </div>
             <div className="md:col-span-2">
               <EmailWithDomainPicker
                 label="Email"
@@ -1323,6 +1416,17 @@ export const AdminStudentsPage: React.FC = () => {
                 onChange={(e) => setEditForm((p) => p ? { ...p, last_name: e.target.value } : p)}
                 placeholder="Last name"
               />
+              <div className="md:col-span-2">
+                <label className="block text-xs font-medium text-gray-600 mb-1">Course *</label>
+                <MultiSelectAsync
+                  value={editForm.course_ids}
+                  onChange={(vals) => setEditForm((p) => (p ? { ...p, course_ids: vals } : p))}
+                  loadOptions={loadCoursesOptions}
+                  placeholder={editCourseLoading ? 'Loading courses…' : 'Select course(s)'}
+                  className="w-full"
+                />
+                <p className="text-xs text-gray-500 mt-1">A student can be assigned to multiple courses.</p>
+              </div>
               <div className="md:col-span-2">
                 <EmailWithDomainPicker
                   label="Email"

@@ -16,6 +16,7 @@ import {
   listStudentsInBatch,
   createCourseLinkExport,
   listCourseLinkExports,
+  getActiveStudentCountsByCourse,
 } from '../lib/formEngine';
 import type { Course } from '../lib/formEngine';
 import { Card } from '../components/ui/Card';
@@ -439,6 +440,7 @@ export const AdminCoursesPage: React.FC = () => {
 
   const [formCountMap, setFormCountMap] = useState<Record<number, number>>({});
   const [qualificationCodeMap, setQualificationCodeMap] = useState<Record<number, string>>({});
+  const [activeStudentCountMap, setActiveStudentCountMap] = useState<Record<number, number>>({});
   useEffect(() => {
     if (courses.length === 0) return;
     Promise.all(
@@ -457,6 +459,12 @@ export const AdminCoursesPage: React.FC = () => {
       setFormCountMap(Object.fromEntries(rows.map(([id, count]) => [id, count])));
       setQualificationCodeMap(Object.fromEntries(rows.map(([id, _count, codes]) => [id, codes || '-'])));
     });
+  }, [courses]);
+
+  useEffect(() => {
+    if (courses.length === 0) return;
+    const ids = courses.map((c) => c.id);
+    getActiveStudentCountsByCourse(ids).then((m) => setActiveStudentCountMap(m));
   }, [courses]);
 
   return (
@@ -529,6 +537,9 @@ export const AdminCoursesPage: React.FC = () => {
                         <div className="mt-1 text-sm text-gray-700">
                           {formCountMap[course.id] ?? '...'} form{formCountMap[course.id] !== 1 ? 's' : ''}
                         </div>
+                        <div className="mt-1 text-sm text-gray-700">
+                          {activeStudentCountMap[course.id] ?? 0} active student{(activeStudentCountMap[course.id] ?? 0) !== 1 ? 's' : ''}
+                        </div>
                         <div className="mt-3 flex flex-col gap-2">
                           <Button
                             variant="outline"
@@ -577,6 +588,7 @@ export const AdminCoursesPage: React.FC = () => {
                     <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Course</th>
                     <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Qualification Code</th>
                     <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Forms</th>
+                    <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Active Students</th>
                     <th className="text-right px-4 py-3 font-semibold border-b border-[var(--border)]">Action</th>
                   </tr>
                 </thead>
@@ -594,6 +606,9 @@ export const AdminCoursesPage: React.FC = () => {
                       </td>
                       <td className="px-4 py-3 border-b border-[var(--border)] text-gray-700">
                         {formCountMap[course.id] ?? '...'} form{formCountMap[course.id] !== 1 ? 's' : ''}
+                      </td>
+                      <td className="px-4 py-3 border-b border-[var(--border)] text-gray-700">
+                        {activeStudentCountMap[course.id] ?? 0}
                       </td>
                       <td className="px-4 py-3 border-b border-[var(--border)] text-right">
                         <div className="flex items-center justify-end gap-2">
