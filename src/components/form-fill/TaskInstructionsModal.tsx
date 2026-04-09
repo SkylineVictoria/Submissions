@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { parseMixedContent as parseMixedContentUtil, stripLeadingRowNumberColumn } from '../../utils/parseMixedContent';
 import type { ParsedBlock, ParsedTableBlock } from '../../utils/parseMixedContent';
 import { RichTextEditor } from '../ui/RichTextEditor';
@@ -8,8 +8,10 @@ import { Input } from '../ui/Input';
 import { Textarea } from '../ui/Textarea';
 import { Loader } from '../ui/Loader';
 import { toast } from '../../utils/toast';
+import { uploadInstructionImage } from '../../lib/storage';
 
 export type InstructionBlockType = 'paragraph' | 'table';
+export type InstructionImageLayout = 'above' | 'below' | 'side_by_side';
 export interface InstructionTableRow {
   heading?: string;
   content?: string;
@@ -21,6 +23,7 @@ export interface InstructionBlock {
   type: InstructionBlockType;
   heading?: string;
   content?: string;
+  imageUrl?: string;
   rows?: InstructionTableRow[];
   /** Column headers for multi-column tables */
   columnHeaders?: string[];
@@ -48,6 +51,7 @@ interface TaskInstructionsModalProps {
   /** Fallback for assessment_type when instructions don't have it (e.g. from row_help: "Written Assignment (WA)") */
   rowHelpFallback?: string | null;
   onSave: (data: TaskInstructionsData) => void;
+  uploadTarget?: { scope: 'task_row' | 'section'; id: number } | null;
 }
 
 export function TaskInstructionsModal({
@@ -57,11 +61,14 @@ export function TaskInstructionsModal({
   initialData,
   rowHelpFallback,
   onSave,
+  uploadTarget = null,
 }: TaskInstructionsModalProps) {
   const [data, setData] = useState<TaskInstructionsData>({});
   const [pasteDraftByBlock, setPasteDraftByBlock] = useState<Record<string, string>>({});
   const [autoCreatingBlockId, setAutoCreatingBlockId] = useState<string | null>(null);
   const [smartPasteInput, setSmartPasteInput] = useState('');
+  const [uploadingImgBlockId, setUploadingImgBlockId] = useState<string | null>(null);
+  const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   const escapeHtml = (input: string): string =>
     input
@@ -367,6 +374,7 @@ export function TaskInstructionsModal({
         type: b.type === 'table' ? 'table' : 'paragraph',
         heading: String(b.heading || ''),
         content: String(b.content || ''),
+        imageUrl: String((b as { imageUrl?: string }).imageUrl || '') || undefined,
         columnHeaders: Array.isArray((b as { columnHeaders?: string[] }).columnHeaders)
           ? (b as { columnHeaders: string[] }).columnHeaders
           : undefined,
@@ -552,6 +560,7 @@ export function TaskInstructionsModal({
         ...b,
         heading: String(b.heading || '').trim(),
         content: String(b.content || ''),
+        imageUrl: b.imageUrl ? String(b.imageUrl).trim() : undefined,
         columnHeaders: Array.isArray(b.columnHeaders) ? b.columnHeaders.filter((h) => String(h).trim()).map(String) : undefined,
         rows: Array.isArray(b.rows)
           ? b.rows
@@ -568,7 +577,8 @@ export function TaskInstructionsModal({
       }))
       .filter((b) => {
         if (b.type === 'table') return (b.rows || []).length > 0;
-        return b.content.replace(/<[^>]*>/g, '').trim();
+        const hasText = b.content.replace(/<[^>]*>/g, '').trim();
+        return !!hasText || !!b.imageUrl;
       })
       .filter((b) => {
         if (b.type === 'paragraph' && String(b.heading || '').toLowerCase() === 'assessment type') return false;
@@ -782,6 +792,73 @@ export function TaskInstructionsModal({
                     placeholder="Paste the complete paragraph here..."
                     minHeight="150px"
                   />
+                  <div className="mt-3 border border-dashed border-gray-300 rounded-md bg-white p-3 space-y-2">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                      <div className="text-sm font-medium text-gray-700">Image (optional)</div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          ref={(el) => {
+                            fileInputRefs.current[block.id] = el;
+                          }}
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          disabled={!uploadTarget || uploadingImgBlockId === block.id}
+                          onChange={async (e) => {
+                            const file = e.target.files?.[0];
+                            e.target.value = '';
+                            if (!file) return;
+                            if (!uploadTarget) {
+                              toast.error('Save this section/task link first to enable image uploads.');
+                              return;
+                            }
+                            setUploadingImgBlockId(block.id);
+                            const { url, error } = await uploadInstructionImage(uploadTarget.scope, uploadTarget.id, file);
+                            setUploadingImgBlockId(null);
+                            if (error || !url) {
+                              toast.error(error || 'Image upload failed');
+                              return;
+                            }
+                            updateBlock(index, { imageUrl: url });
+                            toast.success('Image uploaded');
+                          }}
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={!uploadTarget || uploadingImgBlockId === block.id}
+                          onClick={() => fileInputRefs.current[block.id]?.click()}
+                        >
+                          {uploadingImgBlockId === block.id ? (
+                            <>
+                              <Loader variant="dots" size="sm" inline className="mr-1.5" />
+                              Uploading…
+                            </>
+                          ) : (
+                            'Upload image'
+                          )}
+                        </Button>
+                        {block.imageUrl ? (
+                          <Button type="button" variant="outline" size="sm" onClick={() => updateBlock(index, { imageUrl: undefined })}>
+                            Remove
+                          </Button>
+                        ) : null}
+                      </div>
+                    </div>
+                    {block.imageUrl ? (
+                      <div className="space-y-2">
+                        <img
+                          src={block.imageUrl}
+                          alt=""
+                          className="max-w-full h-auto object-contain rounded border border-gray-200"
+                          style={{ maxHeight: 240 }}
+                        />
+                      </div>
+                    ) : (
+                      <p className="text-xs text-gray-500">Upload an image to show in the PDF between instruction blocks.</p>
+                    )}
+                  </div>
                 </div>
               )}
             </div>

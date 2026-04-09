@@ -61,6 +61,7 @@ export function SectionInstructionsEditor({ section, onSaved }: SectionInstructi
           rowLabel={row.row_label}
           initialData={row.row_meta?.instructions}
           rowHelpFallback={row.row_help}
+          uploadTarget={{ scope: 'task_row', id: rowId }}
           onSave={handleSave}
         />
       )}

@@ -1990,6 +1990,12 @@ export const InstanceFillPage: React.FC = () => {
                                 {customBlocks.length > 0 ? (
                                   customBlocks.map((b, idx) => {
                                     const heading = String(b.heading || '').trim();
+                                    const imgUrl = String((b as { imageUrl?: string }).imageUrl || '').trim();
+                                    const imgEl = imgUrl ? <img src={imgUrl} alt="" className="max-w-full h-auto object-contain rounded border border-gray-200" style={{ maxHeight: 280 }} /> : null;
+                                    const withImage = (content: React.ReactNode) => {
+                                      if (!imgEl) return content;
+                                      return <div>{content}<div className="mt-2">{imgEl}</div></div>;
+                                    };
                                     if (b.type === 'table') {
                                       const rows = Array.isArray(b.rows) ? b.rows : [];
                                       const columnHeaders = Array.isArray(b.columnHeaders) ? b.columnHeaders : [];
@@ -1997,7 +2003,8 @@ export const InstanceFillPage: React.FC = () => {
                                         <div key={String(b.id || idx)} className="border border-gray-200 rounded overflow-hidden">
                                           {heading ? <div className="bg-gray-600 text-white font-semibold text-sm px-3 py-2">{heading}</div> : null}
                                           <div className="overflow-x-auto">
-                                            <table className="w-full table-fixed border-collapse text-sm">
+                                            {withImage(
+                                              <table className="w-full table-fixed border-collapse text-sm">
                                               {columnHeaders.length > 0 ? (
                                                 <thead>
                                                   <tr className="bg-gray-200">
@@ -2038,6 +2045,7 @@ export const InstanceFillPage: React.FC = () => {
                                                 })}
                                               </tbody>
                                             </table>
+                                            )}
                                           </div>
                                         </div>
                                       );
@@ -2048,13 +2056,15 @@ export const InstanceFillPage: React.FC = () => {
                                       <div key={String(b.id || idx)} className="border border-gray-200 rounded overflow-hidden">
                                         {heading ? <div className="bg-gray-600 text-white font-semibold text-sm px-3 py-2">{heading}</div> : null}
                                         <div className="border-t border-gray-200 p-3 bg-gray-50">
-                                          <div className="overflow-x-hidden">
-                                            <div
-                                              lang="en"
-                                              className="prose prose-sm max-w-none whitespace-normal break-normal [word-break:normal] [hyphens:none] [&_table]:w-full [&_table]:table-fixed [&_table]:border-collapse [&_th]:whitespace-normal [&_th]:break-normal [&_th]:align-top [&_td]:whitespace-normal [&_td]:break-normal [&_td]:align-top [&_td>div]:[overflow-wrap:break-word] [&_td>p]:[overflow-wrap:break-word] [&_td>span]:[overflow-wrap:break-word]"
-                                              dangerouslySetInnerHTML={{ __html: normalizeRichTextForPage(String(content || '')) }}
-                                            />
-                                          </div>
+                                          {withImage(
+                                            <div className="overflow-x-hidden">
+                                              <div
+                                                lang="en"
+                                                className="prose prose-sm max-w-none whitespace-normal break-normal [word-break:normal] [hyphens:none] [&_table]:w-full [&_table]:table-fixed [&_table]:border-collapse [&_th]:whitespace-normal [&_th]:break-normal [&_th]:align-top [&_td]:whitespace-normal [&_td]:break-normal [&_td]:align-top [&_td>div]:[overflow-wrap:break-word] [&_td>p]:[overflow-wrap:break-word] [&_td>span]:[overflow-wrap:break-word]"
+                                                dangerouslySetInnerHTML={{ __html: normalizeRichTextForPage(String(content || '')) }}
+                                              />
+                                            </div>
+                                          )}
                                         </div>
                                       </div>
                                     );
@@ -2151,6 +2161,12 @@ export const InstanceFillPage: React.FC = () => {
                                               })}
                                             </tbody>
                                           </table>
+                                          {(() => {
+                                            const imgUrl = String((b as { imageUrl?: string }).imageUrl || '').trim();
+                                            const imgEl = imgUrl ? <img src={imgUrl} alt="" className="max-w-full h-auto object-contain rounded border border-gray-200" style={{ maxHeight: 280 }} /> : null;
+                                            if (!imgEl) return null;
+                                            return <div className="p-3 pt-2">{imgEl}</div>;
+                                          })()}
                                         </div>
                                       ) : (
                                         <div className="overflow-x-hidden">
@@ -2159,6 +2175,12 @@ export const InstanceFillPage: React.FC = () => {
                                             className="prose prose-sm max-w-none whitespace-normal break-normal [word-break:normal] [hyphens:none] [&_table]:w-full [&_table]:table-fixed [&_table]:border-collapse [&_th]:whitespace-normal [&_th]:break-normal [&_th]:align-top [&_th]:[word-break:normal] [&_th]:[hyphens:none] [&_td]:whitespace-normal [&_td]:break-normal [&_td]:align-top [&_td]:[word-break:normal] [&_td]:[hyphens:none] [&_td>div]:[overflow-wrap:break-word] [&_td>p]:[overflow-wrap:break-word] [&_td>span]:[overflow-wrap:break-word]"
                                             dangerouslySetInnerHTML={{ __html: normalizeRichTextForPage(sanitizeInstructionHtml(String(b.content || ''))) }}
                                           />
+                                          {(() => {
+                                            const imgUrl = String((b as { imageUrl?: string }).imageUrl || '').trim();
+                                            const imgEl = imgUrl ? <img src={imgUrl} alt="" className="max-w-full h-auto object-contain rounded border border-gray-200" style={{ maxHeight: 280 }} /> : null;
+                                            if (!imgEl) return null;
+                                            return <div className="mt-2">{imgEl}</div>;
+                                          })()}
                                         </div>
                                       )}
                                     </div>

@@ -120,6 +120,39 @@ export async function uploadQuestionImage(
   return { url: data.publicUrl, error: null };
 }
 
+/**
+ * Upload instruction block image.
+ * Used by Task Instructions (task row) and Additional Instructions (section).
+ */
+export async function uploadInstructionImage(
+  scope: 'task_row' | 'section',
+  id: number,
+  file: File
+): Promise<UploadResult> {
+  const toUpload = await ensurePdfCompatibleImage(file);
+  const ext = toUpload.name.split('.').pop() || 'jpg';
+  const sanitizedName = toUpload.name
+    .replace(/\.[^/.]+$/, '')
+    .replace(/[^a-zA-Z0-9-_]/g, '_')
+    .slice(0, 40);
+  const safeScope = scope === 'section' ? 'section' : 'task_row';
+  const safeId = Number.isFinite(id) && id > 0 ? Math.floor(id) : 0;
+  const path = `${FOLDER}/instructions/${safeScope}/${safeId}/${sanitizedName}_${Date.now()}.${ext}`;
+
+  const { error } = await supabase.storage.from(BUCKET).upload(path, toUpload, {
+    upsert: false,
+    contentType: toUpload.type,
+  });
+
+  if (error) {
+    console.error('uploadInstructionImage error', error);
+    return { url: null, error: error.message };
+  }
+
+  const { data } = supabase.storage.from(BUCKET).getPublicUrl(path);
+  return { url: data.publicUrl, error: null };
+}
+
 /** Optional induction document — one object per `docKey` under `skyline/induction/{inductionId}/` (replaces previous upload). */
 export async function uploadInductionDocument(
   inductionId: number,

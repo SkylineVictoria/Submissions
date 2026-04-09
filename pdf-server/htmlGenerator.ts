@@ -942,17 +942,25 @@ export function buildHtml(data: {
         const instr = (section as { instructions_meta?: Record<string, unknown> | null }).instructions_meta as Record<string, unknown> | null | undefined;
         html += `<div class="task-instructions-header">${String(section.title || 'Additional Instructions').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>`;
         html += `<div class="task-instructions-student-label">Student Instructions</div>`;
+        const renderInstructionImage = (block: Record<string, unknown>) => {
+          const imageUrl = String(block.imageUrl || '').trim();
+          if (!imageUrl) return '';
+          const img = `<img src="${imageUrl.replace(/"/g, '&quot;')}" alt="" style="max-width:100%;height:auto;object-fit:contain;border:1px solid #e5e7eb;border-radius:6px;" />`;
+          return `<div style="margin:10px 0 8px 0">${img}</div>`;
+        };
         if (instr) {
           const customBlocks = Array.isArray((instr as { blocks?: unknown[] }).blocks)
             ? ((instr as { blocks?: Array<{ id?: string; type?: string; heading?: string; content?: string; columnHeaders?: string[]; rows?: Array<{ heading?: string; content?: string; cells?: string[] }> }> }).blocks || [])
             : [];
           for (const b of customBlocks) {
             const heading = String(b.heading || '').trim();
+            const bRec = b as unknown as Record<string, unknown>;
             if (b.type === 'table') {
               if (heading) html += `<div class="task-instructions-block-title">${heading.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>`;
               const rows = Array.isArray(b.rows) ? b.rows : [];
               const columnHeaders = Array.isArray(b.columnHeaders) ? b.columnHeaders : [];
               if (rows.length > 0) {
+                const imgHtml = renderInstructionImage(bRec);
                 html += '<table class="section-table task-instructions-table">';
                 if (columnHeaders.length > 0) {
                   html += '<thead><tr>';
@@ -978,10 +986,13 @@ export function buildHtml(data: {
                   }
                 }
                 html += '</tbody></table>';
+                if (imgHtml) html += imgHtml;
               }
             } else if (String((b as { content?: string }).content || '').replace(/<[^>]*>/g, '').trim()) {
               if (heading) html += `<div class="task-instructions-block-title">${heading.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>`;
+              const imgHtml = renderInstructionImage(bRec);
               html += `<div class="task-instructions-block-content">${String((b as { content?: string }).content || '')}</div>`;
+              if (imgHtml) html += imgHtml;
             }
           }
         }
@@ -994,6 +1005,63 @@ export function buildHtml(data: {
         html += `<div class="task-instructions-student-label">Student Instructions</div>`;
         html += `<div class="task-instructions-subheader">Assessment method-based instructions and guidelines: ${row?.row_help || ''}</div>`;
         if (instr) {
+          const customBlocks = Array.isArray((instr as { blocks?: unknown[] }).blocks)
+            ? ((instr as { blocks?: Array<{ id?: string; type?: string; heading?: string; content?: string; columnHeaders?: string[]; rows?: Array<{ heading?: string; content?: string; cells?: string[] }> }> }).blocks || [])
+            : [];
+          const renderInstructionImage = (block: Record<string, unknown>) => {
+            const imageUrl = String(block.imageUrl || '').trim();
+            if (!imageUrl) return '';
+            const img = `<img src="${imageUrl.replace(/"/g, '&quot;')}" alt="" style="max-width:100%;height:auto;object-fit:contain;border:1px solid #e5e7eb;border-radius:6px;" />`;
+            return `<div style="margin:10px 0 8px 0">${img}</div>`;
+          };
+
+          if (customBlocks.length > 0) {
+            for (const b of customBlocks) {
+              const heading = String((b as { heading?: string }).heading || '').trim();
+              const bRec = b as unknown as Record<string, unknown>;
+              if ((b as { type?: string }).type === 'table') {
+                if (heading) html += `<div class="task-instructions-block-title">${heading.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>`;
+                const rows = Array.isArray((b as { rows?: unknown[] }).rows) ? ((b as { rows?: Array<{ heading?: string; content?: string; cells?: string[] }> }).rows || []) : [];
+                const columnHeaders = Array.isArray((b as { columnHeaders?: unknown[] }).columnHeaders) ? ((b as { columnHeaders?: string[] }).columnHeaders || []) : [];
+                if (rows.length > 0) {
+                  const imgHtml = renderInstructionImage(bRec);
+                  html += '<table class="section-table task-instructions-table">';
+                  if (columnHeaders.length > 0) {
+                    html += '<thead><tr>';
+                    for (const h of columnHeaders) {
+                      html += `<th class="label-cell" style="font-weight:700;border:1px solid #000;padding:6px 8px;text-align:left">${String(h).replace(/</g, '&lt;').replace(/>/g, '&gt;')}</th>`;
+                    }
+                    html += '</tr></thead>';
+                  }
+                  html += '<tbody>';
+                  for (const r of rows) {
+                    const cells = (r as { cells?: string[] }).cells;
+                    if (Array.isArray(cells) && cells.length > 0) {
+                      html += '<tr>';
+                      for (const c of cells) {
+                        html += `<td class="value-cell" style="border:1px solid #000;padding:6px 8px">${String(c ?? '')}</td>`;
+                      }
+                      html += '</tr>';
+                    } else {
+                      html += '<tr>';
+                      html += `<td class="label-cell" style="width:35%;font-weight:700;border:1px solid #000;padding:6px 8px">${String((r as { heading?: string }).heading || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</td>`;
+                      html += `<td class="value-cell" style="border:1px solid #000;padding:6px 8px">${String((r as { content?: string }).content || '')}</td>`;
+                      html += '</tr>';
+                    }
+                  }
+                  html += '</tbody></table>';
+                  if (imgHtml) html += imgHtml;
+                }
+              } else if (String((b as { content?: string }).content || '').replace(/<[^>]*>/g, '').trim()) {
+                if (heading) html += `<div class="task-instructions-block-title">${heading.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>`;
+                const imgHtml = renderInstructionImage(bRec);
+                html += `<div class="task-instructions-block-content">${String((b as { content?: string }).content || '')}</div>`;
+                if (imgHtml) html += imgHtml;
+              }
+            }
+            return html;
+          }
+
           const blocks: { title: string; content: string }[] = [
             { title: 'Assessment type', content: String(instr.assessment_type || '') },
             { title: 'Instructions provided to the student:', content: String(instr.task_description || '') },

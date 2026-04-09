@@ -1491,14 +1491,23 @@ function buildHtml(data: {
           const customBlocks = Array.isArray((instr as { blocks?: unknown[] }).blocks)
             ? ((instr as { blocks?: Array<{ id?: string; type?: string; heading?: string; content?: string; columnHeaders?: string[]; rows?: Array<{ heading?: string; content?: string; cells?: string[] }> }> }).blocks || [])
             : [];
+          const renderInstructionImage = (block: Record<string, unknown>) => {
+            const imageUrl = String(block.imageUrl || '').trim();
+            if (!imageUrl) return '';
+            const img = `<img src="${imageUrl.replace(/"/g, '&quot;')}" alt="" style="max-width:100%;height:auto;object-fit:contain;border:1px solid #e5e7eb;border-radius:6px;" />`;
+            return `<div style="margin:10px 0 8px 0">${img}</div>`;
+          };
+
           if (customBlocks.length > 0) {
             for (const b of customBlocks) {
               const heading = String(b.heading || '').trim();
+              const bRec = b as unknown as Record<string, unknown>;
               if (b.type === 'table') {
                 if (heading) html += `<div class="task-instructions-block-title">${heading.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>`;
                 const rows = Array.isArray(b.rows) ? b.rows : [];
                 const columnHeaders = Array.isArray(b.columnHeaders) ? b.columnHeaders : [];
                 if (rows.length > 0) {
+                  const imgHtml = renderInstructionImage(bRec);
                   html += '<table class="section-table task-instructions-table">';
                   if (columnHeaders.length > 0) {
                     html += '<thead><tr>';
@@ -1524,10 +1533,13 @@ function buildHtml(data: {
                     }
                   }
                   html += '</tbody></table>';
+                  if (imgHtml) html += imgHtml;
                 }
               } else if (String(b.content || '').replace(/<[^>]*>/g, '').trim()) {
                 if (heading) html += `<div class="task-instructions-block-title">${heading.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>`;
+                const imgHtml = renderInstructionImage(bRec);
                 html += `<div class="task-instructions-block-content">${normalizeNbspProse(String(b.content || ''))}</div>`;
+                if (imgHtml) html += imgHtml;
               }
             }
           }
@@ -1546,14 +1558,23 @@ function buildHtml(data: {
           const customBlocks = Array.isArray((instr as { blocks?: unknown[] }).blocks)
             ? ((instr as { blocks?: Array<{ id?: string; type?: string; heading?: string; content?: string; columnHeaders?: string[]; rows?: Array<{ heading?: string; content?: string; cells?: string[] }> }> }).blocks || [])
             : [];
+          const renderInstructionImage = (block: Record<string, unknown>) => {
+            const imageUrl = String(block.imageUrl || '').trim();
+            if (!imageUrl) return '';
+            const img = `<img src="${imageUrl.replace(/"/g, '&quot;')}" alt="" style="max-width:100%;height:auto;object-fit:contain;border:1px solid #e5e7eb;border-radius:6px;" />`;
+            return `<div style="margin:10px 0 8px 0">${img}</div>`;
+          };
+
           if (customBlocks.length > 0) {
             for (const b of customBlocks) {
               const heading = String(b.heading || '').trim();
+              const bRec = b as unknown as Record<string, unknown>;
               if (b.type === 'table') {
                 if (heading) html += `<div class="task-instructions-block-title">${heading}</div>`;
                 const rows = Array.isArray(b.rows) ? b.rows : [];
                 const columnHeaders = Array.isArray(b.columnHeaders) ? b.columnHeaders : [];
                 if (rows.length > 0) {
+                  const imgHtml = renderInstructionImage(bRec);
                   html += '<table class="section-table task-instructions-table">';
                   if (columnHeaders.length > 0) {
                     html += '<thead><tr>';
@@ -1579,9 +1600,12 @@ function buildHtml(data: {
                     }
                   }
                   html += '</tbody></table>';
+                  if (imgHtml) html += imgHtml;
                 }
               } else if (String(b.content || '').replace(/<[^>]*>/g, '').trim()) {
+                const imgHtml = renderInstructionImage(bRec);
                 html += `<div class="task-instructions-block-content">${normalizeNbspProse(String(b.content || ''))}</div>`;
+                if (imgHtml) html += imgHtml;
               }
             }
           } else {

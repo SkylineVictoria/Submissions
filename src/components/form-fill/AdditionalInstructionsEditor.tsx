@@ -36,6 +36,7 @@ export function AdditionalInstructionsEditor({ section, onSaved }: AdditionalIns
           rowLabel={section.title || 'Additional instructions'}
           initialData={initial}
           rowHelpFallback={null}
+          uploadTarget={{ scope: 'section', id: section.id }}
           onSave={handleSave}
         />
       )}
