@@ -64,6 +64,7 @@ export interface Database {
           pdf_render_mode: string;
           sort_order: number;
           assessment_task_row_id: number | null;
+          instructions_meta: Json | null;
         };
         Insert: {
           id?: number;
@@ -73,6 +74,7 @@ export interface Database {
           pdf_render_mode?: string;
           sort_order?: number;
           assessment_task_row_id?: number | null;
+          instructions_meta?: Json | null;
         };
         Update: Partial<Database['public']['Tables']['form_sections']['Insert']>;
       };

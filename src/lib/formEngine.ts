@@ -3690,6 +3690,7 @@ export async function duplicateForm(formId: number): Promise<Form | null> {
           pdf_render_mode: section.pdf_render_mode,
           sort_order: section.sort_order,
           assessment_task_row_id: mappedRowId,
+          instructions_meta: (section as unknown as { instructions_meta?: unknown }).instructions_meta ?? null,
         })
         .select('id')
         .single();

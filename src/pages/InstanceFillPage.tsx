@@ -1588,7 +1588,7 @@ export const InstanceFillPage: React.FC = () => {
                   const hasInteractive = section.questions.some(
                     (q) => q.type !== 'instruction_block' && isRoleVisible((q.role_visibility as Record<string, boolean>) || {}, role)
                   );
-                  return hasInteractive || section.pdf_render_mode === 'assessment_tasks' || section.pdf_render_mode === 'assessment_submission' || section.pdf_render_mode === 'reasonable_adjustment' || section.pdf_render_mode === 'reasonable_adjustment_indicator' || section.pdf_render_mode === 'task_instructions' || section.pdf_render_mode === 'task_questions' || section.pdf_render_mode === 'task_written_evidence_checklist' || section.pdf_render_mode === 'task_marking_checklist' || section.pdf_render_mode === 'task_results' || section.pdf_render_mode === 'assessment_summary';
+                  return hasInteractive || section.pdf_render_mode === 'assessment_tasks' || section.pdf_render_mode === 'assessment_submission' || section.pdf_render_mode === 'reasonable_adjustment' || section.pdf_render_mode === 'reasonable_adjustment_indicator' || section.pdf_render_mode === 'additional_instructions' || section.pdf_render_mode === 'task_instructions' || section.pdf_render_mode === 'task_questions' || section.pdf_render_mode === 'task_written_evidence_checklist' || section.pdf_render_mode === 'task_marking_checklist' || section.pdf_render_mode === 'task_results' || section.pdf_render_mode === 'assessment_summary';
                 });
                 if (filteredSections.length === 0) return null;
                 return (
@@ -1598,7 +1598,7 @@ export const InstanceFillPage: React.FC = () => {
                 </h2>
                 {filteredSections.map((section) => (
                   <div key={section.id} className="mb-8 last:mb-0">
-                    {section.pdf_render_mode !== 'likert_table' && section.pdf_render_mode !== 'reasonable_adjustment' && section.pdf_render_mode !== 'reasonable_adjustment_indicator' && section.pdf_render_mode !== 'task_instructions' && section.pdf_render_mode !== 'task_questions' && section.pdf_render_mode !== 'task_written_evidence_checklist' && section.pdf_render_mode !== 'task_marking_checklist' && section.pdf_render_mode !== 'task_results' && section.pdf_render_mode !== 'assessment_summary' && (
+                    {section.pdf_render_mode !== 'likert_table' && section.pdf_render_mode !== 'reasonable_adjustment' && section.pdf_render_mode !== 'reasonable_adjustment_indicator' && section.pdf_render_mode !== 'task_instructions' && section.pdf_render_mode !== 'additional_instructions' && section.pdf_render_mode !== 'task_questions' && section.pdf_render_mode !== 'task_written_evidence_checklist' && section.pdf_render_mode !== 'task_marking_checklist' && section.pdf_render_mode !== 'task_results' && section.pdf_render_mode !== 'assessment_summary' && (
                       <h3 className="text-lg font-semibold text-gray-700 mb-2">{section.title}</h3>
                     )}
                     <div className={section.pdf_render_mode === 'declarations' || section.pdf_render_mode === 'assessment_submission' ? 'border border-gray-200 rounded-lg p-4 bg-white space-y-4' : 'space-y-4'}>
@@ -1974,6 +1974,98 @@ export const InstanceFillPage: React.FC = () => {
                               )}
                           </div>
                         </div>
+                      ) : section.pdf_render_mode === 'additional_instructions' ? (
+                        (() => {
+                          const instr = (section as unknown as { instructions_meta?: Record<string, unknown> | null }).instructions_meta as Record<string, unknown> | null | undefined;
+                          if (!instr) return <div className="text-gray-500 italic">No additional instructions configured.</div>;
+                          const customBlocks = Array.isArray((instr as { blocks?: unknown[] }).blocks)
+                            ? ((instr as { blocks?: Array<{ id?: string; type?: string; heading?: string; content?: string; columnHeaders?: string[]; rows?: Array<{ heading?: string; content?: string; cells?: string[] }> }> }).blocks || [])
+                            : [];
+                          return (
+                            <div className="border border-gray-200 rounded-lg overflow-hidden bg-white">
+                              <div className="bg-[#5E5E5E] text-white font-bold px-4 py-3">
+                                {section.title || 'Additional Instructions'}
+                              </div>
+                              <div className="p-4 space-y-4">
+                                {customBlocks.length > 0 ? (
+                                  customBlocks.map((b, idx) => {
+                                    const heading = String(b.heading || '').trim();
+                                    if (b.type === 'table') {
+                                      const rows = Array.isArray(b.rows) ? b.rows : [];
+                                      const columnHeaders = Array.isArray(b.columnHeaders) ? b.columnHeaders : [];
+                                      return (
+                                        <div key={String(b.id || idx)} className="border border-gray-200 rounded overflow-hidden">
+                                          {heading ? <div className="bg-gray-600 text-white font-semibold text-sm px-3 py-2">{heading}</div> : null}
+                                          <div className="overflow-x-auto">
+                                            <table className="w-full table-fixed border-collapse text-sm">
+                                              {columnHeaders.length > 0 ? (
+                                                <thead>
+                                                  <tr className="bg-gray-200">
+                                                    {columnHeaders.map((h, hi) => (
+                                                      <th key={hi} className="border border-gray-300 p-2 text-left font-semibold text-gray-700 whitespace-normal break-normal align-top">
+                                                        {h}
+                                                      </th>
+                                                    ))}
+                                                  </tr>
+                                                </thead>
+                                              ) : null}
+                                              <tbody>
+                                                {rows.map((r, ri) => {
+                                                  const cells = (r as { cells?: string[] }).cells;
+                                                  const isMultiCol = Array.isArray(cells) && cells.length > 0;
+                                                  return (
+                                                    <tr key={ri} className={ri % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                                                      {isMultiCol ? (
+                                                        cells.map((cell, ci) => (
+                                                          <td key={ci} className="border border-gray-300 p-2 whitespace-normal break-normal align-top">
+                                                            <div className="[overflow-wrap:break-word]">
+                                                              <div lang="en" className="prose prose-sm max-w-none whitespace-normal break-normal" dangerouslySetInnerHTML={{ __html: normalizeRichTextForPage(String(cell || '')) }} />
+                                                            </div>
+                                                          </td>
+                                                        ))
+                                                      ) : (
+                                                        <>
+                                                          <td className="border border-gray-300 p-2 align-top font-semibold w-[24%] whitespace-normal break-normal">{String((r as { heading?: string }).heading || '')}</td>
+                                                          <td className="border border-gray-300 border-r p-2 align-top w-[76%] whitespace-normal break-normal">
+                                                            <div className="[overflow-wrap:break-word]">
+                                                              <div lang="en" className="prose prose-sm max-w-none whitespace-normal break-normal" dangerouslySetInnerHTML={{ __html: normalizeRichTextForPage(String((r as { content?: string }).content || '')) }} />
+                                                            </div>
+                                                          </td>
+                                                        </>
+                                                      )}
+                                                    </tr>
+                                                  );
+                                                })}
+                                              </tbody>
+                                            </table>
+                                          </div>
+                                        </div>
+                                      );
+                                    }
+                                    const content = String(b.content || '');
+                                    if (!content.replace(/<[^>]*>/g, '').trim()) return null;
+                                    return (
+                                      <div key={String(b.id || idx)} className="border border-gray-200 rounded overflow-hidden">
+                                        {heading ? <div className="bg-gray-600 text-white font-semibold text-sm px-3 py-2">{heading}</div> : null}
+                                        <div className="border-t border-gray-200 p-3 bg-gray-50">
+                                          <div className="overflow-x-hidden">
+                                            <div
+                                              lang="en"
+                                              className="prose prose-sm max-w-none whitespace-normal break-normal [word-break:normal] [hyphens:none] [&_table]:w-full [&_table]:table-fixed [&_table]:border-collapse [&_th]:whitespace-normal [&_th]:break-normal [&_th]:align-top [&_td]:whitespace-normal [&_td]:break-normal [&_td]:align-top [&_td>div]:[overflow-wrap:break-word] [&_td>p]:[overflow-wrap:break-word] [&_td>span]:[overflow-wrap:break-word]"
+                                              dangerouslySetInnerHTML={{ __html: normalizeRichTextForPage(String(content || '')) }}
+                                            />
+                                          </div>
+                                        </div>
+                                      </div>
+                                    );
+                                  })
+                                ) : (
+                                  <div className="text-gray-500 italic">No instruction blocks.</div>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })()
                       ) : section.pdf_render_mode === 'task_instructions' ? (
                         (() => {
                           const taskRow = (section as { taskRow?: { row_label: string; row_help: string | null; row_meta?: { instructions?: Record<string, string | string[]> } } }).taskRow;

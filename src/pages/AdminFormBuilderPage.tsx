@@ -32,6 +32,7 @@ import { Textarea } from '../components/ui/Textarea';
 import { Checkbox } from '../components/ui/Checkbox';
 import { TaskInstructionsModal, type TaskInstructionsData } from '../components/form-fill/TaskInstructionsModal';
 import { SectionInstructionsEditor } from '../components/form-fill/SectionInstructionsEditor';
+import { AdditionalInstructionsEditor } from '../components/form-fill/AdditionalInstructionsEditor';
 import { TableLayoutSelect } from '../components/form-fill/TableLayoutSelect';
 import { cn } from '../components/utils/cn';
 
@@ -334,6 +335,7 @@ const PDF_RENDER_MODES = [
   { value: 'reasonable_adjustment', label: 'Reasonable Adjustment' },
   { value: 'reasonable_adjustment_indicator', label: 'Reasonable Adjustment (Appendix A reference)' },
   { value: 'declarations', label: 'Declarations' },
+  { value: 'additional_instructions', label: 'Additional Instructions' },
   { value: 'task_instructions', label: 'Task Instructions' },
   { value: 'task_questions', label: 'Task Questions' },
   { value: 'task_written_evidence_checklist', label: 'Written Evidence Checklist' },
@@ -1830,7 +1832,7 @@ export const AdminFormBuilderPage: React.FC = () => {
                             ? 'Assessment Summary Sheet'
                             : 'Questions'}
               </h2>
-              {(selectedSection?.pdf_render_mode === 'task_questions' || (!['task_instructions', 'task_questions', 'task_written_evidence_checklist', 'task_marking_checklist', 'task_results', 'assessment_summary'].includes(selectedSection?.pdf_render_mode || '') && selectedSection?.title !== 'Assessment Summary Sheet')) && (
+              {(selectedSection?.pdf_render_mode === 'task_questions' || (!['task_instructions', 'additional_instructions', 'task_questions', 'task_written_evidence_checklist', 'task_marking_checklist', 'task_results', 'assessment_summary'].includes(selectedSection?.pdf_render_mode || '') && selectedSection?.title !== 'Assessment Summary Sheet')) && (
                 <Button
                   variant="outline"
                   size="sm"
@@ -1845,6 +1847,10 @@ export const AdminFormBuilderPage: React.FC = () => {
               selectedSection.pdf_render_mode === 'task_instructions' ? (
                 <p className="text-sm text-gray-600">
                   Instructions students will read before answering. Use the editor on the right to add content.
+                </p>
+              ) : selectedSection.pdf_render_mode === 'additional_instructions' ? (
+                <p className="text-sm text-gray-600">
+                  General instructions that appear in the PDF but are not linked to a specific task. Use the editor on the right to add content.
                 </p>
               ) : loadingSectionTypeChange === selectedSection.id ? (
                 <div className="flex items-center gap-2 py-4 text-sm text-gray-600">
@@ -1927,6 +1933,8 @@ export const AdminFormBuilderPage: React.FC = () => {
                 section={selectedSection}
                 onSaved={loadData}
               />
+            ) : selectedSection?.pdf_render_mode === 'additional_instructions' ? (
+              <AdditionalInstructionsEditor section={selectedSection as unknown as { id: number; title: string; instructions_meta?: TaskInstructionsData | null }} onSaved={loadData} />
             ) : editingQuestionId && selectedSection ? (() => {
               const q = selectedSection.questions.find((x) => x.id === editingQuestionId);
               if (!q) return null;

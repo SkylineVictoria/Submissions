@@ -33,6 +33,7 @@ export interface FormSection {
   pdf_render_mode: string;
   sort_order: number;
   assessment_task_row_id?: number | null;
+  instructions_meta?: Record<string, unknown> | null;
 }
 
 export interface FormQuestionRow {
@@ -754,7 +755,7 @@ export function buildHtml(data: {
         html += `<h3>${headerNum}. ${section.title}</h3>`;
         headerNum++;
         if (section.description) html += `<p>${section.description}</p>`;
-      } else if (section.pdf_render_mode !== 'declarations' && section.pdf_render_mode !== 'reasonable_adjustment' && section.pdf_render_mode !== 'task_instructions' && section.pdf_render_mode !== 'task_results' && section.pdf_render_mode !== 'task_questions' && section.pdf_render_mode !== 'task_written_evidence_checklist' && section.pdf_render_mode !== 'assessment_summary' && section.title !== 'Assessment Summary Sheet' && !isLearnerEvaluation) {
+      } else if (section.pdf_render_mode !== 'declarations' && section.pdf_render_mode !== 'reasonable_adjustment' && section.pdf_render_mode !== 'task_instructions' && section.pdf_render_mode !== 'additional_instructions' && section.pdf_render_mode !== 'task_results' && section.pdf_render_mode !== 'task_questions' && section.pdf_render_mode !== 'task_written_evidence_checklist' && section.pdf_render_mode !== 'assessment_summary' && section.title !== 'Assessment Summary Sheet' && !isLearnerEvaluation) {
         html += `<h3>${headerNum}. ${section.title}</h3>`;
         headerNum++;
         if (section.description) html += `<p>${section.description}</p>`;
@@ -937,6 +938,53 @@ export function buildHtml(data: {
         html += '</div>';
         html += '</div>';
         html += '</div>'; /* close assessment-submission-page */
+      } else if (section.pdf_render_mode === 'additional_instructions') {
+        const instr = (section as { instructions_meta?: Record<string, unknown> | null }).instructions_meta as Record<string, unknown> | null | undefined;
+        html += `<div class="task-instructions-header">${String(section.title || 'Additional Instructions').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>`;
+        html += `<div class="task-instructions-student-label">Student Instructions</div>`;
+        if (instr) {
+          const customBlocks = Array.isArray((instr as { blocks?: unknown[] }).blocks)
+            ? ((instr as { blocks?: Array<{ id?: string; type?: string; heading?: string; content?: string; columnHeaders?: string[]; rows?: Array<{ heading?: string; content?: string; cells?: string[] }> }> }).blocks || [])
+            : [];
+          for (const b of customBlocks) {
+            const heading = String(b.heading || '').trim();
+            if (b.type === 'table') {
+              if (heading) html += `<div class="task-instructions-block-title">${heading.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>`;
+              const rows = Array.isArray(b.rows) ? b.rows : [];
+              const columnHeaders = Array.isArray(b.columnHeaders) ? b.columnHeaders : [];
+              if (rows.length > 0) {
+                html += '<table class="section-table task-instructions-table">';
+                if (columnHeaders.length > 0) {
+                  html += '<thead><tr>';
+                  for (const h of columnHeaders) {
+                    html += `<th class="label-cell" style="font-weight:700;border:1px solid #000;padding:6px 8px;text-align:left">${String(h).replace(/</g, '&lt;').replace(/>/g, '&gt;')}</th>`;
+                  }
+                  html += '</tr></thead>';
+                }
+                html += '<tbody>';
+                for (const r of rows) {
+                  const cells = (r as { cells?: string[] }).cells;
+                  if (Array.isArray(cells) && cells.length > 0) {
+                    html += '<tr>';
+                    for (const c of cells) {
+                      html += `<td class="value-cell" style="border:1px solid #000;padding:6px 8px">${String(c ?? '')}</td>`;
+                    }
+                    html += '</tr>';
+                  } else {
+                    html += '<tr>';
+                    html += `<td class="label-cell" style="width:35%;font-weight:700;border:1px solid #000;padding:6px 8px">${String((r as { heading?: string }).heading || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</td>`;
+                    html += `<td class="value-cell" style="border:1px solid #000;padding:6px 8px">${String((r as { content?: string }).content || '')}</td>`;
+                    html += '</tr>';
+                  }
+                }
+                html += '</tbody></table>';
+              }
+            } else if (String((b as { content?: string }).content || '').replace(/<[^>]*>/g, '').trim()) {
+              if (heading) html += `<div class="task-instructions-block-title">${heading.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>`;
+              html += `<div class="task-instructions-block-content">${String((b as { content?: string }).content || '')}</div>`;
+            }
+          }
+        }
       } else if (section.pdf_render_mode === 'task_instructions') {
         const rowId = section.assessment_task_row_id;
         const row = rowId ? taskRowsMap.get(rowId) : null;
