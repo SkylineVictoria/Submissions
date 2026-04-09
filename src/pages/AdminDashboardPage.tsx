@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { DateTime } from 'luxon';
 import { LayoutDashboard, RefreshCw, Users, UserRoundCheck, ClipboardCheck } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Select } from '../components/ui/Select';
@@ -85,6 +86,7 @@ function Donut({
 }
 
 export const AdminDashboardPage: React.FC = () => {
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [stats, setStats] = useState<AdminDashboardStats | null>(null);
@@ -200,7 +202,16 @@ export const AdminDashboardPage: React.FC = () => {
 
         {/* Totals */}
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
-          <Card className="bg-gradient-to-br from-[var(--brand)] to-[#ea580c] text-white overflow-hidden relative">
+          <Card
+            className="bg-gradient-to-br from-[var(--brand)] to-[#ea580c] text-white overflow-hidden relative cursor-pointer hover:opacity-[0.97]"
+            onClick={() => navigate('/admin/assessments')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') navigate('/admin/assessments');
+            }}
+            title="Go to assessments"
+          >
             <div className="absolute top-0 right-0 w-24 h-24 -mt-4 -mr-4 rounded-full bg-white/10" />
             <div className="relative">
               <p className="text-white/90 text-sm font-medium">Total assessments</p>
@@ -208,7 +219,16 @@ export const AdminDashboardPage: React.FC = () => {
               <p className="text-white/80 text-xs mt-1">All time</p>
             </div>
           </Card>
-          <Card>
+          <Card
+            className="cursor-pointer hover:bg-gray-50/60"
+            onClick={() => navigate('/admin/students')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') navigate('/admin/students');
+            }}
+            title="Go to students"
+          >
             <div className="flex items-center justify-between gap-3">
               <div>
                 <p className="text-gray-600 text-sm font-medium">Students</p>
@@ -218,7 +238,16 @@ export const AdminDashboardPage: React.FC = () => {
               <Users className="w-10 h-10 text-gray-300" />
             </div>
           </Card>
-          <Card>
+          <Card
+            className="cursor-pointer hover:bg-gray-50/60"
+            onClick={() => navigate('/admin/users')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') navigate('/admin/users');
+            }}
+            title="Go to users (trainers)"
+          >
             <div className="flex items-center justify-between gap-3">
               <div>
                 <p className="text-gray-600 text-sm font-medium">Trainers</p>
@@ -228,7 +257,16 @@ export const AdminDashboardPage: React.FC = () => {
               <UserRoundCheck className="w-10 h-10 text-gray-300" />
             </div>
           </Card>
-          <Card>
+          <Card
+            className="cursor-pointer hover:bg-gray-50/60"
+            onClick={() => navigate('/admin/users')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') navigate('/admin/users');
+            }}
+            title="Go to users (admins)"
+          >
             <div className="flex items-center justify-between gap-3">
               <div>
                 <p className="text-gray-600 text-sm font-medium">Admins</p>

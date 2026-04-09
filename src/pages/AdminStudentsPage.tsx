@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { Plus, Send, Mail, Phone, Pencil, Upload, Trash2, FileText } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { supabase } from '../lib/supabase';
+import { useNavigate } from 'react-router-dom';
 import {
   listStudentsPaged,
   createStudent,
@@ -10,7 +11,6 @@ import {
   getInstanceForStudentAndForm,
   listForms,
   listBatchesPaged,
-  listFormsPaged,
   updateFormInstanceDates,
   extendInstanceAccessTokensToDate,
   getStudentsByEmails,
@@ -36,7 +36,6 @@ import { SelectAsync } from '../components/ui/SelectAsync';
 import { MultiSelectAsync } from '../components/ui/MultiSelectAsync';
 import { Modal } from '../components/ui/Modal';
 import { Loader } from '../components/ui/Loader';
-import { DatePicker } from '../components/ui/DatePicker';
 import { toast } from '../utils/toast';
 import { pdf } from '@react-pdf/renderer';
 import { GenericLinksPdf } from '../components/pdf/GenericLinksPdf';
@@ -54,6 +53,7 @@ const STATUS_FILTER_OPTIONS = [
 ];
 
 export const AdminStudentsPage: React.FC = () => {
+  const navigate = useNavigate();
   const PAGE_SIZE = 20;
   const [students, setStudents] = useState<Student[]>([]);
   const [forms, setForms] = useState<Form[]>([]);
@@ -66,15 +66,10 @@ export const AdminStudentsPage: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<'' | 'active' | 'inactive'>('');
   const [currentPage, setCurrentPage] = useState(1);
   const [totalStudents, setTotalStudents] = useState(0);
-  const [rowFormMap, setRowFormMap] = useState<Record<number, string>>({});
-  const [sending, setSending] = useState<number | null>(null);
   const [hasBatches, setHasBatches] = useState(false);
-  const [sendDatesOpen, setSendDatesOpen] = useState(false);
-  const [sendDatesStudentId, setSendDatesStudentId] = useState<number | null>(null);
-  const [sendDatesFormId, setSendDatesFormId] = useState<number | null>(null);
-  const [sendDatesStart, setSendDatesStart] = useState<string>('');
-  const [sendDatesEnd, setSendDatesEnd] = useState<string>('');
-  const [sendDatesSaving, setSendDatesSaving] = useState(false);
+  const [studentCoursesMap, setStudentCoursesMap] = useState<
+    Record<number, Array<{ id: number; name: string; qualification_code: string | null }>>
+  >({});
   const [studentDraft, setStudentDraft] = useState({
     student_id: '',
     first_name: '',
@@ -101,6 +96,7 @@ export const AdminStudentsPage: React.FC = () => {
   }>>([]);
   const [importFileName, setImportFileName] = useState('');
   const [importing, setImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState<{ done: number; total: number; success: number; failed: number } | null>(null);
   const [importExistingByEmail, setImportExistingByEmail] = useState<Record<string, Student>>({});
   const [importIdDecisionByEmail, setImportIdDecisionByEmail] = useState<Record<string, 'keep_existing' | 'use_new'>>({});
   const [lastImportLinksPayload, setLastImportLinksPayload] = useState<{
@@ -148,6 +144,18 @@ export const AdminStudentsPage: React.FC = () => {
   useEffect(() => {
     listForms('published', { asAdmin: false }).then((f) => setForms(f));
   }, []);
+
+  useEffect(() => {
+    if (!importing) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      // Modern browsers ignore custom text but require returnValue to show the warning.
+      e.preventDefault();
+      e.returnValue = 'Import is still running. Leaving or refreshing will stop it.';
+      return e.returnValue;
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [importing]);
   useEffect(() => {
     listBatchesPaged(1, 1).then((res) => setHasBatches(res.total > 0));
   }, []);
@@ -168,17 +176,6 @@ export const AdminStudentsPage: React.FC = () => {
     };
   }, []);
 
-  const loadFormsOptions = useCallback(
-    async (page: number, search: string) => {
-      const res = await listFormsPaged(page, 20, 'published', undefined, search || undefined, { asAdmin: false });
-      return {
-        options: res.data.map((f) => ({ value: String(f.id), label: `${f.name} (${f.version ?? '1.0.0'})` })),
-        hasMore: page * 20 < res.total,
-      };
-    },
-    []
-  );
-
   useEffect(() => {
     const t = setTimeout(async () => {
       setLoading(true);
@@ -191,16 +188,32 @@ export const AdminStudentsPage: React.FC = () => {
   }, [currentPage, searchTerm, statusFilter]);
 
   useEffect(() => {
-    if (displayForms.length === 0 || students.length === 0) return;
-    const firstFormId = String(displayForms[0].id);
-    setRowFormMap((prev) => {
-      const next = { ...prev };
-      for (const st of students) {
-        if (!next[st.id]) next[st.id] = firstFormId;
-      }
-      return next;
-    });
-  }, [displayForms, students]);
+    if (students.length === 0) {
+      setStudentCoursesMap({});
+      return;
+    }
+    const ids = students.map((s) => s.id);
+    supabase
+      .from('skyline_student_courses')
+      .select('student_id, skyline_courses(id, name, qualification_code)')
+      .in('student_id', ids)
+      .eq('status', 'active')
+      .then(({ data }) => {
+        const rows =
+          (data as Array<{ student_id: number; skyline_courses: { id: number; name: string; qualification_code: string | null } | null }> | null) ||
+          [];
+        const map: Record<number, Array<{ id: number; name: string; qualification_code: string | null }>> = {};
+        for (const r of rows) {
+          const sid = Number(r.student_id);
+          const c = r.skyline_courses;
+          if (!Number.isFinite(sid) || !c) continue;
+          const list = map[sid] ?? [];
+          list.push(c);
+          map[sid] = list;
+        }
+        setStudentCoursesMap(map);
+      });
+  }, [students]);
 
   const handleCreate = async () => {
     const formError = validateCreateStudentForm(studentDraft);
@@ -445,119 +458,181 @@ export const AdminStudentsPage: React.FC = () => {
       return;
     }
     setImporting(true);
+    setImportProgress({ done: 0, total: importRows.length, success: 0, failed: 0 });
     let success = 0;
     let failed = 0;
-    const importQualCodes = Array.from(
-      new Set(
-        importRows
-          .flatMap((r) =>
-            String(r.qualification_code ?? '')
-              .toUpperCase()
-              .split(/[;,|]/g)
-              .map((x) => x.trim())
-              .filter(Boolean)
-          )
-      )
-    );
-    const courseByQual = await getCoursesByQualificationCodes(importQualCodes);
-    const unitToFormIds = new Map<string, number[]>();
-    const qualToFormIds = new Map<string, number[]>();
-    for (const f of displayForms) {
-      const unit = String((f as unknown as { unit_code?: string | null }).unit_code ?? '').trim().toUpperCase();
-      if (unit) {
-        const list = unitToFormIds.get(unit) ?? [];
-        list.push(Number(f.id));
-        unitToFormIds.set(unit, list);
+    let importStudentsForPdf: Array<{ id: number; name: string; email: string }> = [];
+    let importFormIdsForPdf: Set<number> = new Set<number>();
+    const splitCodes = (val: unknown) =>
+      String(val ?? '')
+        .toUpperCase()
+        .split(/[;,|]/g)
+        .map((x) => x.trim())
+        .filter(Boolean);
+
+    try {
+      const importQualCodes = Array.from(new Set(importRows.flatMap((r) => splitCodes(r.qualification_code))));
+      const courseByQual = await getCoursesByQualificationCodes(importQualCodes);
+      const unitToFormIds = new Map<string, number[]>();
+      const qualToFormIds = new Map<string, number[]>();
+      for (const f of displayForms) {
+        const unit = String((f as unknown as { unit_code?: string | null }).unit_code ?? '').trim().toUpperCase();
+        if (unit) {
+          const list = unitToFormIds.get(unit) ?? [];
+          list.push(Number(f.id));
+          unitToFormIds.set(unit, list);
+        }
+        const qual = String((f as unknown as { qualification_code?: string | null }).qualification_code ?? '').trim().toUpperCase();
+        if (qual) {
+          const list = qualToFormIds.get(qual) ?? [];
+          list.push(Number(f.id));
+          qualToFormIds.set(qual, list);
+        }
       }
-      const qual = String((f as unknown as { qualification_code?: string | null }).qualification_code ?? '').trim().toUpperCase();
-      if (qual) {
-        const list = qualToFormIds.get(qual) ?? [];
-        list.push(Number(f.id));
-        qualToFormIds.set(qual, list);
+
+      const missingCourseCodes = importQualCodes.filter((c) => !courseByQual[c]);
+      const importUnitCodes = Array.from(new Set(importRows.flatMap((r) => splitCodes(r.unit_code))));
+      const missingUnitCodes = importUnitCodes.filter((c) => !unitToFormIds.get(c)?.length);
+      const missingQualCodesForForms = importQualCodes.filter((c) => !qualToFormIds.get(c)?.length);
+      if (missingCourseCodes.length || missingUnitCodes.length || missingQualCodesForForms.length) {
+        const preview = (arr: string[]) =>
+          arr.length <= 12 ? arr.join(', ') : `${arr.slice(0, 12).join(', ')} … (+${arr.length - 12})`;
+        const msg =
+          `Some codes in the import file do not exist / do not map.\n\n` +
+          (missingCourseCodes.length
+            ? `Missing courses (Qualification Code not found in Courses):\n${preview(missingCourseCodes)}\n\n`
+            : '') +
+          (missingUnitCodes.length ? `No forms found for Unit Code(s):\n${preview(missingUnitCodes)}\n\n` : '') +
+          (missingQualCodesForForms.length
+            ? `No forms found for Qualification Code(s):\n${preview(missingQualCodesForForms)}\n\n`
+            : '') +
+          `Continue import anyway? (Students will still be created/updated, but missing mappings will skip course assignment and/or assessments.)`;
+        const ok = window.confirm(msg);
+        if (!ok) return;
       }
-    }
-    const importStudentsForPdf: Array<{ id: number; name: string; email: string }> = [];
-    const importFormIdsForPdf = new Set<number>();
-    for (const row of importRows) {
-      const first = row.first_name?.trim();
-      const email = row.email?.trim();
-      if (!first || !email) {
-        failed++;
-        continue;
+
+      // Prevent duplicates within this single import run
+      const localStudentByEmail = new Map<string, Student>();
+      for (const [k, v] of Object.entries(importExistingByEmail)) {
+        if (v) localStudentByEmail.set(String(k).trim().toLowerCase(), v);
       }
-      const emailKey = email.trim().toLowerCase();
-      const existingStudent = importExistingByEmail[emailKey];
-      const candidateStudentId = row.student_id?.trim()
-        || (email.includes('@') ? email.split('@')[0] : `${(first + '.' + row.last_name).toLowerCase().replace(/\s+/g, '.')}`);
-      const batchId = importBatchId ? Number(importBatchId) : null;
-      let student: Student | null = existingStudent ?? null;
-      if (student == null) {
-        const created = await createStudent({
-          student_id: candidateStudentId.replace(/\s+/g, ''),
-          first_name: first,
-          last_name: row.last_name ?? '',
-          email,
-          phone: row.phone || undefined,
-          batch_id: (batchId && Number.isFinite(batchId)) ? batchId : undefined,
-        });
-        if (!created) {
-          failed++;
+      const localStudentByStudentId = new Map<string, Student>();
+      importStudentsForPdf = [];
+      importFormIdsForPdf = new Set<number>();
+
+      // Group rows by email to reduce repeated create/update calls (more efficient).
+      const rowsByEmail = new Map<string, typeof importRows>();
+      for (const r of importRows) {
+        const ek = String(r.email ?? '').trim().toLowerCase();
+        if (!ek) continue;
+        const list = rowsByEmail.get(ek) ?? [];
+        list.push(r);
+        rowsByEmail.set(ek, list);
+      }
+
+      let done = 0;
+      for (const [emailKey, rows] of rowsByEmail.entries()) {
+        const firstRow = rows[0];
+        const first = String(firstRow.first_name ?? '').trim();
+        const email = String(firstRow.email ?? '').trim();
+        if (!first || !email) {
+          failed += rows.length;
+          done += rows.length;
+          setImportProgress({ done, total: importRows.length, success, failed });
           continue;
         }
-        student = created;
-      } else {
-        const decision = importIdDecisionByEmail[emailKey] ?? 'keep_existing';
-        const studentIdToSet = decision === 'use_new' ? candidateStudentId : (student.student_id ?? candidateStudentId);
-        const updated = await updateStudent(student.id, {
-          student_id: studentIdToSet,
-          first_name: first,
-          last_name: row.last_name ?? '',
-          phone: row.phone || undefined,
-          batch_id: (batchId && Number.isFinite(batchId)) ? batchId : undefined,
-        });
-        if (updated) student = updated;
-      }
 
-      // Create/update assessment(s) if unit_code or qualification_code matches forms.
-      const unit = String(row.unit_code ?? '').trim().toUpperCase();
-      const qual = String(row.qualification_code ?? '').trim().toUpperCase();
-      const matchedFormIds =
-        (unit && unitToFormIds.get(unit)) ||
-        (qual && qualToFormIds.get(qual)) ||
-        [];
-      const start = (row.activity_start_date ?? '').trim() || '';
-      const end = (row.activity_end_date ?? '').trim() || '';
+        const existingStudent = localStudentByEmail.get(emailKey) ?? importExistingByEmail[emailKey];
+        const candidateStudentId =
+          String(firstRow.student_id ?? '').trim() ||
+          (email.includes('@') ? email.split('@')[0] : `${(first + '.' + String(firstRow.last_name ?? '')).toLowerCase().replace(/\s+/g, '.')}`);
+        const candidateIdKey = candidateStudentId.replace(/\s+/g, '').trim();
+        const batchId = importBatchId ? Number(importBatchId) : null;
+        let student: Student | null = existingStudent ?? null;
+        if (!student && candidateIdKey) student = localStudentByStudentId.get(candidateIdKey) ?? null;
 
-      // Assign course(s) from qualification code (course.qualification_code).
-      if (student?.id) {
-        const codes = String(row.qualification_code ?? '')
-          .toUpperCase()
-          .split(/[;,|]/g)
-          .map((x) => x.trim())
-          .filter(Boolean);
-        const courseIds = codes
+        if (student == null) {
+          const created = await createStudent({
+            student_id: candidateIdKey,
+            first_name: first,
+            last_name: String(firstRow.last_name ?? ''),
+            email,
+            phone: String(firstRow.phone ?? '') || undefined,
+            batch_id: batchId && Number.isFinite(batchId) ? batchId : undefined,
+          });
+          if (!created) {
+            failed += rows.length;
+            done += rows.length;
+            setImportProgress({ done, total: importRows.length, success, failed });
+            continue;
+          }
+          student = created;
+        } else {
+          const decision = importIdDecisionByEmail[emailKey] ?? 'keep_existing';
+          const studentIdToSet = decision === 'use_new' ? candidateStudentId : (student.student_id ?? candidateStudentId);
+          const updated = await updateStudent(student.id, {
+            student_id: studentIdToSet,
+            first_name: first,
+            last_name: String(firstRow.last_name ?? ''),
+            phone: String(firstRow.phone ?? '') || undefined,
+            batch_id: batchId && Number.isFinite(batchId) ? batchId : undefined,
+          });
+          if (updated) student = updated;
+        }
+
+        if (!student?.id) {
+          failed += rows.length;
+          done += rows.length;
+          setImportProgress({ done, total: importRows.length, success, failed });
+          continue;
+        }
+        localStudentByEmail.set(emailKey, student);
+        if (candidateIdKey) localStudentByStudentId.set(candidateIdKey, student);
+
+        // Assign course(s) from ALL qualification codes across this student's rows.
+        const allQualCodes = Array.from(new Set(rows.flatMap((r) => splitCodes(r.qualification_code))));
+        const courseIds = allQualCodes
           .map((c) => courseByQual[c]?.id)
           .filter((n): n is number => typeof n === 'number' && Number.isFinite(n) && n > 0);
         if (courseIds.length > 0) {
           await setStudentCourses(student.id, courseIds);
         }
-      }
-      if (student?.id && matchedFormIds.length > 0) {
-        for (const formId of matchedFormIds) {
-          if (!Number.isFinite(formId) || formId <= 0) continue;
-          importFormIdsForPdf.add(formId);
-          const existing = await getInstanceForStudentAndForm(formId, student.id);
-          if (!existing) {
-            const created = await createFormInstance(formId, 'student', student.id, { start_date: start || null, end_date: end || null });
-            if (created?.id && end) await extendInstanceAccessTokensToDate(created.id, 'student', end);
-          } else {
-            await updateFormInstanceDates(existing.id, { start_date: start || null, end_date: end || null });
-            if (end) await extendInstanceAccessTokensToDate(existing.id, 'student', end);
-          }
-        }
-      }
 
-      if (student?.id && student.email) {
+        // Process each row's assessments (unit/qualification mapping) and dates.
+        for (const row of rows) {
+          const unitCodes = splitCodes(row.unit_code);
+          const qualCodes = splitCodes(row.qualification_code);
+          const matchedFormIds = Array.from(
+            new Set([
+              ...unitCodes.flatMap((u) => unitToFormIds.get(u) ?? []),
+              ...qualCodes.flatMap((q) => qualToFormIds.get(q) ?? []),
+            ])
+          );
+          const start = String(row.activity_start_date ?? '').trim();
+          const end = String(row.activity_end_date ?? '').trim();
+          if (matchedFormIds.length > 0) {
+            for (const formId of matchedFormIds) {
+              if (!Number.isFinite(formId) || formId <= 0) continue;
+              importFormIdsForPdf.add(formId);
+              const existing = await getInstanceForStudentAndForm(formId, student.id);
+              if (!existing) {
+                const created = await createFormInstance(formId, 'student', student.id, {
+                  start_date: start || null,
+                  end_date: end || null,
+                });
+                if (created?.id && end) await extendInstanceAccessTokensToDate(created.id, 'student', end);
+              } else {
+                await updateFormInstanceDates(existing.id, { start_date: start || null, end_date: end || null });
+                if (end) await extendInstanceAccessTokensToDate(existing.id, 'student', end);
+              }
+            }
+          }
+
+          done++;
+          success++;
+          setImportProgress({ done, total: importRows.length, success, failed });
+        }
+
         importStudentsForPdf.push({
           id: student.id,
           name: [student.first_name, student.last_name].filter(Boolean).join(' ').trim() || student.email,
@@ -565,9 +640,17 @@ export const AdminStudentsPage: React.FC = () => {
         });
       }
 
-      success++;
+      // Close out progress + UI state
+      setImporting(false);
+      setImportProgress(null);
+    } catch (e) {
+      console.error('handleBulkImport error', e);
+      toast.error('Import stopped due to an error. Some rows may have been processed.');
+      setImporting(false);
+      setImportProgress(null);
+      return;
     }
-    setImporting(false);
+
     if (success > 0) {
       setCurrentPage(1);
       const res = await listStudentsPaged(1, PAGE_SIZE, searchTerm, statusFilter || undefined);
@@ -576,12 +659,12 @@ export const AdminStudentsPage: React.FC = () => {
       const createdAtIso = new Date().toISOString();
       const bid = importBatchId ? Number(importBatchId) : null;
       const uniqueStudents = Array.from(
-        new Map(importStudentsForPdf.map((s) => [s.id, s])).values()
+        new Map(importStudentsForPdf.map((s: { id: number; name: string; email: string }) => [s.id, s] as const)).values()
       );
       const formsForPdf = Array.from(importFormIdsForPdf).map((fid) => {
         const f = displayForms.find((x) => Number(x.id) === fid);
         return {
-          id: fid,
+          id: Number(fid),
           name: f?.name ?? `Form #${fid}`,
           version: (f as unknown as { version?: string | null } | undefined)?.version ?? null,
           url: `${window.location.origin}/forms/${fid}/student-access`,
@@ -591,7 +674,7 @@ export const AdminStudentsPage: React.FC = () => {
         createdAtIso,
         batchId: bid && Number.isFinite(bid) ? bid : null,
         forms: formsForPdf,
-        students: uniqueStudents,
+        students: uniqueStudents as Array<{ id: number; name: string; email: string }>,
       });
 
       toast.success(
@@ -629,50 +712,7 @@ export const AdminStudentsPage: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
-  const openSendDates = (studentId: number) => {
-    const formId = Number(rowFormMap[studentId]);
-    if (!formId) return;
-    setSendDatesStudentId(studentId);
-    setSendDatesFormId(formId);
-    const today = new Date().toISOString().slice(0, 10);
-    const end = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    setSendDatesStart(today);
-    setSendDatesEnd(end);
-    setSendDatesOpen(true);
-  };
-
-  const confirmSendWithDates = async () => {
-    const studentId = sendDatesStudentId;
-    const formId = sendDatesFormId;
-    const start = (sendDatesStart ?? '').trim();
-    const end = (sendDatesEnd ?? '').trim();
-    if (!studentId || !formId) return;
-    if (!start || !end) {
-      toast.error('Select start and end date');
-      return;
-    }
-    if (end < start) {
-      toast.error('End date cannot be earlier than start date');
-      return;
-    }
-    setSendDatesSaving(true);
-    setSending(studentId);
-    const existing = await getInstanceForStudentAndForm(formId, studentId);
-    if (!existing) {
-      await createFormInstance(formId, 'student', studentId, { start_date: start, end_date: end });
-    } else {
-      await updateFormInstanceDates(existing.id, { start_date: start });
-      await extendInstanceAccessTokensToDate(existing.id, 'student', end);
-    }
-    setSending(null);
-    setSendDatesSaving(false);
-    setSendDatesOpen(false);
-    setSendDatesStudentId(null);
-    setSendDatesFormId(null);
-    const url = `${window.location.origin}/forms/${formId}/student-access`;
-    await navigator.clipboard.writeText(url);
-    toast.success(existing ? 'Assessment dates updated. Generic link copied.' : 'Assessment created. Generic link copied.');
-  };
+  // Assessment creation moved to Student Details page ("Add Assessment" dialog).
 
   const editingStudent = useMemo(() => (editingId ? students.find((s) => s.id === editingId) : null), [editingId, students]);
   const [editForm, setEditForm] = useState<{
@@ -880,9 +920,14 @@ export const AdminStudentsPage: React.FC = () => {
                         {`${student.first_name?.[0] ?? ''}${student.last_name?.[0] ?? ''}`.toUpperCase() || (student.first_name?.[0] ?? student.email?.[0] ?? 'S').toUpperCase()}
                       </div>
                       <div className="min-w-0 flex-1">
-                        <div className="font-semibold text-[var(--text)] break-words">
+                        <button
+                          type="button"
+                          onClick={() => navigate(`/admin/students/${student.id}`)}
+                          className="text-left font-semibold text-blue-600 break-words hover:underline"
+                          title="View student details"
+                        >
                           {[student.first_name, student.last_name].filter(Boolean).join(' ') || student.email}
-                        </div>
+                        </button>
                         <div className="text-xs text-gray-500">ID: {student.student_id || '—'}</div>
                         <div className="mt-2 text-sm text-gray-700 break-words">
                           <span className="font-medium text-gray-600">Batch: </span>
@@ -907,21 +952,21 @@ export const AdminStudentsPage: React.FC = () => {
                             <span>{student.phone || 'No phone'}</span>
                           </div>
                         </div>
-                        <div className="mt-3">
-                          <SelectAsync
-                            value={rowFormMap[student.id] || (displayForms[0] ? String(displayForms[0].id) : '')}
-                            onChange={(v) => setRowFormMap((prev) => ({ ...prev, [student.id]: v }))}
-                            loadOptions={loadFormsOptions}
-                            placeholder="Select form"
-                            selectedLabel={
-                              (() => {
-                                const fid = rowFormMap[student.id] || (displayForms[0] ? String(displayForms[0].id) : '');
-                                const f = displayForms.find((x) => String(x.id) === fid);
-                                return f ? `${f.name} (${f.version ?? '1.0.0'})` : undefined;
-                              })()
-                            }
-                            className="w-full max-w-full"
-                          />
+                        <div className="mt-2 text-sm text-gray-700">
+                          <span className="font-medium text-gray-600">Course: </span>
+                          {(() => {
+                            const list = studentCoursesMap[student.id] || [];
+                            if (list.length === 0) return <span>—</span>;
+                            const first = list[0];
+                            const rest = list.length - 1;
+                            return (
+                              <span>
+                                {first.qualification_code ? `${first.qualification_code} — ` : ''}
+                                {first.name}
+                                {rest > 0 ? ` (+${rest})` : ''}
+                              </span>
+                            );
+                          })()}
                         </div>
                         <div className="mt-3 flex flex-col gap-2 sm:flex-row">
                           <Button
@@ -937,11 +982,10 @@ export const AdminStudentsPage: React.FC = () => {
                             variant="outline"
                             size="sm"
                             className="w-full justify-center sm:w-auto"
-                            onClick={() => openSendDates(student.id)}
-                            disabled={sending !== null || displayForms.length === 0}
+                            onClick={() => navigate(`/admin/students/${student.id}`)}
                           >
                             <Send className="mr-1 h-4 w-4" />
-                            {sending === student.id ? 'Saving...' : 'Send form'}
+                            Details
                           </Button>
                         </div>
                       </div>
@@ -955,9 +999,9 @@ export const AdminStudentsPage: React.FC = () => {
                   <tr>
                     <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Student</th>
                     <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Batch</th>
+                    <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Course</th>
                     <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Status</th>
                     <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Contact</th>
-                    <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Form</th>
                     <th className="text-right px-4 py-3 font-semibold border-b border-[var(--border)]">Action</th>
                   </tr>
                 </thead>
@@ -970,15 +1014,31 @@ export const AdminStudentsPage: React.FC = () => {
                             {`${student.first_name?.[0] ?? ''}${student.last_name?.[0] ?? ''}`.toUpperCase() || (student.first_name?.[0] ?? student.email?.[0] ?? 'S').toUpperCase()}
                           </div>
                           <div>
-                            <div className="font-semibold text-[var(--text)]">
+                            <button
+                              type="button"
+                              onClick={() => navigate(`/admin/students/${student.id}`)}
+                              className="text-left font-semibold text-blue-600 hover:underline"
+                              title="View student details"
+                            >
                               {[student.first_name, student.last_name].filter(Boolean).join(' ') || student.email}
-                            </div>
+                            </button>
                             <div className="text-xs text-gray-500">Student ID: {student.student_id || '-'}</div>
                           </div>
                         </div>
                       </td>
                       <td className="px-4 py-3 border-b border-[var(--border)]">
                         <span className="text-gray-700">{student.batch_name ?? '—'}</span>
+                      </td>
+                      <td className="px-4 py-3 border-b border-[var(--border)]">
+                        <div className="text-gray-700 break-words">
+                          {(() => {
+                            const list = studentCoursesMap[student.id] || [];
+                            if (list.length === 0) return '—';
+                            const first = list[0];
+                            const rest = list.length - 1;
+                            return `${first.qualification_code ? `${first.qualification_code} — ` : ''}${first.name}${rest > 0 ? ` (+${rest})` : ''}`;
+                          })()}
+                        </div>
                       </td>
                       <td className="px-4 py-3 border-b border-[var(--border)]">
                         <span
@@ -1001,22 +1061,6 @@ export const AdminStudentsPage: React.FC = () => {
                           </div>
                         </div>
                       </td>
-                      <td className="px-4 py-3 border-b border-[var(--border)] w-[320px]">
-                        <SelectAsync
-                          value={rowFormMap[student.id] || (displayForms[0] ? String(displayForms[0].id) : '')}
-                          onChange={(v) => setRowFormMap((prev) => ({ ...prev, [student.id]: v }))}
-                          loadOptions={loadFormsOptions}
-                          placeholder="Select form"
-                          selectedLabel={
-                            (() => {
-                              const fid = rowFormMap[student.id] || (displayForms[0] ? String(displayForms[0].id) : '');
-                              const f = displayForms.find((x) => String(x.id) === fid);
-                              return f ? `${f.name} (${f.version ?? '1.0.0'})` : undefined;
-                            })()
-                          }
-                          className="max-w-[320px]"
-                        />
-                      </td>
                       <td className="px-4 py-3 border-b border-[var(--border)] text-right">
                         <div className="flex items-center justify-end gap-2 flex-wrap">
                           <Button
@@ -1031,12 +1075,11 @@ export const AdminStudentsPage: React.FC = () => {
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => openSendDates(student.id)}
-                            disabled={sending !== null || displayForms.length === 0}
+                            onClick={() => navigate(`/admin/students/${student.id}`)}
                             className="inline-flex items-center justify-center gap-1.5 min-w-[110px] whitespace-nowrap"
                           >
                             <Send className="w-4 h-4" />
-                            {sending === student.id ? 'Saving...' : 'Send form'}
+                            Details
                           </Button>
                         </div>
                       </td>
@@ -1160,43 +1203,47 @@ export const AdminStudentsPage: React.FC = () => {
         </div>
       </Modal>
 
-      <Modal
-        isOpen={sendDatesOpen}
-        onClose={() => !sendDatesSaving && setSendDatesOpen(false)}
-        title="Set assessment start and end date"
-        size="md"
-      >
-        <div className="space-y-4">
-          <p className="text-sm text-gray-600">
-            Set the assessment window for this student. This controls expiry and can be extended later.
-          </p>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <label className="block">
-              <span className="text-sm font-medium text-gray-700">Start date</span>
-              <DatePicker value={sendDatesStart} onChange={(v) => setSendDatesStart(v || '')} className="mt-1 max-w-[200px]" />
-            </label>
-            <label className="block">
-              <span className="text-sm font-medium text-gray-700">End date</span>
-              <DatePicker value={sendDatesEnd} onChange={(v) => setSendDatesEnd(v || '')} className="mt-1 max-w-[200px]" />
-            </label>
-          </div>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" onClick={() => setSendDatesOpen(false)} disabled={sendDatesSaving}>
-              Cancel
-            </Button>
-            <Button onClick={confirmSendWithDates} disabled={sendDatesSaving || !sendDatesStart.trim() || !sendDatesEnd.trim()}>
-              {sendDatesSaving ? <Loader variant="dots" size="sm" inline className="mr-2" /> : null}
-              Save & copy link
-            </Button>
-          </div>
-        </div>
-      </Modal>
+      {/* Assessment creation moved to Student Details page ("Add Assessment" dialog). */}
 
-      <Modal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} title="Import Students" size="lg">
+      <Modal
+        isOpen={isImportOpen}
+        onClose={() => {
+          if (importing) {
+            toast.error('Import is running. Please wait until it finishes.');
+            return;
+          }
+          setIsImportOpen(false);
+        }}
+        title="Import Students"
+        size="lg"
+      >
         <div className="space-y-4">
           <p className="text-sm text-gray-600">
             Upload a CSV or XLSX file with columns: <strong>Given Name</strong>, <strong>Surname</strong> (optional), <strong>Email Address</strong>, <strong>Mobile Phone</strong>, <strong>Qualification Code</strong>, <strong>Activity Start Date</strong>, <strong>Activity End Date</strong>. Optional: <strong>Student ID</strong>, <strong>Unit Code</strong>.
           </p>
+          {importing && importProgress && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-sm font-medium text-amber-900">Importing…</div>
+                <div className="text-xs text-amber-800">
+                  {importProgress.done}/{importProgress.total} rows · {importProgress.success} ok · {importProgress.failed} failed
+                </div>
+              </div>
+              <div className="mt-2">
+                <div className="h-2 w-full rounded bg-amber-100 overflow-hidden">
+                  <div
+                    className="h-2 bg-amber-500"
+                    style={{
+                      width: `${importProgress.total > 0 ? Math.min(100, Math.round((importProgress.done / importProgress.total) * 100)) : 0}%`,
+                    }}
+                  />
+                </div>
+                <div className="mt-1 text-[11px] text-amber-800">
+                  Don’t refresh/close the tab — it will stop the import mid-way.
+                </div>
+              </div>
+            </div>
+          )}
           <div className="flex flex-wrap items-center gap-3">
             <label className="cursor-pointer inline-flex">
               <input
@@ -1204,6 +1251,7 @@ export const AdminStudentsPage: React.FC = () => {
                 accept=".csv,.xlsx,.xls"
                 onChange={handleImportFileChange}
                 className="sr-only"
+                disabled={importing}
               />
               <span className="inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-semibold rounded-lg border-2 border-[var(--border)] bg-white text-gray-700 hover:bg-gray-50 min-h-[40px]">
                 <Upload className="w-4 h-4" />
@@ -1372,7 +1420,19 @@ export const AdminStudentsPage: React.FC = () => {
                     Download PDF
                   </Button>
                 )}
-                <Button variant="outline" onClick={() => setIsImportOpen(false)}>Close</Button>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    if (importing) {
+                      toast.error('Import is running. Please wait until it finishes.');
+                      return;
+                    }
+                    setIsImportOpen(false);
+                  }}
+                  disabled={importing}
+                >
+                  Close
+                </Button>
                 <Button
                   onClick={handleBulkImport}
                   disabled={importing}

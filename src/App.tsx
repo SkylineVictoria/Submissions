@@ -18,6 +18,7 @@ const AdminFormsListPage = lazy(() => import('./pages/AdminFormsListPage').then(
 const AdminFormBuilderPage = lazy(() => import('./pages/AdminFormBuilderPage').then(m => ({ default: m.AdminFormBuilderPage })));
 const AdminFormPreviewPage = lazy(() => import('./pages/AdminFormPreviewPage').then(m => ({ default: m.AdminFormPreviewPage })));
 const AdminStudentsPage = lazy(() => import('./pages/AdminStudentsPage').then(m => ({ default: m.AdminStudentsPage })));
+const AdminStudentDetailsPage = lazy(() => import('./pages/AdminStudentDetailsPage').then(m => ({ default: m.AdminStudentDetailsPage })));
 const AdminAssessmentsPage = lazy(() => import('./pages/AdminAssessmentsPage').then(m => ({ default: m.AdminAssessmentsPage })));
 const AdminUsersPage = lazy(() => import('./pages/AdminUsersPage').then(m => ({ default: m.AdminUsersPage })));
 const AdminBatchesPage = lazy(() => import('./pages/AdminBatchesPage').then(m => ({ default: m.AdminBatchesPage })));
@@ -37,8 +38,8 @@ const PublicInductionPage = lazy(() => import('./pages/PublicInductionPage').the
 function DashboardOrFormsRedirect() {
   const { user } = useAuth();
   if (!user) return <Navigate to="/login" replace />;
-  const isTrainerOrOffice = user.role === 'trainer' || user.role === 'office';
-  return <Navigate to={isTrainerOrOffice ? '/admin/dashboard' : '/admin/overview'} replace />;
+  const isTrainer = user.role === 'trainer';
+  return <Navigate to={isTrainer ? '/admin/dashboard' : '/admin/overview'} replace />;
 }
 
 function App() {
@@ -73,6 +74,7 @@ function App() {
             <Route path="forms/:formId/builder" element={<AdminOnlyRoute><SuperAdminOnlyRoute><AdminFormBuilderPage /></SuperAdminOnlyRoute></AdminOnlyRoute>} />
             <Route path="forms/:formId/preview" element={<AdminOnlyRoute><AdminFormPreviewPage /></AdminOnlyRoute>} />
             <Route path="students" element={<AdminOnlyRoute><AdminStudentsPage /></AdminOnlyRoute>} />
+            <Route path="students/:studentId" element={<AdminOnlyRoute><AdminStudentDetailsPage /></AdminOnlyRoute>} />
             <Route path="batches" element={<AdminOnlyRoute><AdminBatchesPage /></AdminOnlyRoute>} />
             <Route path="courses" element={<AdminOnlyRoute><AdminCoursesPage /></AdminOnlyRoute>} />
             <Route path="users" element={<AdminOnlyRoute><AdminUsersPage /></AdminOnlyRoute>} />

@@ -30,7 +30,7 @@ export const AdminLayout: React.FC = () => {
   const location = useLocation();
   const isMdUp = useMediaQuery('(min-width: 768px)');
   const width = sidebarCollapsed ? SIDEBAR_WIDTH_COLLAPSED : SIDEBAR_WIDTH_EXPANDED;
-  const isTrainerOrOffice = user?.role === 'trainer' || user?.role === 'office';
+  const isTrainer = user?.role === 'trainer';
 
   useEffect(() => {
     setMobileNavOpen(false);
@@ -40,7 +40,7 @@ export const AdminLayout: React.FC = () => {
     if (isMdUp) setMobileNavOpen(false);
   }, [isMdUp]);
 
-  const baseNavItems = isTrainerOrOffice
+  const baseNavItems = isTrainer
     ? [{ to: '/admin/dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-5 h-5 shrink-0" />, end: true }]
     : [
         { to: '/admin/overview', label: 'Dashboard', icon: <LayoutDashboard className="w-5 h-5 shrink-0" />, end: true },
@@ -54,36 +54,43 @@ export const AdminLayout: React.FC = () => {
   const navItems = [
     ...baseNavItems,
     { to: '/admin/profile', label: 'My Profile', icon: <User className="w-5 h-5 shrink-0" />, end: true },
-    ...(user?.role === 'admin' || user?.role === 'superadmin'
+    ...(user?.role === 'admin' || user?.role === 'office' || user?.role === 'superadmin'
       ? [{ to: '/admin/enrollment', label: 'Enrollment', icon: <GraduationCap className="w-5 h-5 shrink-0" />, end: true }]
       : []),
   ];
 
   const showSidebarLabels = isMdUp ? !sidebarCollapsed : true;
+  const hideNavForStudentDetails = /^\/admin\/students\/\d+\/?$/.test(location.pathname);
 
   return (
     <div className="flex min-h-[100dvh] min-h-screen w-full max-w-[100vw] overflow-x-hidden bg-[var(--bg)]">
-      {/* Mobile: tap outside to close nav */}
-      {mobileNavOpen && !isMdUp ? (
-        <button
-          type="button"
-          className="fixed inset-0 z-30 bg-black/40 md:hidden"
-          aria-label="Close menu"
-          onClick={() => setMobileNavOpen(false)}
-        />
-      ) : null}
+      {hideNavForStudentDetails ? (
+        <main className="w-full">
+          <Outlet />
+        </main>
+      ) : (
+        <>
+          {/* Mobile: tap outside to close nav */}
+          {mobileNavOpen && !isMdUp ? (
+            <button
+              type="button"
+              className="fixed inset-0 z-30 bg-black/40 md:hidden"
+              aria-label="Close menu"
+              onClick={() => setMobileNavOpen(false)}
+            />
+          ) : null}
 
-      {/* Single navbar/sidebar: crest (sized by expand/collapse) + toggle + nav links */}
-      <aside
-        className={cn(
-          'fixed bottom-0 left-0 top-0 z-40 flex h-[100dvh] max-h-[100dvh] min-h-0 flex-col overflow-hidden border-r border-[var(--border)] bg-white shadow-sm transition-[width,transform] duration-200 ease-out',
-          !isMdUp && 'pt-[env(safe-area-inset-top,0px)]',
-          !isMdUp && !mobileNavOpen && '-translate-x-full',
-          !isMdUp && mobileNavOpen && 'translate-x-0',
-          isMdUp && 'translate-x-0'
-        )}
-        style={{ width: isMdUp ? width : SIDEBAR_WIDTH_EXPANDED }}
-      >
+          {/* Single navbar/sidebar: crest (sized by expand/collapse) + toggle + nav links */}
+          <aside
+            className={cn(
+              'fixed bottom-0 left-0 top-0 z-40 flex h-[100dvh] max-h-[100dvh] min-h-0 flex-col overflow-hidden border-r border-[var(--border)] bg-white shadow-sm transition-[width,transform] duration-200 ease-out',
+              !isMdUp && 'pt-[env(safe-area-inset-top,0px)]',
+              !isMdUp && !mobileNavOpen && '-translate-x-full',
+              !isMdUp && mobileNavOpen && 'translate-x-0',
+              isMdUp && 'translate-x-0'
+            )}
+            style={{ width: isMdUp ? width : SIDEBAR_WIDTH_EXPANDED }}
+          >
         <div
           className={cn(
             'flex shrink-0 items-center gap-2 border-b border-[var(--border)] px-3 py-3',
@@ -91,9 +98,9 @@ export const AdminLayout: React.FC = () => {
           )}
         >
           <Link
-            to={isTrainerOrOffice ? '/admin/dashboard' : '/admin/overview'}
+            to={isTrainer ? '/admin/dashboard' : '/admin/overview'}
             className="flex shrink-0 items-center justify-center overflow-hidden no-underline text-[var(--text)]"
-            aria-label={isTrainerOrOffice ? 'Dashboard' : 'Forms'}
+            aria-label={isTrainer ? 'Dashboard' : 'Forms'}
           >
             {!logoError ? (
               <img
@@ -170,13 +177,13 @@ export const AdminLayout: React.FC = () => {
             </div>
           ) : null}
         </nav>
-      </aside>
+          </aside>
 
-      {/* Main: full width on small screens; offset by sidebar width on md+ */}
-      <main
-        className="flex min-h-[100dvh] min-h-screen min-w-0 flex-1 flex-col overflow-x-hidden transition-[margin-left] duration-200 ease-out"
-        style={{ marginLeft: isMdUp ? width : 0 }}
-      >
+          {/* Main: full width on small screens; offset by sidebar width on md+ */}
+          <main
+            className="flex min-h-[100dvh] min-h-screen min-w-0 flex-1 flex-col overflow-x-hidden transition-[margin-left] duration-200 ease-out"
+            style={{ marginLeft: isMdUp ? width : 0 }}
+          >
         {/* Mobile top bar — opens drawer nav (sidebar toggle is desktop-only) */}
         {!isMdUp ? (
           <header className="sticky top-0 z-20 flex shrink-0 items-center gap-3 border-b border-[var(--border)] bg-white px-3 py-2.5 pt-[max(0.625rem,env(safe-area-inset-top,0px))] pl-[max(0.75rem,env(safe-area-inset-left,0px))] pr-[max(0.75rem,env(safe-area-inset-right,0px))] shadow-sm">
@@ -191,10 +198,12 @@ export const AdminLayout: React.FC = () => {
             <span className="min-w-0 truncate text-base font-semibold text-[var(--text)]">Skyline</span>
           </header>
         ) : null}
-        <div className="min-h-0 min-w-0 flex-1 pb-[env(safe-area-inset-bottom,0px)]">
-          <Outlet />
-        </div>
-      </main>
+            <div className="min-h-0 min-w-0 flex-1 pb-[env(safe-area-inset-bottom,0px)]">
+              <Outlet />
+            </div>
+          </main>
+        </>
+      )}
     </div>
   );
 };

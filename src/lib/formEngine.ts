@@ -1848,9 +1848,47 @@ export async function listStudentsPaged(
   const q = (search ?? '').trim();
   if (q) {
     const escaped = q.replace(/[%_,]/g, '');
-    query = query.or(
-      `student_id.ilike.%${escaped}%,first_name.ilike.%${escaped}%,last_name.ilike.%${escaped}%,name.ilike.%${escaped}%,email.ilike.%${escaped}%,phone.ilike.%${escaped}%,city.ilike.%${escaped}%`
-    );
+    const conditions: string[] = [
+      `student_id.ilike.%${escaped}%`,
+      `first_name.ilike.%${escaped}%`,
+      `last_name.ilike.%${escaped}%`,
+      `name.ilike.%${escaped}%`,
+      `email.ilike.%${escaped}%`,
+      `phone.ilike.%${escaped}%`,
+      `city.ilike.%${escaped}%`,
+    ];
+
+    // Batch name match → student.batch_id.in(...)
+    const { data: batchRows } = await supabase
+      .from('skyline_batches')
+      .select('id')
+      .ilike('name', `%${escaped}%`);
+    const batchIds = ((batchRows as Array<{ id: number }> | null) || [])
+      .map((b) => Number(b.id))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    if (batchIds.length > 0) conditions.push(`batch_id.in.(${batchIds.join(',')})`);
+
+    // Course name / qualification code match → skyline_student_courses → student ids → id.in(...)
+    const { data: courseRows } = await supabase
+      .from('skyline_courses')
+      .select('id')
+      .or(`name.ilike.%${escaped}%,qualification_code.ilike.%${escaped}%`);
+    const courseIds = ((courseRows as Array<{ id: number }> | null) || [])
+      .map((c) => Number(c.id))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    if (courseIds.length > 0) {
+      const { data: scRows } = await supabase
+        .from('skyline_student_courses')
+        .select('student_id')
+        .in('course_id', courseIds)
+        .eq('status', 'active');
+      const sIds = ((scRows as Array<{ student_id: number }> | null) || [])
+        .map((r) => Number(r.student_id))
+        .filter((n) => Number.isFinite(n) && n > 0);
+      if (sIds.length > 0) conditions.push(`id.in.(${Array.from(new Set(sIds)).join(',')})`);
+    }
+
+    query = query.or(conditions.join(','));
   }
   if (statusFilter) query = query.eq('status', statusFilter);
   const { data, error, count } = await query.range(from, to);
@@ -1993,7 +2031,8 @@ export async function listSubmittedInstancesPaged(
   pageSize = 20,
   search?: string,
   courseId?: number,
-  formId?: number
+  formId?: number,
+  studentId?: number
 ): Promise<PaginatedResult<SubmittedInstanceRow>> {
   const from = Math.max(0, (page - 1) * pageSize);
   const to = from + pageSize - 1;
@@ -2006,6 +2045,11 @@ export async function listSubmittedInstancesPaged(
   const normalizedFormId = Number.isFinite(Number(formId)) && Number(formId) > 0 ? Number(formId) : null;
   if (normalizedFormId) {
     query = query.eq('form_id', normalizedFormId);
+  }
+
+  const normalizedStudentId = Number.isFinite(Number(studentId)) && Number(studentId) > 0 ? Number(studentId) : null;
+  if (normalizedStudentId) {
+    query = query.eq('student_id', normalizedStudentId);
   }
 
   const normalizedCourseId = Number.isFinite(Number(courseId)) && Number(courseId) > 0 ? Number(courseId) : null;
@@ -3569,6 +3613,102 @@ export async function getFormsForCourse(
     return [];
   }
   return (forms as Form[]) || [];
+}
+
+export async function getCourseLabelsForStudent(
+  studentId: number
+): Promise<Array<{ id: number; name: string; qualification_code: string | null }>> {
+  const sid = Number(studentId);
+  if (!Number.isFinite(sid) || sid <= 0) return [];
+  const { data, error } = await supabase
+    .from('skyline_student_courses')
+    .select('course_id, skyline_courses(id, name, qualification_code)')
+    .eq('student_id', sid)
+    .eq('status', 'active');
+  if (error) {
+    console.error('getCourseLabelsForStudent error', error);
+    return [];
+  }
+  const rows =
+    (data as unknown as Array<{ skyline_courses: { id: number; name: string; qualification_code: string | null } | null }> | null) || [];
+  return rows
+    .map((r) => r.skyline_courses)
+    .filter((c): c is { id: number; name: string; qualification_code: string | null } => !!c);
+}
+
+export async function upsertStudentAssessmentsForCourse(
+  studentId: number,
+  courseId: number,
+  dates?: { start_date?: string | null; end_date?: string | null }
+): Promise<{ created: number; updated: number; skipped: number }> {
+  const sid = Number(studentId);
+  const cid = Number(courseId);
+  if (!Number.isFinite(sid) || sid <= 0 || !Number.isFinite(cid) || cid <= 0) return { created: 0, updated: 0, skipped: 0 };
+  const forms = await getFormsForCourse(cid, { asAdmin: true });
+  const start = (dates?.start_date ?? null) as string | null;
+  const end = (dates?.end_date ?? null) as string | null;
+  let created = 0;
+  let updated = 0;
+  for (const f of forms) {
+    const formId = Number(f.id);
+    if (!Number.isFinite(formId) || formId <= 0) continue;
+    const existing = await getInstanceForStudentAndForm(formId, sid);
+    if (!existing) {
+      const inst = await createFormInstance(formId, 'student', sid, { start_date: start, end_date: end });
+      if (inst?.id) {
+        created++;
+        if (end) await extendInstanceAccessTokensToDate(inst.id, 'student', end);
+      }
+    } else {
+      await updateFormInstanceDates(existing.id, { start_date: start, end_date: end });
+      if (end) await extendInstanceAccessTokensToDate(existing.id, 'student', end);
+      updated++;
+    }
+  }
+  const skipped = forms.length === 0 ? 1 : 0;
+  return { created, updated, skipped };
+}
+
+export async function listActiveFormsByQualificationCode(qualificationCode?: string | null): Promise<Form[]> {
+  const code = String(qualificationCode ?? '').trim();
+  let query = supabase.from('skyline_forms').select('*').eq('active', true).order('name');
+  if (code) query = query.eq('qualification_code', code);
+  const { data, error } = await query;
+  if (error) {
+    console.error('listActiveFormsByQualificationCode error', error);
+    return [];
+  }
+  return (data as Form[]) || [];
+}
+
+export async function upsertStudentAssessmentsForForms(
+  studentId: number,
+  formIds: number[],
+  dates?: { start_date?: string | null; end_date?: string | null }
+): Promise<{ created: number; updated: number; skipped: number }> {
+  const sid = Number(studentId);
+  if (!Number.isFinite(sid) || sid <= 0) return { created: 0, updated: 0, skipped: 0 };
+  const ids = Array.from(new Set((formIds || []).map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0)));
+  if (ids.length === 0) return { created: 0, updated: 0, skipped: 1 };
+  const start = (dates?.start_date ?? null) as string | null;
+  const end = (dates?.end_date ?? null) as string | null;
+  let created = 0;
+  let updated = 0;
+  for (const formId of ids) {
+    const existing = await getInstanceForStudentAndForm(formId, sid);
+    if (!existing) {
+      const inst = await createFormInstance(formId, 'student', sid, { start_date: start, end_date: end });
+      if (inst?.id) {
+        created++;
+        if (end) await extendInstanceAccessTokensToDate(inst.id, 'student', end);
+      }
+    } else {
+      await updateFormInstanceDates(existing.id, { start_date: start, end_date: end });
+      if (end) await extendInstanceAccessTokensToDate(existing.id, 'student', end);
+      updated++;
+    }
+  }
+  return { created, updated, skipped: 0 };
 }
 
 /** Courses for multiple forms at once (e.g. forms list). Returns map formId -> Course[]. */

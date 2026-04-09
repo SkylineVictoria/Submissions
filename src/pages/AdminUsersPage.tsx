@@ -26,7 +26,6 @@ import type { CreateUserInput } from '../lib/formEngine';
 const BASE_ROLE_OPTIONS = [
   { value: 'admin', label: 'Admin' },
   { value: 'trainer', label: 'Trainer' },
-  { value: 'office', label: 'Office Use' },
 ];
 
 const STATUS_OPTIONS = [
@@ -66,7 +65,7 @@ export const AdminUsersPage: React.FC = () => {
   const [users, setUsers] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
-  const [roleFilter, setRoleFilter] = useState<'' | 'superadmin' | 'admin' | 'trainer' | 'office'>('');
+  const [roleFilter, setRoleFilter] = useState<'' | 'superadmin' | 'admin' | 'trainer'>('');
   const [statusFilter, setStatusFilter] = useState<'' | 'active' | 'inactive'>('');
   const [currentPage, setCurrentPage] = useState(1);
   const [totalUsers, setTotalUsers] = useState(0);
@@ -249,7 +248,7 @@ export const AdminUsersPage: React.FC = () => {
           <div>
             <h2 className="text-lg font-bold text-[var(--text)]">Users</h2>
             <p className="text-sm text-gray-600 mt-1">
-              Manage user directory. Add Admin, Trainer, or Office Use. Batches are assigned to trainers on the Batches page.
+              Manage user directory. Add Admin or Trainer. Batches are assigned to trainers on the Batches page.
             </p>
           </div>
           <div className="mt-4 flex w-full min-w-0 flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
@@ -258,7 +257,7 @@ export const AdminUsersPage: React.FC = () => {
                 <Select
                   value={roleFilter}
                   onChange={(v) => {
-                    setRoleFilter(v as '' | 'superadmin' | 'admin' | 'trainer' | 'office');
+                    setRoleFilter(v as '' | 'superadmin' | 'admin' | 'trainer');
                     setCurrentPage(1);
                   }}
                   options={ROLE_FILTER_OPTIONS}
