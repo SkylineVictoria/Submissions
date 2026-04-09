@@ -202,80 +202,60 @@ export const AdminDashboardPage: React.FC = () => {
 
         {/* Totals */}
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
-          <Card
-            className="bg-gradient-to-br from-[var(--brand)] to-[#ea580c] text-white overflow-hidden relative cursor-pointer hover:opacity-[0.97]"
+          <button
+            type="button"
+            className="text-left"
             onClick={() => navigate('/admin/assessments')}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') navigate('/admin/assessments');
-            }}
             title="Go to assessments"
           >
-            <div className="absolute top-0 right-0 w-24 h-24 -mt-4 -mr-4 rounded-full bg-white/10" />
-            <div className="relative">
-              <p className="text-white/90 text-sm font-medium">Total assessments</p>
-              <p className="text-4xl font-bold mt-1">{stats?.totals.assessments ?? 0}</p>
-              <p className="text-white/80 text-xs mt-1">All time</p>
-            </div>
-          </Card>
-          <Card
-            className="cursor-pointer hover:bg-gray-50/60"
-            onClick={() => navigate('/admin/students')}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') navigate('/admin/students');
-            }}
-            title="Go to students"
-          >
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-gray-600 text-sm font-medium">Students</p>
-                <p className="text-3xl font-bold text-[var(--text)] mt-1">{stats?.totals.students ?? 0}</p>
-                <p className="text-gray-500 text-xs mt-1">Active records</p>
+            <Card className="bg-gradient-to-br from-[var(--brand)] to-[#ea580c] text-white overflow-hidden relative hover:opacity-[0.97]">
+              <div className="absolute top-0 right-0 w-24 h-24 -mt-4 -mr-4 rounded-full bg-white/10" />
+              <div className="relative">
+                <p className="text-white/90 text-sm font-medium">Total assessments</p>
+                <p className="text-4xl font-bold mt-1">{stats?.totals.assessments ?? 0}</p>
+                <p className="text-white/80 text-xs mt-1">All time</p>
               </div>
-              <Users className="w-10 h-10 text-gray-300" />
-            </div>
-          </Card>
-          <Card
-            className="cursor-pointer hover:bg-gray-50/60"
-            onClick={() => navigate('/admin/users')}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') navigate('/admin/users');
-            }}
-            title="Go to users (trainers)"
-          >
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-gray-600 text-sm font-medium">Trainers</p>
-                <p className="text-3xl font-bold text-[var(--text)] mt-1">{stats?.totals.trainers ?? 0}</p>
-                <p className="text-gray-500 text-xs mt-1">Users with trainer role</p>
+            </Card>
+          </button>
+
+          <button type="button" className="text-left" onClick={() => navigate('/admin/students')} title="Go to students">
+            <Card className="hover:bg-gray-50/60">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-gray-600 text-sm font-medium">Students</p>
+                  <p className="text-3xl font-bold text-[var(--text)] mt-1">{stats?.totals.students ?? 0}</p>
+                  <p className="text-gray-500 text-xs mt-1">Active records</p>
+                </div>
+                <Users className="w-10 h-10 text-gray-300" />
               </div>
-              <UserRoundCheck className="w-10 h-10 text-gray-300" />
-            </div>
-          </Card>
-          <Card
-            className="cursor-pointer hover:bg-gray-50/60"
-            onClick={() => navigate('/admin/users')}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') navigate('/admin/users');
-            }}
-            title="Go to users (admins)"
-          >
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-gray-600 text-sm font-medium">Admins</p>
-                <p className="text-3xl font-bold text-[var(--text)] mt-1">{stats?.totals.admins ?? 0}</p>
-                <p className="text-gray-500 text-xs mt-1">Users with admin or super admin role</p>
+            </Card>
+          </button>
+
+          <button type="button" className="text-left" onClick={() => navigate('/admin/users')} title="Go to users (trainers)">
+            <Card className="hover:bg-gray-50/60">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-gray-600 text-sm font-medium">Trainers</p>
+                  <p className="text-3xl font-bold text-[var(--text)] mt-1">{stats?.totals.trainers ?? 0}</p>
+                  <p className="text-gray-500 text-xs mt-1">Users with trainer role</p>
+                </div>
+                <UserRoundCheck className="w-10 h-10 text-gray-300" />
               </div>
-              <ClipboardCheck className="w-10 h-10 text-gray-300" />
-            </div>
-          </Card>
+            </Card>
+          </button>
+
+          <button type="button" className="text-left" onClick={() => navigate('/admin/users')} title="Go to users (admins)">
+            <Card className="hover:bg-gray-50/60">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-gray-600 text-sm font-medium">Admins</p>
+                  <p className="text-3xl font-bold text-[var(--text)] mt-1">{stats?.totals.admins ?? 0}</p>
+                  <p className="text-gray-500 text-xs mt-1">Users with admin or super admin role</p>
+                </div>
+                <ClipboardCheck className="w-10 h-10 text-gray-300" />
+              </div>
+            </Card>
+          </button>
         </div>
 
         {/* Workflow donuts */}
