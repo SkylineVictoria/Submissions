@@ -238,7 +238,7 @@ export function buildHtml(data: {
   <style>
     @page { size: A4; margin: 190px 15mm 70px 15mm; }
     @page :first { margin: 0; }
-    body { font-family: 'Calibri', 'Calibri Light', Arial, Helvetica, sans-serif; font-size: 12pt; margin: 0; padding: 0; color: #000000; box-sizing: border-box; min-height: 100%; }
+    body { font-family: 'Calibri', 'Calibri Light', Arial, Helvetica, sans-serif; font-size: 12pt; margin: 0; padding: 0; color: #000000; box-sizing: border-box; min-height: 100%; overflow-x: hidden; }
     .header { position: fixed; top: 0; left: 15mm; right: 15mm; width: calc(100% - 30mm); z-index: 1000; background: #fff; padding: 16px 0 16px 0; display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; border-bottom: 1px solid #9ca3af; box-sizing: border-box; overflow: visible; }
     .header-inner { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; width: 100%; gap: 16px; overflow: visible; }
     .header img { max-height: 110px; max-width: 220px; flex-shrink: 0; }
@@ -248,8 +248,8 @@ export function buildHtml(data: {
     h2 { font-family: 'Calibri', 'Calibri Light', Arial, Helvetica, sans-serif; font-size: 16pt; font-weight: bold; margin: 0 0 12px 0; color: #000000; border-left: 4px solid #9ca3af; padding-left: 8px; }
     h3 { font-family: 'Calibri', 'Calibri Light', Arial, Helvetica, sans-serif; font-size: 16pt; font-weight: bold; margin: 12px 0 6px 0; color: #000000; }
     .step-page:not(.intro-page) h3 { color: #595959; font-size: 16pt; font-weight: bold; margin: 12px 0 6px 0; }
-    .section-table { width: 100%; border-collapse: collapse; font-size: 12pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; margin: 0 0 12px 0; border: 1px solid #000; border-left: 1px solid #000 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .section-table th, .section-table td { border: 1px solid #000; padding: 10px 12px; vertical-align: middle; line-height: 1.35; overflow: visible; }
+    .section-table { width: 100%; max-width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 12pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; margin: 0 0 12px 0; border: 1px solid #000; border-left: 1px solid #000 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .section-table th, .section-table td { border: 1px solid #000; padding: 10px 12px; vertical-align: middle; line-height: 1.35; overflow: visible; overflow-wrap: anywhere; word-break: break-word; box-sizing: border-box; }
     .section-table td:first-child, .section-table th:first-child { border-left: 1px solid #000 !important; }
     .section-table tbody tr { page-break-inside: avoid; break-inside: avoid; }
     .sub-section-header { background: #595959 !important; color: #fff !important; font-weight: bold; font-size: 16pt; font-family: 'Calibri', 'Calibri Light', Arial, sans-serif; padding: 10px 12px; vertical-align: middle; }
@@ -370,8 +370,8 @@ export function buildHtml(data: {
     .assessment-summary-table .summary-date-line { border: none; border-bottom: 1px solid #333; min-height: 12px; padding: 0 2px 1px; background: transparent; display: inline-block; min-width: 60px; font-size: 7pt; }
     .assessment-summary-table .summary-cb { width: 12px; height: 12px; border: 1px solid #000; border-radius: 0; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; font-size: 9px; color: #000000; background: #fff; }
     .assessment-summary-table .summary-cb.checked { background: #000000; color: #fff; }
-    .decl-table { width: 100%; border-collapse: collapse; font-size: 9pt; margin: 0 0 12px 0; border: 1px solid #000; border-left: 1px solid #000 !important; }
-    .decl-table td { border: 1px solid #000; padding: 10px 12px; vertical-align: middle; line-height: 1.35; overflow: visible; }
+    .decl-table { width: 100%; max-width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 9pt; margin: 0 0 12px 0; border: 1px solid #000; border-left: 1px solid #000 !important; }
+    .decl-table td { border: 1px solid #000; padding: 10px 12px; vertical-align: middle; line-height: 1.35; overflow: visible; overflow-wrap: anywhere; word-break: break-word; box-sizing: border-box; }
     .decl-table td:first-child { border-left: 1px solid #000 !important; }
     .decl-table .decl-label { width: 35%; background: #d9d9d9; color: #000000;font-weight: bold; }
     .decl-table .decl-value { background: #fff; color: #000000; white-space: pre-line; }
@@ -385,10 +385,10 @@ export function buildHtml(data: {
     .decl-sig-inline .decl-sig-line { display: inline-block; border: none; border-bottom: 1px solid #000; min-width: 280px; min-height: 18px; background: transparent; vertical-align: bottom; padding: 0 2px 2px 0; }
     .assessment-summary-page .answer-box { min-height: 18px; padding: 4px 6px; font-size: 8pt; }
     .assessment-summary-page .answer-box.answer-box-large { min-height: 40px; }
-    .answer-box { border: 1px solid #333; min-height: 24px; padding: 6px 8px; overflow: visible; background: #fff; white-space: pre-line; }
+    .answer-box { border: 1px solid #333; min-height: 24px; padding: 6px 8px; overflow: visible; background: #fff; white-space: pre-line; max-width: 100%; box-sizing: border-box; overflow-wrap: anywhere; word-break: break-word; }
     .answer-box.answer-box-large { min-height: 80px; }
-    table { width: 100%; border-collapse: collapse; font-size: 8pt; margin-bottom: 12px; }
-    th, td { border: 1px solid #000; padding: 10px 12px; vertical-align: middle; line-height: 1.35; overflow: visible; }
+    table { width: 100%; max-width: 100%; border-collapse: collapse; font-size: 8pt; margin-bottom: 12px; }
+    th, td { border: 1px solid #000; padding: 10px 12px; vertical-align: middle; line-height: 1.35; overflow: visible; overflow-wrap: anywhere; word-break: break-word; box-sizing: border-box; }
     th { background: #595959; color: #fff; font-weight: bold; }
     tbody tr:nth-child(even) { background: #f9fafb; }
     tbody tr:nth-child(odd) { background: #fff; }
@@ -413,7 +413,8 @@ export function buildHtml(data: {
     .radio-circle { display: inline-block; width: 12px; height: 12px; border: 1.5px solid #4b5563; border-radius: 50%; }
     .radio-circle.filled { background: #000000; border-color: #000000; }
     .signature-img { max-width: 150px; max-height: 60px; display: block; }
-    .grid-table-no-border th, .grid-table-no-border td { border: 1px solid #000 !important; overflow-wrap: anywhere; word-break: break-word; }
+    .grid-table-no-border { width: 100%; max-width: 100%; table-layout: fixed; }
+    .grid-table-no-border th, .grid-table-no-border td { border: 1px solid #000 !important; overflow-wrap: anywhere; word-break: break-word; box-sizing: border-box; }
     .grid-table-no-border th { background: #595959 !important; color: #ffffff !important; font-weight: 700; border: 1px solid #000 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .grid-table-no-border tbody tr { background: transparent !important; }
     .grid-table-no-border .label-cell, .grid-table-no-border .value-cell { background: transparent !important; white-space: pre-line; }
