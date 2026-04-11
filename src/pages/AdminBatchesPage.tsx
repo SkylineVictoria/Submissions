@@ -9,6 +9,7 @@ import { SelectAsync } from '../components/ui/SelectAsync';
 import { MultiSelectAsync } from '../components/ui/MultiSelectAsync';
 import { Modal } from '../components/ui/Modal';
 import { Loader } from '../components/ui/Loader';
+import { AdminListPagination } from '../components/admin/AdminListPagination';
 import { toast } from '../utils/toast';
 
 const BATCH_PAGE_SIZE = 20;
@@ -159,36 +160,20 @@ export const AdminBatchesPage: React.FC = () => {
         </Card>
 
         <Card>
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
-            <h2 className="text-lg font-bold text-[var(--text)]">Batch Directory</h2>
-            {!loading && totalBatches > BATCH_PAGE_SIZE && (
-              <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:justify-end sm:gap-3">
-                <span className="text-center text-xs text-gray-500 sm:text-left">
-                  Page {currentPage} of {totalPages} ({totalBatches} total)
-                </span>
-                <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="min-w-0 flex-1 sm:flex-initial"
-                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                    disabled={currentPage <= 1}
-                  >
-                    Previous
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="min-w-0 flex-1 sm:flex-initial"
-                    onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                    disabled={currentPage >= totalPages}
-                  >
-                    Next
-                  </Button>
-                </div>
-              </div>
-            )}
-          </div>
+          <h2 className="text-lg font-bold text-[var(--text)] mb-4">Batch Directory</h2>
+          {!loading && (
+            <AdminListPagination
+              placement="top"
+              totalItems={totalBatches}
+              pageSize={BATCH_PAGE_SIZE}
+              currentPage={currentPage}
+              totalPages={totalPages}
+              onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              onNext={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              onGoToPage={(p) => setCurrentPage(p)}
+              itemLabel="batches"
+            />
+          )}
           {loading ? (
             <div className="py-12">
               <Loader variant="dots" size="lg" message="Loading batches..." />
@@ -265,6 +250,19 @@ export const AdminBatchesPage: React.FC = () => {
               </table>
               </div>
             </>
+          )}
+          {!loading && (
+            <AdminListPagination
+              placement="bottom"
+              totalItems={totalBatches}
+              pageSize={BATCH_PAGE_SIZE}
+              currentPage={currentPage}
+              totalPages={totalPages}
+              onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              onNext={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              onGoToPage={(p) => setCurrentPage(p)}
+              itemLabel="batches"
+            />
           )}
         </Card>
       </div>

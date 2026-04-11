@@ -1841,10 +1841,7 @@ export async function listStudentsPaged(
 ): Promise<PaginatedResult<Student>> {
   const from = Math.max(0, (page - 1) * pageSize);
   const to = from + pageSize - 1;
-  let query = supabase
-    .from('skyline_students')
-    .select('*, skyline_batches(name)', { count: 'exact' })
-    .order('created_at', { ascending: false });
+  let query = supabase.from('skyline_students').select('*, skyline_batches(name)', { count: 'exact' });
   const q = (search ?? '').trim();
   if (q) {
     const escaped = q.replace(/[%_,]/g, '');
@@ -1891,6 +1888,7 @@ export async function listStudentsPaged(
     query = query.or(conditions.join(','));
   }
   if (statusFilter) query = query.eq('status', statusFilter);
+  query = query.order('created_at', { ascending: false }).order('id', { ascending: false });
   const { data, error, count } = await query.range(from, to);
   if (error) {
     console.error('listStudentsPaged error', error);
@@ -2039,8 +2037,7 @@ export async function listSubmittedInstancesPaged(
   let query = supabase
     .from('skyline_form_instances')
     .select('id, form_id, student_id, status, role_context, created_at, submitted_at, submission_count, start_date, end_date', { count: 'exact' })
-    .not('student_id', 'is', null)
-    .order('created_at', { ascending: false });
+    .not('student_id', 'is', null);
 
   const normalizedFormId = Number.isFinite(Number(formId)) && Number(formId) > 0 ? Number(formId) : null;
   if (normalizedFormId) {
@@ -2098,6 +2095,7 @@ export async function listSubmittedInstancesPaged(
     query = query.or(conditions.join(','));
   }
 
+  query = query.order('created_at', { ascending: false }).order('id', { ascending: false });
   const { data: instances, error, count } = await query.range(from, to);
   if (error) {
     console.error('listSubmittedInstancesPaged error', error);
@@ -2214,8 +2212,7 @@ export async function listDashboardInstances(
   let query = supabase
     .from('skyline_form_instances')
     .select('id, form_id, student_id, status, role_context, created_at, submitted_at', { count: 'exact' })
-    .not('student_id', 'is', null)
-    .order('created_at', { ascending: false });
+    .not('student_id', 'is', null);
 
   if (role === 'trainer') {
     query = query.in('student_id', studentIds);
@@ -2259,6 +2256,7 @@ export async function listDashboardInstances(
     query = query.or(conditions.join(','));
   }
 
+  query = query.order('created_at', { ascending: false }).order('id', { ascending: false });
   const { data: instances, error, count } = await query.range(from, to);
   if (error) {
     console.error('listDashboardInstances error', error);

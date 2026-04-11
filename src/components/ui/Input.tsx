@@ -6,6 +6,8 @@ interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
   error?: string;
   helperText?: string;
   tooltip?: string;
+  /** Use inside flex rows so the field does not stretch to full width. */
+  inline?: boolean;
 }
 
 export const Input: React.FC<InputProps> = ({
@@ -13,6 +15,7 @@ export const Input: React.FC<InputProps> = ({
   error,
   helperText,
   tooltip,
+  inline,
   className,
   id,
   required,
@@ -21,7 +24,7 @@ export const Input: React.FC<InputProps> = ({
   const inputId = useMemo(() => id || `input-${Math.random().toString(36).substr(2, 9)}`, [id]);
 
   return (
-    <div className="w-full">
+    <div className={inline ? 'inline-flex w-auto max-w-full shrink-0 flex-col' : 'w-full'}>
       {label && (
         <label htmlFor={inputId} className="block text-xs sm:text-sm font-semibold text-gray-700 mb-1.5 sm:mb-2 whitespace-pre-line">
           {label}
@@ -43,15 +46,18 @@ export const Input: React.FC<InputProps> = ({
       <input
         id={inputId}
         className={cn(
-          'w-full h-11 sm:h-12 px-3 sm:px-4 rounded-lg border transition-all duration-200',
+          inline ? 'w-auto min-w-[3.25rem] h-10 px-2.5 text-center text-base font-medium tabular-nums' : 'w-full h-11 sm:h-12 px-3 sm:px-4 text-base sm:text-sm',
+          'rounded-lg border transition-all duration-200',
           'focus:outline-none focus:ring-2 focus:ring-[var(--brand)] focus:ring-offset-1 focus:border-[var(--brand)]',
-          'text-base sm:text-sm', // Larger text on mobile for better UX
           error
             ? 'border-red-400 focus:ring-red-400 focus:border-red-400 bg-red-50'
             : 'border-[var(--border)] hover:border-gray-300 bg-blue-50/70',
           'disabled:bg-gray-50 disabled:cursor-not-allowed disabled:text-gray-500',
           'text-[var(--text)] placeholder:text-gray-400',
           props.type === 'date' && 'input-date-styled cursor-pointer',
+          props.type === 'number' &&
+            inline &&
+            '[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none',
           className
         )}
         required={required}

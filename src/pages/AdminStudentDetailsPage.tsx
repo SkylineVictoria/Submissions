@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { CheckCircle, Copy, ExternalLink, Phone, Mail, ArrowLeft, CalendarDays, RotateCcw } from 'lucide-react';
+import { CheckCircle, Copy, ExternalLink, Phone, Mail, ArrowLeft, CalendarDays, RotateCcw, Download } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -21,8 +21,11 @@ import {
   listActiveFormsByQualificationCode,
   upsertStudentAssessmentsForForms,
   getCoursesForForms,
+  getFormsForCourse,
 } from '../lib/formEngine';
 import type { Student, SubmittedInstanceRow } from '../lib/formEngine';
+
+const PDF_BASE = import.meta.env.VITE_PDF_API_URL ?? '';
 
 const pad2 = (n: number) => String(n).padStart(2, '0');
 const formatDDMMYYYY = (value: string | null): string => {
@@ -62,7 +65,9 @@ export const AdminStudentDetailsPage: React.FC = () => {
 
   const [loading, setLoading] = useState(true);
   const [student, setStudent] = useState<Student | null>(null);
-  const [courses, setCourses] = useState<Array<{ id: number; name: string; qualification_code: string | null }>>([]);
+  const [courses, setCourses] = useState<
+    Array<{ id: number; name: string; qualification_code: string | null; enrolled_at?: string }>
+  >([]);
   const [assessments, setAssessments] = useState<SubmittedInstanceRow[]>([]);
   const [assessmentsLoading, setAssessmentsLoading] = useState(false);
   const [courseByFormId, setCourseByFormId] = useState<Map<number, { id: number; name: string; qualification_code?: string | null }[]>>(
@@ -142,9 +147,13 @@ export const AdminStudentDetailsPage: React.FC = () => {
           setAddForms(all.map((f) => ({ id: Number(f.id), name: f.name, version: f.version ?? null })));
           return;
         }
-        const selected = courses.find((c) => String(c.id) === String(addCourseId)) ?? null;
-        const qual = selected?.qualification_code ?? null;
-        const filtered = await listActiveFormsByQualificationCode(qual);
+        const cid = Number(addCourseId);
+        if (!Number.isFinite(cid) || cid <= 0) {
+          setAddForms([]);
+          return;
+        }
+        // Use forms linked to this course only (not every form with the same qualification code).
+        const filtered = await getFormsForCourse(cid, { asAdmin: true });
         setAddForms(filtered.map((f) => ({ id: Number(f.id), name: f.name, version: f.version ?? null })));
       } finally {
         setAddFormsLoading(false);
@@ -204,13 +213,29 @@ export const AdminStudentDetailsPage: React.FC = () => {
 
         const { data: scRows } = await supabase
           .from('skyline_student_courses')
-          .select('course_id, skyline_courses(id, name, qualification_code)')
+          .select('created_at, course_id, skyline_courses(id, name, qualification_code)')
           .eq('student_id', sid)
-          .eq('status', 'active');
-        const courseList =
-          ((scRows as Array<{ skyline_courses: { id: number; name: string; qualification_code: string | null } | null }> | null) || [])
-            .map((r) => r.skyline_courses)
-            .filter((c): c is { id: number; name: string; qualification_code: string | null } => !!c);
+          .eq('status', 'active')
+          .order('created_at', { ascending: false });
+        const courseList = (
+          (scRows as
+            | Array<{
+                created_at?: string;
+                skyline_courses: { id: number; name: string; qualification_code: string | null } | null;
+              }>
+            | null) || []
+        )
+          .map((r) => {
+            const c = r.skyline_courses;
+            if (!c) return null;
+            return {
+              id: c.id,
+              name: c.name,
+              qualification_code: c.qualification_code,
+              enrolled_at: String(r.created_at ?? ''),
+            };
+          })
+          .filter((c): c is { id: number; name: string; qualification_code: string | null; enrolled_at: string } => !!c);
 
         if (cancelled) return;
         setStudent(st);
@@ -338,16 +363,25 @@ export const AdminStudentDetailsPage: React.FC = () => {
                         {courses.length === 0 ? (
                           '—'
                         ) : (
-                          <div className="space-y-1">
+                          <div className="space-y-2">
                             {courses.map((c) => (
                               <div key={c.id} className="break-words">
-                                {c.qualification_code ? `${c.qualification_code} — ` : ''}
-                                {c.name}
+                                <div>
+                                  {c.qualification_code ? `${c.qualification_code} — ` : ''}
+                                  {c.name}
+                                </div>
+                                {c.enrolled_at ? (
+                                  <div className="text-xs text-gray-500">Enrolled {formatDDMMYYYY(c.enrolled_at)}</div>
+                                ) : null}
                               </div>
                             ))}
                           </div>
                         )}
                       </div>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-gray-500">Created</span>
+                      <span className="text-gray-800 text-right">{formatDDMMYYYY(student.created_at)}</span>
                     </div>
                     <div className="flex items-start justify-between gap-3">
                       <span className="text-gray-500">Batch</span>
@@ -378,6 +412,20 @@ export const AdminStudentDetailsPage: React.FC = () => {
                   </div>
                 </div>
 
+                {!assessmentsLoading && totalRows > 0 && (
+                  <AdminListPagination
+                    placement="top"
+                    totalItems={totalRows}
+                    pageSize={PAGE_SIZE}
+                    currentPage={currentPage}
+                    totalPages={totalPages}
+                    onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                    onNext={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                    onGoToPage={(p) => setCurrentPage(p)}
+                    itemLabel="assessments"
+                  />
+                )}
+
                 {assessmentsLoading ? (
                   <div className="py-10">
                     <Loader variant="dots" size="lg" message="Loading assessments..." />
@@ -386,12 +434,13 @@ export const AdminStudentDetailsPage: React.FC = () => {
                   <p className="text-gray-600">No assessments for this student.</p>
                 ) : (
                   <div className="overflow-x-auto">
-                    <table className="min-w-[860px] w-full text-sm border border-[var(--border)] rounded-lg overflow-hidden">
+                    <table className="min-w-[940px] w-full text-sm border border-[var(--border)] rounded-lg overflow-hidden">
                       <thead className="bg-gray-50 text-gray-700">
                         <tr>
                           <th className="text-left px-3 py-2 font-semibold border-b border-[var(--border)] w-[300px]">Course</th>
-                          <th className="text-left px-3 py-2 font-semibold border-b border-[var(--border)]">Start</th>
-                          <th className="text-left px-3 py-2 font-semibold border-b border-[var(--border)]">End</th>
+                          <th className="text-left px-3 py-2 font-semibold border-b border-[var(--border)] w-[100px] whitespace-nowrap">Start</th>
+                          <th className="text-left px-3 py-2 font-semibold border-b border-[var(--border)] w-[100px] whitespace-nowrap">End</th>
+                          <th className="text-left px-3 py-2 font-semibold border-b border-[var(--border)] w-[100px] whitespace-nowrap">Created</th>
                           <th className="text-left px-3 py-2 font-semibold border-b border-[var(--border)]">Completed</th>
                           <th className="text-right px-3 py-2 font-semibold border-b border-[var(--border)]">Action</th>
                         </tr>
@@ -421,6 +470,9 @@ export const AdminStudentDetailsPage: React.FC = () => {
                             <td className="px-3 py-2 border-b border-[var(--border)] text-gray-700">
                               {formatDDMMYYYY(row.end_date)}
                             </td>
+                            <td className="px-3 py-2 border-b border-[var(--border)] text-gray-700 whitespace-nowrap">
+                              {formatDDMMYYYY(row.created_at)}
+                            </td>
                             <td className="px-3 py-2 border-b border-[var(--border)]">
                               <StatusChecks row={row} />
                             </td>
@@ -431,6 +483,8 @@ export const AdminStudentDetailsPage: React.FC = () => {
                                     'group inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-gray-200 bg-white text-gray-600 hover:bg-[var(--brand)]/10 hover:border-[var(--brand)]/40 hover:text-[var(--brand)] transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:border-gray-200 disabled:hover:text-gray-600 text-xs font-medium';
                                   const actionIcon = 'w-3 h-3 shrink-0';
                                   const actionText = 'max-w-0 overflow-hidden group-hover:max-w-[8rem] transition-all duration-200 whitespace-nowrap';
+                                  const pdfBase = PDF_BASE.replace(/\/$/, '');
+                                  const downloadPdfHref = pdfBase ? `${pdfBase}/pdf/${row.id}?role=office&download=1` : '';
                                   const canResubmit =
                                     row.status !== 'locked' &&
                                     (Number((row as unknown as { submission_count?: number }).submission_count ?? 0) > 0 || !!row.submitted_at);
@@ -440,6 +494,20 @@ export const AdminStudentDetailsPage: React.FC = () => {
                                         <ExternalLink className={actionIcon} />
                                         <span className={actionText}>Open</span>
                                       </button>
+                                      <a
+                                        href={downloadPdfHref}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className={actionBtn}
+                                        aria-disabled={!downloadPdfHref}
+                                        onClick={(e) => {
+                                          if (!downloadPdfHref) e.preventDefault();
+                                        }}
+                                        title={!downloadPdfHref ? 'Set VITE_PDF_API_URL to the PDF server URL' : 'Download PDF'}
+                                      >
+                                        <Download className={actionIcon} />
+                                        <span className={actionText}>Download PDF</span>
+                                      </a>
                                       <button type="button" className={actionBtn} onClick={() => void handleCopyLink(row)} title="Copy link">
                                         <Copy className={actionIcon} />
                                         <span className={actionText}>Copy link</span>
@@ -478,7 +546,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
                   </div>
                 )}
 
-                {!assessmentsLoading && totalRows > PAGE_SIZE && (
+                {!assessmentsLoading && totalRows > 0 && (
                   <div className="mt-3">
                     <AdminListPagination
                       placement="bottom"
@@ -488,6 +556,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
                       totalPages={totalPages}
                       onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
                       onNext={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                      onGoToPage={(p) => setCurrentPage(p)}
                       itemLabel="assessments"
                     />
                   </div>

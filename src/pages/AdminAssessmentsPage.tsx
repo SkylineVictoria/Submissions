@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Copy, ExternalLink, Send, RefreshCw, Ban, CheckCircle, User, CalendarClock, CalendarDays } from 'lucide-react';
+import { Copy, ExternalLink, Send, RefreshCw, Ban, CheckCircle, User, CalendarClock, CalendarDays, Download } from 'lucide-react';
 import { listSubmittedInstancesPaged, updateInstanceRole, updateInstanceWorkflowStatus, issueInstanceAccessLink, getOrIssueInstanceAccessLink, revokeRoleAccessTokens, extendInstanceAccessTokens, extendInstanceAccessTokensToDate, allowStudentResubmission, listTrainers, updateFormInstanceDates, listCoursesPaged, listFormsPaged } from '../lib/formEngine';
 import type { SubmittedInstanceRow, Trainer } from '../lib/formEngine';
 import { Card } from '../components/ui/Card';
@@ -11,6 +11,8 @@ import { Loader } from '../components/ui/Loader';
 import { Modal } from '../components/ui/Modal';
 import { toast } from '../utils/toast';
 import { AdminListPagination } from '../components/admin/AdminListPagination';
+
+const PDF_BASE = import.meta.env.VITE_PDF_API_URL ?? '';
 
 const pad2 = (n: number) => String(n).padStart(2, '0');
 
@@ -240,6 +242,9 @@ export const AdminAssessmentsPage: React.FC = () => {
       window.open(url, '_blank');
     };
 
+    const pdfBase = PDF_BASE.replace(/\/$/, '');
+    const downloadPdfHref = pdfBase ? `${pdfBase}/pdf/${row.id}?role=office&download=1` : '';
+
     if (mode === 'stack') {
       return (
         <div className="mt-3 flex flex-col gap-2">
@@ -247,6 +252,18 @@ export const AdminAssessmentsPage: React.FC = () => {
             <ExternalLink className="mr-2 h-4 w-4 shrink-0" />
             Open
           </Button>
+          <a
+            href={downloadPdfHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={!downloadPdfHref ? 'pointer-events-none opacity-50' : undefined}
+            title={!downloadPdfHref ? 'Set VITE_PDF_API_URL to the PDF server URL' : 'Download PDF'}
+          >
+            <Button variant="outline" size="sm" className="w-full justify-center" disabled={!downloadPdfHref}>
+              <Download className="mr-2 h-4 w-4 shrink-0" />
+              Download PDF
+            </Button>
+          </a>
           <Button variant="outline" size="sm" className="w-full justify-center" onClick={() => void handleCopyLink(row.id, role)}>
             <Copy className="mr-2 h-4 w-4 shrink-0" />
             Copy link
@@ -307,6 +324,20 @@ export const AdminAssessmentsPage: React.FC = () => {
           <ExternalLink className={actionIcon} />
           <span className={actionText}>Open</span>
         </button>
+        <a
+          href={downloadPdfHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={actionBtn}
+          aria-disabled={!downloadPdfHref}
+          onClick={(e) => {
+            if (!downloadPdfHref) e.preventDefault();
+          }}
+          title={!downloadPdfHref ? 'Set VITE_PDF_API_URL to the PDF server URL' : 'Download PDF'}
+        >
+          <Download className={actionIcon} />
+          <span className={actionText}>Download PDF</span>
+        </a>
         <button type="button" onClick={() => void handleCopyLink(row.id, role)} className={actionBtn} title="Copy Link">
           <Copy className={actionIcon} />
           <span className={actionText}>Copy Link</span>
@@ -428,6 +459,7 @@ export const AdminAssessmentsPage: React.FC = () => {
               totalPages={totalPages}
               onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
               onNext={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              onGoToPage={(p) => setCurrentPage(p)}
               itemLabel="assessments"
             />
           )}
@@ -456,8 +488,10 @@ export const AdminAssessmentsPage: React.FC = () => {
                           <dd>{formatDDMMYYYY(row.start_date)}</dd>
                           <dt className="text-gray-500">End</dt>
                           <dd>{formatDDMMYYYY(row.end_date)}</dd>
+                          <dt className="text-gray-500">Created</dt>
+                          <dd>{formatDDMMYYYY(row.created_at)}</dd>
                           <dt className="text-gray-500">Submitted</dt>
-                          <dd>{formatDDMMYYYY(row.submitted_at || row.created_at)}</dd>
+                          <dd>{formatDDMMYYYY(row.submitted_at)}</dd>
                         </dl>
                         <div className="mt-2">
                           <span className={`inline-flex rounded-md px-2.5 py-1 text-xs font-medium ${getWorkflowBadgeClass(row)}`}>
@@ -478,7 +512,7 @@ export const AdminAssessmentsPage: React.FC = () => {
                       <th className="py-3 pr-3">Form</th>
                       <th className="py-3 pr-3 w-[120px]">Start</th>
                       <th className="py-3 pr-3 w-[120px]">End</th>
-                      <th className="py-3 pr-3">Date</th>
+                      <th className="py-3 pr-3 w-[120px]">Created</th>
                       <th className="py-3 pr-3 w-[140px]">Workflow</th>
                       <th className="py-3 text-right min-w-[220px]">Actions</th>
                     </tr>
@@ -496,7 +530,7 @@ export const AdminAssessmentsPage: React.FC = () => {
                         </td>
                         <td className="py-3 pr-3 text-gray-700">{formatDDMMYYYY(row.start_date)}</td>
                         <td className="py-3 pr-3 text-gray-700">{formatDDMMYYYY(row.end_date)}</td>
-                        <td className="py-3 pr-3 text-gray-700">{formatDDMMYYYY(row.submitted_at || row.created_at)}</td>
+                        <td className="py-3 pr-3 text-gray-700">{formatDDMMYYYY(row.created_at)}</td>
                         <td className="py-3 pr-3">
                           <span className={`inline-flex rounded-md px-2.5 py-1 text-xs font-medium ${getWorkflowBadgeClass(row)}`}>
                             {getWorkflowLabel(row)}
@@ -519,6 +553,7 @@ export const AdminAssessmentsPage: React.FC = () => {
               totalPages={totalPages}
               onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
               onNext={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              onGoToPage={(p) => setCurrentPage(p)}
               itemLabel="assessments"
             />
           )}

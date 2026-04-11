@@ -52,6 +52,17 @@ const STATUS_FILTER_OPTIONS = [
   ...STATUS_OPTIONS,
 ];
 
+const pad2 = (n: number) => String(n).padStart(2, '0');
+const formatCreatedDisplay = (value: string | null | undefined): string => {
+  const v = String(value ?? '').trim();
+  if (!v) return '—';
+  const m = v.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[3]}/${m[2]}/${m[1]}`;
+  const dt = new Date(v);
+  if (Number.isNaN(dt.getTime())) return v;
+  return `${pad2(dt.getDate())}/${pad2(dt.getMonth() + 1)}/${dt.getFullYear()}`;
+};
+
 export const AdminStudentsPage: React.FC = () => {
   const navigate = useNavigate();
   const PAGE_SIZE = 20;
@@ -285,12 +296,19 @@ export const AdminStudentsPage: React.FC = () => {
     }
     const s = String(val).trim();
     if (!s) return undefined;
-    // Accept dd/mm/yyyy or yyyy-mm-dd-ish.
+    // Accept dd/mm/yyyy, dd-mm-yyyy (common in AU spreadsheets), or yyyy-mm-dd-ish.
     const m1 = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
     if (m1) {
       const dd = String(m1[1]).padStart(2, '0');
       const mm = String(m1[2]).padStart(2, '0');
       const yyyy = String(m1[3]).length === 2 ? `20${m1[3]}` : String(m1[3]).padStart(4, '0');
+      return `${yyyy}-${mm}-${dd}`;
+    }
+    const mDash = s.match(/^(\d{1,2})-(\d{1,2})-(\d{2,4})$/);
+    if (mDash) {
+      const dd = String(mDash[1]).padStart(2, '0');
+      const mm = String(mDash[2]).padStart(2, '0');
+      const yyyy = String(mDash[3]).length === 2 ? `20${mDash[3]}` : String(mDash[3]).padStart(4, '0');
       return `${yyyy}-${mm}-${dd}`;
     }
     const asDate = new Date(s);
@@ -490,21 +508,89 @@ export const AdminStudentsPage: React.FC = () => {
         }
       }
 
+      const formQualUnit = (f: (typeof displayForms)[number]) => ({
+        qual: String((f as unknown as { qualification_code?: string | null }).qualification_code ?? '').trim().toUpperCase(),
+        unit: String((f as unknown as { unit_code?: string | null }).unit_code ?? '').trim().toUpperCase(),
+      });
+
+      /** When both qual and unit are on the row, only forms matching BOTH (same as the spreadsheet row). */
+      const matchFormIdsForImportRow = (qualCodes: string[], unitCodes: string[]): number[] => {
+        const hasQ = qualCodes.length > 0;
+        const hasU = unitCodes.length > 0;
+        const ids: number[] = [];
+        for (const f of displayForms) {
+          const { qual: fq, unit: fu } = formQualUnit(f);
+          const fid = Number(f.id);
+          if (!Number.isFinite(fid) || fid <= 0) continue;
+          if (hasQ && hasU) {
+            if (fq && fu && qualCodes.includes(fq) && unitCodes.includes(fu)) ids.push(fid);
+          } else if (hasU) {
+            if (fu && unitCodes.includes(fu)) ids.push(fid);
+          } else if (hasQ) {
+            if (fq && qualCodes.includes(fq)) ids.push(fid);
+          }
+        }
+        return [...new Set(ids)];
+      };
+
+      const PAIR_SEP = '\x1e';
+      const strictPairs = new Set<string>();
+      for (const r of importRows) {
+        const qs = splitCodes(r.qualification_code);
+        const us = splitCodes(r.unit_code);
+        if (qs.length && us.length) {
+          for (const q of qs) for (const u of us) strictPairs.add(`${q}${PAIR_SEP}${u}`);
+        }
+      }
+      const missingStrictPairs = [...strictPairs].filter((key) => {
+        const sep = key.indexOf(PAIR_SEP);
+        if (sep < 0) return true;
+        const q = key.slice(0, sep);
+        const u = key.slice(sep + PAIR_SEP.length);
+        return !displayForms.some((f) => {
+          const { qual: fq, unit: fu } = formQualUnit(f);
+          return fq === q && fu === u;
+        });
+      });
+
+      const importRowsWithUnitNoQual = importRows.filter((r) => splitCodes(r.unit_code).length > 0 && splitCodes(r.qualification_code).length === 0);
+      const unitCodesOnlyFromRowsNoQual = Array.from(new Set(importRowsWithUnitNoQual.flatMap((r) => splitCodes(r.unit_code))));
+      const missingUnitCodes = unitCodesOnlyFromRowsNoQual.filter((c) => !unitToFormIds.get(c)?.length);
+
+      const importRowsWithQualNoUnit = importRows.filter((r) => splitCodes(r.qualification_code).length > 0 && splitCodes(r.unit_code).length === 0);
+      const qualCodesOnlyFromRowsNoUnit = Array.from(new Set(importRowsWithQualNoUnit.flatMap((r) => splitCodes(r.qualification_code))));
+      const missingQualCodesForForms = qualCodesOnlyFromRowsNoUnit.filter((c) => !qualToFormIds.get(c)?.length);
+
       const missingCourseCodes = importQualCodes.filter((c) => !courseByQual[c]);
-      const importUnitCodes = Array.from(new Set(importRows.flatMap((r) => splitCodes(r.unit_code))));
-      const missingUnitCodes = importUnitCodes.filter((c) => !unitToFormIds.get(c)?.length);
-      const missingQualCodesForForms = importQualCodes.filter((c) => !qualToFormIds.get(c)?.length);
-      if (missingCourseCodes.length || missingUnitCodes.length || missingQualCodesForForms.length) {
+      if (
+        missingCourseCodes.length ||
+        missingUnitCodes.length ||
+        missingQualCodesForForms.length ||
+        missingStrictPairs.length
+      ) {
         const preview = (arr: string[]) =>
           arr.length <= 12 ? arr.join(', ') : `${arr.slice(0, 12).join(', ')} … (+${arr.length - 12})`;
+        const previewPairs = (arr: string[]) => {
+          const lines = arr.map((k) => {
+            const sep = k.indexOf(PAIR_SEP);
+            if (sep < 0) return k;
+            return `${k.slice(0, sep)} + ${k.slice(sep + PAIR_SEP.length)}`;
+          });
+          return lines.length <= 12 ? lines.join('\n') : `${lines.slice(0, 12).join('\n')}\n… (+${lines.length - 12})`;
+        };
         const msg =
           `Some codes in the import file do not exist / do not map.\n\n` +
           (missingCourseCodes.length
             ? `Missing courses (Qualification Code not found in Courses):\n${preview(missingCourseCodes)}\n\n`
             : '') +
-          (missingUnitCodes.length ? `No forms found for Unit Code(s):\n${preview(missingUnitCodes)}\n\n` : '') +
+          (missingStrictPairs.length
+            ? `No form matches BOTH qualification + unit (qualification code + unit code on the same form):\n${previewPairs(missingStrictPairs)}\n\n`
+            : '') +
+          (missingUnitCodes.length
+            ? `Rows with unit but no qualification: no form for Unit Code(s):\n${preview(missingUnitCodes)}\n\n`
+            : '') +
           (missingQualCodesForForms.length
-            ? `No forms found for Qualification Code(s):\n${preview(missingQualCodesForForms)}\n\n`
+            ? `Rows with qualification but no unit: no form for Qualification Code(s):\n${preview(missingQualCodesForForms)}\n\n`
             : '') +
           `Continue import anyway? (Students will still be created/updated, but missing mappings will skip course assignment and/or assessments.)`;
         const ok = window.confirm(msg);
@@ -602,12 +688,7 @@ export const AdminStudentsPage: React.FC = () => {
         for (const row of rows) {
           const unitCodes = splitCodes(row.unit_code);
           const qualCodes = splitCodes(row.qualification_code);
-          const matchedFormIds = Array.from(
-            new Set([
-              ...unitCodes.flatMap((u) => unitToFormIds.get(u) ?? []),
-              ...qualCodes.flatMap((q) => qualToFormIds.get(q) ?? []),
-            ])
-          );
+          const matchedFormIds = matchFormIdsForImportRow(qualCodes, unitCodes);
           const start = String(row.activity_start_date ?? '').trim();
           const end = String(row.activity_end_date ?? '').trim();
           if (matchedFormIds.length > 0) {
@@ -898,6 +979,7 @@ export const AdminStudentsPage: React.FC = () => {
               totalPages={totalPages}
               onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
               onNext={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              onGoToPage={(p) => setCurrentPage(p)}
               itemLabel="students"
             />
           )}
@@ -942,6 +1024,7 @@ export const AdminStudentsPage: React.FC = () => {
                             {student.status || 'active'}
                           </span>
                         </div>
+                        <div className="mt-1 text-xs text-gray-500">Created {formatCreatedDisplay(student.created_at)}</div>
                         <div className="mt-2 space-y-1 text-sm text-gray-700 break-all">
                           <div className="flex items-start gap-2">
                             <Mail className="mt-0.5 h-4 w-4 shrink-0 text-gray-400" />
@@ -994,13 +1077,14 @@ export const AdminStudentsPage: React.FC = () => {
                 ))}
               </div>
               <div className="hidden overflow-x-auto lg:block">
-              <table className="min-w-[1000px] w-full text-sm border border-[var(--border)] rounded-lg overflow-hidden">
+              <table className="min-w-[1080px] w-full text-sm border border-[var(--border)] rounded-lg overflow-hidden">
                 <thead className="bg-gray-50 text-gray-700">
                   <tr>
                     <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Student</th>
                     <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Batch</th>
                     <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Course</th>
                     <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Status</th>
+                    <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)] w-[110px] whitespace-nowrap">Created</th>
                     <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Contact</th>
                     <th className="text-right px-4 py-3 font-semibold border-b border-[var(--border)]">Action</th>
                   </tr>
@@ -1048,6 +1132,9 @@ export const AdminStudentsPage: React.FC = () => {
                         >
                           {student.status || 'active'}
                         </span>
+                      </td>
+                      <td className="px-4 py-3 border-b border-[var(--border)] text-gray-700 whitespace-nowrap">
+                        {formatCreatedDisplay(student.created_at)}
                       </td>
                       <td className="px-4 py-3 border-b border-[var(--border)]">
                         <div className="space-y-1">
@@ -1099,6 +1186,7 @@ export const AdminStudentsPage: React.FC = () => {
               totalPages={totalPages}
               onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
               onNext={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              onGoToPage={(p) => setCurrentPage(p)}
               itemLabel="students"
             />
           )}

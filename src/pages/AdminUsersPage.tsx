@@ -301,6 +301,7 @@ export const AdminUsersPage: React.FC = () => {
               totalPages={totalPages}
               onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
               onNext={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              onGoToPage={(p) => setCurrentPage(p)}
               itemLabel="users"
             />
           )}
@@ -488,6 +489,7 @@ export const AdminUsersPage: React.FC = () => {
               totalPages={totalPages}
               onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
               onNext={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              onGoToPage={(p) => setCurrentPage(p)}
               itemLabel="users"
             />
           )}

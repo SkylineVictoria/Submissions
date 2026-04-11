@@ -221,7 +221,11 @@ export const AdminFormsListPage: React.FC = () => {
                     selectedLabel={courseFilter ? undefined : 'All courses'}
                   />
                 </div>
-                <div className="hidden shrink-0 text-xs text-gray-500 lg:block">Page {currentPage} of {totalPages} ({totalForms} total)</div>
+                {!loading && totalForms > 0 && (
+                  <div className="hidden shrink-0 text-xs text-gray-500 lg:block">
+                    {totalForms} form{totalForms === 1 ? '' : 's'}
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -234,6 +238,7 @@ export const AdminFormsListPage: React.FC = () => {
               totalPages={totalPages}
               onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
               onNext={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              onGoToPage={(p) => setCurrentPage(p)}
               itemLabel="forms"
             />
           )}
@@ -464,6 +469,7 @@ export const AdminFormsListPage: React.FC = () => {
               totalPages={totalPages}
               onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
               onNext={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              onGoToPage={(p) => setCurrentPage(p)}
               itemLabel="forms"
             />
           )}
