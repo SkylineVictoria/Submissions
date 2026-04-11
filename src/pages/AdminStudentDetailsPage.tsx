@@ -1,4 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import type { SortDirection } from '../components/admin/SortableTh';
+import { SortableTh } from '../components/admin/SortableTh';
 import { useNavigate, useParams } from 'react-router-dom';
 import { CheckCircle, Copy, ExternalLink, Phone, Mail, ArrowLeft, CalendarDays, RotateCcw, Download } from 'lucide-react';
 import { supabase } from '../lib/supabase';
@@ -90,6 +92,16 @@ export const AdminStudentDetailsPage: React.FC = () => {
   const [editDatesStart, setEditDatesStart] = useState('');
   const [editDatesEnd, setEditDatesEnd] = useState('');
   const [savingDates, setSavingDates] = useState(false);
+
+  type AssessmentSortKey = 'course' | 'start' | 'end' | 'created' | 'completed';
+  const [assessmentSort, setAssessmentSort] = useState<{ key: AssessmentSortKey; dir: SortDirection }>({
+    key: 'course',
+    dir: 'asc',
+  });
+
+  useEffect(() => {
+    setAssessmentSort({ key: 'course', dir: 'asc' });
+  }, [sid]);
 
   const title = useMemo(() => {
     if (!student) return 'Student';
@@ -259,6 +271,66 @@ export const AdminStudentDetailsPage: React.FC = () => {
     if (loading) return;
     void loadAssessments(currentPage);
   }, [currentPage, loadAssessments, loading]);
+
+  const toggleAssessmentSort = (key: AssessmentSortKey) => {
+    setAssessmentSort((prev) => {
+      if (prev.key !== key) return { key, dir: 'asc' };
+      return { key: prev.key, dir: prev.dir === 'asc' ? 'desc' : 'asc' };
+    });
+  };
+
+  const timeOrNull = (s: string | null | undefined): number | null => {
+    if (!s?.trim()) return null;
+    const t = Date.parse(s);
+    return Number.isFinite(t) ? t : null;
+  };
+
+  const compareDateNullsLast = (a: string | null | undefined, b: string | null | undefined, asc: boolean): number => {
+    const ta = timeOrNull(a);
+    const tb = timeOrNull(b);
+    if (ta === null && tb === null) return 0;
+    if (ta === null) return 1;
+    if (tb === null) return -1;
+    const d = ta - tb;
+    return asc ? d : -d;
+  };
+
+  const sortedAssessments = useMemo(() => {
+    const asc = assessmentSort.dir === 'asc';
+    const courseLabel = (row: SubmittedInstanceRow) => {
+      const list = courseByFormId.get(Number(row.form_id)) || [];
+      const c = list[0];
+      if (!c) return row.form_name || '';
+      return `${c.qualification_code ? `${c.qualification_code} — ` : ''}${c.name}`;
+    };
+    const rows = [...assessments];
+    rows.sort((a, b) => {
+      let cmp = 0;
+      switch (assessmentSort.key) {
+        case 'course':
+          cmp = courseLabel(a).localeCompare(courseLabel(b), undefined, { sensitivity: 'base' });
+          if (!asc) cmp = -cmp;
+          break;
+        case 'start':
+          cmp = compareDateNullsLast(a.start_date, b.start_date, asc);
+          break;
+        case 'end':
+          cmp = compareDateNullsLast(a.end_date, b.end_date, asc);
+          break;
+        case 'created':
+          cmp = compareDateNullsLast(a.created_at, b.created_at, asc);
+          break;
+        case 'completed':
+          cmp = compareDateNullsLast(a.submitted_at, b.submitted_at, asc);
+          break;
+        default:
+          break;
+      }
+      if (cmp !== 0) return cmp;
+      return a.id - b.id;
+    });
+    return rows;
+  }, [assessments, assessmentSort, courseByFormId]);
 
   const openEditDates = (row: SubmittedInstanceRow) => {
     setEditDatesRow(row);
@@ -437,16 +509,46 @@ export const AdminStudentDetailsPage: React.FC = () => {
                     <table className="min-w-[940px] w-full text-sm border border-[var(--border)] rounded-lg overflow-hidden">
                       <thead className="bg-gray-50 text-gray-700">
                         <tr>
-                          <th className="text-left px-3 py-2 font-semibold border-b border-[var(--border)] w-[300px]">Course</th>
-                          <th className="text-left px-3 py-2 font-semibold border-b border-[var(--border)] w-[100px] whitespace-nowrap">Start</th>
-                          <th className="text-left px-3 py-2 font-semibold border-b border-[var(--border)] w-[100px] whitespace-nowrap">End</th>
-                          <th className="text-left px-3 py-2 font-semibold border-b border-[var(--border)] w-[100px] whitespace-nowrap">Created</th>
-                          <th className="text-left px-3 py-2 font-semibold border-b border-[var(--border)]">Completed</th>
+                          <SortableTh
+                            label="Course"
+                            className="text-left px-3 py-2 border-b border-[var(--border)] w-[300px]"
+                            active={assessmentSort.key === 'course'}
+                            direction={assessmentSort.dir}
+                            onToggle={() => toggleAssessmentSort('course')}
+                          />
+                          <SortableTh
+                            label="Start"
+                            className="text-left px-3 py-2 border-b border-[var(--border)] w-[100px] whitespace-nowrap"
+                            active={assessmentSort.key === 'start'}
+                            direction={assessmentSort.dir}
+                            onToggle={() => toggleAssessmentSort('start')}
+                          />
+                          <SortableTh
+                            label="End"
+                            className="text-left px-3 py-2 border-b border-[var(--border)] w-[100px] whitespace-nowrap"
+                            active={assessmentSort.key === 'end'}
+                            direction={assessmentSort.dir}
+                            onToggle={() => toggleAssessmentSort('end')}
+                          />
+                          <SortableTh
+                            label="Created"
+                            className="text-left px-3 py-2 border-b border-[var(--border)] w-[100px] whitespace-nowrap"
+                            active={assessmentSort.key === 'created'}
+                            direction={assessmentSort.dir}
+                            onToggle={() => toggleAssessmentSort('created')}
+                          />
+                          <SortableTh
+                            label="Completed"
+                            className="text-left px-3 py-2 border-b border-[var(--border)]"
+                            active={assessmentSort.key === 'completed'}
+                            direction={assessmentSort.dir}
+                            onToggle={() => toggleAssessmentSort('completed')}
+                          />
                           <th className="text-right px-3 py-2 font-semibold border-b border-[var(--border)]">Action</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {assessments.map((row) => (
+                        {sortedAssessments.map((row) => (
                           <tr key={row.id} className="hover:bg-gray-50">
                             <td className="px-3 py-2 border-b border-[var(--border)] align-top">
                               {(() => {

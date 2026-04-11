@@ -41,6 +41,8 @@ import { pdf } from '@react-pdf/renderer';
 import { GenericLinksPdf } from '../components/pdf/GenericLinksPdf';
 import { registerPdfFonts } from '../utils/fontLoader';
 import { AdminListPagination } from '../components/admin/AdminListPagination';
+import type { SortDirection } from '../components/admin/SortableTh';
+import { SortableTh } from '../components/admin/SortableTh';
 
 const STATUS_OPTIONS = [
   { value: 'active', label: 'Active' },
@@ -81,6 +83,11 @@ export const AdminStudentsPage: React.FC = () => {
   const [studentCoursesMap, setStudentCoursesMap] = useState<
     Record<number, Array<{ id: number; name: string; qualification_code: string | null }>>
   >({});
+  type StudentDirSortKey = 'student' | 'batch' | 'course' | 'status' | 'created' | 'contact';
+  const [studentDirSort, setStudentDirSort] = useState<{ key: StudentDirSortKey; dir: SortDirection }>({
+    key: 'student',
+    dir: 'asc',
+  });
   const [studentDraft, setStudentDraft] = useState({
     student_id: '',
     first_name: '',
@@ -1007,6 +1014,79 @@ export const AdminStudentsPage: React.FC = () => {
 
   const createFormError = useMemo(() => validateCreateStudentForm(studentDraft), [studentDraft]);
   const editFormError = useMemo(() => (editForm ? validateEditStudentForm(editForm) : null), [editForm]);
+
+  const toggleStudentDirSort = (key: StudentDirSortKey) => {
+    setStudentDirSort((prev) => {
+      if (prev.key !== key) return { key, dir: 'asc' };
+      return { key: prev.key, dir: prev.dir === 'asc' ? 'desc' : 'asc' };
+    });
+  };
+
+  const timeOrNullStudent = (s: string | null | undefined): number | null => {
+    if (!s?.trim()) return null;
+    const t = Date.parse(s);
+    return Number.isFinite(t) ? t : null;
+  };
+
+  const compareDateNullsLastStudent = (a: string | null | undefined, b: string | null | undefined, asc: boolean): number => {
+    const ta = timeOrNullStudent(a);
+    const tb = timeOrNullStudent(b);
+    if (ta === null && tb === null) return 0;
+    if (ta === null) return 1;
+    if (tb === null) return -1;
+    const d = ta - tb;
+    return asc ? d : -d;
+  };
+
+  const sortedStudents = useMemo(() => {
+    const asc = studentDirSort.dir === 'asc';
+    const displayName = (s: Student) => {
+      const n = [s.first_name, s.last_name].filter(Boolean).join(' ').trim();
+      return (n || s.email || '').toLowerCase();
+    };
+    const courseLabel = (s: Student) => {
+      const list = studentCoursesMap[s.id] || [];
+      if (list.length === 0) return '';
+      const first = list[0];
+      const rest = list.length - 1;
+      return `${first.qualification_code ? `${first.qualification_code} — ` : ''}${first.name}${rest > 0 ? ` (+${rest})` : ''}`.toLowerCase();
+    };
+    const rows = [...students];
+    rows.sort((a, b) => {
+      let cmp = 0;
+      switch (studentDirSort.key) {
+        case 'student':
+          cmp = displayName(a).localeCompare(displayName(b), undefined, { sensitivity: 'base' });
+          if (!asc) cmp = -cmp;
+          break;
+        case 'batch':
+          cmp = (a.batch_name ?? '').localeCompare(b.batch_name ?? '', undefined, { sensitivity: 'base' });
+          if (!asc) cmp = -cmp;
+          break;
+        case 'course':
+          cmp = courseLabel(a).localeCompare(courseLabel(b), undefined, { sensitivity: 'base' });
+          if (!asc) cmp = -cmp;
+          break;
+        case 'status':
+          cmp = (a.status || 'active').localeCompare(b.status || 'active', undefined, { sensitivity: 'base' });
+          if (!asc) cmp = -cmp;
+          break;
+        case 'created':
+          cmp = compareDateNullsLastStudent(a.created_at, b.created_at, asc);
+          break;
+        case 'contact':
+          cmp = (a.email || '').localeCompare(b.email || '', undefined, { sensitivity: 'base' });
+          if (!asc) cmp = -cmp;
+          break;
+        default:
+          break;
+      }
+      if (cmp !== 0) return cmp;
+      return a.id - b.id;
+    });
+    return rows;
+  }, [students, studentCoursesMap, studentDirSort]);
+
   const totalPages = Math.max(1, Math.ceil(totalStudents / PAGE_SIZE));
 
   return (
@@ -1090,7 +1170,7 @@ export const AdminStudentsPage: React.FC = () => {
           ) : (
             <>
               <div className="space-y-3 lg:hidden">
-                {students.map((student) => (
+                {sortedStudents.map((student) => (
                   <div
                     key={student.id}
                     className="rounded-lg border border-[var(--border)] bg-white p-4 shadow-sm"
@@ -1178,17 +1258,53 @@ export const AdminStudentsPage: React.FC = () => {
               <table className="min-w-[1080px] w-full text-sm border border-[var(--border)] rounded-lg overflow-hidden">
                 <thead className="bg-gray-50 text-gray-700">
                   <tr>
-                    <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Student</th>
-                    <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Batch</th>
-                    <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Course</th>
-                    <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Status</th>
-                    <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)] w-[110px] whitespace-nowrap">Created</th>
-                    <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Contact</th>
+                    <SortableTh
+                      label="Student"
+                      className="text-left px-4 py-3 border-b border-[var(--border)]"
+                      active={studentDirSort.key === 'student'}
+                      direction={studentDirSort.dir}
+                      onToggle={() => toggleStudentDirSort('student')}
+                    />
+                    <SortableTh
+                      label="Batch"
+                      className="text-left px-4 py-3 border-b border-[var(--border)]"
+                      active={studentDirSort.key === 'batch'}
+                      direction={studentDirSort.dir}
+                      onToggle={() => toggleStudentDirSort('batch')}
+                    />
+                    <SortableTh
+                      label="Course"
+                      className="text-left px-4 py-3 border-b border-[var(--border)]"
+                      active={studentDirSort.key === 'course'}
+                      direction={studentDirSort.dir}
+                      onToggle={() => toggleStudentDirSort('course')}
+                    />
+                    <SortableTh
+                      label="Status"
+                      className="text-left px-4 py-3 border-b border-[var(--border)]"
+                      active={studentDirSort.key === 'status'}
+                      direction={studentDirSort.dir}
+                      onToggle={() => toggleStudentDirSort('status')}
+                    />
+                    <SortableTh
+                      label="Created"
+                      className="text-left px-4 py-3 border-b border-[var(--border)] w-[110px] whitespace-nowrap"
+                      active={studentDirSort.key === 'created'}
+                      direction={studentDirSort.dir}
+                      onToggle={() => toggleStudentDirSort('created')}
+                    />
+                    <SortableTh
+                      label="Contact"
+                      className="text-left px-4 py-3 border-b border-[var(--border)]"
+                      active={studentDirSort.key === 'contact'}
+                      direction={studentDirSort.dir}
+                      onToggle={() => toggleStudentDirSort('contact')}
+                    />
                     <th className="text-right px-4 py-3 font-semibold border-b border-[var(--border)]">Action</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {students.map((student) => (
+                  {sortedStudents.map((student) => (
                     <tr key={student.id} className="hover:bg-gray-50 align-top">
                       <td className="px-4 py-3 border-b border-[var(--border)]">
                         <div className="flex items-center gap-3">
