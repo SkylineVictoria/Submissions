@@ -8,9 +8,11 @@ interface ModalProps {
   title: string;
   children: React.ReactNode;
   size?: 'sm' | 'md' | 'lg' | 'xl';
+  /** Overlay z-index / tint (e.g. `!z-[60]` when opening above another modal). */
+  overlayClassName?: string;
 }
 
-export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, size = 'md' }) => {
+export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, size = 'md', overlayClassName }) => {
   useEffect(() => {
     if (isOpen) {
       document.body.style.overflow = 'hidden';
@@ -34,7 +36,10 @@ export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, 
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-white/10 p-0 backdrop-blur-md sm:items-center sm:p-4"
+      className={cn(
+        'fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-white/10 p-0 backdrop-blur-md sm:items-center sm:p-4',
+        overlayClassName
+      )}
       onClick={onClose}
     >
       <div

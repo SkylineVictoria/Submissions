@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { Plus, Send, Mail, Phone, Pencil, Upload, Trash2, FileText } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { supabase } from '../lib/supabase';
@@ -116,6 +116,17 @@ export const AdminStudentsPage: React.FC = () => {
     forms: Array<{ id: number; name: string; version?: string | null; url: string }>;
     students: Array<{ id: number; name: string; email: string }>;
   } | null>(null);
+
+  const importMappingResolveRef = useRef<((ok: boolean) => void) | null>(null);
+  const [importMappingMessage, setImportMappingMessage] = useState<string | null>(null);
+  const [importResultModal, setImportResultModal] = useState<{ title: string; message: string; error?: boolean } | null>(null);
+
+  const dismissImportResult = useCallback(() => {
+    setImportResultModal(null);
+    setIsImportOpen(false);
+    setImportRows([]);
+    setImportFileName('');
+  }, []);
 
   const digitsOnly = (val: string) => val.replace(/\D/g, '');
   const validateCreateStudentForm = (form: {
@@ -508,12 +519,53 @@ export const AdminStudentsPage: React.FC = () => {
         }
       }
 
+      const PAIR_SEP = '\x1e';
+      /** (course qualification from import file) + unit → forms on that course with that unit (form may use a different qualification_code on the form record). */
+      const courseLinkedPairToFormIds = new Map<string, Set<number>>();
+      const courseIds = [
+        ...new Set(
+          Object.values(courseByQual)
+            .map((c) => (c?.id ? Number(c.id) : 0))
+            .filter((n) => Number.isFinite(n) && n > 0)
+        ),
+      ];
+      const courseIdToQual = new Map<number, string>();
+      for (const c of Object.values(courseByQual)) {
+        if (!c?.id) continue;
+        const q = String(c.qualification_code ?? '').trim().toUpperCase();
+        if (q) courseIdToQual.set(Number(c.id), q);
+      }
+      const formById = new Map(displayForms.map((f) => [Number(f.id), f]));
+      if (courseIds.length > 0) {
+        const { data: courseFormLinks, error: cfErr } = await supabase
+          .from('skyline_course_forms')
+          .select('course_id, form_id')
+          .in('course_id', courseIds);
+        if (cfErr) console.error('skyline_course_forms (import mapping)', cfErr);
+        for (const row of (courseFormLinks as Array<{ course_id: number; form_id: number }> | null) || []) {
+          const cid = Number(row.course_id);
+          const fid = Number(row.form_id);
+          const courseQual = courseIdToQual.get(cid);
+          if (!courseQual || !Number.isFinite(fid) || fid <= 0) continue;
+          const linkedForm = formById.get(fid);
+          if (!linkedForm) continue;
+          const unit = String((linkedForm as unknown as { unit_code?: string | null }).unit_code ?? '').trim().toUpperCase();
+          if (!unit) continue;
+          const pairKey = `${courseQual}${PAIR_SEP}${unit}`;
+          if (!courseLinkedPairToFormIds.has(pairKey)) courseLinkedPairToFormIds.set(pairKey, new Set());
+          courseLinkedPairToFormIds.get(pairKey)!.add(fid);
+        }
+      }
+
       const formQualUnit = (f: (typeof displayForms)[number]) => ({
         qual: String((f as unknown as { qualification_code?: string | null }).qualification_code ?? '').trim().toUpperCase(),
         unit: String((f as unknown as { unit_code?: string | null }).unit_code ?? '').trim().toUpperCase(),
       });
 
-      /** When both qual and unit are on the row, only forms matching BOTH (same as the spreadsheet row). */
+      /**
+       * When both qual and unit are on the row: same form fields (strict), OR form is linked to a course whose
+       * qualification_code matches the row and the form’s unit_code matches (shared forms across courses).
+       */
       const matchFormIdsForImportRow = (qualCodes: string[], unitCodes: string[]): number[] => {
         const hasQ = qualCodes.length > 0;
         const hasU = unitCodes.length > 0;
@@ -530,10 +582,21 @@ export const AdminStudentsPage: React.FC = () => {
             if (fq && qualCodes.includes(fq)) ids.push(fid);
           }
         }
+        if (hasQ && hasU) {
+          for (const q of qualCodes) {
+            for (const u of unitCodes) {
+              const fromCourse = courseLinkedPairToFormIds.get(`${q}${PAIR_SEP}${u}`);
+              if (fromCourse) {
+                for (const fid of fromCourse) {
+                  if (Number.isFinite(fid) && fid > 0) ids.push(fid);
+                }
+              }
+            }
+          }
+        }
         return [...new Set(ids)];
       };
 
-      const PAIR_SEP = '\x1e';
       const strictPairs = new Set<string>();
       for (const r of importRows) {
         const qs = splitCodes(r.qualification_code);
@@ -542,15 +605,23 @@ export const AdminStudentsPage: React.FC = () => {
           for (const q of qs) for (const u of us) strictPairs.add(`${q}${PAIR_SEP}${u}`);
         }
       }
+      const pairSatisfiedByStrictOrCourse = (q: string, u: string) => {
+        if (
+          displayForms.some((f) => {
+            const { qual: fq, unit: fu } = formQualUnit(f);
+            return fq === q && fu === u;
+          })
+        )
+          return true;
+        const via = courseLinkedPairToFormIds.get(`${q}${PAIR_SEP}${u}`);
+        return Boolean(via && via.size > 0);
+      };
       const missingStrictPairs = [...strictPairs].filter((key) => {
         const sep = key.indexOf(PAIR_SEP);
         if (sep < 0) return true;
         const q = key.slice(0, sep);
         const u = key.slice(sep + PAIR_SEP.length);
-        return !displayForms.some((f) => {
-          const { qual: fq, unit: fu } = formQualUnit(f);
-          return fq === q && fu === u;
-        });
+        return !pairSatisfiedByStrictOrCourse(q, u);
       });
 
       const importRowsWithUnitNoQual = importRows.filter((r) => splitCodes(r.unit_code).length > 0 && splitCodes(r.qualification_code).length === 0);
@@ -584,7 +655,7 @@ export const AdminStudentsPage: React.FC = () => {
             ? `Missing courses (Qualification Code not found in Courses):\n${preview(missingCourseCodes)}\n\n`
             : '') +
           (missingStrictPairs.length
-            ? `No form matches BOTH qualification + unit (qualification code + unit code on the same form):\n${previewPairs(missingStrictPairs)}\n\n`
+            ? `No form matches qualification + unit (same form fields, or a form linked to a course with that qualification):\n${previewPairs(missingStrictPairs)}\n\n`
             : '') +
           (missingUnitCodes.length
             ? `Rows with unit but no qualification: no form for Unit Code(s):\n${preview(missingUnitCodes)}\n\n`
@@ -593,8 +664,15 @@ export const AdminStudentsPage: React.FC = () => {
             ? `Rows with qualification but no unit: no form for Qualification Code(s):\n${preview(missingQualCodesForForms)}\n\n`
             : '') +
           `Continue import anyway? (Students will still be created/updated, but missing mappings will skip course assignment and/or assessments.)`;
-        const ok = window.confirm(msg);
-        if (!ok) {
+        const consent = await new Promise<boolean>((resolve) => {
+          importMappingResolveRef.current = (ok: boolean) => {
+            importMappingResolveRef.current = null;
+            setImportMappingMessage(null);
+            resolve(ok);
+          };
+          setImportMappingMessage(msg);
+        });
+        if (!consent) {
           setImporting(false);
           setImportProgress(null);
           return;
@@ -732,12 +810,12 @@ export const AdminStudentsPage: React.FC = () => {
       console.error('handleBulkImport error', e);
       setImporting(false);
       setImportProgress(null);
-      window.alert(
-        'Import stopped due to an error. Some rows may have been processed.\n\nClick OK to close this message and the import dialog.'
-      );
-      setIsImportOpen(false);
-      setImportRows([]);
-      setImportFileName('');
+      setImportResultModal({
+        title: 'Import error',
+        error: true,
+        message:
+          'Import stopped due to an error. Some rows may have been processed.\n\nClick OK to close this message and the import dialog.',
+      });
       return;
     }
 
@@ -779,10 +857,11 @@ export const AdminStudentsPage: React.FC = () => {
       summary += 'No rows were processed.';
     }
     summary += '\n\nClick OK to close the import dialog.';
-    window.alert(summary);
-    setIsImportOpen(false);
-    setImportRows([]);
-    setImportFileName('');
+    setImportResultModal({
+      title: success > 0 ? 'Import complete' : failed > 0 ? 'Import finished' : 'Import complete',
+      message: summary,
+      error: success === 0 && failed > 0,
+    });
   };
 
   const downloadLastImportPdf = async () => {
@@ -1560,6 +1639,49 @@ export const AdminStudentsPage: React.FC = () => {
             </>
           )}
         </div>
+      </Modal>
+
+      <Modal
+        isOpen={!!importMappingMessage}
+        onClose={() => importMappingResolveRef.current?.(false)}
+        title="Check import mappings"
+        size="md"
+        overlayClassName="!z-[60]"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-700 whitespace-pre-line">{importMappingMessage}</p>
+          <div className="flex flex-wrap justify-end gap-2 border-t border-[var(--border)] pt-4">
+            <Button type="button" variant="outline" onClick={() => importMappingResolveRef.current?.(false)}>
+              Cancel
+            </Button>
+            <Button type="button" onClick={() => importMappingResolveRef.current?.(true)}>
+              Continue import
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={!!importResultModal}
+        onClose={dismissImportResult}
+        title={importResultModal?.title ?? 'Import'}
+        size="md"
+        overlayClassName="!z-[60]"
+      >
+        {importResultModal && (
+          <div className="space-y-4">
+            <p
+              className={`text-sm whitespace-pre-line ${importResultModal.error ? 'text-red-800' : 'text-gray-700'}`}
+            >
+              {importResultModal.message}
+            </p>
+            <div className="flex justify-end border-t border-[var(--border)] pt-4">
+              <Button type="button" onClick={dismissImportResult}>
+                OK
+              </Button>
+            </div>
+          </div>
+        )}
       </Modal>
 
       {editingId && editForm && (

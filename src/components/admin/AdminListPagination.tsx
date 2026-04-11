@@ -62,6 +62,7 @@ function JumpToPage({
         <div className="w-[4.75rem] shrink-0">
           <Select
             compact
+            attachDropdown="trigger"
             value={String(currentPage)}
             onChange={(v) => {
               const p = Number(v);

@@ -23,6 +23,11 @@ interface SelectProps {
    */
   compact?: boolean;
   /**
+   * `trigger`: menu is `position:absolute` under the trigger (avoids mis-aligned fixed portals when scroll containers are not `window`).
+   * `portal`: menu is portaled to `document.body` with `fixed` coords (default; best inside modals / overflow clipping).
+   */
+  attachDropdown?: 'portal' | 'trigger';
+  /**
    * @deprecated Dropdown always renders in a portal to avoid clipping in modals / overflow containers.
    */
   portal?: boolean;
@@ -71,6 +76,41 @@ function computeDropdownPosition(
   return { top, left, minWidth: clampedMin, maxWidth, maxHeight };
 }
 
+type InlineMenuLayout = {
+  maxHeight: number;
+  placement: 'below' | 'above';
+};
+
+function computeInlineMenuLayout(trigger: DOMRect, opts?: { compact?: boolean }): InlineMenuLayout {
+  const margin = 8;
+  const gap = 4;
+  const compact = opts?.compact === true;
+  const viewportH = window.innerHeight || document.documentElement.clientHeight || 0;
+  const spaceBelow = Math.max(0, viewportH - trigger.bottom - margin);
+  const spaceAbove = Math.max(0, trigger.top - margin);
+  const openDown = spaceBelow >= 160 || spaceBelow >= spaceAbove;
+  const available = openDown ? spaceBelow - gap : spaceAbove - gap;
+  const cap = compact ? COMPACT_MENU_MAX_HEIGHT : DROPDOWN_MAX_HEIGHT;
+  const minList = compact ? 88 : 120;
+  const maxHeight = Math.min(cap, Math.max(minList, available));
+  return { maxHeight, placement: openDown ? 'below' : 'above' };
+}
+
+function getScrollableAncestors(el: HTMLElement | null): HTMLElement[] {
+  const out: HTMLElement[] = [];
+  let cur: HTMLElement | null = el?.parentElement ?? null;
+  while (cur && cur !== document.body) {
+    const s = getComputedStyle(cur);
+    const oy = s.overflowY;
+    const ox = s.overflowX;
+    if (/(auto|scroll|overlay)/.test(oy) || /(auto|scroll|overlay)/.test(ox)) {
+      out.push(cur);
+    }
+    cur = cur.parentElement;
+  }
+  return out;
+}
+
 export const Select: React.FC<SelectProps> = ({
   label,
   value,
@@ -82,31 +122,55 @@ export const Select: React.FC<SelectProps> = ({
   className,
   required,
   compact,
+  attachDropdown = 'portal',
   portal: _portal,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const selectRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [dropdownStyle, setDropdownStyle] = useState<DropdownPosition | null>(null);
+  const [inlineLayout, setInlineLayout] = useState<InlineMenuLayout | null>(null);
   const selectId = `select-${Math.random().toString(36).substr(2, 9)}`;
 
   const updatePosition = useCallback(() => {
     if (!isOpen || !triggerRef.current) return;
     const rect = triggerRef.current.getBoundingClientRect();
-    setDropdownStyle(computeDropdownPosition(rect, { compact }));
-  }, [isOpen, compact]);
+    if (attachDropdown === 'trigger') {
+      setInlineLayout(computeInlineMenuLayout(rect, { compact }));
+      setDropdownStyle(null);
+    } else {
+      setDropdownStyle(computeDropdownPosition(rect, { compact }));
+      setInlineLayout(null);
+    }
+  }, [isOpen, compact, attachDropdown]);
 
   useLayoutEffect(() => {
     if (!isOpen) {
       setDropdownStyle(null);
+      setInlineLayout(null);
       return;
     }
     updatePosition();
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      updatePosition();
+      raf2 = requestAnimationFrame(updatePosition);
+    });
     window.addEventListener('scroll', updatePosition, true);
     window.addEventListener('resize', updatePosition);
+    const vv = typeof window !== 'undefined' ? window.visualViewport : null;
+    vv?.addEventListener('scroll', updatePosition);
+    vv?.addEventListener('resize', updatePosition);
+    const scrollEls = getScrollableAncestors(triggerRef.current);
+    scrollEls.forEach((node) => node.addEventListener('scroll', updatePosition, true));
     return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
       window.removeEventListener('scroll', updatePosition, true);
       window.removeEventListener('resize', updatePosition);
+      vv?.removeEventListener('scroll', updatePosition);
+      vv?.removeEventListener('resize', updatePosition);
+      scrollEls.forEach((node) => node.removeEventListener('scroll', updatePosition, true));
     };
   }, [isOpen, updatePosition]);
 
@@ -126,6 +190,30 @@ export const Select: React.FC<SelectProps> = ({
   }, [isOpen]);
 
   const selectedOption = options.find((opt) => opt.value === value);
+
+  const optionList = (
+    <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          onClick={() => {
+            onChange(option.value);
+            setIsOpen(false);
+          }}
+          className={cn(
+            'w-full transition-colors whitespace-nowrap overflow-hidden text-ellipsis',
+            compact ? 'px-3 py-2 text-center text-base font-medium tabular-nums' : 'px-4 py-2.5 text-left text-sm',
+            'hover:bg-[var(--brand)] hover:text-white',
+            value === option.value && 'bg-orange-50 text-[var(--brand)] font-semibold'
+          )}
+          title={option.label}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
 
   return (
     <div className={cn('w-full', className)}>
@@ -175,7 +263,19 @@ export const Select: React.FC<SelectProps> = ({
           />
         </button>
 
-        {isOpen && dropdownStyle && typeof document !== 'undefined' &&
+        {isOpen && attachDropdown === 'trigger' && inlineLayout && (
+          <div
+            data-select-dropdown
+            className={cn(
+              'absolute left-0 z-[10000] flex min-w-full flex-col overflow-hidden rounded-lg border border-gray-200 bg-white py-1 shadow-xl ring-1 ring-black/5',
+              inlineLayout.placement === 'above' ? 'bottom-full mb-1' : 'top-full mt-1'
+            )}
+            style={{ maxHeight: inlineLayout.maxHeight }}
+          >
+            {optionList}
+          </div>
+        )}
+        {isOpen && attachDropdown === 'portal' && dropdownStyle && typeof document !== 'undefined' &&
           createPortal(
             <div
               data-select-dropdown
@@ -188,27 +288,7 @@ export const Select: React.FC<SelectProps> = ({
                 maxHeight: dropdownStyle.maxHeight,
               }}
             >
-              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-                {options.map((option) => (
-                  <button
-                    key={option.value}
-                    type="button"
-                    onClick={() => {
-                      onChange(option.value);
-                      setIsOpen(false);
-                    }}
-                    className={cn(
-                      'w-full transition-colors whitespace-nowrap overflow-hidden text-ellipsis',
-                      compact ? 'px-3 py-2 text-center text-base font-medium tabular-nums' : 'px-4 py-2.5 text-left text-sm',
-                      'hover:bg-[var(--brand)] hover:text-white',
-                      value === option.value && 'bg-orange-50 text-[var(--brand)] font-semibold'
-                    )}
-                    title={option.label}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
+              {optionList}
             </div>,
             document.body
           )}
