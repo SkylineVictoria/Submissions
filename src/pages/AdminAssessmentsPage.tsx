@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { Copy, ExternalLink, Send, RefreshCw, Ban, CheckCircle, User, CalendarClock, CalendarDays, Download } from 'lucide-react';
 import { listSubmittedInstancesPaged, updateInstanceRole, updateInstanceWorkflowStatus, issueInstanceAccessLink, getOrIssueInstanceAccessLink, revokeRoleAccessTokens, extendInstanceAccessTokens, extendInstanceAccessTokensToDate, allowStudentResubmission, listTrainers, updateFormInstanceDates, listCoursesPaged, listFormsPaged } from '../lib/formEngine';
 import type { SubmittedInstanceRow, Trainer } from '../lib/formEngine';
@@ -11,6 +11,8 @@ import { Loader } from '../components/ui/Loader';
 import { Modal } from '../components/ui/Modal';
 import { toast } from '../utils/toast';
 import { AdminListPagination } from '../components/admin/AdminListPagination';
+import type { SortDirection } from '../components/admin/SortableTh';
+import { SortableTh } from '../components/admin/SortableTh';
 
 const PDF_BASE = import.meta.env.VITE_PDF_API_URL ?? '';
 
@@ -66,6 +68,12 @@ export const AdminAssessmentsPage: React.FC = () => {
   const [editDatesStart, setEditDatesStart] = useState('');
   const [editDatesEnd, setEditDatesEnd] = useState('');
   const [savingDates, setSavingDates] = useState(false);
+
+  type DirectorySortKey = 'student' | 'form' | 'start' | 'end' | 'created' | 'workflow';
+  const [directorySort, setDirectorySort] = useState<{ key: DirectorySortKey; dir: SortDirection }>({
+    key: 'student',
+    dir: 'asc',
+  });
 
   const loadRows = useCallback(async (page: number, search: string, opts?: { silent?: boolean }) => {
     if (!opts?.silent) setLoading(true);
@@ -218,6 +226,71 @@ export const AdminAssessmentsPage: React.FC = () => {
   };
 
   const totalPages = Math.max(1, Math.ceil(totalRows / PAGE_SIZE));
+
+  const toggleDirectorySort = (key: DirectorySortKey) => {
+    setDirectorySort((prev) => {
+      if (prev.key !== key) return { key, dir: 'asc' };
+      return { key: prev.key, dir: prev.dir === 'asc' ? 'desc' : 'asc' };
+    });
+  };
+
+  const timeOrNull = (s: string | null | undefined): number | null => {
+    if (!s?.trim()) return null;
+    const t = Date.parse(s);
+    return Number.isFinite(t) ? t : null;
+  };
+
+  const compareDateNullsLast = (a: string | null | undefined, b: string | null | undefined, asc: boolean): number => {
+    const ta = timeOrNull(a);
+    const tb = timeOrNull(b);
+    if (ta === null && tb === null) return 0;
+    if (ta === null) return 1;
+    if (tb === null) return -1;
+    const d = ta - tb;
+    return asc ? d : -d;
+  };
+
+  const sortedRows = useMemo(() => {
+    const asc = directorySort.dir === 'asc';
+    const copy = [...rows];
+    copy.sort((a, b) => {
+      let cmp = 0;
+      switch (directorySort.key) {
+        case 'student': {
+          const sa = `${(a.student_name || '').trim()}\t${(a.student_email || '').trim()}`.toLowerCase();
+          const sb = `${(b.student_name || '').trim()}\t${(b.student_email || '').trim()}`.toLowerCase();
+          cmp = sa.localeCompare(sb, undefined, { sensitivity: 'base' });
+          if (!asc) cmp = -cmp;
+          break;
+        }
+        case 'form': {
+          const fa = `${a.form_name || ''} ${a.form_version ?? ''}`.toLowerCase();
+          const fb = `${b.form_name || ''} ${b.form_version ?? ''}`.toLowerCase();
+          cmp = fa.localeCompare(fb, undefined, { sensitivity: 'base' });
+          if (!asc) cmp = -cmp;
+          break;
+        }
+        case 'start':
+          cmp = compareDateNullsLast(a.start_date, b.start_date, asc);
+          break;
+        case 'end':
+          cmp = compareDateNullsLast(a.end_date, b.end_date, asc);
+          break;
+        case 'created':
+          cmp = compareDateNullsLast(a.created_at, b.created_at, asc);
+          break;
+        case 'workflow':
+          cmp = getWorkflowLabel(a).localeCompare(getWorkflowLabel(b), undefined, { sensitivity: 'base' });
+          if (!asc) cmp = -cmp;
+          break;
+        default:
+          break;
+      }
+      if (cmp !== 0) return cmp;
+      return a.id - b.id;
+    });
+    return copy;
+  }, [rows, directorySort]);
 
   const renderAssessmentActions = (row: SubmittedInstanceRow, mode: 'toolbar' | 'stack') => {
     const role = row.role_context === 'trainer' ? 'trainer' : row.role_context === 'office' ? 'office' : 'student';
@@ -472,7 +545,7 @@ export const AdminAssessmentsPage: React.FC = () => {
           ) : (
             <>
               <div className="space-y-3 lg:hidden">
-                {rows.map((row) => (
+                {sortedRows.map((row) => (
                   <div key={row.id} className="rounded-lg border border-[var(--border)] bg-white p-4 shadow-sm">
                     <div className="flex items-start gap-3">
                       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gray-100 text-gray-600">
@@ -508,17 +581,53 @@ export const AdminAssessmentsPage: React.FC = () => {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-gray-200 text-left text-xs uppercase tracking-wide text-gray-500">
-                      <th className="py-3 pr-3">Student</th>
-                      <th className="py-3 pr-3">Form</th>
-                      <th className="py-3 pr-3 w-[120px]">Start</th>
-                      <th className="py-3 pr-3 w-[120px]">End</th>
-                      <th className="py-3 pr-3 w-[120px]">Created</th>
-                      <th className="py-3 pr-3 w-[140px]">Workflow</th>
-                      <th className="py-3 text-right min-w-[220px]">Actions</th>
+                      <SortableTh
+                        label="Student"
+                        className="py-3 pr-3 text-left"
+                        active={directorySort.key === 'student'}
+                        direction={directorySort.dir}
+                        onToggle={() => toggleDirectorySort('student')}
+                      />
+                      <SortableTh
+                        label="Form"
+                        className="py-3 pr-3 text-left"
+                        active={directorySort.key === 'form'}
+                        direction={directorySort.dir}
+                        onToggle={() => toggleDirectorySort('form')}
+                      />
+                      <SortableTh
+                        label="Start"
+                        className="py-3 pr-3 text-left w-[120px]"
+                        active={directorySort.key === 'start'}
+                        direction={directorySort.dir}
+                        onToggle={() => toggleDirectorySort('start')}
+                      />
+                      <SortableTh
+                        label="End"
+                        className="py-3 pr-3 text-left w-[120px]"
+                        active={directorySort.key === 'end'}
+                        direction={directorySort.dir}
+                        onToggle={() => toggleDirectorySort('end')}
+                      />
+                      <SortableTh
+                        label="Created"
+                        className="py-3 pr-3 text-left w-[120px]"
+                        active={directorySort.key === 'created'}
+                        direction={directorySort.dir}
+                        onToggle={() => toggleDirectorySort('created')}
+                      />
+                      <SortableTh
+                        label="Workflow"
+                        className="py-3 pr-3 text-left w-[140px]"
+                        active={directorySort.key === 'workflow'}
+                        direction={directorySort.dir}
+                        onToggle={() => toggleDirectorySort('workflow')}
+                      />
+                      <th className="py-3 text-right min-w-[220px] font-semibold">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {rows.map((row) => (
+                    {sortedRows.map((row) => (
                       <tr key={row.id} className="border-b border-gray-100 hover:bg-gray-50/50 transition-colors">
                         <td className="py-3 pr-3">
                           <div className="font-medium text-gray-900">{row.student_name}</div>
