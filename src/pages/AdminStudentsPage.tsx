@@ -1326,7 +1326,7 @@ export const AdminStudentsPage: React.FC = () => {
       >
         <div className="space-y-4">
           <p className="text-sm text-gray-600">
-            Upload a CSV or XLSX file with columns: <strong>Given Name</strong>, <strong>Surname</strong> (optional), <strong>Email Address</strong>, <strong>Mobile Phone</strong>, <strong>Qualification Code</strong>, <strong>Activity Start Date</strong>, <strong>Activity End Date</strong>. Optional: <strong>Student ID</strong>, <strong>Unit Code</strong>.
+            Upload a CSV or XLSX file with columns: <strong>Given Name</strong>, <strong>Surname</strong> (optional), <strong>Email Address</strong>, <strong>Mobile Phone</strong>, <strong>Qualification Code</strong>, <strong>Activity Start Date</strong>, <strong>Activity End Date</strong>, <strong>Student ID</strong>, <strong>Unit Code</strong>.
           </p>
           {importing && importProgress && (
             <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
