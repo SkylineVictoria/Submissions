@@ -594,7 +594,11 @@ export const AdminStudentsPage: React.FC = () => {
             : '') +
           `Continue import anyway? (Students will still be created/updated, but missing mappings will skip course assignment and/or assessments.)`;
         const ok = window.confirm(msg);
-        if (!ok) return;
+        if (!ok) {
+          setImporting(false);
+          setImportProgress(null);
+          return;
+        }
       }
 
       // Prevent duplicates within this single import run
@@ -726,9 +730,14 @@ export const AdminStudentsPage: React.FC = () => {
       setImportProgress(null);
     } catch (e) {
       console.error('handleBulkImport error', e);
-      toast.error('Import stopped due to an error. Some rows may have been processed.');
       setImporting(false);
       setImportProgress(null);
+      window.alert(
+        'Import stopped due to an error. Some rows may have been processed.\n\nClick OK to close this message and the import dialog.'
+      );
+      setIsImportOpen(false);
+      setImportRows([]);
+      setImportFileName('');
       return;
     }
 
@@ -757,13 +766,23 @@ export const AdminStudentsPage: React.FC = () => {
         forms: formsForPdf,
         students: uniqueStudents as Array<{ id: number; name: string; email: string }>,
       });
-
-      toast.success(
-        `${success} student${success !== 1 ? 's' : ''} imported.${failed > 0 ? ` ${failed} failed.` : ''} You can download the generic links PDF.`
-      );
-    } else {
-      toast.error(failed > 0 ? `Import failed for all ${failed} rows. Check for duplicate emails or Student IDs.` : 'No valid rows to import.');
     }
+
+    let summary = 'Import complete.\n\n';
+    if (success > 0) {
+      summary += `${success} row${success !== 1 ? 's' : ''} imported successfully.`;
+      if (failed > 0) summary += `\n${failed} row${failed !== 1 ? 's' : ''} failed.`;
+      summary += '\n\nUse "Download import PDF" on the Students page when you need generic assessment links.';
+    } else if (failed > 0) {
+      summary += `No rows were imported successfully. ${failed} row${failed !== 1 ? 's' : ''} failed.\n\nCheck duplicate emails, Student IDs, or required fields.`;
+    } else {
+      summary += 'No rows were processed.';
+    }
+    summary += '\n\nClick OK to close the import dialog.';
+    window.alert(summary);
+    setIsImportOpen(false);
+    setImportRows([]);
+    setImportFileName('');
   };
 
   const downloadLastImportPdf = async () => {
