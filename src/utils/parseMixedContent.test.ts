@@ -531,6 +531,49 @@ Labour	$800	Secondary`;
     });
   });
 
+  it('parses headerless Assessment Information table (no header row, single-space paste)', () => {
+    const input = `1 Assessment method Carpentry Workshop Practical
+2 Assessment type Summative
+3 Assessment description (What?) This assessment task is designed to gather evidence.
+5 Assessment Instructions (How?) 1. Review the workbook. 2. Conduct research.
+6 Assessment date/s and timing/s (When?) This assessment will be conducted according to plan.`;
+
+    const result = parseMixedContent(input);
+    expect(result).toHaveLength(1);
+    expect(result[0].type).toBe('table');
+    if (result[0].type === 'table') {
+      expect(result[0].headers).toEqual(['Assessment Information', 'Description']);
+      expect(result[0].rows.length).toBeGreaterThanOrEqual(3);
+      const methodRow = result[0].rows.find((r) => r[0].toLowerCase().includes('assessment method'));
+      expect(methodRow?.[1]).toContain('Carpentry');
+      const descRow = result[0].rows.find((r) => r[0].toLowerCase().includes('assessment description'));
+      expect(descRow?.[0]).toContain('(What?)');
+      expect(descRow?.[1]).toContain('gather evidence');
+      const instrRow = result[0].rows.find((r) => r[0].toLowerCase().includes('assessment instructions'));
+      expect(instrRow?.[0]).toContain('(How?)');
+      expect(instrRow?.[1]).toContain('Review');
+    }
+  });
+
+  it('parses headerless Assessment Information table even when blank lines separate rows', () => {
+    const input = `1 Assessment method Carpentry Workshop Practical
+
+2 Assessment type Summative
+
+3 Assessment description (What?) This assessment task is designed to gather evidence.
+
+5 Assessment Instructions (How?) 1. Review the workbook. 2. Conduct research.`;
+
+    const result = parseMixedContent(input);
+    expect(result).toHaveLength(1);
+    expect(result[0].type).toBe('table');
+    if (result[0].type === 'table') {
+      expect(result[0].rows.length).toBeGreaterThanOrEqual(3);
+      const typeRow = result[0].rows.find((r) => r[0].toLowerCase().includes('assessment type'));
+      expect(typeRow?.[1]).toContain('Summative');
+    }
+  });
+
   describe('comprehensive standard tables (spec section L.B)', () => {
     it('parses Project Risks 4-column table', () => {
       const input = `Project Risks

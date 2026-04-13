@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { parseMixedContent as parseMixedContentUtil, stripLeadingRowNumberColumn } from '../../utils/parseMixedContent';
-import type { ParsedBlock, ParsedTableBlock } from '../../utils/parseMixedContent';
+import type { ParsedTableBlock } from '../../utils/parseMixedContent';
+import { parseInputToInstructionBlocks } from '../../utils/parseInstructionInput';
 import { RichTextEditor } from '../ui/RichTextEditor';
 import { Button } from '../ui/Button';
 import { Select } from '../ui/Select';
@@ -67,6 +68,9 @@ export function TaskInstructionsModal({
   const [pasteDraftByBlock, setPasteDraftByBlock] = useState<Record<string, string>>({});
   const [autoCreatingBlockId, setAutoCreatingBlockId] = useState<string | null>(null);
   const [smartPasteInput, setSmartPasteInput] = useState('');
+  const [smartPasteHtml, setSmartPasteHtml] = useState('');
+  const [docxImporting, setDocxImporting] = useState(false);
+  const docxInputRef = useRef<HTMLInputElement | null>(null);
   const [uploadingImgBlockId, setUploadingImgBlockId] = useState<string | null>(null);
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
@@ -326,43 +330,23 @@ export function TaskInstructionsModal({
     return { rows };
   };
 
-  /** Parse mixed paste (paragraphs + tables) into InstructionBlocks using the improved parser. */
-  const parsedBlocksToInstructionBlocks = (parsed: ParsedBlock[]): InstructionBlock[] => {
-    const ts = Date.now();
-    return parsed.map((b, i) => {
-      if (b.type === 'paragraph') {
-        const rawContent = [b.heading, b.content].filter(Boolean).join('\n\n').trim();
-        const content = rawContent ? plainTextToHtml(rawContent) : '';
-        return {
-          id: `smart-${ts}-${i}`,
-          type: 'paragraph' as const,
-          heading: b.heading && b.content ? b.heading : undefined,
-          content,
-        };
-      }
-      return {
-        id: `smart-${ts}-${i}`,
-        type: 'table' as const,
-        columnHeaders: b.headers,
-        rows: b.rows.map((cells) => ({
-          cells: cells.map((c) => cellContentToHtml(c)),
-        })),
-      };
+  const handleSmartPaste = async () => {
+    const blocks = await parseInputToInstructionBlocks({
+      html: smartPasteHtml,
+      text: smartPasteInput,
     });
-  };
-
-  const handleSmartPaste = () => {
-    const parsed = parseMixedContentUtil(smartPasteInput);
-    const blocks = parsedBlocksToInstructionBlocks(parsed);
     if (blocks.length === 0) {
-      toast.error('No content could be parsed. Paste text with paragraphs (separated by blank lines) and/or tables (tab or 2+ spaces between columns).');
+      toast.error('No content could be parsed. Try pasting directly from Word (keeps tables), or paste plain text as a fallback.');
       return;
     }
     updateBlocks(() => blocks);
     setSmartPasteInput('');
+    setSmartPasteHtml('');
     const pCount = blocks.filter((b) => b.type === 'paragraph').length;
     const tCount = blocks.filter((b) => b.type === 'table').length;
-    toast.success(`${blocks.length} block${blocks.length === 1 ? '' : 's'} created (${pCount} paragraph${pCount === 1 ? '' : 's'}, ${tCount} table${tCount === 1 ? '' : 's'})`);
+    toast.success(
+      `${blocks.length} block${blocks.length === 1 ? '' : 's'} created (${pCount} paragraph${pCount === 1 ? '' : 's'}, ${tCount} table${tCount === 1 ? '' : 's'})`
+    );
   };
 
   const buildLegacyBlocks = (raw?: TaskInstructionsData | null): InstructionBlock[] => {
@@ -617,9 +601,55 @@ export function TaskInstructionsModal({
             <p className="text-xs text-gray-600">
               Paste from Word, Google Docs, or any document. Paragraphs and tables will be auto-detected. Separate paragraphs with blank lines. Tables need tab or 2+ spaces between columns.
             </p>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <input
+                ref={docxInputRef}
+                type="file"
+                accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                className="hidden"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0] ?? null;
+                  if (!file) return;
+                  setDocxImporting(true);
+                  try {
+                    const blocks = await parseInputToInstructionBlocks({ file });
+                    if (blocks.length === 0) {
+                      toast.error('No content could be parsed from this Word file.');
+                      return;
+                    }
+                    updateBlocks(() => blocks);
+                    toast.success(`Imported ${blocks.length} block${blocks.length === 1 ? '' : 's'} from Word`);
+                    setSmartPasteInput('');
+                    setSmartPasteHtml('');
+                  } finally {
+                    setDocxImporting(false);
+                    // allow re-uploading the same file
+                    e.target.value = '';
+                  }
+                }}
+              />
+              <Button variant="outline" size="sm" type="button" onClick={() => docxInputRef.current?.click()} disabled={docxImporting}>
+                {docxImporting ? (
+                  <>
+                    <Loader variant="dots" size="sm" inline className="mr-1.5" />
+                    Reading Word…
+                  </>
+                ) : (
+                  'Upload Word (.docx)'
+                )}
+              </Button>
+              <div className="text-xs text-gray-500">DOCX/HTML preserve real tables. Plain text is fallback.</div>
+            </div>
             <Textarea
               value={smartPasteInput}
               onChange={(e) => setSmartPasteInput(e.target.value)}
+              onPaste={(e) => {
+                const html = e.clipboardData?.getData('text/html') || '';
+                const text = e.clipboardData?.getData('text/plain') || '';
+                setSmartPasteHtml(html);
+                // Show plain text in the box, but keep HTML for structure-aware parsing.
+                if (text) setSmartPasteInput(text);
+              }}
               placeholder="Paste your content here... (paragraphs first, then table, or mixed)"
               rows={8}
               className="text-sm font-mono"
@@ -627,7 +657,7 @@ export function TaskInstructionsModal({
             <Button
               variant="primary"
               size="sm"
-              onClick={handleSmartPaste}
+              onClick={() => void handleSmartPaste()}
               disabled={!smartPasteInput.trim()}
             >
               Auto-create blocks from paste
@@ -743,6 +773,7 @@ export function TaskInstructionsModal({
                     const headers = block.columnHeaders;
                     const cells = row.cells;
                     const isMultiCol = Array.isArray(headers) && headers.length > 0 && Array.isArray(cells);
+                    const isTwoColCells = !isMultiCol && Array.isArray(cells) && cells.length === 2;
                     return (
                       <div key={`${block.id}-row-${rowIdx}`} className="border border-gray-200 rounded-md bg-white p-3 space-y-2">
                         <div className="flex justify-between items-center">
@@ -765,17 +796,42 @@ export function TaskInstructionsModal({
                           </div>
                         ) : (
                           <>
-                            <Input
-                              value={row.heading || ''}
-                              onChange={(e) => updateTableRow(index, rowIdx, { heading: e.target.value })}
-                              placeholder="Left column heading (bold in output)"
-                            />
-                            <RichTextEditor
-                              value={row.content || ''}
-                              onChange={(v) => updateTableRow(index, rowIdx, { content: v })}
-                              placeholder="Right column content"
-                              minHeight="90px"
-                            />
+                            {isTwoColCells ? (
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 items-start">
+                                <div className="min-w-0">
+                                  <label className="block text-xs text-gray-500 mb-0.5">Left column</label>
+                                  <RichTextEditor
+                                    value={cells?.[0] ?? ''}
+                                    onChange={(v) => updateTableRowCell(index, rowIdx, 0, v)}
+                                    placeholder="Left column"
+                                    minHeight="60px"
+                                  />
+                                </div>
+                                <div className="min-w-0">
+                                  <label className="block text-xs text-gray-500 mb-0.5">Right column</label>
+                                  <RichTextEditor
+                                    value={cells?.[1] ?? ''}
+                                    onChange={(v) => updateTableRowCell(index, rowIdx, 1, v)}
+                                    placeholder="Right column"
+                                    minHeight="90px"
+                                  />
+                                </div>
+                              </div>
+                            ) : (
+                              <>
+                                <Input
+                                  value={row.heading || ''}
+                                  onChange={(e) => updateTableRow(index, rowIdx, { heading: e.target.value })}
+                                  placeholder="Left column heading (bold in output)"
+                                />
+                                <RichTextEditor
+                                  value={row.content || ''}
+                                  onChange={(v) => updateTableRow(index, rowIdx, { content: v })}
+                                  placeholder="Right column content"
+                                  minHeight="90px"
+                                />
+                              </>
+                            )}
                           </>
                         )}
                       </div>

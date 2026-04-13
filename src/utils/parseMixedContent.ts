@@ -28,6 +28,127 @@ const KNOWN_HEADERS = [
   'Instructions',
 ];
 
+const ASSESSMENT_INFO_ROW_LABELS = [
+  'assessment method',
+  'assessment type',
+  'assessment description',
+  'assessment instructions',
+  'assessment date/s and timing/s',
+  'assessment dates and timings',
+  'assessment date and timing',
+  'assessment information',
+  'purpose (objective) of the assessment',
+  'purpose (objective) of assessment',
+  'purpose',
+  'specifications',
+  'required resources',
+  'evidence requirements',
+  'evidence requirements/',
+  'evidence to submit',
+];
+
+function normalizeLabelForMatch(s: string): string {
+  return String(s ?? '')
+    .toLowerCase()
+    .replace(/[\s_\-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function pickLongestMatchingPrefixLabel(rest: string): string | null {
+  const r = normalizeLabelForMatch(rest);
+  if (!r) return null;
+  let best: string | null = null;
+  for (const label of ASSESSMENT_INFO_ROW_LABELS) {
+    const l = normalizeLabelForMatch(label);
+    if (!l) continue;
+    if (r.startsWith(l) && (!best || l.length > normalizeLabelForMatch(best).length)) {
+      best = label;
+    }
+  }
+  return best;
+}
+
+function tryParseHeaderlessAssessmentInfoTable(lines: string[]): ParsedTableBlock | null {
+  // Heuristic: many consecutive lines start with 1/2/3... and known assessment-info row labels.
+  const trimmed = lines.map((l) => l.trimEnd()).filter((l) => l.trim().length > 0);
+  if (trimmed.length < 3) return null;
+  const headerMaybe = trimmed[0] ?? '';
+  if (/assessment information/i.test(headerMaybe) && /description/i.test(headerMaybe)) return null; // already handled by normal table path
+
+  const rowStarts: Array<{ idx: number; rowNum: string; labelRaw: string; contentRaw: string }> = [];
+  for (let i = 0; i < trimmed.length; i++) {
+    const line = trimmed[i] ?? '';
+    const m = line.match(/^(\d+)[.)]?\s+(.*)$/);
+    if (!m) continue;
+    const rowNum = m[1] ?? '';
+    const rest = (m[2] ?? '').trim();
+    const label = pickLongestMatchingPrefixLabel(rest);
+    if (!label) continue;
+    const normalizedLabel = normalizeLabelForMatch(label);
+    const normalizedRest = normalizeLabelForMatch(rest);
+    // Map cutLen back onto original rest by taking the same number of words from the label match
+    // (labels are short + stable; this is good enough for pasted plain text).
+    const labelWordCount = normalizedLabel.split(' ').filter(Boolean).length;
+    const restWords = rest.split(/\s+/);
+    const labelRaw = restWords.slice(0, labelWordCount).join(' ').trim();
+    const contentRaw = restWords.slice(labelWordCount).join(' ').trim();
+    if (!normalizedRest.startsWith(normalizedLabel)) continue;
+    if (!rowNum.trim() || !labelRaw) continue;
+    rowStarts.push({ idx: i, rowNum, labelRaw, contentRaw });
+  }
+  if (rowStarts.length < 2) return null;
+
+  // Build rows by consuming lines until next start; append continuations to the right cell.
+  const rows: string[][] = [];
+  const rowNumbers: string[] = [];
+  for (let r = 0; r < rowStarts.length; r++) {
+    const start = rowStarts[r]!;
+    const end = rowStarts[r + 1]?.idx ?? trimmed.length;
+    const blockLines = trimmed.slice(start.idx, end);
+    const firstLine = blockLines[0] ?? '';
+    const firstMatch = firstLine.match(/^(\d+)[.)]?\s+(.*)$/);
+    const firstRest = (firstMatch?.[2] ?? '').trim();
+    const label = pickLongestMatchingPrefixLabel(firstRest);
+    if (!label) continue;
+    const normalizedLabel = normalizeLabelForMatch(label);
+    const labelWordCount = normalizedLabel.split(' ').filter(Boolean).length;
+    const restWords = firstRest.split(/\s+/);
+    const labelRaw = restWords.slice(0, labelWordCount).join(' ').trim();
+    let right = restWords.slice(labelWordCount).join(' ').trim();
+
+    // If (What?)/(How?)/(When?) exists on first line, attach to left cell.
+    const paren = right.match(/^(\([^)]{1,80}\))\s*(.*)$/);
+    let left = labelRaw;
+    if (paren) {
+      left = `${labelRaw}\n${paren[1]}`.trim();
+      right = (paren[2] ?? '').trim();
+    }
+
+    // Append continuation lines (wrapped text, bullets, list items) into right cell.
+    if (blockLines.length > 1) {
+      const cont = blockLines
+        .slice(1)
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0);
+      if (cont.length > 0) {
+        right = [right, ...cont].filter(Boolean).join('\n');
+      }
+    }
+
+    rowNumbers.push(start.rowNum);
+    rows.push([left.trim(), right.trim()]);
+  }
+
+  if (rows.length < 2) return null;
+  return {
+    type: 'table',
+    headers: ['Assessment Information', 'Description'],
+    rows,
+    meta: { rowNumbers, sourcePattern: 'assessment-info' },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // A. NORMALIZATION
 // ---------------------------------------------------------------------------
@@ -574,6 +695,13 @@ function isTableCellContinuationBoundary(lastLine: string, nextNonBlankLine: str
   return true;
 }
 
+function isHeaderlessAssessmentInfoRowStart(line: string): boolean {
+  const t = (line ?? '').trim();
+  if (!t) return false;
+  // Common Word/PDF copy: "1 Assessment Method ..." (single spaces, no table separators)
+  return /^\d+[.)]?\s+assessment\s+/i.test(t) || /^\d+[.)]?\s+purpose\s+/i.test(t) || /^\d+[.)]?\s+specifications\s+/i.test(t);
+}
+
 // ---------------------------------------------------------------------------
 // SPLIT INTO LOGICAL BLOCKS
 // ---------------------------------------------------------------------------
@@ -602,6 +730,11 @@ function splitIntoLogicalBlocks(normalized: string): string[] {
           }
         }
         if (isTableCellContinuationBoundary(lastLine, nextNonBlank)) {
+          current.push(line);
+          continue;
+        }
+        // Don't split headerless Assessment Information tables when Word inserts blank lines between numbered rows.
+        if (isHeaderlessAssessmentInfoRowStart(lastLine) && isHeaderlessAssessmentInfoRowStart(nextNonBlank)) {
           current.push(line);
           continue;
         }
@@ -709,6 +842,11 @@ function parseChunk(chunk: string): ParsedBlock[] {
   if (headingBlock && tableLines.length > 0) {
     headingBlock.content = tableLines.join('\n');
     return [headingBlock];
+  }
+  const headerlessAssessment = tryParseHeaderlessAssessmentInfoTable(lines);
+  if (headerlessAssessment) {
+    if (headingBlock) return [headingBlock, headerlessAssessment];
+    return [headerlessAssessment];
   }
   return [{ type: 'paragraph', content: chunk }];
 }
