@@ -793,6 +793,33 @@ export async function getInstanceForStudentAndForm(
   return { id: Number((data as { id: number }).id) };
 }
 
+/** Bulk fetch instances for one student across many forms. */
+export async function listInstancesForStudentAndForms(
+  studentId: number,
+  formIds: number[]
+): Promise<Array<{ id: number; form_id: number; start_date: string | null; end_date: string | null }>> {
+  const sid = Number(studentId);
+  if (!Number.isFinite(sid) || sid <= 0) return [];
+  const ids = Array.from(new Set((formIds || []).map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0)));
+  if (ids.length === 0) return [];
+  const { data, error } = await supabase
+    .from('skyline_form_instances')
+    .select('id, form_id, start_date, end_date')
+    .eq('student_id', sid)
+    .in('form_id', ids);
+  if (error) {
+    console.error('listInstancesForStudentAndForms error', error);
+    return [];
+  }
+  const rows = (data as Array<{ id: number; form_id: number; start_date: string | null; end_date: string | null }> | null) || [];
+  return rows.map((r) => ({
+    id: Number(r.id),
+    form_id: Number(r.form_id),
+    start_date: r.start_date ? String(r.start_date) : null,
+    end_date: r.end_date ? String(r.end_date) : null,
+  }));
+}
+
 export async function createFormInstance(
   formId: number,
   roleContext: string,

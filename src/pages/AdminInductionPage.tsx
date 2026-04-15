@@ -63,6 +63,8 @@ export const AdminInductionPage: React.FC = () => {
   const [submissionsLoadError, setSubmissionsLoadError] = useState<string | null>(null);
   const [submissionCountsRpcError, setSubmissionCountsRpcError] = useState<string | null>(null);
   const [pdfGeneratingId, setPdfGeneratingId] = useState<number | null>(null);
+  const [selectedSubmissionIds, setSelectedSubmissionIds] = useState<Set<number>>(() => new Set());
+  const [bulkDownloading, setBulkDownloading] = useState(false);
   const [submissionsPage, setSubmissionsPage] = useState(1);
   const SUBMISSIONS_PAGE_SIZE = 10;
   const [officeModalSub, setOfficeModalSub] = useState<SkylineInductionSubmissionRow | null>(null);
@@ -143,6 +145,7 @@ export const AdminInductionPage: React.FC = () => {
     setSubmissionsList([]);
     setSubmissionsPage(1);
     setSubmissionsLoadError(null);
+    setSelectedSubmissionIds(new Set());
     try {
       const { rows: list, error: listErr } = await listSkylineInductionSubmissions(induction.id);
       if (listErr) {
@@ -197,6 +200,77 @@ export const AdminInductionPage: React.FC = () => {
       setPdfGeneratingId(null);
     }
   };
+
+  const downloadSubmissionPdfNoToast = async (sub: SkylineInductionSubmissionRow, accessToken: string) => {
+    const base = PDF_BASE.replace(/\/$/, '');
+    if (!base) return;
+    setPdfGeneratingId(sub.id);
+    try {
+      const res = await fetch(`${base}/pdf/induction/${accessToken}/filled`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ payload: sub.payload }),
+      });
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const cd = res.headers.get('Content-Disposition');
+      const m = cd?.match(/filename="([^"]+)"/);
+      a.download = m?.[1] ?? inductionPdfDownloadName(sub.payload);
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } finally {
+      setPdfGeneratingId(null);
+    }
+  };
+
+  const toggleSelectedSubmission = useCallback((id: number) => {
+    setSelectedSubmissionIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const setSelectedForIds = useCallback((ids: number[], checked: boolean) => {
+    setSelectedSubmissionIds((prev) => {
+      const next = new Set(prev);
+      if (checked) for (const id of ids) next.add(id);
+      else for (const id of ids) next.delete(id);
+      return next;
+    });
+  }, []);
+
+  const downloadSelectedSubmissions = useCallback(async () => {
+    if (!submissionsModal) return;
+    const token = submissionsModal.access_token;
+    const base = PDF_BASE.replace(/\/$/, '');
+    if (!base) {
+      toast.error('Set VITE_PDF_API_URL to use PDF export.');
+      return;
+    }
+    const selected = submissionsList.filter((s) => selectedSubmissionIds.has(s.id));
+    if (selected.length === 0) return;
+    setBulkDownloading(true);
+    try {
+      for (const sub of selected) {
+        // eslint-disable-next-line no-await-in-loop
+        await downloadSubmissionPdfNoToast(sub, token);
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      toast.success(`Downloading ${selected.length} PDF${selected.length === 1 ? '' : 's'}…`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not download selected PDFs.');
+    } finally {
+      setBulkDownloading(false);
+    }
+  }, [PDF_BASE, downloadSubmissionPdfNoToast, selectedSubmissionIds, submissionsList, submissionsModal]);
 
   useEffect(() => {
     // Keep page within range after filtering/refetch.
@@ -558,9 +632,20 @@ export const AdminInductionPage: React.FC = () => {
                     type="button"
                     variant="outline"
                     className="w-full sm:w-auto"
+                    disabled={!PDF_BASE || bulkDownloading || selectedSubmissionIds.size === 0}
+                    title={!PDF_BASE ? 'Set VITE_PDF_API_URL to the PDF server URL' : undefined}
+                    onClick={() => void downloadSelectedSubmissions()}
+                  >
+                    {bulkDownloading ? 'Downloading…' : `Download selected (${selectedSubmissionIds.size})`}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full sm:w-auto"
                     onClick={() => {
                       setOfficeModalSub(null);
                       setSubmissionsModal(null);
+                      setSelectedSubmissionIds(new Set());
                     }}
                   >
                     Close
@@ -593,6 +678,28 @@ export const AdminInductionPage: React.FC = () => {
                             </span>
                           );
                         })()}
+                      </div>
+                      <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:justify-end">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="w-full sm:w-auto"
+                          onClick={() => setSelectedForIds(submissionsList.map((s) => s.id), true)}
+                          disabled={submissionsList.length === 0}
+                        >
+                          Select all
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="w-full sm:w-auto"
+                          onClick={() => setSelectedSubmissionIds(new Set())}
+                          disabled={selectedSubmissionIds.size === 0}
+                        >
+                          Clear selection
+                        </Button>
                       </div>
                       <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-nowrap sm:justify-end">
                         <Button
@@ -648,12 +755,26 @@ export const AdminInductionPage: React.FC = () => {
                         (submissionsPage - 1) * SUBMISSIONS_PAGE_SIZE,
                         submissionsPage * SUBMISSIONS_PAGE_SIZE
                       );
+                      const pageIds = pageSlice.map((s) => s.id);
+                      const pageAllChecked = pageIds.length > 0 && pageIds.every((id) => selectedSubmissionIds.has(id));
+                      const pageAnyChecked = pageIds.some((id) => selectedSubmissionIds.has(id));
                       return (
                         <>
                           <div className="space-y-3 lg:hidden">
                             {pageSlice.map((sub) => (
                               <div key={sub.id} className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
-                                <div className="text-xs font-medium uppercase tracking-wide text-gray-500">Submitted (Melbourne)</div>
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="text-xs font-medium uppercase tracking-wide text-gray-500">Submitted (Melbourne)</div>
+                                  <label className="inline-flex items-center gap-2 text-xs text-gray-700 select-none">
+                                    <input
+                                      type="checkbox"
+                                      checked={selectedSubmissionIds.has(sub.id)}
+                                      onChange={() => toggleSelectedSubmission(sub.id)}
+                                      className="h-4 w-4"
+                                    />
+                                    Select
+                                  </label>
+                                </div>
                                 <div className="mt-0.5 text-sm text-gray-800 break-words">{formatMelbourneDateTime(sub.submitted_at)}</div>
                                 <div className="mt-3 text-xs font-medium text-gray-500">Type</div>
                                 <div className="mt-0.5">
@@ -692,6 +813,20 @@ export const AdminInductionPage: React.FC = () => {
                             <table className="w-full min-w-[920px] text-sm border-collapse">
                               <thead>
                                 <tr className="bg-gray-50 border-b border-gray-200 text-left">
+                                  <th className="whitespace-nowrap py-2 px-3 font-semibold text-gray-800">
+                                    <label className="inline-flex items-center gap-2 select-none">
+                                      <input
+                                        type="checkbox"
+                                        checked={pageAllChecked}
+                                        ref={(el) => {
+                                          if (el) el.indeterminate = !pageAllChecked && pageAnyChecked;
+                                        }}
+                                        onChange={(e) => setSelectedForIds(pageIds, e.target.checked)}
+                                        className="h-4 w-4"
+                                      />
+                                      Select
+                                    </label>
+                                  </th>
                                   <th className="whitespace-nowrap py-2 px-3 font-semibold text-gray-800">Submitted (Melbourne)</th>
                                   <th className="whitespace-nowrap py-2 px-3 font-semibold text-gray-800">Type</th>
                                   <th className="min-w-[12rem] py-2 px-3 font-semibold text-gray-800">Email</th>
@@ -703,6 +838,14 @@ export const AdminInductionPage: React.FC = () => {
                               <tbody>
                                 {pageSlice.map((sub) => (
                                   <tr key={sub.id} className="border-b border-gray-100 hover:bg-gray-50/80">
+                                    <td className="py-2 px-3 align-top">
+                                      <input
+                                        type="checkbox"
+                                        checked={selectedSubmissionIds.has(sub.id)}
+                                        onChange={() => toggleSelectedSubmission(sub.id)}
+                                        className="h-4 w-4"
+                                      />
+                                    </td>
                                     <td className="py-2 px-3 align-top text-gray-700">
                                       <span className="whitespace-nowrap">{formatMelbourneDateTime(sub.submitted_at)}</span>
                                     </td>

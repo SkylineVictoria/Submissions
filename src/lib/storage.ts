@@ -178,3 +178,75 @@ export async function uploadInductionDocument(
   const { data } = supabase.storage.from(BUCKET).getPublicUrl(path);
   return { url: data.publicUrl, error: null };
 }
+
+/**
+ * Upload image answer for a form instance question.
+ * Path: photomedia/skyline/answers/{instanceId}/{questionId}/{timestamp}_{filename}.{ext}
+ */
+export async function uploadAnswerImage(
+  instanceId: number,
+  questionId: number,
+  file: File
+): Promise<UploadResult> {
+  const toUpload = await ensurePdfCompatibleImage(file);
+  const ext = toUpload.name.split('.').pop() || 'jpg';
+  const sanitizedName = toUpload.name
+    .replace(/\.[^/.]+$/, '')
+    .replace(/[^a-zA-Z0-9-_]/g, '_')
+    .slice(0, 40);
+  const iid = Number.isFinite(instanceId) && instanceId > 0 ? Math.floor(instanceId) : 0;
+  const qid = Number.isFinite(questionId) && questionId > 0 ? Math.floor(questionId) : 0;
+  const path = `${FOLDER}/answers/${iid}/${qid}/${sanitizedName}_${Date.now()}.${ext}`;
+
+  const { error } = await supabase.storage.from(BUCKET).upload(path, toUpload, {
+    upsert: false,
+    contentType: toUpload.type,
+  });
+  if (error) {
+    console.error('uploadAnswerImage error', error);
+    return { url: null, error: error.message };
+  }
+  const { data } = supabase.storage.from(BUCKET).getPublicUrl(path);
+  return { url: data.publicUrl, error: null };
+}
+
+function extractBucketPathFromPublicUrl(publicUrl: string): string | null {
+  const raw = String(publicUrl ?? '').trim();
+  if (!raw) return null;
+
+  // If someone stored a bare bucket path already, accept it.
+  if (raw.startsWith(`${FOLDER}/`)) return raw;
+
+  // Supabase public URL format typically includes: /storage/v1/object/public/{bucket}/{path}
+  // Signed URLs might include query params; always extract from pathname only.
+  let pathname = raw;
+  try {
+    const u = new URL(raw);
+    pathname = u.pathname || raw;
+  } catch {
+    // Not a full URL; keep as-is.
+    pathname = raw;
+  }
+
+  const marker = `/storage/v1/object/public/${BUCKET}/`;
+  const idx = pathname.indexOf(marker);
+  if (idx < 0) return null;
+  const path = pathname.slice(idx + marker.length);
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    return path;
+  }
+}
+
+/** Delete an uploaded answer image by its public URL (best-effort). */
+export async function deleteAnswerImageByPublicUrl(publicUrl: string): Promise<{ success: boolean; error?: string }> {
+  const path = extractBucketPathFromPublicUrl(publicUrl);
+  if (!path) return { success: false, error: 'Invalid image URL (cannot derive storage path).' };
+  const { error } = await supabase.storage.from(BUCKET).remove([path]);
+  if (error) {
+    console.error('deleteAnswerImageByPublicUrl error', error);
+    return { success: false, error: error.message };
+  }
+  return { success: true };
+}

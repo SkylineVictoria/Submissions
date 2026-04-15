@@ -65,6 +65,7 @@ const QUESTION_TYPES = [
   { value: 'multi_choice', label: 'Multi Choice' },
   { value: 'likert_5', label: 'Likert 5' },
   { value: 'grid_table', label: 'Grid Table' },
+  { value: 'image', label: 'Image Upload' },
   { value: 'date', label: 'Date' },
   { value: 'signature', label: 'Signature' },
   { value: 'page_break', label: 'Page Break' },

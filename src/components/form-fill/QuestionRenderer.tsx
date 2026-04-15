@@ -8,6 +8,10 @@ import { Checkbox } from '../ui/Checkbox';
 import { LikertTableQuestion } from './LikertTableQuestion';
 import { GridTableQuestion } from './GridTableQuestion';
 import { SignaturePad } from './SignaturePad';
+import { cn } from '../utils/cn';
+import { Button } from '../ui/Button';
+import { Loader } from '../ui/Loader';
+import { deleteAnswerImageByPublicUrl, uploadAnswerImage } from '../../lib/storage';
 
 const countWords = (text: string): number =>
   text.trim() ? text.trim().split(/\s+/).length : 0;
@@ -93,6 +97,8 @@ interface QuestionRendererProps {
   question: FormQuestionWithOptionsAndRows;
   value: string | number | boolean | Record<string, unknown> | string[] | null;
   onChange: (value: string | number | boolean | Record<string, unknown> | string[]) => void;
+  /** Needed for image answer uploads (stored under instance). */
+  instanceId?: number;
   disabled?: boolean;
   error?: string;
   declarationStyle?: boolean;
@@ -113,10 +119,158 @@ interface QuestionRendererProps {
   maxDate?: string;
 }
 
+function ImageAnswerField({
+  instanceId,
+  questionId,
+  label,
+  helpText,
+  promptImageUrl,
+  promptImageLayout,
+  promptImageWidthPercent,
+  disabled,
+  error,
+  highlight,
+  value,
+  onChange,
+  fillBgClass,
+}: {
+  instanceId?: number;
+  questionId: number;
+  label: React.ReactNode;
+  helpText?: string | null;
+  promptImageUrl?: string | null;
+  promptImageLayout?: ImageLayoutOption;
+  promptImageWidthPercent?: number;
+  disabled?: boolean;
+  error?: string;
+  highlight?: boolean;
+  value: string | number | boolean | Record<string, unknown> | string[] | null;
+  onChange: (value: string | number | boolean | Record<string, unknown> | string[]) => void;
+  fillBgClass?: string;
+}) {
+  const raw = value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+  const url = raw ? String(raw.url ?? '') : typeof value === 'string' ? value : '';
+  const [uploading, setUploading] = React.useState(false);
+  const [localErr, setLocalErr] = React.useState<string | null>(null);
+  const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+
+  const canUpload = !disabled && Number.isFinite(Number(instanceId)) && Number(instanceId) > 0;
+
+  const doUpload = async (file: File) => {
+    if (!canUpload) return;
+    setLocalErr(null);
+    setUploading(true);
+    try {
+      const res = await uploadAnswerImage(Number(instanceId), Number(questionId), file);
+      if (!res.url) {
+        setLocalErr(res.error || 'Upload failed');
+        return;
+      }
+      onChange({ url: res.url } as Record<string, unknown>);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      <QuestionLabelWithImage
+        label={label}
+        helpText={helpText}
+        imageUrl={promptImageUrl || undefined}
+        imageLayout={promptImageLayout || 'side_by_side'}
+        imageWidthPercent={promptImageWidthPercent ?? 50}
+      >
+        <div className="mt-2 space-y-2">
+          {url ? (
+            <div className="rounded-lg border border-gray-200 bg-white p-2">
+              <img src={url} alt="" className="max-h-[320px] w-auto max-w-full object-contain" />
+            </div>
+          ) : (
+            <div className={cn('rounded-lg border border-dashed border-gray-300 bg-white p-4 text-sm text-gray-600', fillBgClass)}>
+              Upload an image to answer this question.
+            </div>
+          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              disabled={!canUpload || uploading}
+              onChange={async (e) => {
+                const f = e.target.files?.[0] ?? null;
+                e.target.value = '';
+                if (!f) return;
+                await doUpload(f);
+              }}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={!canUpload || uploading}
+              onClick={() => {
+                if (!canUpload || uploading) return;
+                fileInputRef.current?.click();
+              }}
+            >
+              {uploading ? (
+                <>
+                  <Loader variant="dots" size="sm" inline className="mr-1.5" />
+                  Uploading…
+                </>
+              ) : (
+                url ? 'Replace image' : 'Upload image'
+              )}
+            </Button>
+            {url && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={disabled || uploading}
+                onClick={async () => {
+                  if (!url) {
+                    onChange({ url: null } as Record<string, unknown>);
+                    return;
+                  }
+                  setLocalErr(null);
+                  setUploading(true);
+                  try {
+                    const res = await deleteAnswerImageByPublicUrl(url);
+                    if (!res.success) {
+                      setLocalErr(res.error || 'Failed to delete image from storage');
+                      return;
+                    }
+                    onChange({ url: null } as Record<string, unknown>);
+                  } finally {
+                    setUploading(false);
+                  }
+                }}
+              >
+                Delete image
+              </Button>
+            )}
+            {!canUpload && (
+              <span className="text-xs text-gray-500">
+                Image upload is unavailable here (read-only or missing instance).
+              </span>
+            )}
+            {!!highlight && !disabled && !url && <span className="text-xs text-[var(--brand)] font-medium">Required</span>}
+          </div>
+          {(localErr || error) && <p className="text-sm text-red-600">{localErr || error}</p>}
+        </div>
+      </QuestionLabelWithImage>
+    </div>
+  );
+}
+
 export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
   question,
   value,
   onChange,
+  instanceId,
   disabled,
   error,
   declarationStyle,
@@ -216,6 +370,27 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
         disabled={disabled}
         error={error}
         highlight={shouldHighlight}
+      />
+    );
+  }
+
+  if (question.type === 'image') {
+    const imgUrl = pm.imageUrl as string | undefined;
+    return (
+      <ImageAnswerField
+        instanceId={instanceId}
+        questionId={question.id}
+        label={taskLabel(question.label)}
+        helpText={question.help_text}
+        promptImageUrl={imgUrl}
+        promptImageLayout={(pm.imageLayout as ImageLayoutOption) || 'side_by_side'}
+        promptImageWidthPercent={(pm.imageWidthPercent as number) ?? 50}
+        disabled={disabled}
+        error={error}
+        highlight={shouldHighlight && !!question.required}
+        value={value}
+        onChange={onChange}
+        fillBgClass={fillBgClass}
       />
     );
   }

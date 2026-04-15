@@ -1654,12 +1654,12 @@ export const InstanceFillPage: React.FC = () => {
                                   const isExplanationField = q.code === 'reasonable_adjustment_appendix.explanation' || q.code === 'reasonable_adjustment.description';
                                   if (isTaskField) {
                                     return (
-                                      <QuestionRenderer key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!appendixFirstCycleEditable} error={errors[`q-${q.id}`]} highlightAsFill={appendixFirstCycleEditable} />
+                                      <QuestionRenderer instanceId={id} key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!appendixFirstCycleEditable} error={errors[`q-${q.id}`]} highlightAsFill={appendixFirstCycleEditable} />
                                     );
                                   }
                                   if (isExplanationField) {
                                     return (
-                                      <QuestionRenderer key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!appendixFirstCycleEditable} error={errors[`q-${q.id}`]} highlightAsFill={appendixFirstCycleEditable} />
+                                      <QuestionRenderer instanceId={id} key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!appendixFirstCycleEditable} error={errors[`q-${q.id}`]} highlightAsFill={appendixFirstCycleEditable} />
                                     );
                                   }
                                   if (q.code === 'reasonable_adjustment_appendix.matrix' || (q.pdf_meta as Record<string, unknown>)?.appendixMatrix) {
@@ -1675,12 +1675,12 @@ export const InstanceFillPage: React.FC = () => {
                                   }
                                   if (q.type === 'short_text' && !isTaskField) {
                                     return (
-                                      <QuestionRenderer key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!appendixFirstCycleEditable} error={errors[`q-${q.id}`]} highlightAsFill={appendixFirstCycleEditable} />
+                                      <QuestionRenderer instanceId={id} key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!appendixFirstCycleEditable} error={errors[`q-${q.id}`]} highlightAsFill={appendixFirstCycleEditable} />
                                     );
                                   }
                                   if (q.type === 'long_text' && !isExplanationField) {
                                     return (
-                                      <QuestionRenderer key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!appendixFirstCycleEditable} error={errors[`q-${q.id}`]} highlightAsFill={appendixFirstCycleEditable} />
+                                      <QuestionRenderer instanceId={id} key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!appendixFirstCycleEditable} error={errors[`q-${q.id}`]} highlightAsFill={appendixFirstCycleEditable} />
                                     );
                                   }
                                   if (q.type === 'signature') {
@@ -1703,24 +1703,24 @@ export const InstanceFillPage: React.FC = () => {
                                   }
                                   if (q.type === 'yes_no') {
                                     return (
-                                      <QuestionRenderer key={q.id} question={q} value={(val as string | number | boolean) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string | number | boolean)} disabled={!appendixFirstCycleEditable} error={errors[`q-${q.id}`]} highlightAsFill={appendixFirstCycleEditable} />
+                                      <QuestionRenderer instanceId={id} key={q.id} question={q} value={(val as string | number | boolean) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string | number | boolean)} disabled={!appendixFirstCycleEditable} error={errors[`q-${q.id}`]} highlightAsFill={appendixFirstCycleEditable} />
                                     );
                                   }
                                   return null;
                                 }
                                 if (q.type === 'yes_no') {
                                   return (
-                                    <QuestionRenderer key={q.id} question={q} value={(val as string | number | boolean) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string | number | boolean)} disabled={!editable} error={errors[`q-${q.id}`]} highlightAsFill={editable} />
+                                    <QuestionRenderer instanceId={id} key={q.id} question={q} value={(val as string | number | boolean) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string | number | boolean)} disabled={!editable} error={errors[`q-${q.id}`]} highlightAsFill={editable} />
                                   );
                                 }
                                 if (q.code === 'reasonable_adjustment.task') {
                                   return (
-                                    <QuestionRenderer key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!editable} error={errors[`q-${q.id}`]} highlightAsFill={editable} />
+                                    <QuestionRenderer instanceId={id} key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!editable} error={errors[`q-${q.id}`]} highlightAsFill={editable} />
                                   );
                                 }
                                 if (q.type === 'long_text') {
                                   return (
-                                    <QuestionRenderer key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!editable} error={errors[`q-${q.id}`]} highlightAsFill={editable} />
+                                    <QuestionRenderer instanceId={id} key={q.id} question={q} value={(val as string) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string)} disabled={!editable} error={errors[`q-${q.id}`]} highlightAsFill={editable} />
                                   );
                                 }
                                 if (q.type === 'signature') {
@@ -2376,7 +2376,7 @@ export const InstanceFillPage: React.FC = () => {
                                         }
                                         if (block.type === 'short_text' || block.type === 'long_text') {
                                           const val = answers[getAnswerKey(childQ.id, null)] as string | undefined;
-                                          return wrapWithHeader(key, block.headerText, <QuestionRenderer question={childQ} value={val ?? null} onChange={(v) => handleAnswerChange(childQ.id, null, v as string | number | boolean | Record<string, unknown> | string[])} disabled={!editable} error={errors[`q-${childQ.id}`]} highlightAsFill={editable} />);
+                                          return wrapWithHeader(key, block.headerText, <QuestionRenderer instanceId={id} question={childQ} value={val ?? null} onChange={(v) => handleAnswerChange(childQ.id, null, v as string | number | boolean | Record<string, unknown> | string[])} disabled={!editable} error={errors[`q-${childQ.id}`]} highlightAsFill={editable} />);
                                         }
                                         return null;
                                       };
@@ -2516,7 +2516,7 @@ export const InstanceFillPage: React.FC = () => {
                                                     No
                                                   </button>
                                                 </div>
-                                                <QuestionRenderer question={q} value={(answers[getAnswerKey(q.id, null)] as string | number | boolean | Record<string, unknown> | string[] | undefined) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string | number | boolean | Record<string, unknown> | string[])} disabled={!editable} error={errors[`q-${q.id}`]} highlightAsFill={editable} />
+                                                <QuestionRenderer instanceId={id} question={q} value={(answers[getAnswerKey(q.id, null)] as string | number | boolean | Record<string, unknown> | string[] | undefined) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string | number | boolean | Record<string, unknown> | string[])} disabled={!editable} error={errors[`q-${q.id}`]} highlightAsFill={editable} />
                                               </div>
                                             )}
                                             {contentBlocks.map((block, bi) => renderBlock(block, String(block.questionId ?? `block-${bi}`)))}
@@ -2635,11 +2635,11 @@ export const InstanceFillPage: React.FC = () => {
                                                     handleAnswerChange(childQ.id, rowId, rowData);
                                                   }
                                                 };
-                                                return wrapWithHeader(key, block.headerText, <QuestionRenderer question={childQ} value={Object.keys(merged).length ? merged : null} onChange={onGridChange} disabled={!editable} error={errors[`q-${childQ.id}`]} studentResubmissionReadOnlyForSatisfactoryRows={isResubmissionAfterTrainer} taskQuestionDisplayNumber={taskQNumbers.get(childQ.id)} highlightAsFill={editable} />);
+                                                return wrapWithHeader(key, block.headerText, <QuestionRenderer instanceId={id} question={childQ} value={Object.keys(merged).length ? merged : null} onChange={onGridChange} disabled={!editable} error={errors[`q-${childQ.id}`]} studentResubmissionReadOnlyForSatisfactoryRows={isResubmissionAfterTrainer} taskQuestionDisplayNumber={taskQNumbers.get(childQ.id)} highlightAsFill={editable} />);
                                               }
                                               if (block.type === 'short_text' || block.type === 'long_text') {
                                                 const val = answers[getAnswerKey(childQ.id, null)] as string | undefined;
-                                                return wrapWithHeader(key, block.headerText, <QuestionRenderer question={childQ} value={val ?? null} onChange={(v) => handleAnswerChange(childQ.id, null, v as string | number | boolean | Record<string, unknown> | string[])} disabled={!editable} error={errors[`q-${childQ.id}`]} taskQuestionDisplayNumber={taskQNumbers.get(childQ.id)} highlightAsFill={editable} />);
+                                                return wrapWithHeader(key, block.headerText, <QuestionRenderer instanceId={id} question={childQ} value={val ?? null} onChange={(v) => handleAnswerChange(childQ.id, null, v as string | number | boolean | Record<string, unknown> | string[])} disabled={!editable} error={errors[`q-${childQ.id}`]} taskQuestionDisplayNumber={taskQNumbers.get(childQ.id)} highlightAsFill={editable} />);
                                               }
                                               return null;
                                             };
@@ -2669,10 +2669,10 @@ export const InstanceFillPage: React.FC = () => {
                                                         handleAnswerChange(q.id, rowId, rowData);
                                                       }
                                                     };
-                                                    return <QuestionRenderer question={q} value={Object.keys(merged).length ? merged : null} onChange={onGridChange} disabled={!editable} error={errors[`q-${q.id}`]} studentResubmissionReadOnlyForSatisfactoryRows={isResubmissionAfterTrainer} taskQuestionDisplayNumber={taskQNumbers.get(q.id)} highlightAsFill={editable} />;
+                                                    return <QuestionRenderer instanceId={id} question={q} value={Object.keys(merged).length ? merged : null} onChange={onGridChange} disabled={!editable} error={errors[`q-${q.id}`]} studentResubmissionReadOnlyForSatisfactoryRows={isResubmissionAfterTrainer} taskQuestionDisplayNumber={taskQNumbers.get(q.id)} highlightAsFill={editable} />;
                                                   })()
                                                 ) : (
-                                                  <QuestionRenderer question={q} value={(answers[getAnswerKey(q.id, null)] as string | number | boolean | Record<string, unknown> | string[] | undefined) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string | number | boolean | Record<string, unknown> | string[])} disabled={!editable} error={errors[`q-${q.id}`]} taskQuestionDisplayNumber={taskQNumbers.get(q.id)} highlightAsFill={editable} />
+                                                  <QuestionRenderer instanceId={id} question={q} value={(answers[getAnswerKey(q.id, null)] as string | number | boolean | Record<string, unknown> | string[] | undefined) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string | number | boolean | Record<string, unknown> | string[])} disabled={!editable} error={errors[`q-${q.id}`]} taskQuestionDisplayNumber={taskQNumbers.get(q.id)} highlightAsFill={editable} />
                                                 )}
                                                 {contentBlocks.map((block, bi) => renderBlock(block, String(block.questionId ?? `block-${bi}`)))}
                                               </div>
@@ -3366,6 +3366,7 @@ export const InstanceFillPage: React.FC = () => {
                               }
                               return (
                                 <QuestionRenderer
+                                  instanceId={id}
                                   key={q.id}
                                   question={q}
                                   value={(val as string | number | boolean | Record<string, unknown> | string[]) ?? null}
@@ -3434,6 +3435,7 @@ export const InstanceFillPage: React.FC = () => {
                             };
                             return (
                               <QuestionRenderer
+                                instanceId={id}
                                 key={q.id}
                                 question={q}
                                 value={val}
@@ -3468,6 +3470,7 @@ export const InstanceFillPage: React.FC = () => {
                             };
                             return (
                               <QuestionRenderer
+                                instanceId={id}
                                 key={q.id}
                                 question={q}
                                 value={Object.keys(merged).length ? merged : null}
@@ -3554,6 +3557,7 @@ export const InstanceFillPage: React.FC = () => {
                           }
                           return (
                             <QuestionRenderer
+                              instanceId={id}
                               key={q.id}
                               question={q}
                               value={(val as string | number | boolean | Record<string, unknown> | string[]) ?? null}
