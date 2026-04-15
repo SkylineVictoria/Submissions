@@ -10,7 +10,6 @@ import { Loader } from '../components/ui/Loader';
 import { Modal } from '../components/ui/Modal';
 import { DatePicker } from '../components/ui/DatePicker';
 import { toast } from '../utils/toast';
-import { AdminListPagination } from '../components/admin/AdminListPagination';
 import { SelectAsync } from '../components/ui/SelectAsync';
 import { Select } from '../components/ui/Select';
 import {
@@ -22,7 +21,6 @@ import {
   updateFormInstanceDates,
   listActiveFormsByQualificationCode,
   upsertStudentAssessmentsForForms,
-  getCoursesForForms,
   getFormsForCourse,
 } from '../lib/formEngine';
 import type { Student, SubmittedInstanceRow } from '../lib/formEngine';
@@ -63,7 +61,8 @@ export const AdminStudentDetailsPage: React.FC = () => {
   const { studentId } = useParams();
   const navigate = useNavigate();
   const sid = Number(studentId);
-  const PAGE_SIZE = 20;
+  /** One request loads all assessments for this student (typical max ~34). */
+  const ASSESSMENTS_FETCH_SIZE = 80;
 
   const [loading, setLoading] = useState(true);
   const [student, setStudent] = useState<Student | null>(null);
@@ -72,13 +71,6 @@ export const AdminStudentDetailsPage: React.FC = () => {
   >([]);
   const [assessments, setAssessments] = useState<SubmittedInstanceRow[]>([]);
   const [assessmentsLoading, setAssessmentsLoading] = useState(false);
-  const [courseByFormId, setCourseByFormId] = useState<Map<number, { id: number; name: string; qualification_code?: string | null }[]>>(
-    () => new Map()
-  );
-  const [currentPage, setCurrentPage] = useState(1);
-  const [totalRows, setTotalRows] = useState(0);
-  const totalPages = Math.max(1, Math.ceil(totalRows / PAGE_SIZE));
-
   const [managingId, setManagingId] = useState<number | null>(null);
   const [addAssessmentOpen, setAddAssessmentOpen] = useState(false);
   const [addCourseId, setAddCourseId] = useState<string>('');
@@ -93,14 +85,14 @@ export const AdminStudentDetailsPage: React.FC = () => {
   const [editDatesEnd, setEditDatesEnd] = useState('');
   const [savingDates, setSavingDates] = useState(false);
 
-  type AssessmentSortKey = 'course' | 'start' | 'end' | 'created' | 'completed';
+  type AssessmentSortKey = 'unit' | 'start' | 'end' | 'created' | 'completed';
   const [assessmentSort, setAssessmentSort] = useState<{ key: AssessmentSortKey; dir: SortDirection }>({
-    key: 'course',
+    key: 'unit',
     dir: 'asc',
   });
 
   useEffect(() => {
-    setAssessmentSort({ key: 'course', dir: 'asc' });
+    setAssessmentSort({ key: 'unit', dir: 'asc' });
   }, [sid]);
 
   const title = useMemo(() => {
@@ -109,19 +101,11 @@ export const AdminStudentDetailsPage: React.FC = () => {
     return name || student.email || 'Student';
   }, [student]);
 
-  const loadAssessments = useCallback(async (page: number) => {
+  const loadAssessments = useCallback(async () => {
     if (!Number.isFinite(sid) || sid <= 0) return;
     setAssessmentsLoading(true);
-    const res = await listSubmittedInstancesPaged(page, PAGE_SIZE, undefined, undefined, undefined, sid);
+    const res = await listSubmittedInstancesPaged(1, ASSESSMENTS_FETCH_SIZE, undefined, undefined, undefined, sid);
     setAssessments(res.data);
-    setTotalRows(res.total);
-    const formIds = Array.from(new Set(res.data.map((r) => Number(r.form_id)).filter((n) => Number.isFinite(n) && n > 0)));
-    if (formIds.length > 0) {
-      const map = await getCoursesForForms(formIds);
-      setCourseByFormId(map);
-    } else {
-      setCourseByFormId(new Map());
-    }
     setAssessmentsLoading(false);
   }, [sid]);
 
@@ -252,7 +236,6 @@ export const AdminStudentDetailsPage: React.FC = () => {
         if (cancelled) return;
         setStudent(st);
         setCourses(courseList);
-        setCurrentPage(1);
       } catch (e) {
         if (cancelled) return;
         console.error('AdminStudentDetailsPage load error', e);
@@ -269,8 +252,8 @@ export const AdminStudentDetailsPage: React.FC = () => {
 
   useEffect(() => {
     if (loading) return;
-    void loadAssessments(currentPage);
-  }, [currentPage, loadAssessments, loading]);
+    void loadAssessments();
+  }, [loadAssessments, loading]);
 
   const toggleAssessmentSort = (key: AssessmentSortKey) => {
     setAssessmentSort((prev) => {
@@ -297,18 +280,13 @@ export const AdminStudentDetailsPage: React.FC = () => {
 
   const sortedAssessments = useMemo(() => {
     const asc = assessmentSort.dir === 'asc';
-    const courseLabel = (row: SubmittedInstanceRow) => {
-      const list = courseByFormId.get(Number(row.form_id)) || [];
-      const c = list[0];
-      if (!c) return row.form_name || '';
-      return `${c.qualification_code ? `${c.qualification_code} — ` : ''}${c.name}`;
-    };
+    const unitLabel = (row: SubmittedInstanceRow) => String(row.form_name ?? '').trim();
     const rows = [...assessments];
     rows.sort((a, b) => {
       let cmp = 0;
       switch (assessmentSort.key) {
-        case 'course':
-          cmp = courseLabel(a).localeCompare(courseLabel(b), undefined, { sensitivity: 'base' });
+        case 'unit':
+          cmp = unitLabel(a).localeCompare(unitLabel(b), undefined, { sensitivity: 'base' });
           if (!asc) cmp = -cmp;
           break;
         case 'start':
@@ -330,7 +308,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
       return a.id - b.id;
     });
     return rows;
-  }, [assessments, assessmentSort, courseByFormId]);
+  }, [assessments, assessmentSort]);
 
   const openEditDates = (row: SubmittedInstanceRow) => {
     setEditDatesRow(row);
@@ -355,7 +333,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
     await extendInstanceAccessTokensToDate(editDatesRow.id, 'student', end);
     setSavingDates(false);
     setEditDatesRow(null);
-    await loadAssessments(currentPage);
+    await loadAssessments();
     toast.success('Assessment dates updated');
   };
 
@@ -480,23 +458,9 @@ export const AdminStudentDetailsPage: React.FC = () => {
                     <Button variant="outline" size="sm" onClick={() => setAddAssessmentOpen(true)}>
                       + Add Assessment
                     </Button>
-                    <div className="text-xs text-gray-500">{totalRows} total</div>
+                    <div className="text-xs text-gray-500">{assessments.length} total</div>
                   </div>
                 </div>
-
-                {!assessmentsLoading && totalRows > 0 && (
-                  <AdminListPagination
-                    placement="top"
-                    totalItems={totalRows}
-                    pageSize={PAGE_SIZE}
-                    currentPage={currentPage}
-                    totalPages={totalPages}
-                    onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                    onNext={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                    onGoToPage={(p) => setCurrentPage(p)}
-                    itemLabel="assessments"
-                  />
-                )}
 
                 {assessmentsLoading ? (
                   <div className="py-10">
@@ -510,11 +474,11 @@ export const AdminStudentDetailsPage: React.FC = () => {
                       <thead className="bg-gray-50 text-gray-700">
                         <tr>
                           <SortableTh
-                            label="Course"
+                            label="Unit"
                             className="text-left px-3 py-2 border-b border-[var(--border)] w-[300px]"
-                            active={assessmentSort.key === 'course'}
+                            active={assessmentSort.key === 'unit'}
                             direction={assessmentSort.dir}
-                            onToggle={() => toggleAssessmentSort('course')}
+                            onToggle={() => toggleAssessmentSort('unit')}
                           />
                           <SortableTh
                             label="Start"
@@ -552,15 +516,13 @@ export const AdminStudentDetailsPage: React.FC = () => {
                           <tr key={row.id} className="hover:bg-gray-50">
                             <td className="px-3 py-2 border-b border-[var(--border)] align-top">
                               {(() => {
-                                const courses = courseByFormId.get(Number(row.form_id)) || [];
-                                const c = courses[0];
                                 return (
                                   <div className="min-w-0">
                                     <div className="font-medium text-[var(--text)] break-words whitespace-normal">
-                                      {c ? `${c.qualification_code ? `${c.qualification_code} — ` : ''}${c.name}` : '—'}
+                                      {row.form_name || '—'}
                                     </div>
                                     <div className="text-xs text-gray-500 break-words">
-                                      {row.form_name} {row.form_version ? `(v${row.form_version})` : ''}
+                                      {row.form_version ? `(v${row.form_version})` : ''}
                                     </div>
                                   </div>
                                 );
@@ -626,7 +588,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
                                             setManagingId(row.id);
                                             await allowStudentResubmission(row.id);
                                             setManagingId(null);
-                                            await loadAssessments(currentPage);
+                                            await loadAssessments();
                                             toast.success('Resubmission allowed');
                                           }}
                                           disabled={managingId === row.id}
@@ -648,21 +610,6 @@ export const AdminStudentDetailsPage: React.FC = () => {
                   </div>
                 )}
 
-                {!assessmentsLoading && totalRows > 0 && (
-                  <div className="mt-3">
-                    <AdminListPagination
-                      placement="bottom"
-                      totalItems={totalRows}
-                      pageSize={PAGE_SIZE}
-                      currentPage={currentPage}
-                      totalPages={totalPages}
-                      onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                      onNext={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                      onGoToPage={(p) => setCurrentPage(p)}
-                      itemLabel="assessments"
-                    />
-                  </div>
-                )}
               </Card>
             </div>
           </div>
@@ -800,7 +747,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
                 });
                 setAdding(false);
                 setAddAssessmentOpen(false);
-                await loadAssessments(currentPage);
+                await loadAssessments();
                 toast.success(`Assessment updated. ${res.created} created, ${res.updated} updated.`);
               }}
               disabled={adding || addFormsLoading || addForms.length === 0 || !addFormId || (courses.length > 0 && !addCourseId)}

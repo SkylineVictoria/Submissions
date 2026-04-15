@@ -1,5 +1,6 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { Plus, Pencil, Users } from 'lucide-react';
+import { supabase } from '../lib/supabase';
 import {
   listBatchesPaged,
   createBatch,
@@ -29,6 +30,9 @@ import { toast } from '../utils/toast';
 
 const BATCH_PAGE_SIZE = 20;
 
+const getTodayIso = () => new Date().toISOString().slice(0, 10);
+const isIsoDate = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || '').trim());
+
 export const AdminBatchesPage: React.FC = () => {
   const [batches, setBatches] = useState<Batch[]>([]);
   const [totalBatches, setTotalBatches] = useState(0);
@@ -40,13 +44,19 @@ export const AdminBatchesPage: React.FC = () => {
   const [savingEdit, setSavingEdit] = useState(false);
   const [draft, setDraft] = useState({ name: '', trainer_id: '', course_id: '' });
   const [editDraft, setEditDraft] = useState<{ name: string; trainer_id: string; course_id: string; student_ids: number[] } | null>(null);
-  const [editStudents, setEditStudents] = useState<Student[]>([]);
+  const [, setEditStudents] = useState<Student[]>([]);
   const [unitStudentIds, setUnitStudentIds] = useState<number[]>([]);
   const [unitLoading, setUnitLoading] = useState(false);
   const [unitSavingFormId, setUnitSavingFormId] = useState<number | null>(null);
   const [unitForms, setUnitForms] = useState<Array<Record<string, unknown>>>([]);
   const [unitDatesByFormId, setUnitDatesByFormId] = useState<Record<number, { start: string; end: string }>>({});
   const [unitSelectedFormId, setUnitSelectedFormId] = useState<number | null>(null);
+  const [unitMonthFromDate, setUnitMonthFromDate] = useState<string>(() => getTodayIso());
+  const [unitMonthToDate, setUnitMonthToDate] = useState<string>(() => getTodayIso());
+  const [unitEligibilityReady, setUnitEligibilityReady] = useState(false);
+  const [eligibleStudentOptions, setEligibleStudentOptions] = useState<Array<{ id: number; label: string }>>([]);
+  const [eligibleUnitOptions, setEligibleUnitOptions] = useState<Array<{ id: number; name: string }>>([]);
+  const [eligibleStudentUnits, setEligibleStudentUnits] = useState<Record<string, number[]>>({});
 
   const loadBatches = useCallback(async (page: number) => {
     setLoading(true);
@@ -126,6 +136,12 @@ export const AdminBatchesPage: React.FC = () => {
       setUnitForms([]);
       setUnitDatesByFormId({});
       setUnitSelectedFormId(null);
+      setUnitMonthFromDate(getTodayIso());
+      setUnitMonthToDate(getTodayIso());
+      setUnitEligibilityReady(false);
+      setEligibleStudentOptions([]);
+      setEligibleUnitOptions([]);
+      setEligibleStudentUnits({});
       return;
     }
     setEditDraft({ name: editingBatch.name, trainer_id: String(editingBatch.trainer_id), course_id: editingBatch.course_id != null ? String(editingBatch.course_id) : '', student_ids: [] });
@@ -137,13 +153,6 @@ export const AdminBatchesPage: React.FC = () => {
     });
   }, [editingId, editingBatch?.id, editingBatch?.name, editingBatch?.trainer_id]);
 
-  const unitStudentOptions = useMemo(() => {
-    return editStudents.map((s) => {
-      const label = `${[s.first_name, s.last_name].filter(Boolean).join(' ') || s.email} (${s.student_id ?? s.email})`;
-      return { value: s.id, label };
-    });
-  }, [editStudents]);
-
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -152,6 +161,10 @@ export const AdminBatchesPage: React.FC = () => {
         setUnitForms([]);
         setUnitDatesByFormId({});
         setUnitSelectedFormId(null);
+        setUnitEligibilityReady(false);
+        setEligibleStudentOptions([]);
+        setEligibleUnitOptions([]);
+        setEligibleStudentUnits({});
         return;
       }
       setUnitLoading(true);
@@ -180,6 +193,84 @@ export const AdminBatchesPage: React.FC = () => {
       cancelled = true;
     };
   }, [editDraft?.course_id, editDraft?.student_ids]);
+
+  // Fetch which students/units actually have assessments in the selected month range (batch + course only).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const courseId = Number(editDraft?.course_id);
+      const batchId = Number(editingBatch?.id);
+      if (!editDraft || !courseId || !Number.isFinite(courseId) || courseId <= 0) {
+        setUnitEligibilityReady(false);
+        setEligibleStudentOptions([]);
+        setEligibleUnitOptions([]);
+        setEligibleStudentUnits({});
+        return;
+      }
+      if (!Number.isFinite(batchId) || batchId <= 0) {
+        setUnitEligibilityReady(false);
+        setEligibleStudentOptions([]);
+        setEligibleUnitOptions([]);
+        setEligibleStudentUnits({});
+        return;
+      }
+      const rangeStart = String(unitMonthFromDate || '').trim();
+      const rangeEnd = String(unitMonthToDate || '').trim();
+      if (!isIsoDate(rangeStart) || !isIsoDate(rangeEnd) || rangeEnd < rangeStart) {
+        setUnitEligibilityReady(true);
+        setEligibleStudentOptions([]);
+        setEligibleUnitOptions([]);
+        setEligibleStudentUnits({});
+        return;
+      }
+      setUnitEligibilityReady(false);
+      setUnitLoading(true);
+      try {
+        const { data, error } = await supabase.rpc('skyline_batch_assessment_options', {
+          p_batch_id: batchId,
+          p_course_id: courseId,
+          p_from_date: rangeStart,
+          p_to_date: rangeEnd,
+        });
+        if (error) {
+          console.error('skyline_batch_assessment_options rpc error', error);
+          if (!cancelled) {
+            setUnitEligibilityReady(true);
+            setEligibleStudentOptions([]);
+            setEligibleUnitOptions([]);
+            setEligibleStudentUnits({});
+          }
+          return;
+        }
+        const payload = (data as unknown as {
+          students?: Array<{ id: number; label: string }>;
+          units?: Array<{ id: number; name: string }>;
+          student_units?: Record<string, number[]>;
+        }) || {};
+        const students = Array.isArray(payload.students) ? payload.students : [];
+        const units = Array.isArray(payload.units) ? payload.units : [];
+        const studentUnits = (payload.student_units && typeof payload.student_units === 'object') ? payload.student_units : {};
+
+        if (!cancelled) {
+          setEligibleStudentOptions(students);
+          setEligibleUnitOptions(units);
+          setEligibleStudentUnits(studentUnits);
+          setUnitEligibilityReady(true);
+          // If selected students are now out of range, drop them.
+          const allowedStudents = new Set(students.map((s) => Number(s.id)).filter((n) => Number.isFinite(n) && n > 0));
+          setUnitStudentIds((prev) => prev.filter((id) => allowedStudents.has(Number(id))));
+          // If selected unit is out of range, clear it.
+          const allowedUnits = new Set(units.map((u) => Number(u.id)).filter((n) => Number.isFinite(n) && n > 0));
+          setUnitSelectedFormId((prev) => (prev && allowedUnits.has(prev) ? prev : null));
+        }
+      } finally {
+        if (!cancelled) setUnitLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [editDraft?.course_id, editDraft?.student_ids, unitMonthFromDate, unitMonthToDate, editingBatch?.id]);
 
   const saveUnitDates = useCallback(async (formId: number) => {
     if (!editDraft || unitStudentIds.length === 0) return;
@@ -494,12 +585,13 @@ export const AdminBatchesPage: React.FC = () => {
                     value={unitStudentIds}
                     onChange={(ids) => setUnitStudentIds(ids)}
                     loadOptions={async (_page: number, search: string) => {
+                      const base = eligibleStudentOptions.map((s) => ({ value: s.id, label: s.label }));
                       const q = (search || '').trim().toLowerCase();
                       const filtered = q
-                        ? unitStudentOptions.filter((o) => o.label.toLowerCase().includes(q))
-                        : unitStudentOptions;
+                        ? base.filter((o) => o.label.toLowerCase().includes(q))
+                        : base;
                       return {
-                        options: filtered.map((o) => ({ value: o.value, label: o.label })),
+                        options: unitEligibilityReady ? filtered : [],
                         hasMore: false,
                       };
                     }}
@@ -511,6 +603,26 @@ export const AdminBatchesPage: React.FC = () => {
                 </div>
               </div>
 
+              <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <DatePicker
+                  label="From date"
+                  value={unitMonthFromDate}
+                  onChange={(v) => setUnitMonthFromDate(v || '')}
+                  placement="below"
+                />
+                <DatePicker
+                  label="To date"
+                  value={unitMonthToDate}
+                  onChange={(v) => setUnitMonthToDate(v || '')}
+                  placement="below"
+                />
+              </div>
+              {unitEligibilityReady && eligibleStudentOptions.length === 0 ? (
+                <div className="mt-2 text-xs text-gray-500">
+                  No students in this batch have assessments during the selected month range.
+                </div>
+              ) : null}
+
               {unitLoading ? (
                 <div className="py-8">
                   <Loader variant="dots" size="md" message="Loading units..." />
@@ -519,42 +631,47 @@ export const AdminBatchesPage: React.FC = () => {
                 <div className="py-6 text-sm text-gray-600">No units found for this course.</div>
               ) : (
                 (() => {
-                  const opts = unitForms
-                    .map((f) => {
-                      const fid = Number(f.id);
-                      if (!Number.isFinite(fid) || fid <= 0) return null;
-                      const unitCode = String(f.unit_code ?? '').trim();
-                      const unitName = String(f.unit_name ?? f.name ?? '').trim();
-                      const label = unitCode ? `${unitCode} — ${unitName || String(f.name ?? '').trim() || `Form ${fid}`}` : (unitName || String(f.name ?? '').trim() || `Form ${fid}`);
-                      return { value: String(fid), label };
-                    })
-                    .filter(Boolean) as Array<{ value: string; label: string }>;
+                  const opts = eligibleUnitOptions.map((u) => ({ value: String(u.id), label: u.name }));
+
+                  // If students are selected, narrow units to the union of their eligible unit IDs.
+                  const allowedFormIds = (() => {
+                    if (!unitEligibilityReady) return new Set<number>();
+                    if (unitStudentIds.length === 0) return new Set<number>(eligibleUnitOptions.map((u) => Number(u.id)));
+                    const allowed = new Set<number>();
+                    for (const sid of unitStudentIds) {
+                      const list = eligibleStudentUnits[String(sid)] || [];
+                      for (const fid of list) allowed.add(Number(fid));
+                    }
+                    return allowed;
+                  })();
 
                   const fid = unitSelectedFormId && Number.isFinite(unitSelectedFormId) ? unitSelectedFormId : null;
                   const dates = fid ? (unitDatesByFormId[fid] || { start: '', end: '' }) : { start: '', end: '' };
-                  const currentForm = fid ? unitForms.find((x) => Number((x as Record<string, unknown>).id) === fid) : null;
-                  const unitCode = currentForm ? String((currentForm as Record<string, unknown>).unit_code ?? '').trim() : '';
-                  const unitName = currentForm ? String((currentForm as Record<string, unknown>).unit_name ?? (currentForm as Record<string, unknown>).name ?? '').trim() : '';
+                  const currentUnit = fid ? eligibleUnitOptions.find((u) => Number(u.id) === fid) : null;
+                  const unitName = currentUnit?.name ?? '';
 
                   return (
-                    <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-12">
-                      <div className="lg:col-span-5">
-                        <div className="text-xs font-medium text-gray-700 mb-1">Unit</div>
-                        <SelectAsync
-                          value={fid ? String(fid) : ''}
-                          onChange={(v) => setUnitSelectedFormId(v ? Number(v) : null)}
-                          loadOptions={async (_page: number, search: string) => {
-                            const q = (search || '').trim().toLowerCase();
-                            const filtered = q
-                              ? opts.filter((o) => o.label.toLowerCase().includes(q))
-                              : opts;
-                            // Keep it simple: options are local, no paging needed.
-                            return { options: filtered, hasMore: false };
-                          }}
-                          placeholder="Select unit"
-                        />
+                    <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                      <div className="min-w-0">
+                        <label className="block">
+                          <span className="block text-xs font-medium text-gray-700 mb-1">Unit</span>
+                          <SelectAsync
+                            value={fid ? String(fid) : ''}
+                            onChange={(v) => setUnitSelectedFormId(v ? Number(v) : null)}
+                            loadOptions={async (_page: number, search: string) => {
+                              const q = (search || '').trim().toLowerCase();
+                              const base = opts.filter((o) => allowedFormIds.has(Number(o.value)));
+                              const filtered = q ? base.filter((o) => o.label.toLowerCase().includes(q)) : base;
+                              // Keep it simple: options are local, no paging needed.
+                              return { options: filtered, hasMore: false };
+                            }}
+                            placeholder="Select unit"
+                            className="w-full"
+                            attachDropdown="trigger"
+                          />
+                        </label>
                       </div>
-                      <div className="lg:col-span-7">
+                      <div className="min-w-0">
                         {!fid ? (
                           <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
                             Select a unit to edit dates.
@@ -562,7 +679,7 @@ export const AdminBatchesPage: React.FC = () => {
                         ) : (
                           <div className="rounded-lg border border-gray-200 bg-white p-4">
                             <div className="text-sm font-semibold text-gray-900">
-                              {unitCode ? `${unitCode} — ${unitName}` : unitName || `Form ${fid}`}
+                              {unitName || `Form ${fid}`}
                             </div>
                             <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3 sm:items-end">
                               <DatePicker

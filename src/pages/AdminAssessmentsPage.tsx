@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { Copy, ExternalLink, Send, RefreshCw, Ban, CheckCircle, User, CalendarClock, CalendarDays, Download } from 'lucide-react';
 import { listSubmittedInstancesPaged, updateInstanceRole, updateInstanceWorkflowStatus, issueInstanceAccessLink, getOrIssueInstanceAccessLink, revokeRoleAccessTokens, extendInstanceAccessTokens, extendInstanceAccessTokensToDate, allowStudentResubmission, listTrainers, updateFormInstanceDates, listCoursesPaged, listFormsPaged } from '../lib/formEngine';
 import type { SubmittedInstanceRow, Trainer } from '../lib/formEngine';
@@ -79,11 +79,14 @@ export const AdminAssessmentsPage: React.FC = () => {
     if (!opts?.silent) setLoading(true);
     const courseId = courseFilter ? Number(courseFilter) : undefined;
     const formId = formFilter ? Number(formFilter) : undefined;
-    const res = await listSubmittedInstancesPaged(page, PAGE_SIZE, search, courseId, formId);
+    const res = await listSubmittedInstancesPaged(page, PAGE_SIZE, search, courseId, formId, undefined, {
+      key: directorySort.key,
+      dir: directorySort.dir,
+    });
     setRows(res.data);
     setTotalRows(res.total);
     setLoading(false);
-  }, [courseFilter, formFilter]);
+  }, [courseFilter, formFilter, directorySort]);
 
   const loadCoursesOptions = useCallback(async (page: number, search: string) => {
     const res = await listCoursesPaged(page, 20, search ? search.trim() : undefined);
@@ -232,65 +235,10 @@ export const AdminAssessmentsPage: React.FC = () => {
       if (prev.key !== key) return { key, dir: 'asc' };
       return { key: prev.key, dir: prev.dir === 'asc' ? 'desc' : 'asc' };
     });
+    setCurrentPage(1);
   };
 
-  const timeOrNull = (s: string | null | undefined): number | null => {
-    if (!s?.trim()) return null;
-    const t = Date.parse(s);
-    return Number.isFinite(t) ? t : null;
-  };
-
-  const compareDateNullsLast = (a: string | null | undefined, b: string | null | undefined, asc: boolean): number => {
-    const ta = timeOrNull(a);
-    const tb = timeOrNull(b);
-    if (ta === null && tb === null) return 0;
-    if (ta === null) return 1;
-    if (tb === null) return -1;
-    const d = ta - tb;
-    return asc ? d : -d;
-  };
-
-  const sortedRows = useMemo(() => {
-    const asc = directorySort.dir === 'asc';
-    const copy = [...rows];
-    copy.sort((a, b) => {
-      let cmp = 0;
-      switch (directorySort.key) {
-        case 'student': {
-          const sa = `${(a.student_name || '').trim()}\t${(a.student_email || '').trim()}`.toLowerCase();
-          const sb = `${(b.student_name || '').trim()}\t${(b.student_email || '').trim()}`.toLowerCase();
-          cmp = sa.localeCompare(sb, undefined, { sensitivity: 'base' });
-          if (!asc) cmp = -cmp;
-          break;
-        }
-        case 'form': {
-          const fa = `${a.form_name || ''} ${a.form_version ?? ''}`.toLowerCase();
-          const fb = `${b.form_name || ''} ${b.form_version ?? ''}`.toLowerCase();
-          cmp = fa.localeCompare(fb, undefined, { sensitivity: 'base' });
-          if (!asc) cmp = -cmp;
-          break;
-        }
-        case 'start':
-          cmp = compareDateNullsLast(a.start_date, b.start_date, asc);
-          break;
-        case 'end':
-          cmp = compareDateNullsLast(a.end_date, b.end_date, asc);
-          break;
-        case 'created':
-          cmp = compareDateNullsLast(a.created_at, b.created_at, asc);
-          break;
-        case 'workflow':
-          cmp = getWorkflowLabel(a).localeCompare(getWorkflowLabel(b), undefined, { sensitivity: 'base' });
-          if (!asc) cmp = -cmp;
-          break;
-        default:
-          break;
-      }
-      if (cmp !== 0) return cmp;
-      return a.id - b.id;
-    });
-    return copy;
-  }, [rows, directorySort]);
+  const sortedRows = rows;
 
   const renderAssessmentActions = (row: SubmittedInstanceRow, mode: 'toolbar' | 'stack') => {
     const role = row.role_context === 'trainer' ? 'trainer' : row.role_context === 'office' ? 'office' : 'student';

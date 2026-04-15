@@ -27,6 +27,8 @@ interface SelectAsyncProps {
   placeholder?: string;
   /** When value is set but not in loaded options (e.g. from edit), show this label */
   selectedLabel?: string;
+  /** Where the dropdown is rendered. `trigger` keeps it attached (good for modals). */
+  attachDropdown?: 'portal' | 'trigger';
 }
 
 export const SelectAsync: React.FC<SelectAsyncProps> = ({
@@ -41,6 +43,7 @@ export const SelectAsync: React.FC<SelectAsyncProps> = ({
   required,
   placeholder = 'Select an option...',
   selectedLabel: selectedLabelProp,
+  attachDropdown = 'portal',
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const selectRef = useRef<HTMLDivElement>(null);
@@ -126,7 +129,10 @@ export const SelectAsync: React.FC<SelectAsyncProps> = ({
     }
   }, [page, search, loadPage, loadingMore, hasMore, loading]);
 
+  const usePortal = attachDropdown !== 'trigger';
+
   const updateDropdownPosition = useCallback(() => {
+    if (!usePortal) return;
     if (!isOpen || !triggerRef.current) return;
     const rect = triggerRef.current.getBoundingClientRect();
     const viewportH = window.innerHeight || document.documentElement.clientHeight || 0;
@@ -148,9 +154,10 @@ export const SelectAsync: React.FC<SelectAsyncProps> = ({
       maxWidth: maxW,
       maxHeight,
     });
-  }, [isOpen]);
+  }, [isOpen, usePortal]);
 
   useLayoutEffect(() => {
+    if (!usePortal) return;
     if (!isOpen) {
       setDropdownStyle(null);
       return;
@@ -162,7 +169,7 @@ export const SelectAsync: React.FC<SelectAsyncProps> = ({
       window.removeEventListener('scroll', updateDropdownPosition, true);
       window.removeEventListener('resize', updateDropdownPosition);
     };
-  }, [isOpen, updateDropdownPosition]);
+  }, [isOpen, updateDropdownPosition, usePortal]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -217,7 +224,7 @@ export const SelectAsync: React.FC<SelectAsyncProps> = ({
           />
         </button>
 
-        {isOpen && dropdownStyle && typeof document !== 'undefined' &&
+        {isOpen && usePortal && dropdownStyle && typeof document !== 'undefined' &&
           createPortal(
             <div
               data-select-async-dropdown
@@ -286,6 +293,66 @@ export const SelectAsync: React.FC<SelectAsyncProps> = ({
             </div>,
             document.body
           )}
+        {isOpen && !usePortal && (
+          <div
+            data-select-async-dropdown
+            className="absolute z-[10000] mt-1 w-full bg-white border-2 border-gray-200 rounded-lg shadow-lg overflow-hidden flex flex-col"
+            style={{ maxHeight: 360 }}
+          >
+            <div className="p-2 border-b border-gray-100">
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search..."
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-[var(--brand)] focus:border-[var(--brand)]"
+                autoFocus
+              />
+            </div>
+            <div
+              ref={listRef}
+              className="flex-1 overflow-auto py-1 overscroll-contain"
+              onScroll={handleScroll}
+              onWheel={(e) => {
+                e.stopPropagation();
+              }}
+            >
+              {loading && options.length === 0 ? (
+                <div className="flex justify-center py-8">
+                  <Loader variant="dots" size="sm" message="Loading..." />
+                </div>
+              ) : options.length === 0 ? (
+                <div className="px-4 py-6 text-sm text-gray-500 text-center">No options found</div>
+              ) : (
+                <>
+                  {options.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => {
+                        onChange(option.value);
+                        setIsOpen(false);
+                      }}
+                      className={cn(
+                        'w-full px-4 py-2.5 text-left text-sm transition-colors break-words',
+                        'hover:bg-[var(--brand)] hover:text-white',
+                        value === option.value && 'bg-orange-50 text-[var(--brand)] font-semibold'
+                      )}
+                      title={option.label}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                  {loadingMore && (
+                    <div className="flex justify-center py-3 border-t border-gray-100">
+                      <Loader variant="dots" size="sm" inline />
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        )}
       </div>
       {error && <p className="mt-1.5 text-sm text-red-600">{error}</p>}
       {helperText && !error && <p className="mt-1.5 text-sm text-gray-500">{helperText}</p>}

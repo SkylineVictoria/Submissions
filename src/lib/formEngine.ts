@@ -2057,82 +2057,45 @@ export async function listSubmittedInstancesPaged(
   search?: string,
   courseId?: number,
   formId?: number,
-  studentId?: number
+  studentId?: number,
+  sort?: { key: 'created' | 'student' | 'form' | 'start' | 'end' | 'workflow'; dir: 'asc' | 'desc' }
 ): Promise<PaginatedResult<SubmittedInstanceRow>> {
-  const from = Math.max(0, (page - 1) * pageSize);
-  const to = from + pageSize - 1;
-  let query = supabase
-    .from('skyline_form_instances')
-    .select('id, form_id, student_id, status, role_context, created_at, submitted_at, submission_count, start_date, end_date', { count: 'exact' })
-    .not('student_id', 'is', null);
-
-  const normalizedFormId = Number.isFinite(Number(formId)) && Number(formId) > 0 ? Number(formId) : null;
-  if (normalizedFormId) {
-    query = query.eq('form_id', normalizedFormId);
-  }
-
-  const normalizedStudentId = Number.isFinite(Number(studentId)) && Number(studentId) > 0 ? Number(studentId) : null;
-  if (normalizedStudentId) {
-    query = query.eq('student_id', normalizedStudentId);
-  }
-
-  const normalizedCourseId = Number.isFinite(Number(courseId)) && Number(courseId) > 0 ? Number(courseId) : null;
-  if (normalizedCourseId) {
-    const { data: links } = await supabase
-      .from('skyline_course_forms')
-      .select('form_id')
-      .eq('course_id', normalizedCourseId);
-    const courseFormIds = Array.from(
-      new Set(
-        ((links as Array<{ form_id: number }> | null) ?? [])
-          .map((r) => Number(r.form_id))
-          .filter((n) => Number.isFinite(n) && n > 0)
-      )
-    );
-    if (courseFormIds.length === 0) return { data: [], total: 0, page, pageSize };
-    if (normalizedFormId && !courseFormIds.includes(normalizedFormId)) {
-      return { data: [], total: 0, page, pageSize };
-    }
-    query = query.in('form_id', courseFormIds);
-  }
-
-  const q = (search ?? '').trim();
-  if (q) {
-    const escaped = q.replace(/[%_,]/g, '');
-    const conditions: string[] = [`status.ilike.%${escaped}%`, `role_context.ilike.%${escaped}%`];
-
-    const { data: formRows } = await supabase
-      .from('skyline_forms')
-      .select('id')
-      .or(`name.ilike.%${escaped}%,version.ilike.%${escaped}%`);
-    const formIds = ((formRows as Array<Record<string, unknown>>) || [])
-      .map((f) => Number(f.id))
-      .filter((n) => Number.isFinite(n) && n > 0);
-    if (formIds.length > 0) conditions.push(`form_id.in.(${formIds.join(',')})`);
-
-    const { data: studentRows } = await supabase
-      .from('skyline_students')
-      .select('id')
-      .or(`student_id.ilike.%${escaped}%,name.ilike.%${escaped}%,first_name.ilike.%${escaped}%,last_name.ilike.%${escaped}%,email.ilike.%${escaped}%`);
-    const studentIds = ((studentRows as Array<Record<string, unknown>>) || [])
-      .map((s) => Number(s.id))
-      .filter((n) => Number.isFinite(n) && n > 0);
-    if (studentIds.length > 0) conditions.push(`student_id.in.(${studentIds.join(',')})`);
-
-    query = query.or(conditions.join(','));
-  }
-
-  query = query.order('created_at', { ascending: false }).order('id', { ascending: false });
-  const { data: instances, error, count } = await query.range(from, to);
+  const { data, error } = await supabase.rpc('skyline_list_submitted_instances_paged', {
+    p_page: page,
+    p_page_size: pageSize,
+    p_search: (search ?? '').trim() || null,
+    p_course_id: Number.isFinite(Number(courseId)) && Number(courseId) > 0 ? Number(courseId) : null,
+    p_form_id: Number.isFinite(Number(formId)) && Number(formId) > 0 ? Number(formId) : null,
+    p_student_id: Number.isFinite(Number(studentId)) && Number(studentId) > 0 ? Number(studentId) : null,
+    p_sort_key: sort?.key ?? 'created',
+    p_sort_dir: sort?.dir ?? 'desc',
+  });
   if (error) {
-    console.error('listSubmittedInstancesPaged error', error);
+    console.error('skyline_list_submitted_instances_paged rpc error', error);
     return { data: [], total: 0, page, pageSize };
   }
 
-  const rows = (instances as Array<Record<string, unknown>>) || [];
-  const instanceIds = rows.map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0);
-  const formIds = Array.from(new Set(rows.map((r) => Number(r.form_id)).filter((n) => Number.isFinite(n) && n > 0)));
-  const studentIds = Array.from(new Set(rows.map((r) => Number(r.student_id)).filter((n) => Number.isFinite(n) && n > 0)));
+  const rowsRaw =
+    (data as Array<{
+      id: number;
+      form_id: number;
+      form_name: string | null;
+      form_version: string | null;
+      student_id: number | null;
+      student_name: string | null;
+      student_email: string | null;
+      status: string | null;
+      role_context: string | null;
+      created_at: string | null;
+      submitted_at: string | null;
+      submission_count: number | null;
+      start_date: string | null;
+      end_date: string | null;
+      total_count: number | null;
+    }> | null) || [];
+
+  const total = rowsRaw.length > 0 ? Number(rowsRaw[0].total_count ?? rowsRaw.length) : 0;
+  const instanceIds = rowsRaw.map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0);
 
   const now = Date.now();
   const tokenMap = new Map<string, boolean>();
@@ -2148,50 +2111,19 @@ export async function listSubmittedInstancesPaged(
       else if (!tokenMap.has(key)) tokenMap.set(key, true);
     }
   }
-
-  const formMap = new Map<number, { name: string; version: string | null }>();
-  if (formIds.length > 0) {
-    const { data: forms } = await supabase.from('skyline_forms').select('id, name, version').in('id', formIds);
-    for (const f of (forms as Array<Record<string, unknown>>) || []) {
-      formMap.set(Number(f.id), {
-        name: String(f.name ?? ''),
-        version: f.version ? String(f.version) : null,
-      });
-    }
-  }
-
-  const studentMap = new Map<number, { name: string; email: string }>();
-  if (studentIds.length > 0) {
-    const { data: students } = await supabase
-      .from('skyline_students')
-      .select('id, name, first_name, last_name, email')
-      .in('id', studentIds);
-    for (const s of (students as Array<Record<string, unknown>>) || []) {
-      const first = String(s.first_name ?? '').trim();
-      const last = String(s.last_name ?? '').trim();
-      const name = [first, last].filter(Boolean).join(' ').trim() || String(s.name ?? '');
-      studentMap.set(Number(s.id), { name, email: String(s.email ?? '') });
-    }
-  }
-
   return {
-    data: rows.map((r) => {
-      const formId = Number(r.form_id);
-      const studentIdRaw = r.student_id;
-      const studentId = studentIdRaw == null ? null : Number(studentIdRaw);
-      const form = formMap.get(formId);
-      const student = studentId != null ? studentMap.get(studentId) : undefined;
+    data: rowsRaw.map((r) => {
       const roleCtx = String(r.role_context ?? 'student');
       const tokenKey = `${Number(r.id)}:${roleCtx}`;
       const link_expired = tokenMap.get(tokenKey) !== false;
       return {
         id: Number(r.id),
-        form_id: formId,
-        form_name: form?.name || `Form #${formId}`,
-        form_version: form?.version ?? null,
-        student_id: studentId,
-        student_name: student?.name || 'Unknown student',
-        student_email: student?.email || '',
+        form_id: Number(r.form_id),
+        form_name: String(r.form_name ?? ''),
+        form_version: r.form_version != null ? String(r.form_version) : null,
+        student_id: r.student_id == null ? null : Number(r.student_id),
+        student_name: String(r.student_name ?? 'Unknown student'),
+        student_email: String(r.student_email ?? ''),
         status: String(r.status ?? 'draft'),
         role_context: roleCtx,
         created_at: String(r.created_at ?? ''),
@@ -2202,7 +2134,7 @@ export async function listSubmittedInstancesPaged(
         link_expired,
       };
     }),
-    total: Number(count ?? 0),
+    total,
     page,
     pageSize,
   };
