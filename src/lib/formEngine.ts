@@ -1834,6 +1834,7 @@ export async function listStudentsInBatch(batchId: number): Promise<Student[]> {
     .from('skyline_students')
     .select('*, skyline_batches(name)')
     .eq('batch_id', batchId)
+    .eq('status', 'active')
     .order('name');
   if (error) {
     console.error('listStudentsInBatch error', error);
@@ -2744,19 +2745,43 @@ export async function setStudentCourses(studentId: number, courseIds: number[]):
 export async function getActiveStudentCountsByCourse(courseIds: number[]): Promise<Record<number, number>> {
   const ids = Array.from(new Set(courseIds.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0)));
   if (ids.length === 0) return {};
-  const { data, error } = await supabase
+  const { data: scRows, error: scError } = await supabase
     .from('skyline_student_courses')
-    .select('course_id', { count: 'exact' })
+    .select('course_id, student_id')
     .in('course_id', ids)
     .eq('status', 'active');
-  if (error) {
-    console.error('getActiveStudentCountsByCourse error', error);
+  if (scError) {
+    console.error('getActiveStudentCountsByCourse error', scError);
     return {};
   }
-  const rows = (data as Array<{ course_id: number }> | null) || [];
+  const pairs = (scRows as Array<{ course_id: number; student_id: number }> | null) || [];
+  const studentIds = Array.from(
+    new Set(pairs.map((p) => Number(p.student_id)).filter((n) => Number.isFinite(n) && n > 0))
+  );
+  const activeStudentIds = new Set<number>();
+  const chunkSize = 200;
+  for (let i = 0; i < studentIds.length; i += chunkSize) {
+    const chunk = studentIds.slice(i, i + chunkSize);
+    const { data: stRows, error: stError } = await supabase
+      .from('skyline_students')
+      .select('id')
+      .in('id', chunk)
+      .eq('status', 'active');
+    if (stError) {
+      console.error('getActiveStudentCountsByCourse students error', stError);
+      return {};
+    }
+    for (const r of (stRows as Array<{ id: number }> | null) || []) {
+      const sid = Number(r.id);
+      if (Number.isFinite(sid) && sid > 0) activeStudentIds.add(sid);
+    }
+  }
   const out: Record<number, number> = {};
-  for (const r of rows) {
-    const cid = Number(r.course_id);
+  for (const id of ids) out[id] = 0;
+  for (const p of pairs) {
+    const sid = Number(p.student_id);
+    if (!activeStudentIds.has(sid)) continue;
+    const cid = Number(p.course_id);
     out[cid] = (out[cid] ?? 0) + 1;
   }
   return out;

@@ -294,6 +294,27 @@ export const AdminStudentsPage: React.FC = () => {
   const colMatch = (h: string, ...aliases: string[]) =>
     aliases.some((a) => normalizeCol(h).includes(normalizeCol(a)) || normalizeCol(a).includes(normalizeCol(h)));
 
+  /** Spreadsheet cells: IDs must never be inferred from email—only from the Student ID column or explicit fallback name. */
+  const cellToImportStudentId = (val: unknown): string | undefined => {
+    if (val === null || val === undefined || val === '') return undefined;
+    if (typeof val === 'number' && Number.isFinite(val)) {
+      if (Number.isInteger(val) && Math.abs(val) <= Number.MAX_SAFE_INTEGER) return String(val);
+      return String(val).trim();
+    }
+    const s = String(val).trim();
+    return s || undefined;
+  };
+
+  /** Last resort when the file has no ID cell (never use email local-part). */
+  const importStudentIdFallbackFromName = (first: string, last: string): string => {
+    const f = String(first ?? '').trim().toLowerCase().replace(/\s+/g, '');
+    const l = String(last ?? '').trim().toLowerCase().replace(/\s+/g, '');
+    if (!f && !l) return '';
+    if (!f) return l;
+    if (!l) return f;
+    return `${f}.${l}`;
+  };
+
   const toIsoDate = (val: unknown): string | undefined => {
     if (val == null) return undefined;
     if (val instanceof Date) {
@@ -378,7 +399,22 @@ export const AdminStudentsPage: React.FC = () => {
           const lnIdx = headers.findIndex((h) => colMatch(h, 'surname', 'last name', 'lastname'));
           const emIdx = headers.findIndex((h) => colMatch(h, 'email address', 'email'));
           const phIdx = headers.findIndex((h) => colMatch(h, 'mobile phone', 'phone', 'mobile'));
-          const sidIdx = headers.findIndex((h) => colMatch(h, 'student id', 'studentid'));
+          const sidIdx = headers.findIndex((h) =>
+            colMatch(
+              h,
+              'student id',
+              'studentid',
+              'student number',
+              'stu id',
+              'learner id',
+              'usi',
+              'unique student identifier',
+              'student no',
+              'student #',
+              'id number',
+              'learners id'
+            )
+          );
           const unitIdx = headers.findIndex((h) => colMatch(h, 'unit code', 'unit of competency code', 'unit'));
           const qualIdx = headers.findIndex((h) => colMatch(h, 'qualification code', 'qualification'));
           const startIdx = headers.findIndex((h) => colMatch(h, 'activity start date', 'start date', 'activity start'));
@@ -404,7 +440,7 @@ export const AdminStudentsPage: React.FC = () => {
             const last = lnIdx >= 0 ? String(row[lnIdx] ?? '').trim() : '';
             const email = String(row[emIdx] ?? '').trim();
             const phone = phIdx >= 0 ? digitsOnly(String(row[phIdx] ?? '')).slice(0, 10) : '';
-            const studentId = sidIdx >= 0 ? String(row[sidIdx] ?? '').trim() : undefined;
+            const studentId = sidIdx >= 0 ? cellToImportStudentId(row[sidIdx]) : undefined;
             const unitCode = unitIdx >= 0 ? String(row[unitIdx] ?? '').trim() : '';
             const qualCode = qualIdx >= 0 ? String(row[qualIdx] ?? '').trim() : '';
             const start = startIdx >= 0 ? toIsoDate(row[startIdx]) : undefined;
@@ -718,10 +754,16 @@ export const AdminStudentsPage: React.FC = () => {
         }
 
         const existingStudent = localStudentByEmail.get(emailKey) ?? importExistingByEmail[emailKey];
-        const candidateStudentId =
-          String(firstRow.student_id ?? '').trim() ||
-          (email.includes('@') ? email.split('@')[0] : `${(first + '.' + String(firstRow.last_name ?? '')).toLowerCase().replace(/\s+/g, '.')}`);
+        const sidFromFile = String(firstRow.student_id ?? '').trim();
+        const idFallback = importStudentIdFallbackFromName(first, String(firstRow.last_name ?? ''));
+        const candidateStudentId = sidFromFile || idFallback;
         const candidateIdKey = candidateStudentId.replace(/\s+/g, '').trim();
+        if (!candidateIdKey) {
+          failed += rows.length;
+          done += rows.length;
+          setImportProgress({ done, total: importRows.length, success, failed });
+          continue;
+        }
         const batchId = importBatchId ? Number(importBatchId) : null;
         let student: Student | null = existingStudent ?? null;
         if (!student && candidateIdKey) student = localStudentByStudentId.get(candidateIdKey) ?? null;
@@ -1521,7 +1563,7 @@ export const AdminStudentsPage: React.FC = () => {
       >
         <div className="space-y-4">
           <p className="text-sm text-gray-600">
-            Upload a CSV or XLSX file with columns: <strong>Given Name</strong>, <strong>Surname</strong> (optional), <strong>Email Address</strong>, <strong>Mobile Phone</strong>, <strong>Qualification Code</strong>, <strong>Activity Start Date</strong>, <strong>Activity End Date</strong>, <strong>Student ID</strong>, <strong>Unit Code</strong>.
+            Upload a CSV or XLSX file with columns: <strong>Given Name</strong>, <strong>Surname</strong> (optional), <strong>Email Address</strong>, <strong>Mobile Phone</strong>, <strong>Qualification Code</strong>, <strong>Activity Start Date</strong>, <strong>Activity End Date</strong>, <strong>Student ID</strong> (or e.g. Student Number / USI—never taken from email), <strong>Unit Code</strong>.
           </p>
           {importing && importProgress && (
             <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
@@ -1584,13 +1626,14 @@ export const AdminStudentsPage: React.FC = () => {
               </div>
               <p className="text-xs text-gray-500">Edit records before importing. Remove rows you don&apos;t want.</p>
               <div className="max-h-[320px] overflow-x-auto overflow-y-auto border border-gray-200 rounded-lg">
-                <table className="w-full text-sm table-auto min-w-[1900px]">
+                <table className="w-full text-sm table-auto min-w-[2040px]">
                   <thead className="bg-gray-50 sticky top-0">
                     <tr>
                       <th className="text-left px-2 py-2 font-semibold">First Name</th>
                       <th className="text-left px-2 py-2 font-semibold">Last Name</th>
                       <th className="text-left px-2 py-2 font-semibold">Email</th>
                       <th className="text-left px-2 py-2 font-semibold">Phone</th>
+                      <th className="text-left px-2 py-2 font-semibold">Student ID</th>
                       <th className="text-left px-2 py-2 font-semibold">Qualification Code</th>
                       <th className="text-left px-2 py-2 font-semibold">Activity Start</th>
                       <th className="text-left px-2 py-2 font-semibold">Activity End</th>
@@ -1603,7 +1646,8 @@ export const AdminStudentsPage: React.FC = () => {
                       (() => {
                         const emailKey = String(r.email ?? '').trim().toLowerCase();
                         const existing = importExistingByEmail[emailKey];
-                        const candidateId = (r.student_id ?? '').trim() || (r.email?.includes('@') ? r.email.split('@')[0] : '');
+                        const candidateId =
+                          String(r.student_id ?? '').trim() || importStudentIdFallbackFromName(r.first_name ?? '', r.last_name ?? '');
                         const existingId = (existing?.student_id ?? '').trim();
                         const hasConflict = !!existing && !!candidateId && !!existingId && candidateId !== existingId;
                         const decision = importIdDecisionByEmail[emailKey] ?? 'keep_existing';
@@ -1639,6 +1683,14 @@ export const AdminStudentsPage: React.FC = () => {
                             onChange={(e) => updateImportRow(i, 'phone', e.target.value)}
                             placeholder="Phone"
                             className="text-sm py-1.5 min-h-0 w-[160px]"
+                          />
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <Input
+                            value={r.student_id ?? ''}
+                            onChange={(e) => updateImportRow(i, 'student_id', e.target.value)}
+                            placeholder="From file or edit"
+                            className="text-sm py-1.5 min-h-0 w-[140px]"
                           />
                         </td>
                         <td className="px-2 py-1.5">

@@ -79,7 +79,7 @@ export const AdminBatchesPage: React.FC = () => {
   }, []);
 
   const loadStudentsOptions = useCallback(async (page: number, search: string) => {
-    const res = await listStudentsPaged(page, 20, search || undefined);
+    const res = await listStudentsPaged(page, 20, search || undefined, 'active');
     return {
       options: res.data.map((s) => ({
         value: s.id,
