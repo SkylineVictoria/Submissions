@@ -533,6 +533,7 @@ export const AdminStudentsPage: React.FC = () => {
     setImportProgress({ done: 0, total: importRows.length, success: 0, failed: 0 });
     let success = 0;
     let failed = 0;
+    const skippedMissingStudentId: Array<{ email: string; name: string }> = [];
     let importStudentsForPdf: Array<{ id: number; name: string; email: string }> = [];
     let importFormIdsForPdf: Set<number> = new Set<number>();
     const splitCodes = (val: unknown) =>
@@ -759,6 +760,10 @@ export const AdminStudentsPage: React.FC = () => {
         const candidateStudentId = sidFromFile || idFallback;
         const candidateIdKey = candidateStudentId.replace(/\s+/g, '').trim();
         if (!candidateIdKey) {
+          skippedMissingStudentId.push({
+            email,
+            name: [first, String(firstRow.last_name ?? '')].filter(Boolean).join(' ').trim() || email,
+          });
           failed += rows.length;
           done += rows.length;
           setImportProgress({ done, total: importRows.length, success, failed });
@@ -905,6 +910,15 @@ export const AdminStudentsPage: React.FC = () => {
     } else {
       summary += 'No rows were processed.';
     }
+
+    if (skippedMissingStudentId.length > 0) {
+      const preview = skippedMissingStudentId.slice(0, 12).map((x) => `- ${x.name} (${x.email})`).join('\n');
+      summary +=
+        `\n\nSkipped (missing Student ID): ${skippedMissingStudentId.length}` +
+        `\nAdd/fix the Student ID column in the import preview and re-import those rows.\n\n${preview}` +
+        (skippedMissingStudentId.length > 12 ? `\n… (+${skippedMissingStudentId.length - 12} more)` : '');
+    }
+
     summary += '\n\nClick OK to close the import dialog.';
     setImportResultModal({
       title: success > 0 ? 'Import complete' : failed > 0 ? 'Import finished' : 'Import complete',
