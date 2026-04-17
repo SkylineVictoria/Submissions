@@ -12,11 +12,17 @@ import {
   listSkylineInductions,
   listSkylineInductionSubmissions,
   patchSkylineInductionEndAt,
-  patchSkylineInductionSubmissionOffice,
+  patchSkylineInductionSubmissionPayload,
   type SkylineInductionRow,
   type SkylineInductionSubmissionRow,
 } from '../lib/formEngine';
-import { normalizeInductionDateToIso } from '../lib/inductionForm';
+import { InductionDocumentPages } from '../components/induction/InductionDocumentPages';
+import {
+  parseInductionPayload,
+  synchronizeInductionDerivedFields,
+  validateInductionFormPayload,
+  type InductionFormPayload,
+} from '../lib/inductionForm';
 import { toast } from '../utils/toast';
 import { formatMelbourneDateTime, melbourneLocalToUtcIso, utcIsoToMelbourneDateAndTime } from '../utils/melbourneTime';
 
@@ -67,12 +73,9 @@ export const AdminInductionPage: React.FC = () => {
   const [bulkDownloading, setBulkDownloading] = useState(false);
   const [submissionsPage, setSubmissionsPage] = useState(1);
   const SUBMISSIONS_PAGE_SIZE = 10;
-  const [officeModalSub, setOfficeModalSub] = useState<SkylineInductionSubmissionRow | null>(null);
-  const [officeSmsBy, setOfficeSmsBy] = useState('');
-  const [officeSmsDate, setOfficeSmsDate] = useState('');
-  const [officePrismsBy, setOfficePrismsBy] = useState('');
-  const [officePrismsDate, setOfficePrismsDate] = useState('');
-  const [officeSaving, setOfficeSaving] = useState(false);
+  const [editPayloadSub, setEditPayloadSub] = useState<SkylineInductionSubmissionRow | null>(null);
+  const [editPayload, setEditPayload] = useState<InductionFormPayload | null>(null);
+  const [editPayloadSaving, setEditPayloadSaving] = useState(false);
   const [editEndInduction, setEditEndInduction] = useState<SkylineInductionRow | null>(null);
   const [editEndDate, setEditEndDate] = useState('');
   const [editEndTime, setEditEndTime] = useState('17:00');
@@ -285,36 +288,41 @@ export const AdminInductionPage: React.FC = () => {
     return n || '—';
   };
 
-  const openOfficeModal = (sub: SkylineInductionSubmissionRow) => {
-    const en = (sub.payload as { enrolment?: Record<string, unknown> }).enrolment ?? {};
-    setOfficeSmsBy(String(en.officeSmsBy ?? ''));
-    setOfficeSmsDate(normalizeInductionDateToIso(String(en.officeSmsDate ?? '')));
-    setOfficePrismsBy(String(en.officePrismsBy ?? ''));
-    setOfficePrismsDate(normalizeInductionDateToIso(String(en.officePrismsDate ?? '')));
-    setOfficeModalSub(sub);
+  const openEditPayloadModal = (sub: SkylineInductionSubmissionRow) => {
+    const parsed = parseInductionPayload(sub.payload);
+    if (!parsed) {
+      toast.error('Could not parse this submission payload (unexpected format).');
+      return;
+    }
+    setEditPayloadSub(sub);
+    setEditPayload(parsed);
   };
 
-  const saveOffice = async () => {
-    if (!officeModalSub || !submissionsModal) return;
-    setOfficeSaving(true);
+  const saveEditedPayload = async () => {
+    if (!editPayloadSub || !editPayload || !submissionsModal) return;
+    const synced = synchronizeInductionDerivedFields(editPayload);
+    const err = validateInductionFormPayload(synced);
+    if (err) {
+      toast.error(err);
+      return;
+    }
+    setEditPayloadSaving(true);
     try {
-      const res = await patchSkylineInductionSubmissionOffice({
-        submissionId: officeModalSub.id,
-        officeSmsBy: officeSmsBy.trim(),
-        officeSmsDate: normalizeInductionDateToIso(officeSmsDate),
-        officePrismsBy: officePrismsBy.trim(),
-        officePrismsDate: normalizeInductionDateToIso(officePrismsDate),
+      const res = await patchSkylineInductionSubmissionPayload({
+        submissionId: editPayloadSub.id,
+        payload: synced as unknown as Record<string, unknown>,
       });
       if (!res.ok) {
         toast.error(res.error);
         return;
       }
-      toast.success('Office use saved.');
-      setOfficeModalSub(null);
+      toast.success('Submission updated.');
+      setEditPayloadSub(null);
+      setEditPayload(null);
       const { rows: list, error: listErr } = await listSkylineInductionSubmissions(submissionsModal.id);
       if (!listErr) setSubmissionsList(list);
     } finally {
-      setOfficeSaving(false);
+      setEditPayloadSaving(false);
     }
   };
 
@@ -628,6 +636,16 @@ export const AdminInductionPage: React.FC = () => {
                       Download blank PDF pack
                     </a>
                   ) : null}
+                  {editPayloadSub && editPayload ? (
+                    <Button
+                      type="button"
+                      className="w-full sm:w-auto"
+                      onClick={() => void saveEditedPayload()}
+                      disabled={editPayloadSaving}
+                    >
+                      {editPayloadSaving ? 'Saving…' : 'Save'}
+                    </Button>
+                  ) : null}
                   <Button
                     type="button"
                     variant="outline"
@@ -643,7 +661,8 @@ export const AdminInductionPage: React.FC = () => {
                     variant="outline"
                     className="w-full sm:w-auto"
                     onClick={() => {
-                      setOfficeModalSub(null);
+                      setEditPayloadSub(null);
+                      setEditPayload(null);
                       setSubmissionsModal(null);
                       setSelectedSubmissionIds(new Set());
                     }}
@@ -653,7 +672,39 @@ export const AdminInductionPage: React.FC = () => {
                 </div>
               </div>
               <div className="p-4 overflow-y-auto flex-1">
-                {submissionsLoading ? (
+                {editPayloadSub && editPayload ? (
+                  <div className="space-y-4">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="min-w-0">
+                        <div className="text-xs font-medium uppercase tracking-wide text-gray-500">Edit submission</div>
+                        <div className="mt-1 text-sm text-gray-700 break-words">
+                          <span className="font-semibold text-gray-900">{editPayload.checklistHeader.fullName?.trim() || '—'}</span>
+                          <span className="text-gray-400"> · </span>
+                          <span>{editPayloadSub.student_email || editPayloadSub.guest_email || '—'}</span>
+                        </div>
+                        <p className="mt-2 text-xs text-gray-500">
+                          Changes here update the stored submission (and the filled PDF download).
+                        </p>
+                      </div>
+                      <div className="hidden" />
+                    </div>
+
+                    <div className="rounded-lg border border-gray-200 bg-white">
+                      <InductionDocumentPages
+                        title={submissionsModal?.title ?? 'Skyline induction'}
+                        startAt={submissionsModal ? String(submissionsModal.start_at) : ''}
+                        endAt={submissionsModal ? String(submissionsModal.end_at) : ''}
+                        interactive={{
+                          value: editPayload,
+                          onChange: (next) => setEditPayload(next),
+                          readOnly: false,
+                          allowOfficeUseEdit: true,
+                          inductionId: submissionsModal?.id,
+                        }}
+                      />
+                    </div>
+                  </div>
+                ) : submissionsLoading ? (
                   <div className="py-12 text-center text-sm text-gray-600">Loading submissions…</div>
                 ) : submissionsLoadError ? (
                   <div className="py-12 text-center text-sm text-amber-900 bg-amber-50 rounded-lg px-4">
@@ -802,8 +853,8 @@ export const AdminInductionPage: React.FC = () => {
                                   >
                                     {pdfGeneratingId === sub.id ? '…' : 'Download PDF'}
                                   </Button>
-                                  <Button type="button" variant="outline" size="sm" className="w-full justify-center" onClick={() => openOfficeModal(sub)}>
-                                    Office use — Edit
+                                  <Button type="button" variant="outline" size="sm" className="w-full justify-center" onClick={() => openEditPayloadModal(sub)}>
+                                    Edit submission
                                   </Button>
                                 </div>
                               </div>
@@ -875,8 +926,8 @@ export const AdminInductionPage: React.FC = () => {
                                       </Button>
                                     </td>
                                     <td className="py-2 px-3 align-top">
-                                      <Button type="button" variant="outline" size="sm" onClick={() => openOfficeModal(sub)}>
-                                        Edit
+                                      <Button type="button" variant="outline" size="sm" onClick={() => openEditPayloadModal(sub)}>
+                                        Edit submission
                                       </Button>
                                     </td>
                                   </tr>
@@ -898,58 +949,7 @@ export const AdminInductionPage: React.FC = () => {
           </div>
         ) : null}
 
-        {officeModalSub ? (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4 overflow-y-auto" role="dialog">
-            <Card className="w-full max-w-md p-6 shadow-xl my-4">
-              <h3 className="text-lg font-bold text-[var(--text)]">Office use only</h3>
-              <p className="text-sm text-gray-600 mt-1">
-                Enrolment form — staff fields for {payloadDisplayName(officeModalSub.payload)}
-              </p>
-              <div className="mt-4 space-y-4">
-                <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">Updated in SMS by</label>
-                  <input
-                    className="w-full rounded border border-gray-300 px-3 py-2 text-sm"
-                    value={officeSmsBy}
-                    onChange={(e) => setOfficeSmsBy(e.target.value)}
-                    autoComplete="off"
-                  />
-                </div>
-                <DatePicker
-                  label="Date (SMS)"
-                  value={officeSmsDate}
-                  onChange={setOfficeSmsDate}
-                  compact
-                  className="w-full"
-                />
-                <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">Updated in PRISMS by</label>
-                  <input
-                    className="w-full rounded border border-gray-300 px-3 py-2 text-sm"
-                    value={officePrismsBy}
-                    onChange={(e) => setOfficePrismsBy(e.target.value)}
-                    autoComplete="off"
-                  />
-                </div>
-                <DatePicker
-                  label="Date (PRISMS)"
-                  value={officePrismsDate}
-                  onChange={setOfficePrismsDate}
-                  compact
-                  className="w-full"
-                />
-              </div>
-              <div className="mt-6 flex justify-end gap-2">
-                <Button type="button" variant="outline" onClick={() => setOfficeModalSub(null)} disabled={officeSaving}>
-                  Cancel
-                </Button>
-                <Button type="button" onClick={() => void saveOffice()} disabled={officeSaving}>
-                  {officeSaving ? 'Saving…' : 'Save'}
-                </Button>
-              </div>
-            </Card>
-          </div>
-        ) : null}
+        {/* Edit submission is rendered inside the existing submissions window (no extra dialog). */}
 
         {editEndInduction ? (
           <div className="fixed inset-0 z-[55] flex items-center justify-center bg-black/40 p-4" role="dialog" aria-labelledby="edit-end-title">

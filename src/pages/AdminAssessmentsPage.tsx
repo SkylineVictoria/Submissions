@@ -277,14 +277,16 @@ export const AdminAssessmentsPage: React.FC = () => {
     const actionIcon = 'w-3 h-3 shrink-0';
     const actionText = 'max-w-0 overflow-hidden group-hover:max-w-[8rem] transition-all duration-200 whitespace-nowrap';
 
-    const openLink = async () => {
-      const url = await getOrIssueInstanceAccessLink(row.id, role);
+    const openLinkAs = async (targetRole: 'student' | 'trainer' | 'office') => {
+      const url = await getOrIssueInstanceAccessLink(row.id, targetRole);
       if (!url) {
         toast.error('Failed to open secure link');
         return;
       }
       window.open(url, '_blank');
     };
+    const openLink = async () => openLinkAs(role);
+    const openOfficeEdit = async () => openLinkAs('office');
 
     const pdfBase = PDF_BASE.replace(/\/$/, '');
     const downloadPdfHref = pdfBase ? `${pdfBase}/pdf/${row.id}?role=office&download=1` : '';
@@ -295,6 +297,10 @@ export const AdminAssessmentsPage: React.FC = () => {
           <Button variant="outline" size="sm" className="w-full justify-center" onClick={openLink}>
             <ExternalLink className="mr-2 h-4 w-4 shrink-0" />
             Open
+          </Button>
+          <Button variant="outline" size="sm" className="w-full justify-center" onClick={openOfficeEdit}>
+            <ExternalLink className="mr-2 h-4 w-4 shrink-0" />
+            Office edit
           </Button>
           <a
             href={downloadPdfHref}
@@ -367,6 +373,10 @@ export const AdminAssessmentsPage: React.FC = () => {
         <button type="button" onClick={openLink} className={actionBtn} title="Open">
           <ExternalLink className={actionIcon} />
           <span className={actionText}>Open</span>
+        </button>
+        <button type="button" onClick={() => void openOfficeEdit()} className={actionBtn} title="Edit office/admin-only fields">
+          <ExternalLink className={actionIcon} />
+          <span className={actionText}>Office edit</span>
         </button>
         <a
           href={downloadPdfHref}

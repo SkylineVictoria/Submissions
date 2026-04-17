@@ -4548,3 +4548,17 @@ export async function patchSkylineInductionSubmissionOffice(input: {
   if (!j?.ok) return { ok: false, error: j?.error || 'Could not update office fields.' };
   return { ok: true };
 }
+
+export async function patchSkylineInductionSubmissionPayload(input: {
+  submissionId: number;
+  payload: Record<string, unknown>;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { data, error } = await supabase.rpc('skyline_admin_patch_induction_submission_payload', {
+    p_submission_id: input.submissionId,
+    p_payload: input.payload,
+  });
+  if (error) return { ok: false, error: error.message };
+  const j = data as { ok?: boolean; error?: string } | null;
+  if (!j?.ok) return { ok: false, error: j?.error || 'Could not update submission.' };
+  return { ok: true };
+}
