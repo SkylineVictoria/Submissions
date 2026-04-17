@@ -22,6 +22,8 @@ import {
   buildEmailFromLocalAndDomain,
   getEmailLocalPartForEdit,
   getInstitutionalDomainFromEmail,
+  normalizeStudentImportEmail,
+  resolveStudentIdFromImportRow,
   type InstitutionalDomain,
   STUDENT_DOMAIN,
 } from '../lib/emailUtils';
@@ -294,7 +296,7 @@ export const AdminStudentsPage: React.FC = () => {
   const colMatch = (h: string, ...aliases: string[]) =>
     aliases.some((a) => normalizeCol(h).includes(normalizeCol(a)) || normalizeCol(a).includes(normalizeCol(h)));
 
-  /** Spreadsheet cells: IDs must never be inferred from email—only from the Student ID column or explicit fallback name. */
+  /** Spreadsheet cells: Contact ID / Student ID column is canonical (not derived from name). */
   const cellToImportStudentId = (val: unknown): string | undefined => {
     if (val === null || val === undefined || val === '') return undefined;
     if (typeof val === 'number' && Number.isFinite(val)) {
@@ -303,16 +305,6 @@ export const AdminStudentsPage: React.FC = () => {
     }
     const s = String(val).trim();
     return s || undefined;
-  };
-
-  /** Last resort when the file has no ID cell (never use email local-part). */
-  const importStudentIdFallbackFromName = (first: string, last: string): string => {
-    const f = String(first ?? '').trim().toLowerCase().replace(/\s+/g, '');
-    const l = String(last ?? '').trim().toLowerCase().replace(/\s+/g, '');
-    if (!f && !l) return '';
-    if (!f) return l;
-    if (!l) return f;
-    return `${f}.${l}`;
   };
 
   const toIsoDate = (val: unknown): string | undefined => {
@@ -402,6 +394,7 @@ export const AdminStudentsPage: React.FC = () => {
           const sidIdx = headers.findIndex((h) =>
             colMatch(
               h,
+              'contact id',
               'student id',
               'studentid',
               'student number',
@@ -419,8 +412,16 @@ export const AdminStudentsPage: React.FC = () => {
           const qualIdx = headers.findIndex((h) => colMatch(h, 'qualification code', 'qualification'));
           const startIdx = headers.findIndex((h) => colMatch(h, 'activity start date', 'start date', 'activity start'));
           const endIdx = headers.findIndex((h) => colMatch(h, 'activity end date', 'end date', 'activity end'));
-          if (fnIdx < 0 || emIdx < 0) {
-            reject(new Error('Required columns: First Name, Email. Found: ' + headers.join(', ')));
+          if (fnIdx < 0) {
+            reject(new Error('Required column: Given / First name. Found: ' + headers.join(', ')));
+            return;
+          }
+          if (emIdx < 0 && sidIdx < 0) {
+            reject(
+              new Error(
+                'Required: Email Address column and/or Contact ID (or Student ID). Found: ' + headers.join(', ')
+              )
+            );
             return;
           }
           const result: Array<{
@@ -438,20 +439,23 @@ export const AdminStudentsPage: React.FC = () => {
             const row = rows[i] as unknown[];
             const first = String(row[fnIdx] ?? '').trim();
             const last = lnIdx >= 0 ? String(row[lnIdx] ?? '').trim() : '';
-            const email = String(row[emIdx] ?? '').trim();
+            const emailRaw = emIdx >= 0 ? String(row[emIdx] ?? '').trim() : '';
             const phone = phIdx >= 0 ? digitsOnly(String(row[phIdx] ?? '')).slice(0, 10) : '';
-            const studentId = sidIdx >= 0 ? cellToImportStudentId(row[sidIdx]) : undefined;
+            const studentIdCell = sidIdx >= 0 ? cellToImportStudentId(row[sidIdx]) : undefined;
+            const resolvedSid = resolveStudentIdFromImportRow(studentIdCell, emailRaw);
+            const email = normalizeStudentImportEmail(resolvedSid || undefined, emailRaw);
             const unitCode = unitIdx >= 0 ? String(row[unitIdx] ?? '').trim() : '';
             const qualCode = qualIdx >= 0 ? String(row[qualIdx] ?? '').trim() : '';
             const start = startIdx >= 0 ? toIsoDate(row[startIdx]) : undefined;
             const end = endIdx >= 0 ? toIsoDate(row[endIdx]) : undefined;
-            if (!first && !email) continue;
+            if (!first) continue;
+            if (!resolvedSid) continue;
             result.push({
               first_name: first,
               last_name: last,
               email,
               phone,
-              student_id: studentId || undefined,
+              student_id: resolvedSid,
               unit_code: unitCode || undefined,
               qualification_code: qualCode || undefined,
               activity_start_date: start,
@@ -497,7 +501,17 @@ export const AdminStudentsPage: React.FC = () => {
       setImportIdDecisionByEmail({});
       return;
     }
-    const emails = Array.from(new Set(importRows.map((r) => String(r.email ?? '').trim().toLowerCase()).filter(Boolean)));
+    const emails = Array.from(
+      new Set(
+        importRows
+          .map((r) => {
+            const raw = String(r.email ?? '').trim();
+            const sid = resolveStudentIdFromImportRow(String(r.student_id ?? '').trim() || undefined, raw);
+            return normalizeStudentImportEmail(sid || undefined, raw).trim().toLowerCase();
+          })
+          .filter(Boolean)
+      )
+    );
     getStudentsByEmails(emails).then((existing) => {
       const map: Record<string, Student> = {};
       for (const s of existing) {
@@ -516,7 +530,16 @@ export const AdminStudentsPage: React.FC = () => {
 
   const updateImportRow = (index: number, field: keyof typeof importRows[0], value: string) => {
     setImportRows((prev) =>
-      prev.map((r, i) => (i === index ? { ...r, [field]: field === 'phone' ? digitsOnly(value).slice(0, 10) : value } : r))
+      prev.map((r, i) => {
+        if (i !== index) return r;
+        if (field === 'phone') return { ...r, phone: digitsOnly(value).slice(0, 10) };
+        if (field === 'student_id') {
+          const nextSid = value.trim();
+          const newEmail = normalizeStudentImportEmail(nextSid || undefined, String(r.email ?? '').trim());
+          return { ...r, student_id: value, email: newEmail };
+        }
+        return { ...r, [field]: value };
+      })
     );
   };
 
@@ -732,22 +755,41 @@ export const AdminStudentsPage: React.FC = () => {
       importStudentsForPdf = [];
       importFormIdsForPdf = new Set<number>();
 
-      // Group rows by email to reduce repeated create/update calls (more efficient).
+      // Group rows by normalized institutional email (Contact ID drives identity).
       const rowsByEmail = new Map<string, typeof importRows>();
       for (const r of importRows) {
-        const ek = String(r.email ?? '').trim().toLowerCase();
-        if (!ek) continue;
-        const list = rowsByEmail.get(ek) ?? [];
+        const raw = String(r.email ?? '').trim();
+        const sid = resolveStudentIdFromImportRow(String(r.student_id ?? '').trim() || undefined, raw);
+        const norm = normalizeStudentImportEmail(sid || undefined, raw).trim().toLowerCase();
+        if (!norm) continue;
+        const list = rowsByEmail.get(norm) ?? [];
         list.push(r);
-        rowsByEmail.set(ek, list);
+        rowsByEmail.set(norm, list);
       }
 
       let done = 0;
       for (const [emailKey, rows] of rowsByEmail.entries()) {
         const firstRow = rows[0];
         const first = String(firstRow.first_name ?? '').trim();
-        const email = String(firstRow.email ?? '').trim();
-        if (!first || !email) {
+        const emailRaw = String(firstRow.email ?? '').trim();
+        const resolvedSid = resolveStudentIdFromImportRow(
+          String(firstRow.student_id ?? '').trim() || undefined,
+          emailRaw
+        );
+        const studentEmail = normalizeStudentImportEmail(resolvedSid || undefined, emailRaw);
+        const candidateIdKey = resolvedSid.replace(/\s+/g, '').trim();
+        if (!first) {
+          failed += rows.length;
+          done += rows.length;
+          setImportProgress({ done, total: importRows.length, success, failed });
+          continue;
+        }
+
+        if (!candidateIdKey) {
+          skippedMissingStudentId.push({
+            email: studentEmail || emailRaw,
+            name: [first, String(firstRow.last_name ?? '')].filter(Boolean).join(' ').trim() || studentEmail || emailRaw,
+          });
           failed += rows.length;
           done += rows.length;
           setImportProgress({ done, total: importRows.length, success, failed });
@@ -755,20 +797,6 @@ export const AdminStudentsPage: React.FC = () => {
         }
 
         const existingStudent = localStudentByEmail.get(emailKey) ?? importExistingByEmail[emailKey];
-        const sidFromFile = String(firstRow.student_id ?? '').trim();
-        const idFallback = importStudentIdFallbackFromName(first, String(firstRow.last_name ?? ''));
-        const candidateStudentId = sidFromFile || idFallback;
-        const candidateIdKey = candidateStudentId.replace(/\s+/g, '').trim();
-        if (!candidateIdKey) {
-          skippedMissingStudentId.push({
-            email,
-            name: [first, String(firstRow.last_name ?? '')].filter(Boolean).join(' ').trim() || email,
-          });
-          failed += rows.length;
-          done += rows.length;
-          setImportProgress({ done, total: importRows.length, success, failed });
-          continue;
-        }
         const batchId = importBatchId ? Number(importBatchId) : null;
         let student: Student | null = existingStudent ?? null;
         if (!student && candidateIdKey) student = localStudentByStudentId.get(candidateIdKey) ?? null;
@@ -778,7 +806,7 @@ export const AdminStudentsPage: React.FC = () => {
             student_id: candidateIdKey,
             first_name: first,
             last_name: String(firstRow.last_name ?? ''),
-            email,
+            email: studentEmail,
             phone: String(firstRow.phone ?? '') || undefined,
             batch_id: batchId && Number.isFinite(batchId) ? batchId : undefined,
           });
@@ -791,11 +819,12 @@ export const AdminStudentsPage: React.FC = () => {
           student = created;
         } else {
           const decision = importIdDecisionByEmail[emailKey] ?? 'keep_existing';
-          const studentIdToSet = decision === 'use_new' ? candidateStudentId : (student.student_id ?? candidateStudentId);
+          const studentIdToSet = decision === 'use_new' ? candidateIdKey : (student.student_id ?? candidateIdKey);
           const updated = await updateStudent(student.id, {
             student_id: studentIdToSet,
             first_name: first,
             last_name: String(firstRow.last_name ?? ''),
+            email: studentEmail,
             phone: String(firstRow.phone ?? '') || undefined,
             batch_id: batchId && Number.isFinite(batchId) ? batchId : undefined,
           });
@@ -1577,7 +1606,7 @@ export const AdminStudentsPage: React.FC = () => {
       >
         <div className="space-y-4">
           <p className="text-sm text-gray-600">
-            Upload a CSV or XLSX file with columns: <strong>Given Name</strong>, <strong>Surname</strong> (optional), <strong>Email Address</strong>, <strong>Mobile Phone</strong>, <strong>Qualification Code</strong>, <strong>Activity Start Date</strong>, <strong>Activity End Date</strong>, <strong>Student ID</strong> (or e.g. Student Number / USI—never taken from email), <strong>Unit Code</strong>.
+            Upload a CSV or XLSX file with columns: <strong>Surname</strong>, <strong>Given Name</strong>, <strong>Contact ID</strong> (stored as Student ID), <strong>Email Address</strong> (optional if Contact ID is present—non‑institutional emails are replaced with <code>{'{ContactID}@student.slit.edu.au'}</code>), <strong>Mobile Phone</strong>, <strong>Qualification Code</strong>, <strong>Activity Start Date</strong>, <strong>Activity End Date</strong>, <strong>Unit Code</strong>.
           </p>
           {importing && importProgress && (
             <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
@@ -1660,8 +1689,10 @@ export const AdminStudentsPage: React.FC = () => {
                       (() => {
                         const emailKey = String(r.email ?? '').trim().toLowerCase();
                         const existing = importExistingByEmail[emailKey];
-                        const candidateId =
-                          String(r.student_id ?? '').trim() || importStudentIdFallbackFromName(r.first_name ?? '', r.last_name ?? '');
+                        const candidateId = resolveStudentIdFromImportRow(
+                          String(r.student_id ?? '').trim() || undefined,
+                          String(r.email ?? '').trim()
+                        );
                         const existingId = (existing?.student_id ?? '').trim();
                         const hasConflict = !!existing && !!candidateId && !!existingId && candidateId !== existingId;
                         const decision = importIdDecisionByEmail[emailKey] ?? 'keep_existing';

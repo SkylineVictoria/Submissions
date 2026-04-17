@@ -1,4 +1,4 @@
-import React, { useState, useRef, useLayoutEffect, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useLayoutEffect, useEffect, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronDown } from 'lucide-react';
 import { cn } from '../utils/cn';
@@ -31,6 +31,10 @@ interface SelectProps {
    * @deprecated Dropdown always renders in a portal to avoid clipping in modals / overflow containers.
    */
   portal?: boolean;
+  /** Show a search field to filter options by label (case-insensitive). */
+  searchable?: boolean;
+  /** Placeholder for the search input when `searchable` is true. */
+  searchPlaceholder?: string;
 }
 
 const DROPDOWN_MAX_HEIGHT = 240;
@@ -47,11 +51,12 @@ type DropdownPosition = {
 
 function computeDropdownPosition(
   trigger: DOMRect,
-  opts?: { compact?: boolean }
+  opts?: { compact?: boolean; searchable?: boolean }
 ): DropdownPosition {
   const margin = 8;
   const gap = 4;
   const compact = opts?.compact === true;
+  const searchable = opts?.searchable === true;
   const viewportH = window.innerHeight || document.documentElement.clientHeight || 0;
   const viewportW = window.innerWidth || document.documentElement.clientWidth || 0;
   const spaceBelow = Math.max(0, viewportH - trigger.bottom - margin);
@@ -65,9 +70,13 @@ function computeDropdownPosition(
     ? trigger.bottom + gap
     : Math.max(margin, trigger.top - maxHeight - gap);
   let left = trigger.left;
-  const minMenu = compact ? Math.max(trigger.width, 64) : Math.max(trigger.width, 180);
+  const minMenu = searchable
+    ? Math.max(trigger.width, 280)
+    : compact
+      ? Math.max(trigger.width, 64)
+      : Math.max(trigger.width, 180);
   const minWidth = minMenu;
-  const maxWidth = Math.min(compact ? 120 : 360, viewportW - 16);
+  const maxWidth = Math.min(searchable ? 480 : compact ? 120 : 360, viewportW - 16);
   const clampedMin = Math.min(minWidth, maxWidth);
   if (left + clampedMin > viewportW - margin) {
     left = Math.max(margin, viewportW - clampedMin - margin);
@@ -81,7 +90,10 @@ type InlineMenuLayout = {
   placement: 'below' | 'above';
 };
 
-function computeInlineMenuLayout(trigger: DOMRect, opts?: { compact?: boolean }): InlineMenuLayout {
+function computeInlineMenuLayout(
+  trigger: DOMRect,
+  opts?: { compact?: boolean; searchable?: boolean }
+): InlineMenuLayout {
   const margin = 8;
   const gap = 4;
   const compact = opts?.compact === true;
@@ -124,30 +136,42 @@ export const Select: React.FC<SelectProps> = ({
   compact,
   attachDropdown = 'portal',
   portal: _portal,
+  searchable,
+  searchPlaceholder,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
   const selectRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [dropdownStyle, setDropdownStyle] = useState<DropdownPosition | null>(null);
   const [inlineLayout, setInlineLayout] = useState<InlineMenuLayout | null>(null);
   const selectId = `select-${Math.random().toString(36).substr(2, 9)}`;
 
+  const filteredOptions = useMemo(() => {
+    if (!searchable || !searchQuery.trim()) return options;
+    const q = searchQuery.toLowerCase().trim();
+    return options.filter((o) => o.label.toLowerCase().includes(q));
+  }, [options, searchable, searchQuery]);
+
   const updatePosition = useCallback(() => {
     if (!isOpen || !triggerRef.current) return;
     const rect = triggerRef.current.getBoundingClientRect();
+    const layoutOpts = { compact, searchable: searchable === true };
     if (attachDropdown === 'trigger') {
-      setInlineLayout(computeInlineMenuLayout(rect, { compact }));
+      setInlineLayout(computeInlineMenuLayout(rect, layoutOpts));
       setDropdownStyle(null);
     } else {
-      setDropdownStyle(computeDropdownPosition(rect, { compact }));
+      setDropdownStyle(computeDropdownPosition(rect, layoutOpts));
       setInlineLayout(null);
     }
-  }, [isOpen, compact, attachDropdown]);
+  }, [isOpen, compact, attachDropdown, searchable]);
 
   useLayoutEffect(() => {
     if (!isOpen) {
       setDropdownStyle(null);
       setInlineLayout(null);
+      setSearchQuery('');
       return;
     }
     updatePosition();
@@ -174,6 +198,11 @@ export const Select: React.FC<SelectProps> = ({
     };
   }, [isOpen, updatePosition]);
 
+  useEffect(() => {
+    if (!isOpen || !searchable) return;
+    const t = window.setTimeout(() => searchInputRef.current?.focus(), 0);
+    return () => window.clearTimeout(t);
+  }, [isOpen, searchable]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -192,26 +221,53 @@ export const Select: React.FC<SelectProps> = ({
   const selectedOption = options.find((opt) => opt.value === value);
 
   const optionList = (
-    <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-      {options.map((option) => (
-        <button
-          key={option.value}
-          type="button"
-          onClick={() => {
-            onChange(option.value);
-            setIsOpen(false);
-          }}
-          className={cn(
-            'w-full transition-colors whitespace-nowrap overflow-hidden text-ellipsis',
-            compact ? 'px-3 py-2 text-center text-base font-medium tabular-nums' : 'px-4 py-2.5 text-left text-sm',
-            'hover:bg-[var(--brand)] hover:text-white',
-            value === option.value && 'bg-orange-50 text-[var(--brand)] font-semibold'
-          )}
-          title={option.label}
-        >
-          {option.label}
-        </button>
-      ))}
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      {searchable ? (
+        <div className="shrink-0 border-b border-gray-100 p-2">
+          <input
+            ref={searchInputRef}
+            type="search"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder={searchPlaceholder ?? 'Search...'}
+            autoComplete="off"
+            className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-[var(--brand)] focus:outline-none focus:ring-1 focus:ring-[var(--brand)]"
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+          />
+        </div>
+      ) : null}
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+        {filteredOptions.length === 0 ? (
+          <div className={cn('px-4 py-3 text-sm text-gray-500', compact && 'text-center')}>
+            {searchable && searchQuery.trim() ? 'No matching options' : 'No options'}
+          </div>
+        ) : (
+          filteredOptions.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => {
+                onChange(option.value);
+                setIsOpen(false);
+              }}
+              className={cn(
+                'w-full transition-colors hover:bg-[var(--brand)] hover:text-white',
+                searchable
+                  ? 'px-4 py-2.5 text-left text-sm whitespace-normal break-words'
+                  : cn(
+                      'whitespace-nowrap overflow-hidden text-ellipsis',
+                      compact ? 'px-3 py-2 text-center text-base font-medium tabular-nums' : 'px-4 py-2.5 text-left text-sm'
+                    ),
+                value === option.value && 'bg-orange-50 text-[var(--brand)] font-semibold'
+              )}
+              title={option.label}
+            >
+              {option.label}
+            </button>
+          ))
+        )}
+      </div>
     </div>
   );
 
@@ -268,6 +324,7 @@ export const Select: React.FC<SelectProps> = ({
             data-select-dropdown
             className={cn(
               'absolute left-0 z-[10000] flex min-w-full flex-col overflow-hidden rounded-lg border border-gray-200 bg-white py-1 shadow-xl ring-1 ring-black/5',
+              searchable && 'min-w-[min(100%,28rem)] max-w-[min(100vw-1rem,30rem)]',
               inlineLayout.placement === 'above' ? 'bottom-full mb-1' : 'top-full mt-1'
             )}
             style={{ maxHeight: inlineLayout.maxHeight }}

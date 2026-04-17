@@ -1,6 +1,20 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Copy, ExternalLink, Send, RefreshCw, Ban, CheckCircle, User, CalendarClock, CalendarDays, Download } from 'lucide-react';
-import { listSubmittedInstancesPaged, updateInstanceRole, updateInstanceWorkflowStatus, issueInstanceAccessLink, getOrIssueInstanceAccessLink, revokeRoleAccessTokens, extendInstanceAccessTokens, extendInstanceAccessTokensToDate, allowStudentResubmission, listTrainers, updateFormInstanceDates, listCoursesPaged, listFormsPaged } from '../lib/formEngine';
+import {
+  listSubmittedInstancesPaged,
+  updateInstanceRole,
+  updateInstanceWorkflowStatus,
+  issueInstanceAccessLink,
+  getOrIssueInstanceAccessLink,
+  revokeRoleAccessTokens,
+  extendInstanceAccessTokens,
+  extendInstanceAccessTokensToDate,
+  allowStudentResubmission,
+  listTrainers,
+  updateFormInstanceDates,
+  listCoursesPaged,
+  listFormsPaged,
+} from '../lib/formEngine';
 import type { SubmittedInstanceRow, Trainer } from '../lib/formEngine';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -79,10 +93,19 @@ export const AdminAssessmentsPage: React.FC = () => {
     if (!opts?.silent) setLoading(true);
     const courseId = courseFilter ? Number(courseFilter) : undefined;
     const formId = formFilter ? Number(formFilter) : undefined;
-    const res = await listSubmittedInstancesPaged(page, PAGE_SIZE, search, courseId, formId, undefined, {
-      key: directorySort.key,
-      dir: directorySort.dir,
-    });
+    const res = await listSubmittedInstancesPaged(
+      page,
+      PAGE_SIZE,
+      search,
+      courseId,
+      formId,
+      undefined,
+      {
+        key: directorySort.key,
+        dir: directorySort.dir,
+      },
+      null
+    );
     setRows(res.data);
     setTotalRows(res.total);
     setLoading(false);
@@ -466,6 +489,10 @@ export const AdminAssessmentsPage: React.FC = () => {
                 <span>Refresh</span>
               </Button>
             </div>
+            <p className="text-xs text-gray-500">
+              With a <strong>course</strong> selected, the form list can be narrowed to that course. Column sorting in the
+              directory only reorders rows.
+            </p>
           </div>
         </Card>
 

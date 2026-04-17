@@ -2052,6 +2052,23 @@ export async function listSubmittedInstances(): Promise<SubmittedInstanceRow[]> 
   });
 }
 
+/** yyyy-MM-dd; instance start <= day and (end is null or end >= day). */
+export async function listFormIdsForCourseActiveOn(courseId: number, activeOnIso: string): Promise<number[]> {
+  const cid = Number(courseId);
+  const d = (activeOnIso ?? '').trim();
+  if (!Number.isFinite(cid) || cid <= 0 || !/^\d{4}-\d{2}-\d{2}$/.test(d)) return [];
+  const { data, error } = await supabase.rpc('skyline_form_ids_for_course_active_on', {
+    p_course_id: cid,
+    p_on: d,
+  });
+  if (error) {
+    console.error('listFormIdsForCourseActiveOn error', error);
+    return [];
+  }
+  if (Array.isArray(data)) return (data as unknown[]).map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0);
+  return [];
+}
+
 export async function listSubmittedInstancesPaged(
   page = 1,
   pageSize = 20,
@@ -2059,8 +2076,11 @@ export async function listSubmittedInstancesPaged(
   courseId?: number,
   formId?: number,
   studentId?: number,
-  sort?: { key: 'created' | 'student' | 'form' | 'start' | 'end' | 'workflow'; dir: 'asc' | 'desc' }
+  sort?: { key: 'created' | 'student' | 'form' | 'start' | 'end' | 'workflow'; dir: 'asc' | 'desc' },
+  activeOnIso?: string | null
 ): Promise<PaginatedResult<SubmittedInstanceRow>> {
+  const active =
+    activeOnIso && /^\d{4}-\d{2}-\d{2}$/.test(String(activeOnIso).trim()) ? String(activeOnIso).trim() : null;
   const { data, error } = await supabase.rpc('skyline_list_submitted_instances_paged', {
     p_page: page,
     p_page_size: pageSize,
@@ -2068,6 +2088,7 @@ export async function listSubmittedInstancesPaged(
     p_course_id: Number.isFinite(Number(courseId)) && Number(courseId) > 0 ? Number(courseId) : null,
     p_form_id: Number.isFinite(Number(formId)) && Number(formId) > 0 ? Number(formId) : null,
     p_student_id: Number.isFinite(Number(studentId)) && Number(studentId) > 0 ? Number(studentId) : null,
+    p_active_on: active,
     p_sort_key: sort?.key ?? 'created',
     p_sort_dir: sort?.dir ?? 'desc',
   });
@@ -2487,6 +2508,133 @@ export async function listBatchesPaged(
     total: Number(count ?? 0),
     page,
     pageSize,
+  };
+}
+
+export async function getBatchById(id: number): Promise<Batch | null> {
+  const bid = Number(id);
+  if (!Number.isFinite(bid) || bid <= 0) return null;
+  const { data, error } = await supabase
+    .from('skyline_batches')
+    .select('id, name, trainer_id, course_id, created_at')
+    .eq('id', bid)
+    .maybeSingle();
+  if (error) {
+    console.error('getBatchById error', error);
+    return null;
+  }
+  if (!data) return null;
+  const row = data as Record<string, unknown>;
+  const trainerId = Number(row.trainer_id);
+  let trainerName: string | null = null;
+  if (trainerId) {
+    const { data: t } = await supabase.from('skyline_users').select('full_name').eq('id', trainerId).maybeSingle();
+    trainerName = (t as { full_name?: string } | null)?.full_name ?? null;
+  }
+  let courseName: string | null = null;
+  const courseId = row.course_id != null ? Number(row.course_id) : null;
+  if (courseId != null && Number.isFinite(courseId)) {
+    const { data: c } = await supabase.from('skyline_courses').select('name').eq('id', courseId).maybeSingle();
+    courseName = (c as { name?: string } | null)?.name ?? null;
+  }
+  return mapBatchRow(row, trainerName, courseName);
+}
+
+export interface BatchAssessmentOptionsPayload {
+  students: Array<{ id: number; label: string }>;
+  units: Array<{ id: number; name: string }>;
+  student_units: Record<string, number[]>;
+  /** Total students matching filters (not only the current page). */
+  studentsTotal: number;
+  /** 1-based page echoed from the RPC. */
+  studentsPage: number;
+  studentsPageSize: number;
+  /** All student ids matching filters (compact; for select-all and mass actions). */
+  eligibleStudentIds: number[];
+}
+
+/**
+ * Date filters for batch unit assessment UI (see skyline_batch_assessment_options RPC).
+ * Range mode (both dates set): start_date = from, end_date between from and to (inclusive).
+ * When To is empty (`startOnlyNullEnd` true): default is "active on" From — start ≤ From ≤ end (or no end yet).
+ * Set `openNullEndExact` to only match open-ended instances with start exactly on From.
+ *
+ * `units` in the payload are only forms with at least one matching instance (same filter as students).
+ */
+export async function fetchBatchAssessmentOptions(
+  batchId: number,
+  courseId: number,
+  fromDate: string,
+  toDate: string,
+  startOnlyNullEnd: boolean,
+  openNullEndExact = false,
+  pagination?: { page?: number; pageSize?: number; formId?: number | null }
+): Promise<BatchAssessmentOptionsPayload | null> {
+  const bid = Number(batchId);
+  const cid = Number(courseId);
+  if (!Number.isFinite(bid) || bid <= 0 || !Number.isFinite(cid) || cid <= 0) return null;
+  const page = pagination?.page != null ? Number(pagination.page) : 1;
+  const pageSize = pagination?.pageSize != null ? Number(pagination.pageSize) : 25;
+  const formId = pagination?.formId;
+  const { data, error } = await supabase.rpc('skyline_batch_assessment_options', {
+    p_batch_id: bid,
+    p_course_id: cid,
+    p_from_date: fromDate,
+    p_to_date: toDate,
+    p_start_only_null_end: startOnlyNullEnd,
+    p_open_null_end_exact: startOnlyNullEnd ? Boolean(openNullEndExact) : false,
+    p_page: Number.isFinite(page) && page > 0 ? Math.floor(page) : 1,
+    p_page_size: Number.isFinite(pageSize) && pageSize > 0 ? Math.floor(pageSize) : 25,
+    p_form_id:
+      formId != null && Number.isFinite(Number(formId)) && Number(formId) > 0 ? Math.floor(Number(formId)) : null,
+  });
+  if (error) {
+    console.error('fetchBatchAssessmentOptions rpc error', error);
+    return null;
+  }
+  const raw = data as {
+    students?: Array<{ id: number; label: string }>;
+    units?: Array<{ id: number; name: string }>;
+    student_units?: Record<string, unknown>;
+    students_total?: number;
+    students_page?: number;
+    students_page_size?: number;
+    eligible_student_ids?: unknown;
+  } | null;
+  if (!raw || typeof raw !== 'object') {
+    return {
+      students: [],
+      units: [],
+      student_units: {},
+      studentsTotal: 0,
+      studentsPage: 1,
+      studentsPageSize: 25,
+      eligibleStudentIds: [],
+    };
+  }
+  const su: Record<string, number[]> = {};
+  if (raw.student_units && typeof raw.student_units === 'object') {
+    for (const [k, v] of Object.entries(raw.student_units)) {
+      if (Array.isArray(v)) su[k] = v.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0);
+    }
+  }
+  let eligibleStudentIds: number[] = [];
+  if (Array.isArray(raw.eligible_student_ids)) {
+    eligibleStudentIds = raw.eligible_student_ids
+      .map((n) => Number(n))
+      .filter((n) => Number.isFinite(n) && n > 0);
+  }
+  const studentsTotal = Number(raw.students_total);
+  const studentsPage = Number(raw.students_page);
+  const studentsPageSize = Number(raw.students_page_size);
+  return {
+    students: Array.isArray(raw.students) ? raw.students : [],
+    units: Array.isArray(raw.units) ? raw.units : [],
+    student_units: su,
+    studentsTotal: Number.isFinite(studentsTotal) ? studentsTotal : 0,
+    studentsPage: Number.isFinite(studentsPage) && studentsPage > 0 ? studentsPage : 1,
+    studentsPageSize: Number.isFinite(studentsPageSize) && studentsPageSize > 0 ? studentsPageSize : 25,
+    eligibleStudentIds,
   };
 }
 
@@ -3446,6 +3594,41 @@ export async function listFormsPaged(
   const { data, error, count } = await query.range(from, to);
   if (error) {
     console.error('listFormsPaged error', error);
+    return { data: [], total: 0, page, pageSize };
+  }
+  return {
+    data: (data as Form[]) || [],
+    total: Number(count ?? 0),
+    page,
+    pageSize,
+  };
+}
+
+/** Unit/form picker: only forms that have at least one assessment in the course active on this day. */
+export async function listFormsPagedForCourseAndActiveOn(
+  page = 1,
+  pageSize = 20,
+  courseId: number,
+  search: string | undefined,
+  options: { asAdmin?: boolean } | undefined,
+  activeOnIso: string
+): Promise<PaginatedResult<Form>> {
+  const cid = Number(courseId);
+  if (!Number.isFinite(cid) || cid <= 0) return { data: [], total: 0, page, pageSize };
+  const allowed = await listFormIdsForCourseActiveOn(cid, activeOnIso);
+  if (allowed.length === 0) return { data: [], total: 0, page, pageSize };
+  const from = Math.max(0, (page - 1) * pageSize);
+  const to = from + pageSize - 1;
+  let query = supabase
+    .from('skyline_forms')
+    .select('*', { count: 'exact' })
+    .in('id', allowed)
+    .order('name', { ascending: true });
+  if (!options?.asAdmin) query = query.eq('active', true);
+  if (search && search.trim()) query = query.ilike('name', `%${search.trim()}%`);
+  const { data, error, count } = await query.range(from, to);
+  if (error) {
+    console.error('listFormsPagedForCourseAndActiveOn error', error);
     return { data: [], total: 0, page, pageSize };
   }
   return {
