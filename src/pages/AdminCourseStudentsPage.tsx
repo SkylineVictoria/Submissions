@@ -12,8 +12,9 @@ import { listBatchesPaged, listStudentsPaged } from '../lib/formEngine';
 import type { Course, Student } from '../lib/formEngine';
 
 const STATUS_FILTER_OPTIONS = [
-  { value: '', label: 'All (active only)' },
+  { value: '', label: 'All' },
   { value: 'active', label: 'Active' },
+  { value: 'inactive', label: 'Inactive' },
 ];
 
 export const AdminCourseStudentsPage: React.FC = () => {
@@ -31,7 +32,7 @@ export const AdminCourseStudentsPage: React.FC = () => {
   const [currentPage, setCurrentPage] = useState(1);
 
   const [batchFilterId, setBatchFilterId] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'' | 'active'>('');
+  const [statusFilter, setStatusFilter] = useState<'' | 'active' | 'inactive'>('');
   const [searchTerm, setSearchTerm] = useState('');
 
   useEffect(() => {
@@ -142,10 +143,10 @@ export const AdminCourseStudentsPage: React.FC = () => {
             <div className="flex flex-col gap-2 md:flex-row md:flex-wrap md:items-center md:gap-3 min-w-0">
               <Select
                 value={statusFilter}
-                onChange={(v) => setStatusFilter(v as '' | 'active')}
+                onChange={(v) => setStatusFilter(v as '' | 'active' | 'inactive')}
                 options={STATUS_FILTER_OPTIONS}
                 compact
-                className="w-full md:w-[160px]"
+                className="w-full min-w-0 md:w-[200px]"
               />
               <SelectAsync
                 value={batchFilterId}
@@ -197,7 +198,7 @@ export const AdminCourseStudentsPage: React.FC = () => {
                 </thead>
                 <tbody>
                   {students.map((s) => (
-                    <tr key={s.id} className="hover:bg-gray-50">
+                    <tr key={s.id} className="hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors">
                       <td className="px-4 py-3 border-b border-[var(--border)]">
                         <div className="font-medium text-gray-900 break-words">
                           {[s.first_name, s.last_name].filter(Boolean).join(' ') || s.email}

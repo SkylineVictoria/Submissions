@@ -1974,8 +1974,12 @@ export async function listStudentsPaged(
   const from = Math.max(0, (page - 1) * pageSize);
   const to = from + pageSize - 1;
   let query = supabase.from('skyline_students').select('*, skyline_batches(name)', { count: 'exact' });
-  // Never show inactive students in directories.
-  query = query.or('status.is.null,status.eq.active');
+  // All / unset: no status filter. Active: non-inactive (null or active). Inactive: inactive only.
+  if (statusFilter === 'inactive') {
+    query = query.eq('status', 'inactive');
+  } else if (statusFilter === 'active') {
+    query = query.or('status.is.null,status.eq.active');
+  }
   const batchId = filters?.batchId != null ? Number(filters.batchId) : null;
   if (batchId != null && Number.isFinite(batchId) && batchId > 0) {
     query = query.eq('batch_id', batchId);
@@ -2045,8 +2049,6 @@ export async function listStudentsPaged(
 
     query = query.or(conditions.join(','));
   }
-  // Keep support for an explicit active filter, but never allow "inactive" directories.
-  if (statusFilter === 'active') query = query.eq('status', 'active');
   query = query.order('created_at', { ascending: false }).order('id', { ascending: false });
   const { data, error, count } = await query.range(from, to);
   if (error) {

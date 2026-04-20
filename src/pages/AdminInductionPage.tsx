@@ -540,7 +540,7 @@ export const AdminInductionPage: React.FC = () => {
                   </thead>
                   <tbody>
                     {rows.map((r) => (
-                      <tr key={r.id} className="border-b border-gray-100 hover:bg-gray-50/80">
+                      <tr key={r.id} className="border-b border-gray-100 hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors">
                         <td className="py-3 px-3 font-medium text-[var(--text)]">{r.title}</td>
                         <td className="py-3 px-3 text-gray-700 whitespace-nowrap">{formatMelbourneDateTime(r.start_at)}</td>
                         <td className="py-3 px-3 text-gray-700 whitespace-nowrap">{formatMelbourneDateTime(r.end_at)}</td>
@@ -888,7 +888,7 @@ export const AdminInductionPage: React.FC = () => {
                               </thead>
                               <tbody>
                                 {pageSlice.map((sub) => (
-                                  <tr key={sub.id} className="border-b border-gray-100 hover:bg-gray-50/80">
+                                  <tr key={sub.id} className="border-b border-gray-100 hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors">
                                     <td className="py-2 px-3 align-top">
                                       <input
                                         type="checkbox"

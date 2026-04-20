@@ -190,7 +190,7 @@ export const DashboardPage: React.FC = () => {
                     </thead>
                     <tbody>
                       {batchStudents.map((s) => (
-                        <tr key={s.id} className="border-b border-gray-100 hover:bg-gray-50/50">
+                        <tr key={s.id} className="border-b border-gray-100 hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors">
                           <td className="py-2.5 px-3 font-medium text-gray-900">{s.name}</td>
                           <td className="py-2.5 px-3 text-gray-600">{s.email}</td>
                           <td className="py-2.5 px-3 text-gray-600">{s.student_id ?? '-'}</td>
@@ -269,7 +269,7 @@ export const DashboardPage: React.FC = () => {
                 </thead>
                 <tbody>
                   {rows.map((row) => (
-                    <tr key={row.id} className="border-b border-gray-100 hover:bg-gray-50/50">
+                    <tr key={row.id} className="border-b border-gray-100 hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors">
                       <td className="py-3 pr-3">
                         <div className="font-medium text-gray-900">{row.student_name}</div>
                         <div className="text-xs text-gray-500">{row.student_email || '-'}</div>

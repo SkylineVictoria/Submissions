@@ -557,7 +557,7 @@ export const AdminCoursesPage: React.FC = () => {
                 </thead>
                 <tbody>
                   {courses.map((course) => (
-                    <tr key={course.id} className="hover:bg-gray-50">
+                    <tr key={course.id} className="hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors">
                       <td className="px-4 py-3 border-b border-[var(--border)]">
                         <div className="flex items-center gap-2">
                           <FileText className="w-4 h-4 text-gray-400" />

@@ -512,7 +512,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
                       </thead>
                       <tbody>
                         {sortedAssessments.map((row) => (
-                          <tr key={row.id} className="hover:bg-gray-50">
+                          <tr key={row.id} className="hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors">
                             <td className="px-3 py-2 border-b border-[var(--border)] align-top">
                               {(() => {
                                 return (

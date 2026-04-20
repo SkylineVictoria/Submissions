@@ -52,8 +52,9 @@ const STATUS_OPTIONS = [
 ];
 
 const STATUS_FILTER_OPTIONS = [
-  { value: '', label: 'All (active only)' },
-  ...STATUS_OPTIONS,
+  { value: '', label: 'All' },
+  { value: 'active', label: 'Active' },
+  { value: 'inactive', label: 'Inactive' },
 ];
 
 const pad2 = (n: number) => String(n).padStart(2, '0');
@@ -78,7 +79,7 @@ export const AdminStudentsPage: React.FC = () => {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'' | 'active'>('');
+  const [statusFilter, setStatusFilter] = useState<'' | 'active' | 'inactive'>('');
   const [batchFilterId, setBatchFilterId] = useState<string>('');
   const [courseFilterIds, setCourseFilterIds] = useState<number[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
@@ -1379,12 +1380,12 @@ export const AdminStudentsPage: React.FC = () => {
                 <Select
                   value={statusFilter}
                   onChange={(v) => {
-                    setStatusFilter(v as '' | 'active');
+                    setStatusFilter(v as '' | 'active' | 'inactive');
                     setCurrentPage(1);
                   }}
                   options={STATUS_FILTER_OPTIONS}
                   compact
-                  className="min-w-0 w-full md:min-w-[120px] md:w-[140px]"
+                  className="min-w-0 w-full md:min-w-[180px] md:w-[200px]"
                 />
                 <SelectAsync
                   value={batchFilterId}
@@ -1620,7 +1621,7 @@ export const AdminStudentsPage: React.FC = () => {
                 </thead>
                 <tbody>
                   {sortedStudents.map((student) => (
-                    <tr key={student.id} className="hover:bg-gray-50 align-top">
+                    <tr key={student.id} className="hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors align-top">
                       <td className="px-4 py-3 border-b border-[var(--border)]">
                         <div className="flex items-center gap-3">
                           <div className="w-9 h-9 rounded-full bg-orange-100 text-orange-700 font-semibold flex items-center justify-center">
@@ -1940,7 +1941,7 @@ export const AdminStudentsPage: React.FC = () => {
                         const hasConflict = !!existing && !!candidateId && !!existingId && candidateId !== existingId;
                         const decision = importIdDecisionByEmail[emailKey] ?? 'keep_existing';
                         return (
-                      <tr key={i} className="border-t border-gray-100 hover:bg-gray-50/50">
+                      <tr key={i} className="border-t border-gray-100 hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors">
                         <td className="px-2 py-1.5">
                           <Input
                             value={r.first_name}

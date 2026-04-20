@@ -397,7 +397,7 @@ export const AdminUsersPage: React.FC = () => {
                 </thead>
                 <tbody>
                   {users.map((user) => (
-                    <tr key={user.id} className="hover:bg-gray-50 align-top">
+                    <tr key={user.id} className="hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors align-top">
                       <td className="px-4 py-3 border-b border-[var(--border)]">
                         <div className="flex items-center gap-3">
                           <div className="w-9 h-9 rounded-full bg-orange-100 text-orange-700 font-semibold flex items-center justify-center">

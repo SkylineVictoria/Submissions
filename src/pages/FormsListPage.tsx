@@ -45,7 +45,7 @@ export const FormsListPage: React.FC = () => {
                 <li key={form.id}>
                   <Link
                     to={`/forms/${form.id}/start`}
-                    className="flex items-center gap-3 p-3 rounded-lg border border-[var(--border)] bg-white hover:bg-gray-50 block"
+                    className="flex items-center gap-3 p-3 rounded-lg border border-[var(--border)] bg-white hover:bg-[var(--brand)]/10 focus-visible:bg-[var(--brand)]/10 transition-colors block"
                   >
                     <FileText className="w-5 h-5 text-gray-400" />
                     <div>

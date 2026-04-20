@@ -404,7 +404,7 @@ export const AdminDashboardPage: React.FC = () => {
                     rows.map((r) => (
                       <tr
                         key={r.id}
-                        className="border-b border-gray-100 hover:bg-gray-50/70 cursor-pointer"
+                        className="border-b border-gray-100 hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 cursor-pointer transition-colors"
                         onClick={() => navigate('/admin/assessments')}
                         title="Open assessments directory"
                       >

@@ -570,7 +570,10 @@ export const AdminAssessmentsPage: React.FC = () => {
                   </thead>
                   <tbody>
                     {sortedRows.map((row) => (
-                      <tr key={row.id} className="border-b border-gray-100 hover:bg-gray-50/50 transition-colors">
+                      <tr
+                        key={row.id}
+                        className="border-b border-gray-100 hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors"
+                      >
                         <td className="py-3 pr-3">
                           <div className="font-medium text-gray-900">{row.student_name}</div>
                           <div className="text-xs text-gray-500">{row.student_email || '-'}</div>
@@ -679,7 +682,7 @@ export const AdminAssessmentsPage: React.FC = () => {
                       key={t.id}
                       type="button"
                       onClick={() => setSelectedTrainerId(selectedTrainerId === t.id ? null : t.id)}
-                      className={`w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 transition-colors ${
+                      className={`w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-[var(--brand)]/10 focus-visible:bg-[var(--brand)]/10 transition-colors ${
                         selectedTrainerId === t.id ? 'bg-[var(--brand)]/10 ring-1 ring-[var(--brand)]' : ''
                       }`}
                     >

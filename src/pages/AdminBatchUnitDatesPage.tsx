@@ -534,7 +534,9 @@ export const AdminBatchUnitDatesPage: React.FC = () => {
                             return (
                               <tr
                                 key={sid}
-                                className={`border-b border-gray-100 last:border-0 ${checked ? 'bg-[#fff7ed]/50' : 'hover:bg-gray-50/80'}`}
+                                className={`border-b border-gray-100 last:border-0 transition-colors ${
+                                  checked ? 'bg-[#fff7ed]/50' : 'hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10'
+                                }`}
                               >
                                 <td className="px-3 py-2.5 align-top">
                                   <input
@@ -634,8 +636,8 @@ export const AdminBatchUnitDatesPage: React.FC = () => {
                         return (
                           <label
                             key={uid}
-                            className={`flex items-start gap-2 rounded-md border px-2 py-2 cursor-pointer text-sm ${
-                              c ? 'border-[#ea580c]/40 bg-[#fff7ed]/60' : 'border-gray-200 hover:bg-gray-50'
+                            className={`flex items-start gap-2 rounded-md border px-2 py-2 cursor-pointer text-sm transition-colors ${
+                              c ? 'border-[#ea580c]/40 bg-[#fff7ed]/60' : 'border-gray-200 hover:bg-[var(--brand)]/10'
                             }`}
                           >
                             <input
