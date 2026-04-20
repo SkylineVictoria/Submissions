@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
-import { Plus, Pencil, FileText, Trash2, Send } from 'lucide-react';
+import { Plus, Pencil, FileText, Send } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import {
   listCoursesPaged,
   createCourse,
   updateCourse,
-  deleteCourse,
   setCourseForms,
   getFormsForCourse,
   listFormsPaged,
@@ -36,6 +36,7 @@ import { SelectAsync } from '../components/ui/SelectAsync';
 const COURSE_PAGE_SIZE = 20;
 
 export const AdminCoursesPage: React.FC = () => {
+  const navigate = useNavigate();
   const [courses, setCourses] = useState<Course[]>([]);
   const [totalCourses, setTotalCourses] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
@@ -44,7 +45,6 @@ export const AdminCoursesPage: React.FC = () => {
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
-  const [deletingId, setDeletingId] = useState<number | null>(null);
   const [draft, setDraft] = useState({ name: '', qualification_code: '' });
   const [editDraft, setEditDraft] = useState<{
     name: string;
@@ -425,19 +425,7 @@ export const AdminCoursesPage: React.FC = () => {
     }
   };
 
-  const handleDelete = async (id: number, name: string) => {
-    if (!window.confirm(`Delete course "${name}"? Forms will not be deleted, only the course assignment.`)) return;
-    setDeletingId(id);
-    const ok = await deleteCourse(id);
-    setDeletingId(null);
-    if (ok) {
-      await loadCourses(currentPage);
-      if (editingId === id) setEditingId(null);
-      toast.success('Course deleted');
-    } else {
-      toast.error('Failed to delete course');
-    }
-  };
+  // Delete course removed (navigation-only).
 
   const [formCountMap, setFormCountMap] = useState<Record<number, number>>({});
   const [qualificationCodeMap, setQualificationCodeMap] = useState<Record<number, string>>({});
@@ -550,16 +538,6 @@ export const AdminCoursesPage: React.FC = () => {
                             <Pencil className="mr-1 h-4 w-4" />
                             Edit
                           </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="w-full justify-center text-red-600 hover:border-red-300"
-                            onClick={() => handleDelete(course.id, course.name)}
-                            disabled={deletingId === course.id}
-                          >
-                            {deletingId === course.id ? <Loader variant="dots" size="sm" inline /> : <Trash2 className="mr-1 h-4 w-4" />}
-                            Delete
-                          </Button>
                         </div>
                       </div>
                     </div>
@@ -583,7 +561,14 @@ export const AdminCoursesPage: React.FC = () => {
                       <td className="px-4 py-3 border-b border-[var(--border)]">
                         <div className="flex items-center gap-2">
                           <FileText className="w-4 h-4 text-gray-400" />
-                          <span className="font-medium">{course.name}</span>
+                          <button
+                            type="button"
+                            className="font-medium text-blue-600 hover:underline text-left"
+                            onClick={() => navigate(`/admin/courses/${course.id}`)}
+                            title="View students in this course"
+                          >
+                            {course.name}
+                          </button>
                         </div>
                       </td>
                       <td className="px-4 py-3 border-b border-[var(--border)] text-gray-700">
@@ -632,20 +617,6 @@ export const AdminCoursesPage: React.FC = () => {
                           >
                             <Pencil className="w-4 h-4" />
                             Edit
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleDelete(course.id, course.name)}
-                            disabled={deletingId === course.id}
-                            className="inline-flex items-center justify-center gap-1.5 text-red-600 hover:border-red-300"
-                          >
-                            {deletingId === course.id ? (
-                              <Loader variant="dots" size="sm" inline />
-                            ) : (
-                              <Trash2 className="w-4 h-4" />
-                            )}
-                            Delete
                           </Button>
                         </div>
                       </td>

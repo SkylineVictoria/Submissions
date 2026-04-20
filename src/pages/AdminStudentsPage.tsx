@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
-import { Plus, Send, Mail, Phone, Pencil, Upload, Trash2, FileText } from 'lucide-react';
+import { Plus, Send, Mail, Phone, Pencil, Upload, Trash2, FileText, Download } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { supabase } from '../lib/supabase';
 import { useNavigate } from 'react-router-dom';
@@ -17,6 +17,7 @@ import {
   listCoursesPaged,
   getCoursesByQualificationCodes,
   setStudentCourses,
+  deleteStudentIfNoAssessments,
 } from '../lib/formEngine';
 import {
   buildEmailFromLocalAndDomain,
@@ -48,11 +49,10 @@ import { SortableTh } from '../components/admin/SortableTh';
 
 const STATUS_OPTIONS = [
   { value: 'active', label: 'Active' },
-  { value: 'inactive', label: 'Inactive' },
 ];
 
 const STATUS_FILTER_OPTIONS = [
-  { value: '', label: 'All statuses' },
+  { value: '', label: 'All (active only)' },
   ...STATUS_OPTIONS,
 ];
 
@@ -78,10 +78,15 @@ export const AdminStudentsPage: React.FC = () => {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'' | 'active' | 'inactive'>('');
+  const [statusFilter, setStatusFilter] = useState<'' | 'active'>('');
+  const [batchFilterId, setBatchFilterId] = useState<string>('');
+  const [courseFilterIds, setCourseFilterIds] = useState<number[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalStudents, setTotalStudents] = useState(0);
   const [hasBatches, setHasBatches] = useState(false);
+  const [hasAssessmentsByStudentId, setHasAssessmentsByStudentId] = useState<Record<number, boolean>>({});
+  const [deletingStudentId, setDeletingStudentId] = useState<number | null>(null);
+  const [deleteStudentTarget, setDeleteStudentTarget] = useState<Student | null>(null);
   const [studentCoursesMap, setStudentCoursesMap] = useState<
     Record<number, Array<{ id: number; name: string; qualification_code: string | null }>>
   >({});
@@ -172,6 +177,13 @@ export const AdminStudentsPage: React.FC = () => {
     };
   }, []);
 
+  const loadBatchFilterOptions = useCallback(async (page: number, search: string) => {
+    const res = await listBatchesPaged(page, 20, search || undefined);
+    const opts = res.data.map((b) => ({ value: String(b.id), label: b.name }));
+    const withAll = page === 1 && !search?.trim() ? [{ value: '', label: 'All batches' }, ...opts] : opts;
+    return { options: withAll, hasMore: page * 20 < res.total };
+  }, []);
+
   useEffect(() => {
     listForms('published', { asAdmin: false }).then((f) => setForms(f));
   }, []);
@@ -210,17 +222,25 @@ export const AdminStudentsPage: React.FC = () => {
   useEffect(() => {
     const t = setTimeout(async () => {
       setLoading(true);
-      const res = await listStudentsPaged(currentPage, PAGE_SIZE, searchTerm, statusFilter || undefined);
+      const res = await listStudentsPaged(currentPage, PAGE_SIZE, searchTerm, statusFilter || undefined, {
+        batchId: batchFilterId ? Number(batchFilterId) : null,
+        courseIds: courseFilterIds,
+      });
       setStudents(res.data);
       setTotalStudents(res.total);
       setLoading(false);
     }, 250);
     return () => clearTimeout(t);
-  }, [currentPage, searchTerm, statusFilter]);
+  }, [currentPage, searchTerm, statusFilter, batchFilterId, courseFilterIds]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [batchFilterId, courseFilterIds]);
 
   useEffect(() => {
     if (students.length === 0) {
       setStudentCoursesMap({});
+      setHasAssessmentsByStudentId({});
       return;
     }
     const ids = students.map((s) => s.id);
@@ -246,6 +266,74 @@ export const AdminStudentsPage: React.FC = () => {
       });
   }, [students]);
 
+  useEffect(() => {
+    if (students.length === 0) return;
+    const ids = students.map((s) => Number(s.id)).filter((n) => Number.isFinite(n) && n > 0);
+    if (ids.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from('skyline_form_instances')
+        .select('student_id')
+        .in('student_id', ids)
+        .limit(5000);
+      if (cancelled) return;
+      if (error) {
+        console.error('load student assessment presence error', error);
+        setHasAssessmentsByStudentId({});
+        return;
+      }
+      const rows = (data as Array<{ student_id: number }> | null) || [];
+      const set = new Set(rows.map((r) => Number(r.student_id)).filter((n) => Number.isFinite(n) && n > 0));
+      const map: Record<number, boolean> = {};
+      for (const id of ids) map[id] = set.has(id);
+      setHasAssessmentsByStudentId(map);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [students]);
+
+  const requestDeleteStudent = useCallback((student: Student) => {
+    const sid = Number(student.id);
+    if (!Number.isFinite(sid) || sid <= 0) return;
+    if (hasAssessmentsByStudentId[sid]) {
+      toast.error('Cannot delete. This student has activity.');
+      return;
+    }
+    setDeleteStudentTarget(student);
+  }, [hasAssessmentsByStudentId]);
+
+  const confirmDeleteStudent = useCallback(async () => {
+    const student = deleteStudentTarget;
+    if (!student) return;
+    const sid = Number(student.id);
+    if (!Number.isFinite(sid) || sid <= 0) return;
+    if (hasAssessmentsByStudentId[sid]) {
+      toast.error('Cannot delete. This student has activity.');
+      setDeleteStudentTarget(null);
+      return;
+    }
+    setDeletingStudentId(sid);
+    try {
+      const res = await deleteStudentIfNoAssessments(sid);
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
+      toast.success('Student deleted');
+      const res2 = await listStudentsPaged(currentPage, PAGE_SIZE, searchTerm, statusFilter || undefined, {
+        batchId: batchFilterId ? Number(batchFilterId) : null,
+        courseIds: courseFilterIds,
+      });
+      setStudents(res2.data);
+      setTotalStudents(res2.total);
+    } finally {
+      setDeletingStudentId(null);
+      setDeleteStudentTarget(null);
+    }
+  }, [batchFilterId, courseFilterIds, currentPage, deleteStudentTarget, hasAssessmentsByStudentId, searchTerm, statusFilter]);
+
   const handleCreate = async () => {
     const formError = validateCreateStudentForm(studentDraft);
     if (formError) {
@@ -270,7 +358,10 @@ export const AdminStudentsPage: React.FC = () => {
     });
     if (created) {
       setCurrentPage(1);
-      const res = await listStudentsPaged(1, PAGE_SIZE, searchTerm, statusFilter || undefined);
+      const res = await listStudentsPaged(1, PAGE_SIZE, searchTerm, statusFilter || undefined, {
+        batchId: batchFilterId ? Number(batchFilterId) : null,
+        courseIds: courseFilterIds,
+      });
       setStudents(res.data);
       setTotalStudents(res.total);
       setStudentDraft({
@@ -291,6 +382,100 @@ export const AdminStudentsPage: React.FC = () => {
     }
     setCreating(false);
   };
+
+  const [exportingCsv, setExportingCsv] = useState(false);
+  const exportCsv = useCallback(async () => {
+    try {
+      setExportingCsv(true);
+      const all: Student[] = [];
+      const pageSize = 500;
+      let page = 1;
+      while (true) {
+        // eslint-disable-next-line no-await-in-loop
+        const res = await listStudentsPaged(page, pageSize, searchTerm, statusFilter || undefined, {
+          batchId: batchFilterId ? Number(batchFilterId) : null,
+          courseIds: courseFilterIds,
+        });
+        all.push(...res.data);
+        if (all.length >= res.total || res.data.length === 0) break;
+        page += 1;
+      }
+
+      const ids = all.map((s) => Number(s.id)).filter((n) => Number.isFinite(n) && n > 0);
+      const courseMap: Record<number, Array<{ id: number; name: string; qualification_code: string | null }>> = {};
+      const chunkSize = 500;
+      for (let i = 0; i < ids.length; i += chunkSize) {
+        const chunk = ids.slice(i, i + chunkSize);
+        // eslint-disable-next-line no-await-in-loop
+        const { data } = await supabase
+          .from('skyline_student_courses')
+          .select('student_id, skyline_courses(id, name, qualification_code)')
+          .in('student_id', chunk)
+          .eq('status', 'active');
+        const rows =
+          (data as Array<{ student_id: number; skyline_courses: { id: number; name: string; qualification_code: string | null } | null }> | null) ||
+          [];
+        for (const r of rows) {
+          const sid = Number(r.student_id);
+          const c = r.skyline_courses;
+          if (!Number.isFinite(sid) || !c) continue;
+          (courseMap[sid] ||= []).push(c);
+        }
+      }
+
+      const esc = (v: unknown) => {
+        const s = String(v ?? '');
+        if (/[\",\n\r]/.test(s)) return `"${s.replace(/\"/g, '""')}"`;
+        return s;
+      };
+      const header = [
+        'student_id',
+        'first_name',
+        'last_name',
+        'email',
+        'phone',
+        'status',
+        'batch',
+        'courses',
+        'created_at',
+      ];
+      const lines = [header.map(esc).join(',')];
+      for (const s of all) {
+        const courses = (courseMap[s.id] || [])
+          .map((c) => (c.qualification_code?.trim() ? `${c.qualification_code} — ${c.name}` : c.name))
+          .join(' | ');
+        lines.push(
+          [
+            s.student_id ?? '',
+            s.first_name ?? '',
+            s.last_name ?? '',
+            s.email ?? '',
+            s.phone ?? '',
+            s.status ?? '',
+            (s as unknown as { batch_name?: string | null }).batch_name ?? '',
+            courses,
+            s.created_at ?? '',
+          ].map(esc).join(',')
+        );
+      }
+      const csv = lines.join('\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const yyyyMmDd = new Date().toISOString().slice(0, 10);
+      a.download = `students-${yyyyMmDd}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success(`Exported ${all.length} students`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Export failed');
+    } finally {
+      setExportingCsv(false);
+    }
+  }, [batchFilterId, courseFilterIds, searchTerm, statusFilter]);
 
   const normalizeCol = (s: string) => String(s ?? '').trim().toLowerCase().replace(/[\s_-]+/g, ' ');
   const colMatch = (h: string, ...aliases: string[]) =>
@@ -904,7 +1089,10 @@ export const AdminStudentsPage: React.FC = () => {
 
     if (success > 0) {
       setCurrentPage(1);
-      const res = await listStudentsPaged(1, PAGE_SIZE, searchTerm, statusFilter || undefined);
+      const res = await listStudentsPaged(1, PAGE_SIZE, searchTerm, statusFilter || undefined, {
+        batchId: batchFilterId ? Number(batchFilterId) : null,
+        courseIds: courseFilterIds,
+      });
       setStudents(res.data);
       setTotalStudents(res.total);
       const createdAtIso = new Date().toISOString();
@@ -1064,7 +1252,10 @@ export const AdminStudentsPage: React.FC = () => {
     }
     setSavingEdit(false);
     if (updated) {
-      const res = await listStudentsPaged(currentPage, PAGE_SIZE, searchTerm, statusFilter || undefined);
+      const res = await listStudentsPaged(currentPage, PAGE_SIZE, searchTerm, statusFilter || undefined, {
+        batchId: batchFilterId ? Number(batchFilterId) : null,
+        courseIds: courseFilterIds,
+      });
       setStudents(res.data);
       setTotalStudents(res.total);
       setEditingId(null);
@@ -1181,20 +1372,34 @@ export const AdminStudentsPage: React.FC = () => {
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
             <div>
               <h2 className="text-lg font-bold text-[var(--text)]">Students</h2>
-              <p className="text-sm text-gray-600 mt-1">Manage learner profiles and send form links. Students must be in a batch.</p>
               {!hasBatches && <p className="text-amber-600 text-sm mt-1">Create batches first (Batches page).</p>}
             </div>
-            <div className="flex w-full min-w-0 flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
-              <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
-                <span className="text-sm text-gray-600 shrink-0">Status:</span>
+            <div className="flex w-full min-w-0 flex-col gap-3">
+              <div className="flex min-w-0 flex-1 flex-col gap-2 md:flex-row md:flex-wrap md:items-center md:gap-3">
                 <Select
                   value={statusFilter}
                   onChange={(v) => {
-                    setStatusFilter(v as '' | 'active' | 'inactive');
+                    setStatusFilter(v as '' | 'active');
                     setCurrentPage(1);
                   }}
                   options={STATUS_FILTER_OPTIONS}
-                  className="min-w-0 w-full sm:min-w-[120px] sm:w-[140px]"
+                  compact
+                  className="min-w-0 w-full md:min-w-[120px] md:w-[140px]"
+                />
+                <SelectAsync
+                  value={batchFilterId}
+                  onChange={(v) => setBatchFilterId(v)}
+                  loadOptions={loadBatchFilterOptions}
+                  placeholder="All batches"
+                  selectedLabel={batchFilterId ? undefined : 'All batches'}
+                  className="w-full min-w-0 md:w-56 md:shrink-0"
+                />
+                <MultiSelectAsync
+                  value={courseFilterIds}
+                  onChange={(v) => setCourseFilterIds(v)}
+                  loadOptions={loadCoursesOptions}
+                  placeholder="All courses"
+                  className="w-full min-w-0 md:w-[320px]"
                 />
                 <Input
                   value={searchTerm}
@@ -1203,23 +1408,35 @@ export const AdminStudentsPage: React.FC = () => {
                     setCurrentPage(1);
                   }}
                   placeholder="Search..."
-                  className="w-full min-w-0 sm:w-48 sm:shrink-0"
+                  className="w-full min-w-0 h-10 md:h-10 md:w-48 md:shrink-0"
                 />
               </div>
-              <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:justify-end">
-                <Button onClick={() => setIsCreateOpen(true)} disabled={!hasBatches} className="w-full sm:w-auto">
+              <div className="flex w-full flex-col gap-2 md:flex-row md:flex-wrap md:justify-end">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void exportCsv()}
+                  disabled={exportingCsv}
+                  className="w-full md:w-auto"
+                  title="Export CSV for current filters"
+                >
+                  <Download className="w-4 h-4 mr-2 inline" />
+                  {exportingCsv ? 'Exporting…' : 'Export CSV'}
+                </Button>
+                <Button size="sm" onClick={() => setIsCreateOpen(true)} disabled={!hasBatches} className="w-full md:w-auto">
                   <Plus className="w-4 h-4 mr-2 inline" />
                   Add Student
                 </Button>
-                <Button variant="outline" onClick={() => { setIsImportOpen(true); setImportRows([]); setImportFileName(''); }} disabled={!hasBatches} className="w-full sm:w-auto">
+                <Button size="sm" variant="outline" onClick={() => { setIsImportOpen(true); setImportRows([]); setImportFileName(''); }} disabled={!hasBatches} className="w-full md:w-auto">
                   <Upload className="w-4 h-4 mr-2 inline" />
                   Import Students
                 </Button>
                 {lastImportLinksPayload && (
                   <Button
+                    size="sm"
                     variant="outline"
                     onClick={() => void downloadLastImportPdf()}
-                    className="w-full sm:w-auto"
+                    className="w-full md:w-auto"
                     title="Download generic links PDF from last import"
                   >
                     <FileText className="w-4 h-4 mr-2 inline" />
@@ -1333,6 +1550,19 @@ export const AdminStudentsPage: React.FC = () => {
                             <Send className="mr-1 h-4 w-4" />
                             Details
                           </Button>
+                          {!hasAssessmentsByStudentId[student.id] ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="w-full justify-center sm:w-auto"
+                              onClick={() => requestDeleteStudent(student)}
+                              disabled={deletingStudentId === student.id}
+                              title="Delete student (only when no assessments exist)"
+                            >
+                              <Trash2 className="mr-1 h-4 w-4" />
+                              Delete
+                            </Button>
+                          ) : null}
                         </div>
                       </div>
                     </div>
@@ -1467,6 +1697,19 @@ export const AdminStudentsPage: React.FC = () => {
                             <Send className="w-4 h-4" />
                             Details
                           </Button>
+                          {!hasAssessmentsByStudentId[student.id] ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => requestDeleteStudent(student)}
+                              disabled={deletingStudentId === student.id}
+                              className="inline-flex items-center justify-center gap-1.5 min-w-[110px] whitespace-nowrap"
+                              title="Delete student (only when no assessments exist)"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                              Delete
+                            </Button>
+                          ) : null}
                         </div>
                       </td>
                     </tr>
@@ -1982,6 +2225,41 @@ export const AdminStudentsPage: React.FC = () => {
           </div>
         </Modal>
       )}
+
+      <Modal
+        isOpen={!!deleteStudentTarget}
+        onClose={() => {
+          if (deletingStudentId) return;
+          setDeleteStudentTarget(null);
+        }}
+        title="Delete student"
+        size="md"
+      >
+        {deleteStudentTarget ? (
+          <div className="space-y-4">
+            <p className="text-sm text-gray-700">
+              Delete{' '}
+              <strong>
+                {[deleteStudentTarget.first_name, deleteStudentTarget.last_name].filter(Boolean).join(' ').trim() ||
+                  deleteStudentTarget.email}
+              </strong>
+              ?
+            </p>
+            <p className="text-xs text-gray-500">
+              This is only allowed when the student has <strong>no assessments</strong>. This action cannot be undone.
+            </p>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" size="sm" onClick={() => setDeleteStudentTarget(null)} disabled={!!deletingStudentId}>
+                Cancel
+              </Button>
+              <Button size="sm" onClick={() => void confirmDeleteStudent()} disabled={!!deletingStudentId}>
+                {deletingStudentId === deleteStudentTarget.id ? <Loader variant="dots" size="sm" inline className="mr-2" /> : null}
+                Delete
+              </Button>
+            </div>
+          </div>
+        ) : null}
+      </Modal>
 
     </div>
   );

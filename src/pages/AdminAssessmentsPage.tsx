@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Copy, ExternalLink, Send, RefreshCw, Ban, CheckCircle, User, CalendarClock, CalendarDays, Download } from 'lucide-react';
+import { Copy, ExternalLink, Send, RefreshCw, Ban, CheckCircle, User, Download } from 'lucide-react';
 import {
   listSubmittedInstancesPaged,
   updateInstanceRole,
@@ -75,13 +75,8 @@ export const AdminAssessmentsPage: React.FC = () => {
   const [trainers, setTrainers] = useState<Trainer[]>([]);
   const [trainersLoading, setTrainersLoading] = useState(false);
   const [selectedTrainerId, setSelectedTrainerId] = useState<number | null>(null);
-  const [extendDeadlineRow, setExtendDeadlineRow] = useState<SubmittedInstanceRow | null>(null);
-  const [extendDeadlineNewDate, setExtendDeadlineNewDate] = useState('');
-  const [extending, setExtending] = useState(false);
-  const [editDatesRow, setEditDatesRow] = useState<SubmittedInstanceRow | null>(null);
-  const [editDatesStart, setEditDatesStart] = useState('');
-  const [editDatesEnd, setEditDatesEnd] = useState('');
-  const [savingDates, setSavingDates] = useState(false);
+  const [editingDateCell, setEditingDateCell] = useState<{ id: number; field: 'start' | 'end' } | null>(null);
+  const [savingDateId, setSavingDateId] = useState<number | null>(null);
 
   type DirectorySortKey = 'student' | 'form' | 'start' | 'end' | 'created' | 'workflow';
   const [directorySort, setDirectorySort] = useState<{ key: DirectorySortKey; dir: SortDirection }>({
@@ -180,49 +175,32 @@ export const AdminAssessmentsPage: React.FC = () => {
     });
   };
 
-  const openExtendDeadline = (row: SubmittedInstanceRow) => {
-    setExtendDeadlineRow(row);
-    setExtendDeadlineNewDate((row.end_date ?? '').trim() || new Date().toISOString().slice(0, 10));
-  };
-
-  const openEditDates = (row: SubmittedInstanceRow) => {
-    setEditDatesRow(row);
-    setEditDatesStart((row.start_date ?? '').trim() || new Date().toISOString().slice(0, 10));
-    setEditDatesEnd((row.end_date ?? '').trim() || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10));
-  };
-
-  const handleSaveDates = async () => {
-    if (!editDatesRow) return;
-    const start = editDatesStart.trim();
-    const end = editDatesEnd.trim();
-    if (!start || !end) {
-      toast.error('Select start and end date');
+  const saveDateCell = async (row: SubmittedInstanceRow, field: 'start' | 'end', nextIso: string) => {
+    const next = String(nextIso || '').trim();
+    const start = String(row.start_date ?? '').trim();
+    const end = String(row.end_date ?? '').trim();
+    const nextStart = field === 'start' ? next : start;
+    const nextEnd = field === 'end' ? next : end;
+    if (nextStart && nextEnd && nextStart > nextEnd) {
+      toast.error('Start date cannot be later than end date');
       return;
     }
-    if (end < start) {
-      toast.error('End date cannot be earlier than start date');
-      return;
+    try {
+      setSavingDateId(row.id);
+      if (field === 'start') {
+        await updateFormInstanceDates(row.id, { start_date: next || null });
+      } else {
+        await updateFormInstanceDates(row.id, { end_date: next || null });
+        if (next) await extendInstanceAccessTokensToDate(row.id, 'student', next);
+      }
+      setEditingDateCell(null);
+      await loadRows(currentPage, searchTerm, { silent: true });
+      toast.success('Dates updated');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to update dates');
+    } finally {
+      setSavingDateId(null);
     }
-    setSavingDates(true);
-    await updateFormInstanceDates(editDatesRow.id, { start_date: start });
-    await extendInstanceAccessTokensToDate(editDatesRow.id, 'student', end);
-    setSavingDates(false);
-    setEditDatesRow(null);
-    await loadRows(currentPage, searchTerm, { silent: true });
-    toast.success('Assessment dates updated');
-  };
-
-  const handleExtendDeadlineConfirm = async () => {
-    if (!extendDeadlineRow || !extendDeadlineNewDate.trim()) return;
-    const newDate = extendDeadlineNewDate.trim();
-    const studentName = extendDeadlineRow.student_name;
-    setExtending(true);
-    await extendInstanceAccessTokensToDate(extendDeadlineRow.id, 'student', newDate);
-    setExtending(false);
-    setExtendDeadlineRow(null);
-    setExtendDeadlineNewDate('');
-    await loadRows(currentPage, searchTerm, { silent: true });
-    toast.success(`${studentName}'s assessment end date extended. They can access until ${newDate} 11:59 PM.`);
   };
 
   const handleSendToTrainerConfirm = async () => {
@@ -273,9 +251,11 @@ export const AdminAssessmentsPage: React.FC = () => {
       submissionCount < 3;
 
     const actionBtn =
-      'group inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-gray-200 bg-white text-gray-600 hover:bg-[var(--brand)]/10 hover:border-[var(--brand)]/40 hover:text-[var(--brand)] transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:border-gray-200 disabled:hover:text-gray-600 text-xs font-medium';
-    const actionIcon = 'w-3 h-3 shrink-0';
-    const actionText = 'max-w-0 overflow-hidden group-hover:max-w-[8rem] transition-all duration-200 whitespace-nowrap';
+      'relative group inline-flex h-8 w-8 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-600 hover:bg-[var(--brand)]/10 hover:border-[var(--brand)]/40 hover:text-[var(--brand)] transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:border-gray-200 disabled:hover:text-gray-600';
+    const actionIcon = 'w-4 h-4 shrink-0';
+    // 3D-style hover label (tooltip) for icon-only buttons.
+    const actionText =
+      'pointer-events-none absolute -top-2 left-1/2 -translate-x-1/2 -translate-y-full whitespace-nowrap rounded-md border border-gray-200 bg-white px-2 py-1 text-[11px] font-medium text-gray-800 shadow-[0_10px_20px_rgba(0,0,0,0.15)] opacity-0 scale-95 transition-all duration-150 group-hover:opacity-100 group-hover:scale-100';
 
     const openLinkAs = async (targetRole: 'student' | 'trainer' | 'office') => {
       const url = await getOrIssueInstanceAccessLink(row.id, targetRole);
@@ -286,7 +266,6 @@ export const AdminAssessmentsPage: React.FC = () => {
       window.open(url, '_blank');
     };
     const openLink = async () => openLinkAs(role);
-    const openOfficeEdit = async () => openLinkAs('office');
 
     const pdfBase = PDF_BASE.replace(/\/$/, '');
     const downloadPdfHref = pdfBase ? `${pdfBase}/pdf/${row.id}?role=office&download=1` : '';
@@ -297,10 +276,6 @@ export const AdminAssessmentsPage: React.FC = () => {
           <Button variant="outline" size="sm" className="w-full justify-center" onClick={openLink}>
             <ExternalLink className="mr-2 h-4 w-4 shrink-0" />
             Open
-          </Button>
-          <Button variant="outline" size="sm" className="w-full justify-center" onClick={openOfficeEdit}>
-            <ExternalLink className="mr-2 h-4 w-4 shrink-0" />
-            Office edit
           </Button>
           <a
             href={downloadPdfHref}
@@ -330,14 +305,6 @@ export const AdminAssessmentsPage: React.FC = () => {
               Enable link
             </Button>
           )}
-          <Button variant="outline" size="sm" className="w-full justify-center" onClick={() => openExtendDeadline(row)}>
-            <CalendarClock className="mr-2 h-4 w-4 shrink-0" />
-            Extend end date
-          </Button>
-          <Button variant="outline" size="sm" className="w-full justify-center" onClick={() => openEditDates(row)}>
-            <CalendarDays className="mr-2 h-4 w-4 shrink-0" />
-            Edit dates
-          </Button>
           {showResubmit && (
             <Button
               variant="outline"
@@ -370,13 +337,9 @@ export const AdminAssessmentsPage: React.FC = () => {
 
     return (
       <div className="flex flex-wrap items-center justify-end gap-1">
-        <button type="button" onClick={openLink} className={actionBtn} title="Open">
+        <button type="button" onClick={openLink} className={actionBtn} aria-label="Open">
           <ExternalLink className={actionIcon} />
           <span className={actionText}>Open</span>
-        </button>
-        <button type="button" onClick={() => void openOfficeEdit()} className={actionBtn} title="Edit office/admin-only fields">
-          <ExternalLink className={actionIcon} />
-          <span className={actionText}>Office edit</span>
         </button>
         <a
           href={downloadPdfHref}
@@ -387,35 +350,27 @@ export const AdminAssessmentsPage: React.FC = () => {
           onClick={(e) => {
             if (!downloadPdfHref) e.preventDefault();
           }}
-          title={!downloadPdfHref ? 'Set VITE_PDF_API_URL to the PDF server URL' : 'Download PDF'}
+          aria-label="Download PDF"
         >
           <Download className={actionIcon} />
           <span className={actionText}>Download PDF</span>
         </a>
-        <button type="button" onClick={() => void handleCopyLink(row.id, role)} className={actionBtn} title="Copy Link">
+        <button type="button" onClick={() => void handleCopyLink(row.id, role)} className={actionBtn} aria-label="Copy link">
           <Copy className={actionIcon} />
-          <span className={actionText}>Copy Link</span>
+          <span className={actionText}>Copy link</span>
         </button>
         {!row.link_expired && (
-          <button type="button" onClick={() => void handleExpireLink(row.id, role)} disabled={managingId === row.id} className={actionBtn} title="Revoke link access">
+          <button type="button" onClick={() => void handleExpireLink(row.id, role)} disabled={managingId === row.id} className={actionBtn} aria-label="Expire link">
             <Ban className={actionIcon} />
             <span className={actionText}>Expire</span>
           </button>
         )}
         {row.link_expired && (
-          <button type="button" onClick={() => void handleEnableLink(row.id, role)} disabled={managingId === row.id} className={actionBtn} title="Re-enable link (30 days)">
+          <button type="button" onClick={() => void handleEnableLink(row.id, role)} disabled={managingId === row.id} className={actionBtn} aria-label="Enable link">
             <CheckCircle className={actionIcon} />
             <span className={actionText}>Enable</span>
           </button>
         )}
-        <button type="button" onClick={() => openExtendDeadline(row)} className={actionBtn} title="Extend assessment end date">
-          <CalendarClock className={actionIcon} />
-          <span className={actionText}>Extend End Date</span>
-        </button>
-        <button type="button" onClick={() => openEditDates(row)} className={actionBtn} title="Edit assessment dates">
-          <CalendarDays className={actionIcon} />
-          <span className={actionText}>Edit dates</span>
-        </button>
         {showResubmit && (
           <button
             type="button"
@@ -430,16 +385,18 @@ export const AdminAssessmentsPage: React.FC = () => {
             }}
             disabled={managingId === row.id}
             className={actionBtn}
-            title="Allow student to resubmit"
+            aria-label="Allow resubmission"
           >
             <CheckCircle className={actionIcon} />
-            <span className={actionText}>Allow Resubmission</span>
+            <span className={actionText}>Allow resubmission</span>
           </button>
         )}
         {(row.status === 'submitted' || row.status === 'draft') && (
-          <button type="button" onClick={() => openSendToTrainer(row)} disabled={sendingId === row.id} className={actionBtn} title={row.role_context === 'trainer' ? 'Resend to Trainer' : 'Send to Trainer'}>
+          <button type="button" onClick={() => openSendToTrainer(row)} disabled={sendingId === row.id} className={actionBtn} aria-label={row.role_context === 'trainer' ? 'Resend to trainer' : 'Send to trainer'}>
             <Send className={actionIcon} />
-            <span className={actionText}>{sendingId === row.id ? 'Sending...' : row.role_context === 'trainer' ? 'Resend to Trainer' : 'Send to Trainer'}</span>
+            <span className={actionText}>
+              {sendingId === row.id ? 'Sending…' : row.role_context === 'trainer' ? 'Resend to trainer' : 'Send to trainer'}
+            </span>
           </button>
         )}
       </div>
@@ -618,12 +575,56 @@ export const AdminAssessmentsPage: React.FC = () => {
                           <div className="font-medium text-gray-900">{row.student_name}</div>
                           <div className="text-xs text-gray-500">{row.student_email || '-'}</div>
                         </td>
-                        <td className="py-3 pr-3">
-                          <div className="font-medium text-gray-900">{row.form_name}</div>
-                          <div className="text-xs text-gray-500">Version {row.form_version ?? '1.0.0'}</div>
+                        <td className="py-3 pr-3 w-[220px] max-w-[220px] align-top">
+                          <div className="font-medium text-gray-900 break-words whitespace-normal leading-snug">
+                            {row.form_name}
+                          </div>
+                          <div className="text-xs text-gray-500 break-words whitespace-normal">Version {row.form_version ?? '1.0.0'}</div>
                         </td>
-                        <td className="py-3 pr-3 text-gray-700">{formatDDMMYYYY(row.start_date)}</td>
-                        <td className="py-3 pr-3 text-gray-700">{formatDDMMYYYY(row.end_date)}</td>
+                        <td className="py-3 pr-3 text-gray-700">
+                          {editingDateCell?.id === row.id && editingDateCell.field === 'start' ? (
+                            <DatePicker
+                              value={(row.start_date ?? '').trim()}
+                              onChange={(v) => void saveDateCell(row, 'start', v || '')}
+                              compact
+                              placement="below"
+                              className="max-w-[160px]"
+                              disabled={savingDateId === row.id}
+                              maxDate={row.end_date ?? undefined}
+                            />
+                          ) : (
+                            <button
+                              type="button"
+                              className="text-gray-700 hover:underline"
+                              onClick={() => setEditingDateCell({ id: row.id, field: 'start' })}
+                              disabled={savingDateId === row.id}
+                            >
+                              {formatDDMMYYYY(row.start_date)}
+                            </button>
+                          )}
+                        </td>
+                        <td className="py-3 pr-3 text-gray-700">
+                          {editingDateCell?.id === row.id && editingDateCell.field === 'end' ? (
+                            <DatePicker
+                              value={(row.end_date ?? '').trim()}
+                              onChange={(v) => void saveDateCell(row, 'end', v || '')}
+                              compact
+                              placement="below"
+                              className="max-w-[160px]"
+                              disabled={savingDateId === row.id}
+                              minDate={row.start_date ?? undefined}
+                            />
+                          ) : (
+                            <button
+                              type="button"
+                              className="text-gray-700 hover:underline"
+                              onClick={() => setEditingDateCell({ id: row.id, field: 'end' })}
+                              disabled={savingDateId === row.id}
+                            >
+                              {formatDDMMYYYY(row.end_date)}
+                            </button>
+                          )}
+                        </td>
                         <td className="py-3 pr-3 text-gray-700">{formatDDMMYYYY(row.created_at)}</td>
                         <td className="py-3 pr-3">
                           <span className={`inline-flex rounded-md px-2.5 py-1 text-xs font-medium ${getWorkflowBadgeClass(row)}`}>
@@ -721,94 +722,6 @@ export const AdminAssessmentsPage: React.FC = () => {
           )}
         </Modal>
 
-        <Modal
-          isOpen={!!extendDeadlineRow}
-          onClose={() => {
-            setExtendDeadlineRow(null);
-            setExtendDeadlineNewDate('');
-          }}
-          title="Extend assessment end date (this instance only)"
-          size="md"
-        >
-          {extendDeadlineRow && (
-            <div className="space-y-4">
-              <p className="text-sm text-gray-600">
-                Extend <strong>{extendDeadlineRow.student_name}</strong>'s assessment end date for <strong>{extendDeadlineRow.form_name}</strong>. Only this student is affected.
-              </p>
-              <div className="flex flex-col gap-2">
-                <label className="text-sm font-medium text-gray-700">New end date (end of day)</label>
-                <DatePicker
-                  value={extendDeadlineNewDate}
-                  onChange={(v) => setExtendDeadlineNewDate(v || '')}
-                  className="max-w-[180px]"
-                  fromYear={new Date().getFullYear()}
-                  toYear={new Date().getFullYear() + 2}
-                />
-              </div>
-              <div className="flex justify-end gap-2 pt-2">
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setExtendDeadlineRow(null);
-                    setExtendDeadlineNewDate('');
-                  }}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  onClick={handleExtendDeadlineConfirm}
-                  disabled={!extendDeadlineNewDate.trim() || extending}
-                  className="inline-flex items-center gap-2"
-                >
-                  {extending ? (
-                    <Loader variant="dots" size="sm" inline />
-                  ) : (
-                    <CalendarClock className="w-4 h-4" />
-                  )}
-                  <span>{extending ? 'Updating...' : 'Extend deadline'}</span>
-                </Button>
-              </div>
-            </div>
-          )}
-        </Modal>
-
-        <Modal
-          isOpen={!!editDatesRow}
-          onClose={() => {
-            setEditDatesRow(null);
-            setEditDatesStart('');
-            setEditDatesEnd('');
-          }}
-          title="Edit assessment dates (this instance only)"
-          size="md"
-        >
-          {editDatesRow && (
-            <div className="space-y-4">
-              <p className="text-sm text-gray-600">
-                Update start/end dates for <strong>{editDatesRow.student_name}</strong> — <strong>{editDatesRow.form_name}</strong>.
-              </p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <label className="block">
-                  <span className="text-sm font-medium text-gray-700">Start date</span>
-                  <DatePicker value={editDatesStart} onChange={(v) => setEditDatesStart(v || '')} className="mt-1 max-w-[180px]" />
-                </label>
-                <label className="block">
-                  <span className="text-sm font-medium text-gray-700">End date</span>
-                  <DatePicker value={editDatesEnd} onChange={(v) => setEditDatesEnd(v || '')} className="mt-1 max-w-[180px]" minDate={editDatesStart || undefined} />
-                </label>
-              </div>
-              <div className="flex justify-end gap-2 pt-2">
-                <Button variant="outline" onClick={() => setEditDatesRow(null)} disabled={savingDates}>
-                  Cancel
-                </Button>
-                <Button onClick={handleSaveDates} disabled={savingDates || !editDatesStart.trim() || !editDatesEnd.trim()}>
-                  {savingDates ? <Loader variant="dots" size="sm" inline className="mr-2" /> : null}
-                  Save
-                </Button>
-              </div>
-            </div>
-          )}
-        </Modal>
       </div>
     </div>
   );

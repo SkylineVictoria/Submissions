@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import type { SortDirection } from '../components/admin/SortableTh';
 import { SortableTh } from '../components/admin/SortableTh';
 import { useNavigate, useParams } from 'react-router-dom';
-import { CheckCircle, Copy, ExternalLink, Phone, Mail, ArrowLeft, CalendarDays, RotateCcw, Download } from 'lucide-react';
+import { CheckCircle, Copy, ExternalLink, Phone, Mail, ArrowLeft, RotateCcw, Download } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -80,10 +80,8 @@ export const AdminStudentDetailsPage: React.FC = () => {
   const [addForms, setAddForms] = useState<Array<{ id: number; name: string; version: string | null }>>([]);
   const [addFormsLoading, setAddFormsLoading] = useState(false);
   const [addFormId, setAddFormId] = useState<string>('');
-  const [editDatesRow, setEditDatesRow] = useState<SubmittedInstanceRow | null>(null);
-  const [editDatesStart, setEditDatesStart] = useState('');
-  const [editDatesEnd, setEditDatesEnd] = useState('');
-  const [savingDates, setSavingDates] = useState(false);
+  const [editingDateCell, setEditingDateCell] = useState<{ id: number; field: 'start' | 'end' } | null>(null);
+  const [savingDateId, setSavingDateId] = useState<number | null>(null);
 
   type AssessmentSortKey = 'unit' | 'start' | 'end' | 'created' | 'completed';
   const [assessmentSort, setAssessmentSort] = useState<{ key: AssessmentSortKey; dir: SortDirection }>({
@@ -310,31 +308,32 @@ export const AdminStudentDetailsPage: React.FC = () => {
     return rows;
   }, [assessments, assessmentSort]);
 
-  const openEditDates = (row: SubmittedInstanceRow) => {
-    setEditDatesRow(row);
-    setEditDatesStart((row.start_date ?? '').trim() || new Date().toISOString().slice(0, 10));
-    setEditDatesEnd((row.end_date ?? '').trim() || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10));
-  };
-
-  const handleSaveDates = async () => {
-    if (!editDatesRow) return;
-    const start = editDatesStart.trim();
-    const end = editDatesEnd.trim();
-    if (!start || !end) {
-      toast.error('Select start and end date');
+  const saveDateCell = async (row: SubmittedInstanceRow, field: 'start' | 'end', nextIso: string) => {
+    const next = String(nextIso || '').trim();
+    const start = String(row.start_date ?? '').trim();
+    const end = String(row.end_date ?? '').trim();
+    const nextStart = field === 'start' ? next : start;
+    const nextEnd = field === 'end' ? next : end;
+    if (nextStart && nextEnd && nextStart > nextEnd) {
+      toast.error('Start date cannot be later than end date');
       return;
     }
-    if (end < start) {
-      toast.error('End date cannot be earlier than start date');
-      return;
+    try {
+      setSavingDateId(row.id);
+      if (field === 'start') {
+        await updateFormInstanceDates(row.id, { start_date: next || null });
+      } else {
+        await updateFormInstanceDates(row.id, { end_date: next || null });
+        if (next) await extendInstanceAccessTokensToDate(row.id, 'student', next);
+      }
+      setEditingDateCell(null);
+      await loadAssessments();
+      toast.success('Dates updated');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to update dates');
+    } finally {
+      setSavingDateId(null);
     }
-    setSavingDates(true);
-    await updateFormInstanceDates(editDatesRow.id, { start_date: start, end_date: end });
-    await extendInstanceAccessTokensToDate(editDatesRow.id, 'student', end);
-    setSavingDates(false);
-    setEditDatesRow(null);
-    await loadAssessments();
-    toast.success('Assessment dates updated');
   };
 
   const handleCopyLink = async (row: SubmittedInstanceRow) => {
@@ -528,11 +527,49 @@ export const AdminStudentDetailsPage: React.FC = () => {
                                 );
                               })()}
                             </td>
-                            <td className="px-3 py-2 border-b border-[var(--border)] text-gray-700">
-                              {formatDDMMYYYY(row.start_date)}
+                            <td className="px-3 py-2 border-b border-[var(--border)] text-gray-700 align-top">
+                              {editingDateCell?.id === row.id && editingDateCell.field === 'start' ? (
+                                <DatePicker
+                                  value={(row.start_date ?? '').trim()}
+                                  onChange={(v) => void saveDateCell(row, 'start', v || '')}
+                                  compact
+                                  placement="below"
+                                  className="max-w-[160px]"
+                                  disabled={savingDateId === row.id}
+                                  maxDate={row.end_date ?? undefined}
+                                />
+                              ) : (
+                                <button
+                                  type="button"
+                                  className="text-gray-700 hover:underline"
+                                  onClick={() => setEditingDateCell({ id: row.id, field: 'start' })}
+                                  disabled={savingDateId === row.id}
+                                >
+                                  {formatDDMMYYYY(row.start_date)}
+                                </button>
+                              )}
                             </td>
-                            <td className="px-3 py-2 border-b border-[var(--border)] text-gray-700">
-                              {formatDDMMYYYY(row.end_date)}
+                            <td className="px-3 py-2 border-b border-[var(--border)] text-gray-700 align-top">
+                              {editingDateCell?.id === row.id && editingDateCell.field === 'end' ? (
+                                <DatePicker
+                                  value={(row.end_date ?? '').trim()}
+                                  onChange={(v) => void saveDateCell(row, 'end', v || '')}
+                                  compact
+                                  placement="below"
+                                  className="max-w-[160px]"
+                                  disabled={savingDateId === row.id}
+                                  minDate={row.start_date ?? undefined}
+                                />
+                              ) : (
+                                <button
+                                  type="button"
+                                  className="text-gray-700 hover:underline"
+                                  onClick={() => setEditingDateCell({ id: row.id, field: 'end' })}
+                                  disabled={savingDateId === row.id}
+                                >
+                                  {formatDDMMYYYY(row.end_date)}
+                                </button>
+                              )}
                             </td>
                             <td className="px-3 py-2 border-b border-[var(--border)] text-gray-700 whitespace-nowrap">
                               {formatDDMMYYYY(row.created_at)}
@@ -576,10 +613,6 @@ export const AdminStudentDetailsPage: React.FC = () => {
                                         <Copy className={actionIcon} />
                                         <span className={actionText}>Copy link</span>
                                       </button>
-                                      <button type="button" className={actionBtn} onClick={() => openEditDates(row)} title="Edit dates">
-                                        <CalendarDays className={actionIcon} />
-                                        <span className={actionText}>Edit dates</span>
-                                      </button>
                                       {canResubmit ? (
                                         <button
                                           type="button"
@@ -615,43 +648,6 @@ export const AdminStudentDetailsPage: React.FC = () => {
           </div>
         )}
       </div>
-
-      <Modal
-        isOpen={!!editDatesRow}
-        onClose={() => {
-          if (savingDates) return;
-          setEditDatesRow(null);
-        }}
-        title="Edit assessment dates"
-        size="md"
-      >
-        {editDatesRow && (
-          <div className="space-y-4">
-            <p className="text-sm text-gray-600">
-              Update dates for <strong>{student?.email ?? 'student'}</strong> — <strong>{editDatesRow.form_name}</strong>.
-            </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <label className="block">
-                <span className="text-sm font-medium text-gray-700">Start date</span>
-                <DatePicker value={editDatesStart} onChange={(v) => setEditDatesStart(v || '')} className="mt-1 max-w-[200px]" />
-              </label>
-              <label className="block">
-                <span className="text-sm font-medium text-gray-700">End date</span>
-                <DatePicker value={editDatesEnd} onChange={(v) => setEditDatesEnd(v || '')} className="mt-1 max-w-[200px]" />
-              </label>
-            </div>
-            <div className="flex justify-end gap-2 pt-2">
-              <Button variant="outline" onClick={() => setEditDatesRow(null)} disabled={savingDates}>
-                Cancel
-              </Button>
-              <Button onClick={handleSaveDates} disabled={savingDates || !editDatesStart.trim() || !editDatesEnd.trim()}>
-                {savingDates ? <Loader variant="dots" size="sm" inline className="mr-2" /> : null}
-                Save
-              </Button>
-            </div>
-          </div>
-        )}
-      </Modal>
 
       <Modal
         isOpen={addAssessmentOpen}

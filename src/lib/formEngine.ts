@@ -1829,6 +1829,108 @@ export interface SubmittedInstanceRow {
   link_expired: boolean;
 }
 
+export interface AdminDashboardStatsV2 {
+  totals: { assessments: number; students: number; trainers: number; admins: number };
+  workflow: { awaiting_student: number; awaiting_trainer: number; awaiting_office: number; completed: number };
+}
+
+export async function getAdminDashboardStatsV2(input: {
+  fromDate?: string | null;
+  toDate?: string | null;
+  status: 'all' | 'awaiting_student' | 'awaiting_trainer' | 'awaiting_office' | 'completed';
+}): Promise<{ ok: true; stats: AdminDashboardStatsV2 } | { ok: false; error: string }> {
+  const { data, error } = await supabase.rpc('skyline_admin_dashboard_stats_v2', {
+    p_from_date: input.fromDate && /^\d{4}-\d{2}-\d{2}$/.test(String(input.fromDate)) ? String(input.fromDate) : null,
+    p_to_date: input.toDate && /^\d{4}-\d{2}-\d{2}$/.test(String(input.toDate)) ? String(input.toDate) : null,
+    p_status: input.status,
+  });
+  if (error) {
+    console.error('skyline_admin_dashboard_stats_v2 rpc error', error);
+    return { ok: false, error: error.message };
+  }
+  const raw = data as { ok?: boolean; totals?: unknown; workflow?: unknown } | null;
+  if (!raw || raw.ok !== true) return { ok: false, error: 'Failed to load dashboard stats' };
+  const totals = raw.totals as { assessments?: unknown; students?: unknown; trainers?: unknown; admins?: unknown } | undefined;
+  const workflow = raw.workflow as { awaiting_student?: unknown; awaiting_trainer?: unknown; awaiting_office?: unknown; completed?: unknown } | undefined;
+  return {
+    ok: true,
+    stats: {
+      totals: {
+        assessments: Number(totals?.assessments ?? 0) || 0,
+        students: Number(totals?.students ?? 0) || 0,
+        trainers: Number(totals?.trainers ?? 0) || 0,
+        admins: Number(totals?.admins ?? 0) || 0,
+      },
+      workflow: {
+        awaiting_student: Number(workflow?.awaiting_student ?? 0) || 0,
+        awaiting_trainer: Number(workflow?.awaiting_trainer ?? 0) || 0,
+        awaiting_office: Number(workflow?.awaiting_office ?? 0) || 0,
+        completed: Number(workflow?.completed ?? 0) || 0,
+      },
+    },
+  };
+}
+
+export async function listAdminDashboardInstancesPaged(
+  page = 1,
+  pageSize = 20,
+  status: 'all' | 'awaiting_student' | 'awaiting_trainer' | 'awaiting_office' | 'completed',
+  fromDate?: string | null,
+  toDate?: string | null
+): Promise<PaginatedResult<SubmittedInstanceRow>> {
+  const { data, error } = await supabase.rpc('skyline_admin_dashboard_instances_paged', {
+    p_page: page,
+    p_page_size: pageSize,
+    p_status: status,
+    p_from_date: fromDate && /^\d{4}-\d{2}-\d{2}$/.test(String(fromDate)) ? String(fromDate) : null,
+    p_to_date: toDate && /^\d{4}-\d{2}-\d{2}$/.test(String(toDate)) ? String(toDate) : null,
+  });
+  if (error) {
+    console.error('skyline_admin_dashboard_instances_paged rpc error', error);
+    return { data: [], total: 0, page, pageSize };
+  }
+  const rowsRaw =
+    (data as Array<{
+      id: number;
+      form_id: number;
+      form_name: string | null;
+      form_version: string | null;
+      student_id: number | null;
+      student_name: string | null;
+      student_email: string | null;
+      status: string | null;
+      role_context: string | null;
+      start_date: string | null;
+      end_date: string | null;
+      created_at: string | null;
+      total_count: number | null;
+    }> | null) || [];
+  const total = rowsRaw.length > 0 ? Number(rowsRaw[0].total_count ?? rowsRaw.length) : 0;
+  // No token lookup needed for admin dashboard list; link controls live in assessments directory.
+  return {
+    data: rowsRaw.map((r) => ({
+      id: Number(r.id),
+      form_id: Number(r.form_id),
+      form_name: String(r.form_name ?? ''),
+      form_version: r.form_version != null ? String(r.form_version) : null,
+      student_id: r.student_id == null ? null : Number(r.student_id),
+      student_name: String(r.student_name ?? 'Unknown student'),
+      student_email: String(r.student_email ?? ''),
+      status: String(r.status ?? 'draft'),
+      role_context: String(r.role_context ?? 'student'),
+      created_at: String(r.created_at ?? ''),
+      submitted_at: null,
+      submission_count: 0,
+      start_date: r.start_date ? String(r.start_date) : null,
+      end_date: r.end_date ? String(r.end_date) : null,
+      link_expired: false,
+    })),
+    total: Number.isFinite(total) ? total : 0,
+    page,
+    pageSize,
+  };
+}
+
 export async function listStudentsInBatch(batchId: number): Promise<Student[]> {
   const { data, error } = await supabase
     .from('skyline_students')
@@ -1850,6 +1952,7 @@ export async function listStudents(): Promise<Student[]> {
   const { data, error } = await supabase
     .from('skyline_students')
     .select('*, skyline_batches(name)')
+    .or('status.is.null,status.eq.active')
     .order('created_at', { ascending: false });
   if (error) {
     console.error('listStudents error', error);
@@ -1865,11 +1968,38 @@ export async function listStudentsPaged(
   page = 1,
   pageSize = 20,
   search?: string,
-  statusFilter?: '' | 'active' | 'inactive'
+  statusFilter?: '' | 'active' | 'inactive',
+  filters?: { batchId?: number | null; courseIds?: number[] }
 ): Promise<PaginatedResult<Student>> {
   const from = Math.max(0, (page - 1) * pageSize);
   const to = from + pageSize - 1;
   let query = supabase.from('skyline_students').select('*, skyline_batches(name)', { count: 'exact' });
+  // Never show inactive students in directories.
+  query = query.or('status.is.null,status.eq.active');
+  const batchId = filters?.batchId != null ? Number(filters.batchId) : null;
+  if (batchId != null && Number.isFinite(batchId) && batchId > 0) {
+    query = query.eq('batch_id', batchId);
+  }
+  const courseIds = (filters?.courseIds || [])
+    .map((n) => Number(n))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  if (courseIds.length > 0) {
+    const { data: scRows, error: scErr } = await supabase
+      .from('skyline_student_courses')
+      .select('student_id')
+      .in('course_id', courseIds)
+      .eq('status', 'active');
+    if (scErr) {
+      console.error('listStudentsPaged course filter error', scErr);
+      return { data: [], total: 0, page, pageSize };
+    }
+    const sIds = ((scRows as Array<{ student_id: number }> | null) || [])
+      .map((r) => Number(r.student_id))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    const uniq = Array.from(new Set(sIds));
+    if (uniq.length === 0) return { data: [], total: 0, page, pageSize };
+    query = query.in('id', uniq);
+  }
   const q = (search ?? '').trim();
   if (q) {
     const escaped = q.replace(/[%_,]/g, '');
@@ -1915,7 +2045,8 @@ export async function listStudentsPaged(
 
     query = query.or(conditions.join(','));
   }
-  if (statusFilter) query = query.eq('status', statusFilter);
+  // Keep support for an explicit active filter, but never allow "inactive" directories.
+  if (statusFilter === 'active') query = query.eq('status', 'active');
   query = query.order('created_at', { ascending: false }).order('id', { ascending: false });
   const { data, error, count } = await query.range(from, to);
   if (error) {
@@ -2183,7 +2314,8 @@ export async function listDashboardInstances(
     const { data: students } = await supabase
       .from('skyline_students')
       .select('id')
-      .in('batch_id', batchIds);
+      .in('batch_id', batchIds)
+      .or('status.is.null,status.eq.active');
     studentIds = ((students as { id: number }[]) || []).map((s) => s.id);
     if (studentIds.length === 0) return { data: [], total: 0, page, pageSize };
   }
@@ -2192,8 +2324,12 @@ export async function listDashboardInstances(
   const to = from + pageSize - 1;
   let query = supabase
     .from('skyline_form_instances')
-    .select('id, form_id, student_id, status, role_context, created_at, submitted_at', { count: 'exact' })
+    .select('id, form_id, student_id, status, role_context, created_at, submitted_at, skyline_students!inner(status)', {
+      count: 'exact',
+    })
     .not('student_id', 'is', null);
+  // Never show inactive students in directories.
+  query = query.or('skyline_students.status.is.null,skyline_students.status.eq.active');
 
   if (role === 'trainer') {
     query = query.in('student_id', studentIds);
@@ -2223,7 +2359,8 @@ export async function listDashboardInstances(
     const { data: studentRows } = await supabase
       .from('skyline_students')
       .select('id')
-      .or(`student_id.ilike.%${escaped}%,name.ilike.%${escaped}%,first_name.ilike.%${escaped}%,last_name.ilike.%${escaped}%,email.ilike.%${escaped}%`);
+      .or(`student_id.ilike.%${escaped}%,name.ilike.%${escaped}%,first_name.ilike.%${escaped}%,last_name.ilike.%${escaped}%,email.ilike.%${escaped}%`)
+      .or('status.is.null,status.eq.active');
     const searchStudentIds = ((studentRows as Array<Record<string, unknown>>) || []).map((s) => Number(s.id)).filter((n) => Number.isFinite(n) && n > 0);
     if (searchStudentIds.length > 0) {
       if (role === 'trainer') {
@@ -4560,5 +4697,25 @@ export async function patchSkylineInductionSubmissionPayload(input: {
   if (error) return { ok: false, error: error.message };
   const j = data as { ok?: boolean; error?: string } | null;
   if (!j?.ok) return { ok: false, error: j?.error || 'Could not update submission.' };
+  return { ok: true };
+}
+
+export async function deleteStudentIfNoAssessments(studentId: number): Promise<{ ok: true } | { ok: false; error: string }> {
+  const sid = Number(studentId);
+  if (!Number.isFinite(sid) || sid <= 0) return { ok: false, error: 'Invalid student id.' };
+  const { data, error } = await supabase.rpc('skyline_admin_delete_student_if_no_assessments', { p_student_id: sid });
+  if (error) return { ok: false, error: error.message };
+  const j = data as { ok?: boolean; error?: string } | null;
+  if (!j?.ok) return { ok: false, error: j?.error || 'Could not delete student.' };
+  return { ok: true };
+}
+
+export async function deleteBatchIfAllStudentsInactive(batchId: number): Promise<{ ok: true } | { ok: false; error: string }> {
+  const bid = Number(batchId);
+  if (!Number.isFinite(bid) || bid <= 0) return { ok: false, error: 'Invalid batch id.' };
+  const { data, error } = await supabase.rpc('skyline_admin_delete_batch_if_all_students_inactive', { p_batch_id: bid });
+  if (error) return { ok: false, error: error.message };
+  const j = data as { ok?: boolean; error?: string } | null;
+  if (!j?.ok) return { ok: false, error: j?.error || 'Could not delete batch.' };
   return { ok: true };
 }

@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, Pencil, Users, CalendarRange } from 'lucide-react';
+import { Plus, Pencil, Users, CalendarRange, Trash2 } from 'lucide-react';
+import { supabase } from '../lib/supabase';
 import {
   listBatchesPaged,
   createBatch,
@@ -10,6 +11,7 @@ import {
   listStudentsPaged,
   listStudentsInBatch,
   listCoursesPaged,
+  deleteBatchIfAllStudentsInactive,
 } from '../lib/formEngine';
 import type { Batch, Student } from '../lib/formEngine';
 import { Card } from '../components/ui/Card';
@@ -36,6 +38,9 @@ export const AdminBatchesPage: React.FC = () => {
   const [draft, setDraft] = useState({ name: '', trainer_id: '', course_id: '' });
   const [editDraft, setEditDraft] = useState<{ name: string; trainer_id: string; course_id: string; student_ids: number[] } | null>(null);
   const [, setEditStudents] = useState<Student[]>([]);
+  const [activeCountByBatchId, setActiveCountByBatchId] = useState<Record<number, number>>({});
+  const [deletingBatchId, setDeletingBatchId] = useState<number | null>(null);
+  const [deleteBatchTarget, setDeleteBatchTarget] = useState<Batch | null>(null);
 
   const loadBatches = useCallback(async (page: number) => {
     setLoading(true);
@@ -48,6 +53,78 @@ export const AdminBatchesPage: React.FC = () => {
   useEffect(() => {
     loadBatches(currentPage);
   }, [currentPage, loadBatches]);
+
+  useEffect(() => {
+    if (batches.length === 0) {
+      setActiveCountByBatchId({});
+      return;
+    }
+    const ids = batches.map((b) => Number(b.id)).filter((n) => Number.isFinite(n) && n > 0);
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from('skyline_students')
+        .select('batch_id, status')
+        .in('batch_id', ids);
+      if (cancelled) return;
+      if (error) {
+        console.error('load active students for batches error', error);
+        setActiveCountByBatchId({});
+        return;
+      }
+      const rows = (data as Array<{ batch_id: number | null; status: string | null }> | null) || [];
+      const map: Record<number, number> = {};
+      for (const id of ids) map[id] = 0;
+      for (const r of rows) {
+        const bid = Number(r.batch_id);
+        if (!Number.isFinite(bid) || bid <= 0) continue;
+        const st = (r.status ?? 'active') as string;
+        if (st === 'inactive') continue;
+        map[bid] = (map[bid] ?? 0) + 1;
+      }
+      setActiveCountByBatchId(map);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [batches]);
+
+  const requestDeleteBatch = useCallback((batch: Batch) => {
+    const bid = Number(batch.id);
+    if (!Number.isFinite(bid) || bid <= 0) return;
+    const active = activeCountByBatchId[bid] ?? 0;
+    if (active > 0) {
+      toast.error('Cannot delete. This batch has active students.');
+      return;
+    }
+    setDeleteBatchTarget(batch);
+  }, [activeCountByBatchId]);
+
+  const confirmDeleteBatch = useCallback(async () => {
+    const batch = deleteBatchTarget;
+    if (!batch) return;
+    const bid = Number(batch.id);
+    if (!Number.isFinite(bid) || bid <= 0) return;
+    const active = activeCountByBatchId[bid] ?? 0;
+    if (active > 0) {
+      toast.error('Cannot delete. This batch has active students.');
+      setDeleteBatchTarget(null);
+      return;
+    }
+    setDeletingBatchId(bid);
+    try {
+      const res = await deleteBatchIfAllStudentsInactive(bid);
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
+      toast.success('Batch deleted');
+      await loadBatches(currentPage);
+    } finally {
+      setDeletingBatchId(null);
+      setDeleteBatchTarget(null);
+    }
+  }, [activeCountByBatchId, currentPage, deleteBatchTarget, loadBatches]);
 
   const loadTrainersOptions = useCallback(async (page: number, search: string) => {
     const res = await listUsersForBatchAssignmentPaged(page, 20, search || undefined);
@@ -220,6 +297,19 @@ export const AdminBatchesPage: React.FC = () => {
                             <Pencil className="mr-1 h-4 w-4" />
                             Edit
                           </Button>
+                          {(activeCountByBatchId[batch.id] ?? 0) === 0 ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="w-full mt-2"
+                              onClick={() => requestDeleteBatch(batch)}
+                              disabled={deletingBatchId === batch.id}
+                              title="Delete batch (only when no active students)"
+                            >
+                              <Trash2 className="mr-1 h-4 w-4" />
+                              Delete
+                            </Button>
+                          ) : null}
                         </div>
                       </div>
                     </div>
@@ -257,15 +347,30 @@ export const AdminBatchesPage: React.FC = () => {
                         {batch.trainer_name ?? `ID: ${batch.trainer_id}`}
                       </td>
                       <td className="px-4 py-3 border-b border-[var(--border)] text-right">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setEditingId(batch.id)}
-                          className="inline-flex items-center justify-center gap-1.5"
-                        >
-                          <Pencil className="w-4 h-4" />
-                          Edit
-                        </Button>
+                        <div className="inline-flex items-center justify-end gap-2 flex-wrap">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setEditingId(batch.id)}
+                            className="inline-flex items-center justify-center gap-1.5"
+                          >
+                            <Pencil className="w-4 h-4" />
+                            Edit
+                          </Button>
+                          {(activeCountByBatchId[batch.id] ?? 0) === 0 ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => requestDeleteBatch(batch)}
+                              disabled={deletingBatchId === batch.id}
+                              className="inline-flex items-center justify-center gap-1.5"
+                              title="Delete batch (only when no active students)"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                              Delete
+                            </Button>
+                          ) : null}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -425,6 +530,36 @@ export const AdminBatchesPage: React.FC = () => {
             </Button>
           </div>
         )}
+      </Modal>
+
+      <Modal
+        isOpen={!!deleteBatchTarget}
+        onClose={() => {
+          if (deletingBatchId) return;
+          setDeleteBatchTarget(null);
+        }}
+        title="Delete batch"
+        size="md"
+      >
+        {deleteBatchTarget ? (
+          <div className="space-y-4">
+            <p className="text-sm text-gray-700">
+              Delete batch <strong>{deleteBatchTarget.name}</strong>?
+            </p>
+            <p className="text-xs text-gray-500">
+              This is only allowed when the batch has <strong>no active students</strong>. This action cannot be undone.
+            </p>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" size="sm" onClick={() => setDeleteBatchTarget(null)} disabled={!!deletingBatchId}>
+                Cancel
+              </Button>
+              <Button size="sm" onClick={() => void confirmDeleteBatch()} disabled={!!deletingBatchId}>
+                {deletingBatchId === deleteBatchTarget.id ? <Loader variant="dots" size="sm" inline className="mr-2" /> : null}
+                Delete
+              </Button>
+            </div>
+          </div>
+        ) : null}
       </Modal>
     </div>
   );
