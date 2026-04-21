@@ -2202,6 +2202,13 @@ export async function listFormIdsForCourseActiveOn(courseId: number, activeOnIso
   return [];
 }
 
+export type AssessmentDirectoryWorkflowFilter =
+  | 'all'
+  | 'awaiting_student'
+  | 'awaiting_trainer'
+  | 'awaiting_office'
+  | 'completed';
+
 export async function listSubmittedInstancesPaged(
   page = 1,
   pageSize = 20,
@@ -2210,10 +2217,12 @@ export async function listSubmittedInstancesPaged(
   formId?: number,
   studentId?: number,
   sort?: { key: 'created' | 'student' | 'form' | 'start' | 'end' | 'workflow'; dir: 'asc' | 'desc' },
-  activeOnIso?: string | null
+  activeOnIso?: string | null,
+  workflowStatus?: AssessmentDirectoryWorkflowFilter | null
 ): Promise<PaginatedResult<SubmittedInstanceRow>> {
   const active =
     activeOnIso && /^\d{4}-\d{2}-\d{2}$/.test(String(activeOnIso).trim()) ? String(activeOnIso).trim() : null;
+  const wf = workflowStatus && workflowStatus !== 'all' ? workflowStatus : null;
   const { data, error } = await supabase.rpc('skyline_list_submitted_instances_paged', {
     p_page: page,
     p_page_size: pageSize,
@@ -2222,6 +2231,7 @@ export async function listSubmittedInstancesPaged(
     p_form_id: Number.isFinite(Number(formId)) && Number(formId) > 0 ? Number(formId) : null,
     p_student_id: Number.isFinite(Number(studentId)) && Number(studentId) > 0 ? Number(studentId) : null,
     p_active_on: active,
+    p_workflow_status: wf,
     p_sort_key: sort?.key ?? 'created',
     p_sort_dir: sort?.dir ?? 'desc',
   });
@@ -2592,7 +2602,7 @@ export async function listBatchesPaged(
   page = 1,
   pageSize = 20,
   search?: string,
-  courseId?: number
+  courseFilter?: number | number[] | null
 ): Promise<PaginatedResult<Batch>> {
   const from = Math.max(0, (page - 1) * pageSize);
   const to = from + pageSize - 1;
@@ -2603,8 +2613,14 @@ export async function listBatchesPaged(
   if (search && search.trim()) {
     query = query.ilike('name', `%${search.trim()}%`);
   }
-  if (courseId != null && Number.isFinite(courseId)) {
-    query = query.eq('course_id', courseId);
+  if (courseFilter != null) {
+    const arr = Array.isArray(courseFilter) ? courseFilter : [courseFilter];
+    const ids = [...new Set(arr.map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0))];
+    if (ids.length === 1) {
+      query = query.eq('course_id', ids[0]);
+    } else if (ids.length > 1) {
+      query = query.in('course_id', ids);
+    }
   }
   const { data, error, count } = await query.range(from, to);
   if (error) {
@@ -3813,7 +3829,8 @@ export async function listCourses(): Promise<Course[]> {
 export async function listCoursesPaged(
   page = 1,
   pageSize = 20,
-  search?: string
+  search?: string,
+  restrictToCourseIds?: number[] | null
 ): Promise<PaginatedResult<Course>> {
   const from = Math.max(0, (page - 1) * pageSize);
   const to = from + pageSize - 1;
@@ -3822,6 +3839,14 @@ export async function listCoursesPaged(
     .select('*', { count: 'exact' })
     .order('sort_order', { ascending: true })
     .order('name', { ascending: true });
+  const rid = restrictToCourseIds
+    ? [...new Set(restrictToCourseIds.map(Number).filter((n) => Number.isFinite(n) && n > 0))]
+    : [];
+  if (rid.length === 1) {
+    query = query.eq('id', rid[0]);
+  } else if (rid.length > 1) {
+    query = query.in('id', rid);
+  }
   const q = (search ?? '').trim();
   if (q) {
     const like = `%${q.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')}%`;
@@ -4380,6 +4405,17 @@ export async function duplicateForm(formId: number): Promise<Form | null> {
   return newForm;
 }
 
+/**
+ * Superadmin: permanently delete a form. Related rows cascade (course links, steps, questions, instances, answers, tokens).
+ */
+export async function deleteFormSuperadmin(formId: number): Promise<{ ok: true } | { ok: false; error: string }> {
+  const fid = Number(formId);
+  if (!Number.isFinite(fid) || fid <= 0) return { ok: false, error: 'Invalid form id.' };
+  const { error } = await supabase.from('skyline_forms').delete().eq('id', fid);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
+
 export async function updateInstanceRole(instanceId: number, roleContext: string): Promise<void> {
   const { updated_by } = getAuditFields();
   await supabase.from('skyline_form_instances').update({ role_context: roleContext, updated_by }).eq('id', instanceId);
@@ -4716,6 +4752,33 @@ export async function deleteBatchIfAllStudentsInactive(batchId: number): Promise
   const bid = Number(batchId);
   if (!Number.isFinite(bid) || bid <= 0) return { ok: false, error: 'Invalid batch id.' };
   const { data, error } = await supabase.rpc('skyline_admin_delete_batch_if_all_students_inactive', { p_batch_id: bid });
+  if (error) return { ok: false, error: error.message };
+  const j = data as { ok?: boolean; error?: string } | null;
+  if (!j?.ok) return { ok: false, error: j?.error || 'Could not delete batch.' };
+  return { ok: true };
+}
+
+export async function deleteStudentSuperadmin(studentId: number): Promise<{ ok: true } | { ok: false; error: string }> {
+  const sid = Number(studentId);
+  if (!Number.isFinite(sid) || sid <= 0) return { ok: false, error: 'Invalid student id.' };
+  const { data, error } = await supabase.rpc('skyline_superadmin_delete_student', { p_student_id: sid });
+  if (error) return { ok: false, error: error.message };
+  const j = data as { ok?: boolean; error?: string } | null;
+  if (!j?.ok) return { ok: false, error: j?.error || 'Could not delete student.' };
+  return { ok: true };
+}
+
+export async function deleteBatchSuperadmin(
+  batchId: number,
+  studentIdsFullDelete: number[]
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const bid = Number(batchId);
+  if (!Number.isFinite(bid) || bid <= 0) return { ok: false, error: 'Invalid batch id.' };
+  const ids = [...new Set((studentIdsFullDelete || []).map(Number).filter((n) => Number.isFinite(n) && n > 0))];
+  const { data, error } = await supabase.rpc('skyline_superadmin_delete_batch', {
+    p_batch_id: bid,
+    p_student_ids_full_delete: ids,
+  });
   if (error) return { ok: false, error: error.message };
   const j = data as { ok?: boolean; error?: string } | null;
   if (!j?.ok) return { ok: false, error: j?.error || 'Could not delete batch.' };

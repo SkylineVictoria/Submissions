@@ -3,6 +3,7 @@ import { Plus, Send, Mail, Phone, Pencil, Upload, Trash2, FileText, Download } f
 import * as XLSX from 'xlsx';
 import { supabase } from '../lib/supabase';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
 import {
   listStudentsPaged,
   createStudent,
@@ -15,9 +16,11 @@ import {
   extendInstanceAccessTokensToDate,
   getStudentsByEmails,
   listCoursesPaged,
+  getBatchById,
   getCoursesByQualificationCodes,
   setStudentCourses,
   deleteStudentIfNoAssessments,
+  deleteStudentSuperadmin,
 } from '../lib/formEngine';
 import {
   buildEmailFromLocalAndDomain,
@@ -71,6 +74,8 @@ const formatCreatedDisplay = (value: string | null | undefined): string => {
 
 export const AdminStudentsPage: React.FC = () => {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const viewerIsSuperadmin = user?.role === 'superadmin';
   const PAGE_SIZE = 20;
   const [students, setStudents] = useState<Student[]>([]);
   const [forms, setForms] = useState<Form[]>([]);
@@ -86,7 +91,8 @@ export const AdminStudentsPage: React.FC = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [totalStudents, setTotalStudents] = useState(0);
   const [hasBatches, setHasBatches] = useState(false);
-  const [hasAssessmentsByStudentId, setHasAssessmentsByStudentId] = useState<Record<number, boolean>>({});
+  /** True when the student has at least one form instance with a submission (submitted_at or submission_count). */
+  const [hasSubmittedAssessmentByStudentId, setHasSubmittedAssessmentByStudentId] = useState<Record<number, boolean>>({});
   const [deletingStudentId, setDeletingStudentId] = useState<number | null>(null);
   const [deleteStudentTarget, setDeleteStudentTarget] = useState<Student | null>(null);
   const [studentCoursesMap, setStudentCoursesMap] = useState<
@@ -168,6 +174,25 @@ export const AdminStudentsPage: React.FC = () => {
     return null;
   };
 
+  /** Toolbar only: when a batch filter is set, limit courses to that batch’s course. */
+  const loadCoursesFilterOptions = useCallback(async (page: number, search: string) => {
+    let restrict: number[] | undefined;
+    if (batchFilterId) {
+      const b = await getBatchById(Number(batchFilterId));
+      if (b?.course_id != null) {
+        restrict = [b.course_id];
+      }
+    }
+    const res = await listCoursesPaged(page, 20, search || undefined, restrict);
+    return {
+      options: res.data.map((c) => ({
+        value: c.id,
+        label: c.qualification_code?.trim() ? `${c.qualification_code} — ${c.name}` : c.name,
+      })),
+      hasMore: page * 20 < res.total,
+    };
+  }, [batchFilterId]);
+
   const loadCoursesOptions = useCallback(async (page: number, search: string) => {
     const res = await listCoursesPaged(page, 20, search || undefined);
     return {
@@ -180,10 +205,41 @@ export const AdminStudentsPage: React.FC = () => {
   }, []);
 
   const loadBatchFilterOptions = useCallback(async (page: number, search: string) => {
-    const res = await listBatchesPaged(page, 20, search || undefined);
+    const courseFilter =
+      courseFilterIds.length === 0
+        ? undefined
+        : courseFilterIds.length === 1
+          ? courseFilterIds[0]
+          : courseFilterIds;
+    const res = await listBatchesPaged(page, 20, search || undefined, courseFilter);
     const opts = res.data.map((b) => ({ value: String(b.id), label: b.name }));
     const withAll = page === 1 && !search?.trim() ? [{ value: '', label: 'All batches' }, ...opts] : opts;
     return { options: withAll, hasMore: page * 20 < res.total };
+  }, [courseFilterIds]);
+
+  const handleCourseFilterChange = useCallback(
+    (ids: number[]) => {
+      setCourseFilterIds(ids);
+      if (!batchFilterId) return;
+      void (async () => {
+        const b = await getBatchById(Number(batchFilterId));
+        if (!b?.course_id) return;
+        if (ids.length > 0 && !ids.includes(b.course_id)) {
+          setBatchFilterId('');
+        }
+      })();
+    },
+    [batchFilterId]
+  );
+
+  const handleBatchFilterChange = useCallback((v: string) => {
+    setBatchFilterId(v);
+    if (!v.trim()) return;
+    void getBatchById(Number(v)).then((b) => {
+      if (b?.course_id != null) {
+        setCourseFilterIds([b.course_id]);
+      }
+    });
   }, []);
 
   useEffect(() => {
@@ -242,7 +298,7 @@ export const AdminStudentsPage: React.FC = () => {
   useEffect(() => {
     if (students.length === 0) {
       setStudentCoursesMap({});
-      setHasAssessmentsByStudentId({});
+      setHasSubmittedAssessmentByStudentId({});
       return;
     }
     const ids = students.map((s) => s.id);
@@ -278,47 +334,51 @@ export const AdminStudentsPage: React.FC = () => {
         .from('skyline_form_instances')
         .select('student_id')
         .in('student_id', ids)
+        .or('submitted_at.not.is.null,submission_count.gt.0')
         .limit(5000);
       if (cancelled) return;
       if (error) {
-        console.error('load student assessment presence error', error);
-        setHasAssessmentsByStudentId({});
+        console.error('load student submitted-assessment presence error', error);
+        setHasSubmittedAssessmentByStudentId({});
         return;
       }
       const rows = (data as Array<{ student_id: number }> | null) || [];
       const set = new Set(rows.map((r) => Number(r.student_id)).filter((n) => Number.isFinite(n) && n > 0));
       const map: Record<number, boolean> = {};
       for (const id of ids) map[id] = set.has(id);
-      setHasAssessmentsByStudentId(map);
+      setHasSubmittedAssessmentByStudentId(map);
     })();
     return () => {
       cancelled = true;
     };
   }, [students]);
 
-  const requestDeleteStudent = useCallback((student: Student) => {
-    const sid = Number(student.id);
-    if (!Number.isFinite(sid) || sid <= 0) return;
-    if (hasAssessmentsByStudentId[sid]) {
-      toast.error('Cannot delete. This student has activity.');
-      return;
-    }
-    setDeleteStudentTarget(student);
-  }, [hasAssessmentsByStudentId]);
+  const requestDeleteStudent = useCallback(
+    (student: Student) => {
+      const sid = Number(student.id);
+      if (!Number.isFinite(sid) || sid <= 0) return;
+      if (!viewerIsSuperadmin && hasSubmittedAssessmentByStudentId[sid]) {
+        toast.error('Cannot delete. This student has submitted assessments.');
+        return;
+      }
+      setDeleteStudentTarget(student);
+    },
+    [hasSubmittedAssessmentByStudentId, viewerIsSuperadmin]
+  );
 
   const confirmDeleteStudent = useCallback(async () => {
     const student = deleteStudentTarget;
     if (!student) return;
     const sid = Number(student.id);
     if (!Number.isFinite(sid) || sid <= 0) return;
-    if (hasAssessmentsByStudentId[sid]) {
-      toast.error('Cannot delete. This student has activity.');
+    if (!viewerIsSuperadmin && hasSubmittedAssessmentByStudentId[sid]) {
+      toast.error('Cannot delete. This student has submitted assessments.');
       setDeleteStudentTarget(null);
       return;
     }
     setDeletingStudentId(sid);
     try {
-      const res = await deleteStudentIfNoAssessments(sid);
+      const res = viewerIsSuperadmin ? await deleteStudentSuperadmin(sid) : await deleteStudentIfNoAssessments(sid);
       if (!res.ok) {
         toast.error(res.error);
         return;
@@ -334,7 +394,16 @@ export const AdminStudentsPage: React.FC = () => {
       setDeletingStudentId(null);
       setDeleteStudentTarget(null);
     }
-  }, [batchFilterId, courseFilterIds, currentPage, deleteStudentTarget, hasAssessmentsByStudentId, searchTerm, statusFilter]);
+  }, [
+    batchFilterId,
+    courseFilterIds,
+    currentPage,
+    deleteStudentTarget,
+    hasSubmittedAssessmentByStudentId,
+    searchTerm,
+    statusFilter,
+    viewerIsSuperadmin,
+  ]);
 
   const handleCreate = async () => {
     const formError = validateCreateStudentForm(studentDraft);
@@ -1388,20 +1457,22 @@ export const AdminStudentsPage: React.FC = () => {
                   compact
                   className="min-w-0 w-full md:min-w-[180px] md:w-[200px]"
                 />
+                <MultiSelectAsync
+                  key={`course-filter-${batchFilterId || 'none'}`}
+                  value={courseFilterIds}
+                  onChange={handleCourseFilterChange}
+                  loadOptions={loadCoursesFilterOptions}
+                  placeholder="All courses"
+                  className="w-full min-w-0 md:w-[320px]"
+                />
                 <SelectAsync
+                  key={`batch-filter-${courseFilterIds.join(',') || 'all'}`}
                   value={batchFilterId}
-                  onChange={(v) => setBatchFilterId(v)}
+                  onChange={handleBatchFilterChange}
                   loadOptions={loadBatchFilterOptions}
                   placeholder="All batches"
                   selectedLabel={batchFilterId ? undefined : 'All batches'}
                   className="w-full min-w-0 md:w-56 md:shrink-0"
-                />
-                <MultiSelectAsync
-                  value={courseFilterIds}
-                  onChange={(v) => setCourseFilterIds(v)}
-                  loadOptions={loadCoursesOptions}
-                  placeholder="All courses"
-                  className="w-full min-w-0 md:w-[320px]"
                 />
                 <Input
                   value={searchTerm}
@@ -1552,14 +1623,18 @@ export const AdminStudentsPage: React.FC = () => {
                             <Send className="mr-1 h-4 w-4" />
                             Details
                           </Button>
-                          {!hasAssessmentsByStudentId[student.id] ? (
+                          {!hasSubmittedAssessmentByStudentId[student.id] || viewerIsSuperadmin ? (
                             <Button
                               variant="outline"
                               size="sm"
                               className="w-full justify-center sm:w-auto"
                               onClick={() => requestDeleteStudent(student)}
                               disabled={deletingStudentId === student.id}
-                              title="Delete student (only when no assessments exist)"
+                              title={
+                                viewerIsSuperadmin
+                                  ? 'Delete student (removes all assessments)'
+                                  : 'Delete student (only when no submitted assessments)'
+                              }
                             >
                               <Trash2 className="mr-1 h-4 w-4" />
                               Delete
@@ -1699,14 +1774,18 @@ export const AdminStudentsPage: React.FC = () => {
                             <Send className="w-4 h-4" />
                             Details
                           </Button>
-                          {!hasAssessmentsByStudentId[student.id] ? (
+                          {!hasSubmittedAssessmentByStudentId[student.id] || viewerIsSuperadmin ? (
                             <Button
                               variant="outline"
                               size="sm"
                               onClick={() => requestDeleteStudent(student)}
                               disabled={deletingStudentId === student.id}
                               className="inline-flex items-center justify-center gap-1.5 min-w-[110px] whitespace-nowrap"
-                              title="Delete student (only when no assessments exist)"
+                              title={
+                                viewerIsSuperadmin
+                                  ? 'Delete student (removes all assessments)'
+                                  : 'Delete student (only when no submitted assessments)'
+                              }
                             >
                               <Trash2 className="w-4 h-4" />
                               Delete
@@ -2248,7 +2327,16 @@ export const AdminStudentsPage: React.FC = () => {
               ?
             </p>
             <p className="text-xs text-gray-500">
-              This is only allowed when the student has <strong>no assessments</strong>. This action cannot be undone.
+              {viewerIsSuperadmin ? (
+                <>
+                  This will permanently delete the student and <strong>all their assessments</strong>. This action cannot be undone.
+                </>
+              ) : (
+                <>
+                  This is only allowed when the student has <strong>no submitted assessments</strong> (allocated but
+                  unsubmitted work does not block delete). This action cannot be undone.
+                </>
+              )}
             </p>
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="outline" size="sm" onClick={() => setDeleteStudentTarget(null)} disabled={!!deletingStudentId}>

@@ -15,10 +15,11 @@ import {
   listCoursesPaged,
   listFormsPaged,
 } from '../lib/formEngine';
-import type { SubmittedInstanceRow, Trainer } from '../lib/formEngine';
+import type { AssessmentDirectoryWorkflowFilter, SubmittedInstanceRow, Trainer } from '../lib/formEngine';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
+import { Select } from '../components/ui/Select';
 import { DatePicker } from '../components/ui/DatePicker';
 import { SelectAsync } from '../components/ui/SelectAsync';
 import { Loader } from '../components/ui/Loader';
@@ -50,6 +51,14 @@ const getWorkflowLabel = (row: SubmittedInstanceRow): string => {
   return 'Submitted (Not Sent)';
 };
 
+const WORKFLOW_FILTER_OPTIONS: { value: AssessmentDirectoryWorkflowFilter; label: string }[] = [
+  { value: 'all', label: 'All workflows' },
+  { value: 'awaiting_student', label: 'Awaiting student' },
+  { value: 'awaiting_trainer', label: 'Waiting trainer' },
+  { value: 'awaiting_office', label: 'Waiting office' },
+  { value: 'completed', label: 'Completed' },
+];
+
 const getWorkflowBadgeClass = (row: SubmittedInstanceRow): string => {
   const base = 'border border-gray-200/80';
   if (row.status === 'locked') return `${base} bg-emerald-50 text-emerald-800`;
@@ -71,12 +80,16 @@ export const AdminAssessmentsPage: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [courseFilter, setCourseFilter] = useState('');
   const [formFilter, setFormFilter] = useState('');
+  const [workflowFilter, setWorkflowFilter] = useState<AssessmentDirectoryWorkflowFilter>('all');
   const [sendToTrainerRow, setSendToTrainerRow] = useState<SubmittedInstanceRow | null>(null);
   const [trainers, setTrainers] = useState<Trainer[]>([]);
   const [trainersLoading, setTrainersLoading] = useState(false);
   const [selectedTrainerId, setSelectedTrainerId] = useState<number | null>(null);
   const [editingDateCell, setEditingDateCell] = useState<{ id: number; field: 'start' | 'end' } | null>(null);
   const [savingDateId, setSavingDateId] = useState<number | null>(null);
+  /** Pending start/end edits until user clicks Apply or Mass apply */
+  const [dateDrafts, setDateDrafts] = useState<Record<number, { start?: string | null; end?: string | null }>>({});
+  const [massApplying, setMassApplying] = useState(false);
 
   type DirectorySortKey = 'student' | 'form' | 'start' | 'end' | 'created' | 'workflow';
   const [directorySort, setDirectorySort] = useState<{ key: DirectorySortKey; dir: SortDirection }>({
@@ -99,12 +112,13 @@ export const AdminAssessmentsPage: React.FC = () => {
         key: directorySort.key,
         dir: directorySort.dir,
       },
-      null
+      null,
+      workflowFilter
     );
     setRows(res.data);
     setTotalRows(res.total);
     setLoading(false);
-  }, [courseFilter, formFilter, directorySort]);
+  }, [courseFilter, formFilter, directorySort, workflowFilter]);
 
   const loadCoursesOptions = useCallback(async (page: number, search: string) => {
     const res = await listCoursesPaged(page, 20, search ? search.trim() : undefined);
@@ -130,7 +144,7 @@ export const AdminAssessmentsPage: React.FC = () => {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, courseFilter, formFilter]);
+  }, [searchTerm, courseFilter, formFilter, workflowFilter]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -175,33 +189,95 @@ export const AdminAssessmentsPage: React.FC = () => {
     });
   };
 
-  const saveDateCell = async (row: SubmittedInstanceRow, field: 'start' | 'end', nextIso: string) => {
-    const next = String(nextIso || '').trim();
-    const start = String(row.start_date ?? '').trim();
-    const end = String(row.end_date ?? '').trim();
-    const nextStart = field === 'start' ? next : start;
-    const nextEnd = field === 'end' ? next : end;
-    if (nextStart && nextEnd && nextStart > nextEnd) {
-      toast.error('Start date cannot be later than end date');
-      return;
-    }
+  const getEffectiveStart = useCallback(
+    (row: SubmittedInstanceRow) => {
+      const d = dateDrafts[row.id];
+      if (d && 'start' in d) return String(d.start ?? '').trim();
+      return String(row.start_date ?? '').trim();
+    },
+    [dateDrafts]
+  );
+
+  const getEffectiveEnd = useCallback(
+    (row: SubmittedInstanceRow) => {
+      const d = dateDrafts[row.id];
+      if (d && 'end' in d) return String(d.end ?? '').trim();
+      return String(row.end_date ?? '').trim();
+    },
+    [dateDrafts]
+  );
+
+  const hasRowDateChanges = useCallback(
+    (row: SubmittedInstanceRow) => {
+      const es = getEffectiveStart(row);
+      const ee = getEffectiveEnd(row);
+      const rs = String(row.start_date ?? '').trim();
+      const re = String(row.end_date ?? '').trim();
+      return es !== rs || ee !== re;
+    },
+    [getEffectiveStart, getEffectiveEnd]
+  );
+
+  const applyRowDates = useCallback(
+    async (row: SubmittedInstanceRow, opts?: { silent?: boolean }) => {
+      const nextStart = getEffectiveStart(row) || null;
+      const nextEnd = getEffectiveEnd(row) || null;
+      if (nextStart && nextEnd && nextStart > nextEnd) {
+        toast.error('Start date cannot be later than end date');
+        return;
+      }
+      try {
+        setSavingDateId(row.id);
+        await updateFormInstanceDates(row.id, { start_date: nextStart, end_date: nextEnd });
+        if (nextEnd) await extendInstanceAccessTokensToDate(row.id, 'student', nextEnd);
+        setDateDrafts((prev) => {
+          const next = { ...prev };
+          delete next[row.id];
+          return next;
+        });
+        setEditingDateCell(null);
+        await loadRows(currentPage, searchTerm, { silent: true });
+        if (!opts?.silent) toast.success('Dates updated');
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Failed to update dates');
+      } finally {
+        setSavingDateId(null);
+      }
+    },
+    [currentPage, getEffectiveEnd, getEffectiveStart, loadRows, searchTerm]
+  );
+
+  const massApplyDates = useCallback(async () => {
+    const targets = rows.filter(hasRowDateChanges);
+    if (targets.length === 0) return;
+    setMassApplying(true);
+    let ok = 0;
     try {
-      setSavingDateId(row.id);
-      if (field === 'start') {
-        await updateFormInstanceDates(row.id, { start_date: next || null });
-      } else {
-        await updateFormInstanceDates(row.id, { end_date: next || null });
-        if (next) await extendInstanceAccessTokensToDate(row.id, 'student', next);
+      for (const row of targets) {
+        const nextStart = getEffectiveStart(row) || null;
+        const nextEnd = getEffectiveEnd(row) || null;
+        if (nextStart && nextEnd && nextStart > nextEnd) {
+          toast.error(`Skipped ${row.form_name}: start cannot be after end`);
+          continue;
+        }
+        await updateFormInstanceDates(row.id, { start_date: nextStart, end_date: nextEnd });
+        if (nextEnd) await extendInstanceAccessTokensToDate(row.id, 'student', nextEnd);
+        setDateDrafts((prev) => {
+          const n = { ...prev };
+          delete n[row.id];
+          return n;
+        });
+        ok++;
       }
       setEditingDateCell(null);
       await loadRows(currentPage, searchTerm, { silent: true });
-      toast.success('Dates updated');
+      toast.success(`Updated ${ok} assessment${ok !== 1 ? 's' : ''}`);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to update dates');
+      toast.error(err instanceof Error ? err.message : 'Mass apply failed');
     } finally {
-      setSavingDateId(null);
+      setMassApplying(false);
     }
-  };
+  }, [rows, currentPage, getEffectiveEnd, getEffectiveStart, hasRowDateChanges, loadRows, searchTerm]);
 
   const handleSendToTrainerConfirm = async () => {
     if (!sendToTrainerRow || !selectedTrainerId) return;
@@ -273,6 +349,15 @@ export const AdminAssessmentsPage: React.FC = () => {
     if (mode === 'stack') {
       return (
         <div className="mt-3 flex flex-col gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full justify-center border-[#ea580c]/40 text-[#c2410c] hover:bg-[#fff7ed]"
+            onClick={() => void applyRowDates(row)}
+            disabled={!hasRowDateChanges(row) || savingDateId === row.id || massApplying}
+          >
+            Apply dates
+          </Button>
           <Button variant="outline" size="sm" className="w-full justify-center" onClick={openLink}>
             <ExternalLink className="mr-2 h-4 w-4 shrink-0" />
             Open
@@ -337,6 +422,15 @@ export const AdminAssessmentsPage: React.FC = () => {
 
     return (
       <div className="flex flex-wrap items-center justify-end gap-1">
+        <button
+          type="button"
+          onClick={() => void applyRowDates(row)}
+          disabled={!hasRowDateChanges(row) || savingDateId === row.id || massApplying}
+          className="relative group inline-flex h-8 min-w-[3.25rem] shrink-0 items-center justify-center rounded-md border border-[#ea580c]/40 bg-white px-2 text-xs font-semibold text-[#c2410c] hover:bg-[#fff7ed] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-white"
+          aria-label="Apply date changes"
+        >
+          Apply
+        </button>
         <button type="button" onClick={openLink} className={actionBtn} aria-label="Open">
           <ExternalLink className={actionIcon} />
           <span className={actionText}>Open</span>
@@ -414,57 +508,84 @@ export const AdminAssessmentsPage: React.FC = () => {
                 View all assessments sent to students (pending and submitted) and send completed ones to trainer.
               </p>
             </div>
-            <div className="flex flex-col lg:flex-row lg:flex-nowrap lg:items-center lg:justify-start gap-2 lg:gap-2">
-              <Input
-                value={searchTerm}
-                onChange={(e) => {
-                  setSearchTerm(e.target.value);
-                  setCurrentPage(1);
-                }}
-                placeholder="Search student, form, or workflow..."
-                className="w-full lg:flex-1 lg:min-w-[220px] lg:max-w-none"
-              />
-              <div className="w-full lg:w-52 lg:shrink-0">
-                <SelectAsync
-                  value={courseFilter}
-                  onChange={(v) => {
-                    setCourseFilter(v);
-                    setFormFilter('');
+            <div className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
+              {/* Search + filters: stay grouped on the left; wrap on smaller viewports */}
+              <div className="flex min-w-0 flex-1 flex-wrap items-end gap-2 sm:gap-3">
+                <Input
+                  value={searchTerm}
+                  onChange={(e) => {
+                    setSearchTerm(e.target.value);
+                    setCurrentPage(1);
                   }}
-                  loadOptions={loadCoursesOptions}
-                  placeholder="All courses"
-                  selectedLabel={courseFilter ? undefined : 'All courses'}
+                  placeholder="Search student, form, or workflow..."
+                  className="w-full min-w-0 sm:max-w-[min(100%,280px)] sm:flex-[1_1_200px]"
                 />
+                <div className="w-full min-w-0 sm:w-[13rem] sm:max-w-[14rem] sm:flex-shrink-0">
+                  <SelectAsync
+                    value={courseFilter}
+                    onChange={(v) => {
+                      setCourseFilter(v);
+                      setFormFilter('');
+                    }}
+                    loadOptions={loadCoursesOptions}
+                    placeholder="All courses"
+                    selectedLabel={courseFilter ? undefined : 'All courses'}
+                  />
+                </div>
+                <div className="w-full min-w-0 sm:w-[15rem] sm:max-w-[16rem] sm:flex-shrink-0">
+                  <SelectAsync
+                    value={formFilter}
+                    onChange={(v) => setFormFilter(v)}
+                    loadOptions={loadFormsOptions}
+                    placeholder="All forms"
+                    selectedLabel={formFilter ? undefined : 'All forms'}
+                  />
+                </div>
+                {/* Not compact: compact mode caps dropdown menu at ~120px wide and truncates labels */}
+                <div className="w-full min-w-[12rem] sm:w-[min(100%,18rem)] sm:min-w-[14rem] sm:flex-shrink-0">
+                  <Select
+                    label="Workflow"
+                    value={workflowFilter}
+                    onChange={(v) => {
+                      setWorkflowFilter(v as AssessmentDirectoryWorkflowFilter);
+                      setCurrentPage(1);
+                    }}
+                    options={WORKFLOW_FILTER_OPTIONS}
+                    className="w-full min-w-0"
+                  />
+                </div>
               </div>
-              <div className="w-full lg:w-60 lg:shrink-0">
-                <SelectAsync
-                  value={formFilter}
-                  onChange={(v) => setFormFilter(v)}
-                  loadOptions={loadFormsOptions}
-                  placeholder="All forms"
-                  selectedLabel={formFilter ? undefined : 'All forms'}
-                />
+              <div className="flex w-full shrink-0 justify-end xl:w-auto xl:pl-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleRefresh}
+                  disabled={refreshing}
+                  className="inline-flex h-10 min-h-[40px] w-full items-center justify-center gap-2 whitespace-nowrap sm:w-auto"
+                >
+                  <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+                  <span>Refresh</span>
+                </Button>
               </div>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={handleRefresh}
-                disabled={refreshing}
-                className="inline-flex items-center justify-center gap-2 whitespace-nowrap w-full lg:w-auto"
-              >
-                <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
-                <span>Refresh</span>
-              </Button>
             </div>
-            <p className="text-xs text-gray-500">
-              With a <strong>course</strong> selected, the form list can be narrowed to that course. Column sorting in the
-              directory only reorders rows.
-            </p>
+
           </div>
         </Card>
 
         <Card>
-          <h2 className="text-lg font-bold text-[var(--text)] mb-4">Assessment directory</h2>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
+            <h2 className="text-lg font-bold text-[var(--text)]">Assessment directory</h2>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="shrink-0 border-[#ea580c]/40 text-[#c2410c] hover:bg-[#fff7ed] sm:ml-auto"
+              onClick={() => void massApplyDates()}
+              disabled={massApplying || rows.length === 0 || !rows.some(hasRowDateChanges)}
+            >
+              {massApplying ? 'Applying…' : 'Mass apply'}
+            </Button>
+          </div>
           {!loading && (
             <AdminListPagination
               placement="top"
@@ -500,9 +621,61 @@ export const AdminAssessmentsPage: React.FC = () => {
                         <div className="text-xs text-gray-500">Version {row.form_version ?? '1.0.0'}</div>
                         <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-xs text-gray-600">
                           <dt className="text-gray-500">Start</dt>
-                          <dd>{formatDDMMYYYY(row.start_date)}</dd>
+                          <dd className="min-w-0">
+                            {editingDateCell?.id === row.id && editingDateCell.field === 'start' ? (
+                              <DatePicker
+                                value={getEffectiveStart(row)}
+                                onChange={(v) =>
+                                  setDateDrafts((prev) => ({
+                                    ...prev,
+                                    [row.id]: { ...prev[row.id], start: v || null },
+                                  }))
+                                }
+                                compact
+                                placement="below"
+                                className="max-w-[160px]"
+                                disabled={savingDateId === row.id || massApplying}
+                                maxDate={getEffectiveEnd(row) || undefined}
+                              />
+                            ) : (
+                              <button
+                                type="button"
+                                className="text-gray-800 hover:underline text-left"
+                                onClick={() => setEditingDateCell({ id: row.id, field: 'start' })}
+                                disabled={savingDateId === row.id || massApplying}
+                              >
+                                {formatDDMMYYYY(getEffectiveStart(row) || row.start_date)}
+                              </button>
+                            )}
+                          </dd>
                           <dt className="text-gray-500">End</dt>
-                          <dd>{formatDDMMYYYY(row.end_date)}</dd>
+                          <dd className="min-w-0">
+                            {editingDateCell?.id === row.id && editingDateCell.field === 'end' ? (
+                              <DatePicker
+                                value={getEffectiveEnd(row)}
+                                onChange={(v) =>
+                                  setDateDrafts((prev) => ({
+                                    ...prev,
+                                    [row.id]: { ...prev[row.id], end: v || null },
+                                  }))
+                                }
+                                compact
+                                placement="below"
+                                className="max-w-[160px]"
+                                disabled={savingDateId === row.id || massApplying}
+                                minDate={getEffectiveStart(row) || undefined}
+                              />
+                            ) : (
+                              <button
+                                type="button"
+                                className="text-gray-800 hover:underline text-left"
+                                onClick={() => setEditingDateCell({ id: row.id, field: 'end' })}
+                                disabled={savingDateId === row.id || massApplying}
+                              >
+                                {formatDDMMYYYY(getEffectiveEnd(row) || row.end_date)}
+                              </button>
+                            )}
+                          </dd>
                           <dt className="text-gray-500">Created</dt>
                           <dd>{formatDDMMYYYY(row.created_at)}</dd>
                           <dt className="text-gray-500">Submitted</dt>
@@ -587,44 +760,54 @@ export const AdminAssessmentsPage: React.FC = () => {
                         <td className="py-3 pr-3 text-gray-700">
                           {editingDateCell?.id === row.id && editingDateCell.field === 'start' ? (
                             <DatePicker
-                              value={(row.start_date ?? '').trim()}
-                              onChange={(v) => void saveDateCell(row, 'start', v || '')}
+                              value={getEffectiveStart(row)}
+                              onChange={(v) =>
+                                setDateDrafts((prev) => ({
+                                  ...prev,
+                                  [row.id]: { ...prev[row.id], start: v || null },
+                                }))
+                              }
                               compact
                               placement="below"
                               className="max-w-[160px]"
-                              disabled={savingDateId === row.id}
-                              maxDate={row.end_date ?? undefined}
+                              disabled={savingDateId === row.id || massApplying}
+                              maxDate={getEffectiveEnd(row) || undefined}
                             />
                           ) : (
                             <button
                               type="button"
                               className="text-gray-700 hover:underline"
                               onClick={() => setEditingDateCell({ id: row.id, field: 'start' })}
-                              disabled={savingDateId === row.id}
+                              disabled={savingDateId === row.id || massApplying}
                             >
-                              {formatDDMMYYYY(row.start_date)}
+                              {formatDDMMYYYY(getEffectiveStart(row) || row.start_date)}
                             </button>
                           )}
                         </td>
                         <td className="py-3 pr-3 text-gray-700">
                           {editingDateCell?.id === row.id && editingDateCell.field === 'end' ? (
                             <DatePicker
-                              value={(row.end_date ?? '').trim()}
-                              onChange={(v) => void saveDateCell(row, 'end', v || '')}
+                              value={getEffectiveEnd(row)}
+                              onChange={(v) =>
+                                setDateDrafts((prev) => ({
+                                  ...prev,
+                                  [row.id]: { ...prev[row.id], end: v || null },
+                                }))
+                              }
                               compact
                               placement="below"
                               className="max-w-[160px]"
-                              disabled={savingDateId === row.id}
-                              minDate={row.start_date ?? undefined}
+                              disabled={savingDateId === row.id || massApplying}
+                              minDate={getEffectiveStart(row) || undefined}
                             />
                           ) : (
                             <button
                               type="button"
                               className="text-gray-700 hover:underline"
                               onClick={() => setEditingDateCell({ id: row.id, field: 'end' })}
-                              disabled={savingDateId === row.id}
+                              disabled={savingDateId === row.id || massApplying}
                             >
-                              {formatDDMMYYYY(row.end_date)}
+                              {formatDDMMYYYY(getEffectiveEnd(row) || row.end_date)}
                             </button>
                           )}
                         </td>

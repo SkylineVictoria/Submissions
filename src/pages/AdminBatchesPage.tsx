@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
 import { Plus, Pencil, Users, CalendarRange, Trash2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import {
@@ -12,6 +13,7 @@ import {
   listStudentsInBatch,
   listCoursesPaged,
   deleteBatchIfAllStudentsInactive,
+  deleteBatchSuperadmin,
 } from '../lib/formEngine';
 import type { Batch, Student } from '../lib/formEngine';
 import { Card } from '../components/ui/Card';
@@ -27,6 +29,9 @@ import { toast } from '../utils/toast';
 const BATCH_PAGE_SIZE = 20;
 
 export const AdminBatchesPage: React.FC = () => {
+  const { user } = useAuth();
+  const viewerIsSuperadmin = user?.role === 'superadmin';
+
   const [batches, setBatches] = useState<Batch[]>([]);
   const [totalBatches, setTotalBatches] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
@@ -41,6 +46,10 @@ export const AdminBatchesPage: React.FC = () => {
   const [activeCountByBatchId, setActiveCountByBatchId] = useState<Record<number, number>>({});
   const [deletingBatchId, setDeletingBatchId] = useState<number | null>(null);
   const [deleteBatchTarget, setDeleteBatchTarget] = useState<Batch | null>(null);
+  const [batchDeleteModalStudents, setBatchDeleteModalStudents] = useState<Student[]>([]);
+  const [batchDeleteModalLoading, setBatchDeleteModalLoading] = useState(false);
+  /** When checked, student is fully deleted (including assessments); when unchecked, only removed from batch. */
+  const [batchDeleteFullDeleteById, setBatchDeleteFullDeleteById] = useState<Record<number, boolean>>({});
 
   const loadBatches = useCallback(async (page: number) => {
     setLoading(true);
@@ -89,16 +98,41 @@ export const AdminBatchesPage: React.FC = () => {
     };
   }, [batches]);
 
-  const requestDeleteBatch = useCallback((batch: Batch) => {
-    const bid = Number(batch.id);
-    if (!Number.isFinite(bid) || bid <= 0) return;
-    const active = activeCountByBatchId[bid] ?? 0;
-    if (active > 0) {
-      toast.error('Cannot delete. This batch has active students.');
+  useEffect(() => {
+    if (!deleteBatchTarget || !viewerIsSuperadmin) {
+      setBatchDeleteModalStudents([]);
+      setBatchDeleteFullDeleteById({});
+      setBatchDeleteModalLoading(false);
       return;
     }
-    setDeleteBatchTarget(batch);
-  }, [activeCountByBatchId]);
+    let cancelled = false;
+    setBatchDeleteModalLoading(true);
+    void listStudentsInBatch(deleteBatchTarget.id).then((students) => {
+      if (cancelled) return;
+      setBatchDeleteModalStudents(students);
+      const m: Record<number, boolean> = {};
+      for (const s of students) m[s.id] = true;
+      setBatchDeleteFullDeleteById(m);
+      setBatchDeleteModalLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [deleteBatchTarget, viewerIsSuperadmin]);
+
+  const requestDeleteBatch = useCallback(
+    (batch: Batch) => {
+      const bid = Number(batch.id);
+      if (!Number.isFinite(bid) || bid <= 0) return;
+      const active = activeCountByBatchId[bid] ?? 0;
+      if (!viewerIsSuperadmin && active > 0) {
+        toast.error('Cannot delete. This batch has active students.');
+        return;
+      }
+      setDeleteBatchTarget(batch);
+    },
+    [activeCountByBatchId, viewerIsSuperadmin]
+  );
 
   const confirmDeleteBatch = useCallback(async () => {
     const batch = deleteBatchTarget;
@@ -106,25 +140,46 @@ export const AdminBatchesPage: React.FC = () => {
     const bid = Number(batch.id);
     if (!Number.isFinite(bid) || bid <= 0) return;
     const active = activeCountByBatchId[bid] ?? 0;
-    if (active > 0) {
+    if (!viewerIsSuperadmin && active > 0) {
       toast.error('Cannot delete. This batch has active students.');
       setDeleteBatchTarget(null);
       return;
     }
     setDeletingBatchId(bid);
     try {
-      const res = await deleteBatchIfAllStudentsInactive(bid);
-      if (!res.ok) {
-        toast.error(res.error);
-        return;
+      if (viewerIsSuperadmin) {
+        const fullDeleteIds = Object.entries(batchDeleteFullDeleteById)
+          .filter(([, v]) => v)
+          .map(([k]) => Number(k))
+          .filter((n) => Number.isFinite(n) && n > 0);
+        const res = await deleteBatchSuperadmin(bid, fullDeleteIds);
+        if (!res.ok) {
+          toast.error(res.error);
+          return;
+        }
+        toast.success('Batch deleted');
+        await loadBatches(currentPage);
+      } else {
+        const res = await deleteBatchIfAllStudentsInactive(bid);
+        if (!res.ok) {
+          toast.error(res.error);
+          return;
+        }
+        toast.success('Batch deleted');
+        await loadBatches(currentPage);
       }
-      toast.success('Batch deleted');
-      await loadBatches(currentPage);
     } finally {
       setDeletingBatchId(null);
       setDeleteBatchTarget(null);
     }
-  }, [activeCountByBatchId, currentPage, deleteBatchTarget, loadBatches]);
+  }, [
+    activeCountByBatchId,
+    batchDeleteFullDeleteById,
+    currentPage,
+    deleteBatchTarget,
+    loadBatches,
+    viewerIsSuperadmin,
+  ]);
 
   const loadTrainersOptions = useCallback(async (page: number, search: string) => {
     const res = await listUsersForBatchAssignmentPaged(page, 20, search || undefined);
@@ -297,14 +352,18 @@ export const AdminBatchesPage: React.FC = () => {
                             <Pencil className="mr-1 h-4 w-4" />
                             Edit
                           </Button>
-                          {(activeCountByBatchId[batch.id] ?? 0) === 0 ? (
+                          {(viewerIsSuperadmin || (activeCountByBatchId[batch.id] ?? 0) === 0) ? (
                             <Button
                               variant="outline"
                               size="sm"
                               className="w-full mt-2"
                               onClick={() => requestDeleteBatch(batch)}
                               disabled={deletingBatchId === batch.id}
-                              title="Delete batch (only when no active students)"
+                              title={
+                                viewerIsSuperadmin
+                                  ? 'Delete batch (choose whether to fully delete each student)'
+                                  : 'Delete batch (only when no active students)'
+                              }
                             >
                               <Trash2 className="mr-1 h-4 w-4" />
                               Delete
@@ -357,14 +416,18 @@ export const AdminBatchesPage: React.FC = () => {
                             <Pencil className="w-4 h-4" />
                             Edit
                           </Button>
-                          {(activeCountByBatchId[batch.id] ?? 0) === 0 ? (
+                          {(viewerIsSuperadmin || (activeCountByBatchId[batch.id] ?? 0) === 0) ? (
                             <Button
                               variant="outline"
                               size="sm"
                               onClick={() => requestDeleteBatch(batch)}
                               disabled={deletingBatchId === batch.id}
                               className="inline-flex items-center justify-center gap-1.5"
-                              title="Delete batch (only when no active students)"
+                              title={
+                                viewerIsSuperadmin
+                                  ? 'Delete batch (choose whether to fully delete each student)'
+                                  : 'Delete batch (only when no active students)'
+                              }
                             >
                               <Trash2 className="w-4 h-4" />
                               Delete
@@ -539,21 +602,70 @@ export const AdminBatchesPage: React.FC = () => {
           setDeleteBatchTarget(null);
         }}
         title="Delete batch"
-        size="md"
+        size={viewerIsSuperadmin ? 'lg' : 'md'}
       >
         {deleteBatchTarget ? (
           <div className="space-y-4">
             <p className="text-sm text-gray-700">
               Delete batch <strong>{deleteBatchTarget.name}</strong>?
             </p>
-            <p className="text-xs text-gray-500">
-              This is only allowed when the batch has <strong>no active students</strong>. This action cannot be undone.
-            </p>
+            {viewerIsSuperadmin ? (
+              <>
+                <p className="text-xs text-gray-500">
+                  The batch will be removed. For each student in this batch, choose whether to <strong>fully delete</strong> their
+                  record (including assessments) or only <strong>remove them from this batch</strong> (uncheck to keep the
+                  student).
+                </p>
+                {batchDeleteModalLoading ? (
+                  <div className="py-6 flex justify-center">
+                    <Loader variant="dots" size="md" message="Loading students…" />
+                  </div>
+                ) : batchDeleteModalStudents.length === 0 ? (
+                  <p className="text-xs text-gray-600">No students in this batch.</p>
+                ) : (
+                  <ul className="max-h-56 overflow-y-auto rounded-md border border-[var(--border)] divide-y divide-[var(--border)] text-sm">
+                    {batchDeleteModalStudents.map((s) => {
+                      const label =
+                        [s.first_name, s.last_name].filter(Boolean).join(' ').trim() || s.email || `Student #${s.id}`;
+                      const checked = batchDeleteFullDeleteById[s.id] ?? false;
+                      return (
+                        <li key={s.id} className="flex items-start gap-3 px-3 py-2">
+                          <input
+                            type="checkbox"
+                            id={`batch-del-full-${s.id}`}
+                            className="mt-1 h-4 w-4 shrink-0 rounded border-gray-300"
+                            checked={checked}
+                            onChange={() =>
+                              setBatchDeleteFullDeleteById((prev) => ({
+                                ...prev,
+                                [s.id]: !checked,
+                              }))
+                            }
+                          />
+                          <label htmlFor={`batch-del-full-${s.id}`} className="min-w-0 flex-1 cursor-pointer">
+                            <span className="font-medium text-gray-800">{label}</span>
+                            <span className="block text-xs text-gray-500">{s.email}</span>
+                          </label>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </>
+            ) : (
+              <p className="text-xs text-gray-500">
+                This is only allowed when the batch has <strong>no active students</strong>. This action cannot be undone.
+              </p>
+            )}
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="outline" size="sm" onClick={() => setDeleteBatchTarget(null)} disabled={!!deletingBatchId}>
                 Cancel
               </Button>
-              <Button size="sm" onClick={() => void confirmDeleteBatch()} disabled={!!deletingBatchId}>
+              <Button
+                size="sm"
+                onClick={() => void confirmDeleteBatch()}
+                disabled={!!deletingBatchId || (viewerIsSuperadmin && batchDeleteModalLoading)}
+              >
                 {deletingBatchId === deleteBatchTarget.id ? <Loader variant="dots" size="sm" inline className="mr-2" /> : null}
                 Delete
               </Button>

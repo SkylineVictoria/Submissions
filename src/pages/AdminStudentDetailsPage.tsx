@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import type { SortDirection } from '../components/admin/SortableTh';
 import { SortableTh } from '../components/admin/SortableTh';
 import { useNavigate, useParams } from 'react-router-dom';
-import { CheckCircle, Copy, ExternalLink, Phone, Mail, ArrowLeft, RotateCcw, Download } from 'lucide-react';
+import { CheckCircle, Copy, ExternalLink, Phone, Mail, ArrowLeft, RotateCcw, Download, Trash2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -10,6 +10,7 @@ import { Loader } from '../components/ui/Loader';
 import { Modal } from '../components/ui/Modal';
 import { DatePicker } from '../components/ui/DatePicker';
 import { toast } from '../utils/toast';
+import { useAuth } from '../contexts/AuthContext';
 import { SelectAsync } from '../components/ui/SelectAsync';
 import { Select } from '../components/ui/Select';
 import {
@@ -22,6 +23,8 @@ import {
   listActiveFormsByQualificationCode,
   upsertStudentAssessmentsForForms,
   getFormsForCourse,
+  deleteStudentIfNoAssessments,
+  deleteStudentSuperadmin,
 } from '../lib/formEngine';
 import type { Student, SubmittedInstanceRow } from '../lib/formEngine';
 
@@ -60,6 +63,8 @@ function StatusChecks({ row }: { row: SubmittedInstanceRow }) {
 export const AdminStudentDetailsPage: React.FC = () => {
   const { studentId } = useParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const viewerIsSuperadmin = user?.role === 'superadmin';
   const sid = Number(studentId);
   /** One request loads all assessments for this student (typical max ~34). */
   const ASSESSMENTS_FETCH_SIZE = 80;
@@ -82,6 +87,10 @@ export const AdminStudentDetailsPage: React.FC = () => {
   const [addFormId, setAddFormId] = useState<string>('');
   const [editingDateCell, setEditingDateCell] = useState<{ id: number; field: 'start' | 'end' } | null>(null);
   const [savingDateId, setSavingDateId] = useState<number | null>(null);
+  const [dateDrafts, setDateDrafts] = useState<Record<number, { start?: string | null; end?: string | null }>>({});
+  const [massApplying, setMassApplying] = useState(false);
+  const [deleteStudentOpen, setDeleteStudentOpen] = useState(false);
+  const [deletingStudent, setDeletingStudent] = useState(false);
 
   type AssessmentSortKey = 'unit' | 'start' | 'end' | 'created' | 'completed';
   const [assessmentSort, setAssessmentSort] = useState<{ key: AssessmentSortKey; dir: SortDirection }>({
@@ -91,6 +100,10 @@ export const AdminStudentDetailsPage: React.FC = () => {
 
   useEffect(() => {
     setAssessmentSort({ key: 'unit', dir: 'asc' });
+  }, [sid]);
+
+  useEffect(() => {
+    setDateDrafts({});
   }, [sid]);
 
   const title = useMemo(() => {
@@ -308,33 +321,95 @@ export const AdminStudentDetailsPage: React.FC = () => {
     return rows;
   }, [assessments, assessmentSort]);
 
-  const saveDateCell = async (row: SubmittedInstanceRow, field: 'start' | 'end', nextIso: string) => {
-    const next = String(nextIso || '').trim();
-    const start = String(row.start_date ?? '').trim();
-    const end = String(row.end_date ?? '').trim();
-    const nextStart = field === 'start' ? next : start;
-    const nextEnd = field === 'end' ? next : end;
-    if (nextStart && nextEnd && nextStart > nextEnd) {
-      toast.error('Start date cannot be later than end date');
-      return;
-    }
+  const getEffectiveStart = useCallback(
+    (row: SubmittedInstanceRow) => {
+      const d = dateDrafts[row.id];
+      if (d && 'start' in d) return String(d.start ?? '').trim();
+      return String(row.start_date ?? '').trim();
+    },
+    [dateDrafts]
+  );
+
+  const getEffectiveEnd = useCallback(
+    (row: SubmittedInstanceRow) => {
+      const d = dateDrafts[row.id];
+      if (d && 'end' in d) return String(d.end ?? '').trim();
+      return String(row.end_date ?? '').trim();
+    },
+    [dateDrafts]
+  );
+
+  const hasRowDateChanges = useCallback(
+    (row: SubmittedInstanceRow) => {
+      const es = getEffectiveStart(row);
+      const ee = getEffectiveEnd(row);
+      const rs = String(row.start_date ?? '').trim();
+      const re = String(row.end_date ?? '').trim();
+      return es !== rs || ee !== re;
+    },
+    [getEffectiveStart, getEffectiveEnd]
+  );
+
+  const applyRowDates = useCallback(
+    async (row: SubmittedInstanceRow) => {
+      const nextStart = getEffectiveStart(row) || null;
+      const nextEnd = getEffectiveEnd(row) || null;
+      if (nextStart && nextEnd && nextStart > nextEnd) {
+        toast.error('Start date cannot be later than end date');
+        return;
+      }
+      try {
+        setSavingDateId(row.id);
+        await updateFormInstanceDates(row.id, { start_date: nextStart, end_date: nextEnd });
+        if (nextEnd) await extendInstanceAccessTokensToDate(row.id, 'student', nextEnd);
+        setDateDrafts((prev) => {
+          const next = { ...prev };
+          delete next[row.id];
+          return next;
+        });
+        setEditingDateCell(null);
+        await loadAssessments();
+        toast.success('Dates updated');
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Failed to update dates');
+      } finally {
+        setSavingDateId(null);
+      }
+    },
+    [getEffectiveEnd, getEffectiveStart, loadAssessments]
+  );
+
+  const massApplyDates = useCallback(async () => {
+    const targets = sortedAssessments.filter(hasRowDateChanges);
+    if (targets.length === 0) return;
+    setMassApplying(true);
+    let ok = 0;
     try {
-      setSavingDateId(row.id);
-      if (field === 'start') {
-        await updateFormInstanceDates(row.id, { start_date: next || null });
-      } else {
-        await updateFormInstanceDates(row.id, { end_date: next || null });
-        if (next) await extendInstanceAccessTokensToDate(row.id, 'student', next);
+      for (const row of targets) {
+        const nextStart = getEffectiveStart(row) || null;
+        const nextEnd = getEffectiveEnd(row) || null;
+        if (nextStart && nextEnd && nextStart > nextEnd) {
+          toast.error(`Skipped ${row.form_name ?? 'unit'}: start cannot be after end`);
+          continue;
+        }
+        await updateFormInstanceDates(row.id, { start_date: nextStart, end_date: nextEnd });
+        if (nextEnd) await extendInstanceAccessTokensToDate(row.id, 'student', nextEnd);
+        setDateDrafts((prev) => {
+          const n = { ...prev };
+          delete n[row.id];
+          return n;
+        });
+        ok++;
       }
       setEditingDateCell(null);
       await loadAssessments();
-      toast.success('Dates updated');
+      toast.success(`Updated ${ok} assessment${ok !== 1 ? 's' : ''}`);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to update dates');
+      toast.error(err instanceof Error ? err.message : 'Mass apply failed');
     } finally {
-      setSavingDateId(null);
+      setMassApplying(false);
     }
-  };
+  }, [getEffectiveEnd, getEffectiveStart, hasRowDateChanges, loadAssessments, sortedAssessments]);
 
   const handleCopyLink = async (row: SubmittedInstanceRow) => {
     const role = row.role_context === 'trainer' ? 'trainer' : row.role_context === 'office' ? 'office' : 'student';
@@ -355,6 +430,36 @@ export const AdminStudentDetailsPage: React.FC = () => {
       return;
     }
     window.open(url, '_blank');
+  };
+
+  const hasAssessmentsLoaded = !assessmentsLoading;
+  const hasSubmittedAssessment = assessments.some(
+    (a) =>
+      (a.submitted_at != null && String(a.submitted_at).trim() !== '') || (Number(a.submission_count ?? 0) > 0)
+  );
+  const canDeleteStudent =
+    !!student && (viewerIsSuperadmin || (hasAssessmentsLoaded && !hasSubmittedAssessment));
+
+  const confirmDeleteStudent = async () => {
+    if (!student || !Number.isFinite(sid) || sid <= 0) return;
+    if (!viewerIsSuperadmin && hasSubmittedAssessment) {
+      toast.error('Cannot delete. This student has submitted assessments.');
+      setDeleteStudentOpen(false);
+      return;
+    }
+    setDeletingStudent(true);
+    try {
+      const res = viewerIsSuperadmin ? await deleteStudentSuperadmin(sid) : await deleteStudentIfNoAssessments(sid);
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
+      toast.success('Student deleted');
+      navigate('/admin/students');
+    } finally {
+      setDeletingStudent(false);
+      setDeleteStudentOpen(false);
+    }
   };
 
   return (
@@ -445,15 +550,45 @@ export const AdminStudentDetailsPage: React.FC = () => {
                       <span className="text-gray-800">Student</span>
                     </div>
                   </div>
+
+                  {canDeleteStudent ? (
+                    <div className="border-t border-gray-100 pt-3">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full text-red-700 border-red-200 hover:bg-red-50"
+                        onClick={() => setDeleteStudentOpen(true)}
+                        disabled={deletingStudent}
+                        title={
+                          viewerIsSuperadmin
+                            ? 'Delete student (removes all assessments)'
+                            : 'Delete student (only when no submitted assessments)'
+                        }
+                      >
+                        <Trash2 className="w-4 h-4 mr-2 inline" />
+                        Delete student
+                      </Button>
+                    </div>
+                  ) : null}
                 </div>
               </Card>
             </div>
 
             <div className="min-w-0 flex-1">
               <Card>
-                <div className="flex items-center justify-between gap-3 mb-3">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-3">
                   <h3 className="font-bold text-[var(--text)]">Assessment records</h3>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2 justify-end">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="border-[#ea580c]/40 text-[#c2410c] hover:bg-[#fff7ed]"
+                      onClick={() => void massApplyDates()}
+                      disabled={massApplying || assessments.length === 0 || !assessments.some(hasRowDateChanges)}
+                    >
+                      {massApplying ? 'Applying…' : 'Mass apply'}
+                    </Button>
                     <Button variant="outline" size="sm" onClick={() => setAddAssessmentOpen(true)}>
                       + Add Assessment
                     </Button>
@@ -530,44 +665,54 @@ export const AdminStudentDetailsPage: React.FC = () => {
                             <td className="px-3 py-2 border-b border-[var(--border)] text-gray-700 align-top">
                               {editingDateCell?.id === row.id && editingDateCell.field === 'start' ? (
                                 <DatePicker
-                                  value={(row.start_date ?? '').trim()}
-                                  onChange={(v) => void saveDateCell(row, 'start', v || '')}
+                                  value={getEffectiveStart(row)}
+                                  onChange={(v) =>
+                                    setDateDrafts((prev) => ({
+                                      ...prev,
+                                      [row.id]: { ...prev[row.id], start: v || null },
+                                    }))
+                                  }
                                   compact
                                   placement="below"
                                   className="max-w-[160px]"
-                                  disabled={savingDateId === row.id}
-                                  maxDate={row.end_date ?? undefined}
+                                  disabled={savingDateId === row.id || massApplying}
+                                  maxDate={getEffectiveEnd(row) || undefined}
                                 />
                               ) : (
                                 <button
                                   type="button"
                                   className="text-gray-700 hover:underline"
                                   onClick={() => setEditingDateCell({ id: row.id, field: 'start' })}
-                                  disabled={savingDateId === row.id}
+                                  disabled={savingDateId === row.id || massApplying}
                                 >
-                                  {formatDDMMYYYY(row.start_date)}
+                                  {formatDDMMYYYY(getEffectiveStart(row) || row.start_date)}
                                 </button>
                               )}
                             </td>
                             <td className="px-3 py-2 border-b border-[var(--border)] text-gray-700 align-top">
                               {editingDateCell?.id === row.id && editingDateCell.field === 'end' ? (
                                 <DatePicker
-                                  value={(row.end_date ?? '').trim()}
-                                  onChange={(v) => void saveDateCell(row, 'end', v || '')}
+                                  value={getEffectiveEnd(row)}
+                                  onChange={(v) =>
+                                    setDateDrafts((prev) => ({
+                                      ...prev,
+                                      [row.id]: { ...prev[row.id], end: v || null },
+                                    }))
+                                  }
                                   compact
                                   placement="below"
                                   className="max-w-[160px]"
-                                  disabled={savingDateId === row.id}
-                                  minDate={row.start_date ?? undefined}
+                                  disabled={savingDateId === row.id || massApplying}
+                                  minDate={getEffectiveStart(row) || undefined}
                                 />
                               ) : (
                                 <button
                                   type="button"
                                   className="text-gray-700 hover:underline"
                                   onClick={() => setEditingDateCell({ id: row.id, field: 'end' })}
-                                  disabled={savingDateId === row.id}
+                                  disabled={savingDateId === row.id || massApplying}
                                 >
-                                  {formatDDMMYYYY(row.end_date)}
+                                  {formatDDMMYYYY(getEffectiveEnd(row) || row.end_date)}
                                 </button>
                               )}
                             </td>
@@ -591,6 +736,15 @@ export const AdminStudentDetailsPage: React.FC = () => {
                                     (Number((row as unknown as { submission_count?: number }).submission_count ?? 0) > 0 || !!row.submitted_at);
                                   return (
                                     <>
+                                      <button
+                                        type="button"
+                                        className="inline-flex items-center justify-center rounded-md border border-[#ea580c]/40 bg-white px-2 py-1 text-[10px] font-semibold text-[#c2410c] hover:bg-[#fff7ed] disabled:cursor-not-allowed disabled:opacity-40"
+                                        onClick={() => void applyRowDates(row)}
+                                        disabled={!hasRowDateChanges(row) || savingDateId === row.id || massApplying}
+                                        title="Apply date changes"
+                                      >
+                                        Apply
+                                      </button>
                                       <button type="button" className={actionBtn} onClick={() => void handleOpen(row)} title="Open">
                                         <ExternalLink className={actionIcon} />
                                         <span className={actionText}>Open</span>
@@ -753,6 +907,45 @@ export const AdminStudentDetailsPage: React.FC = () => {
             </Button>
           </div>
         </div>
+      </Modal>
+
+      <Modal
+        isOpen={deleteStudentOpen}
+        onClose={() => {
+          if (deletingStudent) return;
+          setDeleteStudentOpen(false);
+        }}
+        title="Delete student"
+        size="md"
+      >
+        {student ? (
+          <div className="space-y-4">
+            <p className="text-sm text-gray-700">
+              Delete <strong>{[student.first_name, student.last_name].filter(Boolean).join(' ').trim() || student.email}</strong>?
+            </p>
+            <p className="text-xs text-gray-500">
+              {viewerIsSuperadmin ? (
+                <>
+                  This will permanently delete the student and <strong>all their assessments</strong>. This action cannot be undone.
+                </>
+              ) : (
+                <>
+                  This is only allowed when the student has <strong>no submitted assessments</strong> (allocated but
+                  unsubmitted work does not block delete). This action cannot be undone.
+                </>
+              )}
+            </p>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" size="sm" onClick={() => setDeleteStudentOpen(false)} disabled={deletingStudent}>
+                Cancel
+              </Button>
+              <Button size="sm" onClick={() => void confirmDeleteStudent()} disabled={deletingStudent}>
+                {deletingStudent ? <Loader variant="dots" size="sm" inline className="mr-2" /> : null}
+                Delete
+              </Button>
+            </div>
+          </div>
+        ) : null}
       </Modal>
     </div>
   );

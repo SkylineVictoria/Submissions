@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Plus, FileText, Edit, Eye, MoreVertical, Copy, ToggleLeft, ToggleRight, Search } from 'lucide-react';
-import { listFormsPaged, createForm, duplicateForm, updateForm, listCoursesPaged, getCoursesForForms } from '../lib/formEngine';
+import { Plus, FileText, Edit, Eye, MoreVertical, Copy, ToggleLeft, ToggleRight, Search, Trash2 } from 'lucide-react';
+import { listFormsPaged, createForm, duplicateForm, updateForm, listCoursesPaged, getCoursesForForms, deleteFormSuperadmin } from '../lib/formEngine';
 import type { Form } from '../types/database';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -35,6 +35,8 @@ export const AdminFormsListPage: React.FC = () => {
   const [togglingActive, setTogglingActive] = useState<number | null>(null);
   const [openMenuId, setOpenMenuId] = useState<number | null>(null);
   const [openMenuPlacement, setOpenMenuPlacement] = useState<'up' | 'down'>('down');
+  const [deleteFormTarget, setDeleteFormTarget] = useState<Form | null>(null);
+  const [deletingFormId, setDeletingFormId] = useState<number | null>(null);
   const [courseFilter, setCourseFilter] = useState<string>('');
   const [searchTerm, setSearchTerm] = useState('');
   const [formCoursesMap, setFormCoursesMap] = useState<Map<number, { id: number; name: string }[]>>(new Map());
@@ -120,6 +122,25 @@ export const AdminFormsListPage: React.FC = () => {
     if (duplicated) {
       setCurrentPage(1);
       await loadFormsPage(1, courseFilter ? Number(courseFilter) : undefined);
+    }
+  };
+
+  const confirmDeleteForm = async () => {
+    if (!deleteFormTarget) return;
+    const id = deleteFormTarget.id;
+    setDeletingFormId(id);
+    try {
+      const res = await deleteFormSuperadmin(id);
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
+      toast.success('Form deleted');
+      setDeleteFormTarget(null);
+      setOpenMenuId(null);
+      await loadFormsPage(currentPage, courseFilter ? Number(courseFilter) : undefined, searchTerm.trim() || undefined);
+    } finally {
+      setDeletingFormId(null);
     }
   };
 
@@ -324,6 +345,18 @@ export const AdminFormsListPage: React.FC = () => {
                                 Duplicate
                               </Button>
                             ) : null}
+                            {canManageForms ? (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="w-full justify-center border-red-200 text-red-700 hover:bg-red-50"
+                                onClick={() => setDeleteFormTarget(form)}
+                                disabled={deletingFormId !== null}
+                              >
+                                <Trash2 className="mr-2 h-4 w-4 shrink-0" />
+                                Delete form
+                              </Button>
+                            ) : null}
                           </div>
                         </div>
                       </div>
@@ -445,6 +478,19 @@ export const AdminFormsListPage: React.FC = () => {
                                           <Copy className="w-4 h-4" />
                                           Duplicate
                                         </button>
+                                        <div className="my-1 h-px bg-gray-100" />
+                                        <button
+                                          type="button"
+                                          className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-700 hover:bg-red-50"
+                                          onClick={() => {
+                                            setOpenMenuId(null);
+                                            setDeleteFormTarget(form);
+                                          }}
+                                          role="menuitem"
+                                        >
+                                          <Trash2 className="w-4 h-4 shrink-0" />
+                                          Delete form
+                                        </button>
                                       </>
                                     ) : null}
                                   </div>
@@ -475,6 +521,38 @@ export const AdminFormsListPage: React.FC = () => {
           )}
         </Card>
       </div>
+
+      <Modal
+        isOpen={!!deleteFormTarget}
+        onClose={() => {
+          if (deletingFormId) return;
+          setDeleteFormTarget(null);
+        }}
+        title="Delete form"
+        size="md"
+      >
+        {deleteFormTarget ? (
+          <div className="space-y-4">
+            <p className="text-sm text-gray-700">
+              Delete <strong className="break-words">{deleteFormTarget.name}</strong> permanently? This removes the form definition, all student assessment instances for this form, and course links. This cannot be undone.
+            </p>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" onClick={() => setDeleteFormTarget(null)} disabled={deletingFormId !== null}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                className="bg-red-600 hover:bg-red-700 border-red-600"
+                onClick={() => void confirmDeleteForm()}
+                disabled={deletingFormId !== null}
+              >
+                {deletingFormId === deleteFormTarget.id ? <Loader variant="dots" size="sm" inline className="mr-2" /> : <Trash2 className="w-4 h-4 mr-2 inline" />}
+                Delete
+              </Button>
+            </div>
+          </div>
+        ) : null}
+      </Modal>
 
       <Modal isOpen={isCreateOpen} onClose={() => !creating && setIsCreateOpen(false)} title="Create New Form" size="lg">
         <p className="text-sm text-gray-600 mb-4">

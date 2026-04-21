@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, CalendarRange, User } from 'lucide-react';
+import { ChevronLeft, ChevronRight, CalendarRange, User, Users, Search } from 'lucide-react';
 import {
   getBatchById,
   fetchBatchAssessmentOptions,
@@ -13,15 +13,19 @@ import {
 import type { Batch, Student } from '../lib/formEngine';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
+import { Input } from '../components/ui/Input';
 import { DatePicker } from '../components/ui/DatePicker';
 import { Select } from '../components/ui/Select';
 import { Loader } from '../components/ui/Loader';
 import { toast } from '../utils/toast';
+import { AdminListPagination } from '../components/admin/AdminListPagination';
 
 const getTodayIso = () => new Date().toISOString().slice(0, 10);
 const isIsoDate = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || '').trim());
 
 const STUDENT_PAGE_SIZE = 25;
+
+type BatchDetailTab = 'students' | 'assessment';
 
 export const AdminBatchUnitDatesPage: React.FC = () => {
   const { batchId: batchIdParam } = useParams<{ batchId: string }>();
@@ -31,6 +35,10 @@ export const AdminBatchUnitDatesPage: React.FC = () => {
   const [batch, setBatch] = useState<Batch | null>(null);
   const [batchStudents, setBatchStudents] = useState<Student[]>([]);
   const [loadingBatch, setLoadingBatch] = useState(true);
+  const [activeTab, setActiveTab] = useState<BatchDetailTab>('students');
+  const [batchStudentSearch, setBatchStudentSearch] = useState('');
+  /** 1-based page for the Students tab roster (search-filtered). */
+  const [rosterPage, setRosterPage] = useState(1);
 
   const [fromDate, setFromDate] = useState(() => getTodayIso());
   const [toDate, setToDate] = useState(() => getTodayIso());
@@ -77,6 +85,40 @@ export const AdminBatchUnitDatesPage: React.FC = () => {
   }, [eligibleUnitOptions, unitFilterId]);
 
   const studentTotalPages = Math.max(1, Math.ceil(studentsTotalCount / STUDENT_PAGE_SIZE));
+
+  const filteredBatchStudents = useMemo(() => {
+    const q = batchStudentSearch.trim().toLowerCase();
+    if (!q) return batchStudents;
+    return batchStudents.filter((s) => {
+      const hay = [
+        s.first_name,
+        s.last_name,
+        s.name,
+        s.email,
+        s.student_id,
+        s.phone,
+        s.status,
+      ]
+        .filter(Boolean)
+        .map((x) => String(x).toLowerCase());
+      return hay.some((chunk) => chunk.includes(q));
+    });
+  }, [batchStudents, batchStudentSearch]);
+
+  const rosterTotalPages = Math.max(1, Math.ceil(filteredBatchStudents.length / STUDENT_PAGE_SIZE));
+
+  const paginatedRosterStudents = useMemo(() => {
+    const from = (rosterPage - 1) * STUDENT_PAGE_SIZE;
+    return filteredBatchStudents.slice(from, from + STUDENT_PAGE_SIZE);
+  }, [filteredBatchStudents, rosterPage]);
+
+  useEffect(() => {
+    setRosterPage(1);
+  }, [batchStudentSearch, batchId]);
+
+  useEffect(() => {
+    setRosterPage((p) => Math.min(Math.max(1, p), rosterTotalPages));
+  }, [rosterTotalPages]);
 
   useEffect(() => {
     setStudentPage(1);
@@ -382,8 +424,8 @@ export const AdminBatchUnitDatesPage: React.FC = () => {
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
             <div>
               <h1 className="text-xl font-bold text-[var(--text)] flex items-center gap-2">
-                <CalendarRange className="w-6 h-6 text-[#ea580c]" />
-                Student unit dates
+                <Users className="w-6 h-6 text-[#ea580c]" />
+                Batch details
               </h1>
               <p className="text-sm text-gray-600 mt-1">
                 <span className="font-medium text-gray-800">{batch.name}</span>
@@ -392,13 +434,170 @@ export const AdminBatchUnitDatesPage: React.FC = () => {
                 ) : null}
               </p>
               <p className="text-xs text-gray-500 mt-2 max-w-2xl">
-                Filter by assessment dates and optionally by unit, then review students below. Each row lists unit names
-                that match the filter. Use the checkboxes to choose who receives the mass date update.
+                {activeTab === 'students' ? (
+                  <>
+                    Active students in this batch. Open a profile or switch to <strong>Assessment</strong> to filter by
+                    dates and mass-edit unit windows.
+                  </>
+                ) : (
+                  <>
+                    Filter by assessment dates and optionally by unit, then review students below. Each row lists unit
+                    names that match the filter. Use the checkboxes to choose who receives the mass date update.
+                  </>
+                )}
               </p>
             </div>
           </div>
+
+          <div
+            className="mt-5 flex flex-wrap gap-1.5 p-1 rounded-xl bg-gray-100/90 border border-[var(--border)] w-full sm:w-fit"
+            role="tablist"
+            aria-label="Batch sections"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'students'}
+              id="batch-tab-students"
+              aria-controls="batch-panel-students"
+              onClick={() => setActiveTab('students')}
+              className={`flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-colors min-w-0 flex-1 sm:flex-initial ${
+                activeTab === 'students'
+                  ? 'bg-white text-[var(--text)] shadow-sm ring-1 ring-black/5'
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              <Users className="w-4 h-4 shrink-0 opacity-80" />
+              Students
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'assessment'}
+              id="batch-tab-assessment"
+              aria-controls="batch-panel-assessment"
+              onClick={() => setActiveTab('assessment')}
+              className={`flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-colors min-w-0 flex-1 sm:flex-initial ${
+                activeTab === 'assessment'
+                  ? 'bg-white text-[var(--text)] shadow-sm ring-1 ring-black/5'
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              <CalendarRange className="w-4 h-4 shrink-0 opacity-80" />
+              Assessment
+            </button>
+          </div>
         </div>
 
+        {activeTab === 'students' ? (
+          <div id="batch-panel-students" role="tabpanel" aria-labelledby="batch-tab-students">
+          <Card className="p-4 md:p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-end gap-3 justify-between">
+              <div>
+                <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Roster</div>
+                <p className="text-sm text-gray-600">
+                  {batchStudents.length} active student{batchStudents.length !== 1 ? 's' : ''} in this batch
+                  {batchStudentSearch.trim() ? (
+                    <span className="text-gray-500">
+                      {' '}
+                      · {filteredBatchStudents.length} match{filteredBatchStudents.length !== 1 ? 'es' : ''} your search
+                    </span>
+                  ) : null}
+                </p>
+              </div>
+              <div className="relative w-full sm:w-80">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                <Input
+                  value={batchStudentSearch}
+                  onChange={(e) => setBatchStudentSearch(e.target.value)}
+                  placeholder="Search name, email, student ID…"
+                  className="pl-9"
+                  aria-label="Search students in batch"
+                />
+              </div>
+            </div>
+
+            {filteredBatchStudents.length === 0 ? (
+              <div className="text-sm text-gray-500 rounded-lg border border-gray-200 bg-gray-50 px-4 py-8 text-center">
+                {batchStudents.length === 0
+                  ? 'No active students in this batch.'
+                  : 'No students match your search.'}
+              </div>
+            ) : (
+              <>
+                <AdminListPagination
+                  placement="top"
+                  totalItems={filteredBatchStudents.length}
+                  pageSize={STUDENT_PAGE_SIZE}
+                  currentPage={rosterPage}
+                  totalPages={rosterTotalPages}
+                  onPrev={() => setRosterPage((p) => Math.max(1, p - 1))}
+                  onNext={() => setRosterPage((p) => Math.min(rosterTotalPages, p + 1))}
+                  onGoToPage={(p) => setRosterPage(p)}
+                  itemLabel="students"
+                />
+                <div className="overflow-x-auto rounded-lg border border-[var(--border)] bg-white">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-500 border-b border-gray-200">
+                    <tr>
+                      <th className="px-3 py-2.5 font-semibold">Student</th>
+                      <th className="px-3 py-2.5 font-semibold whitespace-nowrap">Student ID</th>
+                      <th className="px-3 py-2.5 font-semibold min-w-[180px]">Email</th>
+                      <th className="px-3 py-2.5 font-semibold whitespace-nowrap">Phone</th>
+                      <th className="px-3 py-2.5 font-semibold text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {paginatedRosterStudents.map((s) => {
+                      const display =
+                        [s.first_name, s.last_name].filter(Boolean).join(' ').trim() || s.name?.trim() || s.email;
+                      return (
+                        <tr
+                          key={s.id}
+                          className="border-b border-gray-100 last:border-0 hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors"
+                        >
+                          <td className="px-3 py-2.5 align-top">
+                            <div className="flex items-start gap-2">
+                              <User className="w-4 h-4 text-gray-400 shrink-0 mt-0.5" />
+                              <span className="font-medium text-gray-900">{display}</span>
+                            </div>
+                          </td>
+                          <td className="px-3 py-2.5 align-top text-gray-700 tabular-nums">{s.student_id ?? '—'}</td>
+                          <td className="px-3 py-2.5 align-top text-gray-700 break-all">{s.email}</td>
+                          <td className="px-3 py-2.5 align-top text-gray-700 whitespace-nowrap">{s.phone ?? '—'}</td>
+                          <td className="px-3 py-2.5 align-top text-right">
+                            <Link
+                              to={`/admin/students/${s.id}`}
+                              className="text-sm font-medium text-[#ea580c] hover:underline"
+                            >
+                              View
+                            </Link>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+                <AdminListPagination
+                  placement="bottom"
+                  totalItems={filteredBatchStudents.length}
+                  pageSize={STUDENT_PAGE_SIZE}
+                  currentPage={rosterPage}
+                  totalPages={rosterTotalPages}
+                  onPrev={() => setRosterPage((p) => Math.max(1, p - 1))}
+                  onNext={() => setRosterPage((p) => Math.min(rosterTotalPages, p + 1))}
+                  onGoToPage={(p) => setRosterPage(p)}
+                  itemLabel="students"
+                />
+              </>
+            )}
+          </Card>
+          </div>
+        ) : null}
+
+        {activeTab === 'assessment' ? (
+        <div id="batch-panel-assessment" role="tabpanel" aria-labelledby="batch-tab-assessment">
         <Card className="p-4 md:p-6 space-y-6">
           <div>
             <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Filters</div>
@@ -684,13 +883,15 @@ export const AdminBatchUnitDatesPage: React.FC = () => {
             </>
           )}
         </Card>
+        </div>
+        ) : null}
 
         <div className="mt-4 text-xs text-gray-500">
           {batchStudents.length} active student{batchStudents.length !== 1 ? 's' : ''} in this batch
-          {unitEligibilityReady && studentsTotalCount > 0 ? (
+          {activeTab === 'assessment' && unitEligibilityReady && studentsTotalCount > 0 ? (
             <span>
               {' '}
-              · {studentsTotalCount} student{studentsTotalCount !== 1 ? 's' : ''} match the current filters
+              · {studentsTotalCount} student{studentsTotalCount !== 1 ? 's' : ''} match the current assessment filters
             </span>
           ) : null}
         </div>
