@@ -49,6 +49,7 @@ import { SortableTh } from '../components/admin/SortableTh';
 
 const STATUS_OPTIONS = [
   { value: 'active', label: 'Active' },
+  { value: 'inactive', label: 'Inactive' },
 ];
 
 const STATUS_FILTER_OPTIONS = [
@@ -2202,7 +2203,7 @@ export const AdminStudentsPage: React.FC = () => {
               <div className="md:col-span-2">
                 <Select
                   value={editForm.status}
-                  onChange={(v) => setEditForm((p) => (p ? { ...p, status: v } : p))}
+                  onChange={(v) => setEditForm((p) => (p ? { ...p, status: v as 'active' | 'inactive' } : p))}
                   options={STATUS_OPTIONS}
                   label="Status"
                 />
