@@ -967,6 +967,15 @@ export async function issueInstanceAccessLink(
     .select('start_date, end_date')
     .eq('id', instanceId)
     .maybeSingle();
+  if (roleContext === 'student') {
+    // Enforce access window in Melbourne time (AEDT/AEST): must be within [start_date, end_date] inclusive.
+    // End date is treated as end-of-day (23:59) via token expiry and date comparisons.
+    const start = String((instDates as { start_date?: string | null } | null)?.start_date ?? '').trim();
+    const end = String((instDates as { end_date?: string | null } | null)?.end_date ?? '').trim();
+    const todayMel = getMelbourneDateStr(new Date());
+    if (start && todayMel < start) return null;
+    if (end && todayMel > end) return null;
+  }
   const instanceEndDate = (instDates as { end_date?: string | null } | null)?.end_date ?? null;
   const isTrainerOrOffice = roleContext === 'trainer' || roleContext === 'office';
   if (useResubmissionExpiry && resubmissionExpiresAt) {
@@ -995,6 +1004,108 @@ export async function issueInstanceAccessLink(
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
   const base = `${origin}/instances/${instanceId}`;
   return `${base}?token=${encodeURIComponent(token)}`;
+}
+
+export async function studentLoginWithOtp(email: string, otp: string): Promise<{ ok: true; studentId: number; email: string } | { ok: false; error: string }> {
+  const e = String(email || '').trim();
+  const o = String(otp || '').trim();
+  if (!e) return { ok: false, error: 'Email is required.' };
+  if (!o) return { ok: false, error: 'OTP is required.' };
+  const { data: authData, error: authError } = await supabase.rpc('skyline_verify_student_otp', {
+    p_email: e,
+    p_otp: o,
+  });
+  if (authError) return { ok: false, error: 'Authentication failed.' };
+  const rows = authData as Array<{ id: number; email: string }> | null;
+  if (!rows || rows.length === 0) return { ok: false, error: 'Invalid or expired OTP.' };
+  const sid = Number(rows[0].id);
+  if (!Number.isFinite(sid) || sid <= 0) return { ok: false, error: 'Invalid student.' };
+  return { ok: true, studentId: sid, email: String(rows[0].email ?? e) };
+}
+
+export async function listStudentAssessmentsPaged(
+  studentId: number,
+  page = 1,
+  pageSize = 20,
+  search?: string
+): Promise<PaginatedResult<SubmittedInstanceRow>> {
+  const sid = Number(studentId);
+  if (!Number.isFinite(sid) || sid <= 0) return { data: [], total: 0, page, pageSize };
+  const from = Math.max(0, (page - 1) * pageSize);
+  const to = from + pageSize - 1;
+  let query = supabase
+    .from('skyline_form_instances')
+    .select(
+      'id, form_id, student_id, status, role_context, created_at, submitted_at, submission_count, start_date, end_date, skyline_students!inner(id, first_name, last_name, name, email), skyline_forms!inner(id, name, version)',
+      { count: 'exact' }
+    )
+    .eq('student_id', sid)
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: false });
+
+  const q = String(search ?? '').trim();
+  if (q) {
+    const escaped = q.replace(/[%_,]/g, '');
+    // Filter by form name/version or status text.
+    query = query.or(`status.ilike.%${escaped}%,role_context.ilike.%${escaped}%,skyline_forms.name.ilike.%${escaped}%,skyline_forms.version.ilike.%${escaped}%`);
+  }
+
+  const { data: instances, error, count } = await query.range(from, to);
+  if (error) {
+    console.error('listStudentAssessmentsPaged error', error);
+    return { data: [], total: 0, page, pageSize };
+  }
+
+  const rows = (instances as Array<Record<string, unknown>>) || [];
+  const total = Number(count ?? rows.length) || 0;
+
+  const instanceIds = rows.map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0);
+  const now = Date.now();
+  const tokenMap = new Map<string, boolean>();
+  if (instanceIds.length > 0) {
+    const { data: tokens } = await supabase
+      .from('skyline_instance_access_tokens')
+      .select('instance_id, role_context, expires_at, revoked_at')
+      .in('instance_id', instanceIds);
+    for (const t of (tokens as Array<{ instance_id: number; role_context: string; expires_at: string; revoked_at: string | null }>) || []) {
+      const key = `${t.instance_id}:${t.role_context}`;
+      const valid = t.revoked_at == null && t.expires_at && new Date(t.expires_at).getTime() > now;
+      if (valid) tokenMap.set(key, false);
+      else if (!tokenMap.has(key)) tokenMap.set(key, true);
+    }
+  }
+
+  return {
+    data: rows.map((r) => {
+      const form = (r.skyline_forms as { name?: string | null; version?: string | null } | null) ?? null;
+      const stu = (r.skyline_students as { first_name?: string | null; last_name?: string | null; name?: string | null; email?: string | null } | null) ?? null;
+      const first = String(stu?.first_name ?? '').trim();
+      const last = String(stu?.last_name ?? '').trim();
+      const student_name = [first, last].filter(Boolean).join(' ').trim() || String(stu?.name ?? '') || 'Student';
+      const roleCtx = String(r.role_context ?? 'student');
+      const link_expired = tokenMap.get(`${Number(r.id)}:student`) !== false;
+      return {
+        id: Number(r.id),
+        form_id: Number(r.form_id),
+        form_name: String(form?.name ?? ''),
+        form_version: form?.version != null ? String(form.version) : null,
+        student_id: Number(r.student_id),
+        student_name,
+        student_email: String(stu?.email ?? ''),
+        status: String(r.status ?? 'draft'),
+        role_context: roleCtx,
+        created_at: String(r.created_at ?? ''),
+        submitted_at: r.submitted_at ? String(r.submitted_at) : null,
+        submission_count: Number((r as { submission_count?: number | null }).submission_count ?? 0) || 0,
+        start_date: (r as { start_date?: string | null }).start_date ? String((r as { start_date?: string | null }).start_date) : null,
+        end_date: (r as { end_date?: string | null }).end_date ? String((r as { end_date?: string | null }).end_date) : null,
+        link_expired,
+      };
+    }),
+    total,
+    page,
+    pageSize,
+  };
 }
 
 export async function validateInstanceAccessToken(

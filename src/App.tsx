@@ -34,6 +34,7 @@ const AdminEnrollmentPage = lazy(() => import('./pages/AdminEnrollmentPage').the
 const AdminInductionPage = lazy(() => import('./pages/AdminInductionPage'));
 const FormStartPage = lazy(() => import('./pages/FormStartPage').then(m => ({ default: m.FormStartPage })));
 const StudentAccessPage = lazy(() => import('./pages/StudentAccessPage').then(m => ({ default: m.StudentAccessPage })));
+const StudentDashboardPage = lazy(() => import('./pages/StudentDashboardPage').then(m => ({ default: m.StudentDashboardPage })));
 const InstanceFillPage = lazy(() => import('./pages/InstanceFillPage').then(m => ({ default: m.InstanceFillPage })));
 const FormWizardPage = lazy(() => import('./pages/FormWizardPage').then(m => ({ default: m.FormWizardPage })));
 const LoginPage = lazy(() => import('./pages/LoginPage').then(m => ({ default: m.LoginPage })));
@@ -65,6 +66,7 @@ function App() {
             <Route path="/forms/:formId/start" element={<FormStartPage />} />
             <Route path="/forms/:formId/student-access" element={<StudentAccessPage />} />
             <Route path="/student-access" element={<StudentAccessPage />} />
+            <Route path="/student/dashboard" element={<StudentDashboardPage />} />
             <Route path="/instances/:instanceId" element={<InstanceFillPage />} />
             <Route path="/induction/:token" element={<PublicInductionPage />} />
             <Route path="/admin" element={<ProtectedRoute><AdminLayout /></ProtectedRoute>}>
