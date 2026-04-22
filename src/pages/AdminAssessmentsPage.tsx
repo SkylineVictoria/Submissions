@@ -28,6 +28,7 @@ import { toast } from '../utils/toast';
 import { AdminListPagination } from '../components/admin/AdminListPagination';
 import type { SortDirection } from '../components/admin/SortableTh';
 import { SortableTh } from '../components/admin/SortableTh';
+import { supabase } from '../lib/supabase';
 
 const PDF_BASE = import.meta.env.VITE_PDF_API_URL ?? '';
 
@@ -180,6 +181,66 @@ export const AdminAssessmentsPage: React.FC = () => {
   };
 
   const openSendToTrainer = (row: SubmittedInstanceRow) => {
+    // If this student's batch has a trainer, auto-send immediately (no manual modal).
+    const instanceId = Number(row.id);
+    const sid = Number(row.student_id);
+    if (Number.isFinite(instanceId) && instanceId > 0 && Number.isFinite(sid) && sid > 0) {
+      void (async () => {
+        try {
+          const { data: sRow } = await supabase
+            .from('skyline_students')
+            .select('batch_id')
+            .eq('id', sid)
+            .maybeSingle();
+          const bid = Number((sRow as { batch_id?: number | null } | null)?.batch_id ?? 0);
+          if (!Number.isFinite(bid) || bid <= 0) throw new Error('No batch');
+          const { data: bRow } = await supabase
+            .from('skyline_batches')
+            .select('trainer_id, skyline_users(full_name, email)')
+            .eq('id', bid)
+            .maybeSingle();
+          const tid = Number((bRow as { trainer_id?: number | null } | null)?.trainer_id ?? 0);
+          if (!Number.isFinite(tid) || tid <= 0) throw new Error('No trainer');
+
+          const u = (bRow as unknown as { skyline_users?: { full_name?: string | null; email?: string | null } | null } | null)?.skyline_users;
+          const trainerName = String(u?.full_name ?? '').trim() || 'trainer';
+
+          // Ensure trainer sees editable form (trainer can only edit in waiting_trainer workflow).
+          setSendingId(instanceId);
+          if (row.status === 'draft') {
+            await updateInstanceWorkflowStatus(instanceId, 'waiting_trainer');
+            setRows((prev) => prev.map((r) => (r.id === instanceId ? { ...r, status: 'submitted' } : r)));
+          }
+          if (row.role_context !== 'trainer') {
+            await updateInstanceRole(instanceId, 'trainer');
+            setRows((prev) => prev.map((r) => (r.id === instanceId ? { ...r, role_context: 'trainer' } : r)));
+          }
+          const url = await issueInstanceAccessLink(instanceId, 'trainer');
+          setSendingId(null);
+          if (!url) {
+            toast.error('Failed to create secure link');
+            return;
+          }
+          await navigator.clipboard.writeText(url);
+          await loadRows(currentPage, searchTerm, { silent: true });
+          toast.success(`Link copied for ${trainerName}. Share it with them.`);
+          return;
+        } catch {
+          // Fallback to manual selection modal (no batch trainer configured)
+        }
+
+        setSendToTrainerRow(row);
+        setSelectedTrainerId(null);
+        setTrainersLoading(true);
+        listTrainers().then((list) => {
+          setTrainers(list);
+          setTrainersLoading(false);
+        });
+      })();
+      return;
+    }
+
+    // Fallback: manual selection modal
     setSendToTrainerRow(row);
     setSelectedTrainerId(null);
     setTrainersLoading(true);

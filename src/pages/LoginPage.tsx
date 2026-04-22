@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { loginWithOtp, requestOtp } from '../lib/formEngine';
+import { loginWithOtp, requestOtp, requestStudentOtp, studentLoginWithOtp } from '../lib/formEngine';
 import { useAuth } from '../contexts/AuthContext';
 import { isValidInstitutionalEmail } from '../lib/emailUtils';
 import { Navigate } from 'react-router-dom';
@@ -29,10 +29,29 @@ export const LoginPage: React.FC = () => {
   const canSendOtp = email.trim() && emailValid && !otpSent;
   const canVerifyOtp = email.trim() && otp.trim().length >= 6;
 
+  const isLikelyStudentEmail = (e: string) => String(e || '').trim().toLowerCase().endsWith('@student.slit.edu.au');
+  const STUDENT_DASHBOARD_STORAGE_KEY = 'signflow_student_dashboard_auth_v1';
+
   const handleSendOtp = async () => {
     if (!email.trim() || !emailValid) return;
     setLoading(true);
-    const res = await requestOtp(email.trim());
+    // Staff login is the primary flow; if the user isn't found, fall back to student OTP.
+    // For @student.slit.edu.au we skip directly to student OTP.
+    const res = isLikelyStudentEmail(email)
+      ? await requestStudentOtp(email.trim())
+      : await requestOtp(email.trim());
+    if (!res.success && !isLikelyStudentEmail(email)) {
+      const msg = String(res.message || '').toLowerCase();
+      if (msg.includes('user not found') || msg.includes('not found')) {
+        const alt = await requestStudentOtp(email.trim());
+        if (alt.success) {
+          setLoading(false);
+          setOtpSent(true);
+          toast.success('OTP sent! Check your email. Valid for 10 minutes.');
+          return;
+        }
+      }
+    }
     setLoading(false);
     if (res.success) {
       setOtpSent(true);
@@ -46,15 +65,28 @@ export const LoginPage: React.FC = () => {
     e.preventDefault();
     if (!email.trim() || !otp.trim()) return;
     setLoading(true);
-    const u = await loginWithOtp(email.trim(), otp.trim());
-    setLoading(false);
+    // Staff login first; if it fails, try student login and redirect to student dashboard.
+    const u = isLikelyStudentEmail(email) ? null : await loginWithOtp(email.trim(), otp.trim());
     if (u) {
+      setLoading(false);
       login(u);
       toast.success(`Welcome, ${u.full_name}`);
       navigate(from, { replace: true });
-    } else {
-      toast.error('Invalid or expired OTP');
+      return;
     }
+    const s = await studentLoginWithOtp(email.trim(), otp.trim());
+    setLoading(false);
+    if (s.ok) {
+      // Student dashboard keeps its own sessionStorage auth; we just navigate there.
+      sessionStorage.setItem(
+        STUDENT_DASHBOARD_STORAGE_KEY,
+        JSON.stringify({ studentId: s.studentId, email: email.trim(), at: Date.now() })
+      );
+      toast.success('Welcome');
+      navigate('/student/dashboard', { replace: true });
+      return;
+    }
+    toast.error('Invalid or expired OTP');
   };
 
   return (
@@ -178,15 +210,26 @@ export const LoginPage: React.FC = () => {
                             // Auto-submit when 6 digits are entered
                             void (async () => {
                               setLoading(true);
-                              const u = await loginWithOtp(email.trim(), next);
-                              setLoading(false);
+                              const u = isLikelyStudentEmail(email) ? null : await loginWithOtp(email.trim(), next);
                               if (u) {
+                                setLoading(false);
                                 login(u);
                                 toast.success(`Welcome, ${u.full_name}`);
                                 navigate(from, { replace: true });
-                              } else {
-                                toast.error('Invalid or expired OTP');
+                                return;
                               }
+                              const s = await studentLoginWithOtp(email.trim(), next);
+                              setLoading(false);
+                              if (s.ok) {
+                                sessionStorage.setItem(
+                                  STUDENT_DASHBOARD_STORAGE_KEY,
+                                  JSON.stringify({ studentId: s.studentId, email: email.trim(), at: Date.now() })
+                                );
+                                toast.success('Welcome');
+                                navigate('/student/dashboard', { replace: true });
+                                return;
+                              }
+                              toast.error('Invalid or expired OTP');
                             })();
                           }
                         }}

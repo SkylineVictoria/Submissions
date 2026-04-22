@@ -49,6 +49,7 @@ import {
   updateInstanceWorkflowStatus,
   validateInstanceAccessToken,
   revokeRoleAccessTokens,
+  extendInstanceAccessTokensToDate,
 } from '../lib/formEngine';
 import type { FormTemplate, FormQuestionWithOptionsAndRows, FormSectionWithQuestions } from '../lib/formEngine';
 import { getTaskQuestionDisplayNumbers } from '../lib/taskQuestionsNumbering';
@@ -67,7 +68,28 @@ import { AppendixAMatrixForm } from '../components/form-fill/AppendixAMatrixForm
 import { DatePicker } from '../components/ui/DatePicker';
 import { toast } from '../utils/toast';
 
+const isIsoDate = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || '').trim());
+const addDaysIso = (dateStr: string, days: number): string => {
+  if (!isIsoDate(dateStr)) return dateStr;
+  const base = new Date(`${dateStr}T00:00:00.000Z`);
+  const next = new Date(base.getTime() + days * 24 * 60 * 60 * 1000);
+  return next.toISOString().slice(0, 10);
+};
+
+const MELBOURNE_TZ = 'Australia/Melbourne';
+const getMelbourneDateStr = (d: Date): string => {
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: MELBOURNE_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  return fmt.format(d);
+};
+
 const PDF_BASE = import.meta.env.VITE_PDF_API_URL ?? '';
+
+type AttemptOutcome = 'competent' | 'not_yet_competent' | null;
 
 function getAnswerKey(questionId: number, rowId: number | null): string {
   if (rowId === null) return `q-${questionId}`;
@@ -414,8 +436,32 @@ export const InstanceFillPage: React.FC = () => {
   const [resultsData, setResultsData] = useState<Record<number, import('../lib/formEngine').ResultsDataEntry>>({});
   const [assessmentSummary, setAssessmentSummary] = useState<import('../lib/formEngine').AssessmentSummaryDataEntry | null>(null);
   const [role, setRole] = useState<FormRole>('student');
-  const [workflowStatus, setWorkflowStatus] = useState<'draft' | 'waiting_trainer' | 'waiting_office' | 'completed'>('draft');
+  const [workflowStatus, setWorkflowStatus] = useState<'draft' | 'waiting_trainer' | 'waiting_office' | 'completed' | 'failed'>('draft');
   const [submissionCount, setSubmissionCount] = useState<number>(0);
+
+  const getTrainerAttemptOutcome = useCallback(
+    (attempt: 1 | 2 | 3): AttemptOutcome => {
+      if (!template) return null;
+      const taskResultSections = (template.steps ?? [])
+        .flatMap((st) => st.sections)
+        .filter((s) => s.pdf_render_mode === 'task_results');
+      if (taskResultSections.length === 0) return null;
+      let anyAnswered = false;
+      let anyNs = false;
+      for (const sec of taskResultSections) {
+        const rd = resultsData[sec.id];
+        const sat =
+          attempt === 1 ? rd?.first_attempt_satisfactory
+          : attempt === 2 ? rd?.second_attempt_satisfactory
+          : rd?.third_attempt_satisfactory;
+        if (sat === 's' || sat === 'ns') anyAnswered = true;
+        if (sat === 'ns') anyNs = true;
+      }
+      if (!anyAnswered) return null;
+      return anyNs ? 'not_yet_competent' : 'competent';
+    },
+    [template, resultsData]
+  );
   const [confirmConfig, setConfirmConfig] = useState<{
     title: string;
     message: string;
@@ -486,7 +532,7 @@ export const InstanceFillPage: React.FC = () => {
               : legacyStatus === 'draft' && roleCtx === 'office'
                 ? 'waiting_office'
                 : 'draft'
-    ) as 'draft' | 'waiting_trainer' | 'waiting_office' | 'completed';
+    ) as 'draft' | 'waiting_trainer' | 'waiting_office' | 'completed' | 'failed';
     setWorkflowStatus(normalizedWorkflow);
     const instSubmittedAt = (inst as unknown as { submitted_at?: string } | null)?.submitted_at;
     const instSubmissionCount = Number((inst as unknown as { submission_count?: number | null } | null)?.submission_count ?? 0) || 0;
@@ -1031,7 +1077,7 @@ export const InstanceFillPage: React.FC = () => {
   );
 
   const canRoleEditCurrentWorkflow = useMemo(() => {
-    if (workflowStatus === 'completed') return false;
+    if (workflowStatus === 'completed' || workflowStatus === 'failed') return false;
     if (role === 'student') return workflowStatus === 'draft';
     if (role === 'trainer') return workflowStatus === 'waiting_trainer';
     if (role === 'office') return workflowStatus === 'waiting_office';
@@ -1056,6 +1102,7 @@ export const InstanceFillPage: React.FC = () => {
     if (workflowStatus === 'draft') return 'Draft';
     if (workflowStatus === 'waiting_trainer') return 'Waiting for trainer check';
     if (workflowStatus === 'waiting_office') return 'Waiting for office check';
+    if (workflowStatus === 'failed') return 'Failed';
     return 'Completed';
   }, [workflowStatus]);
 
@@ -1089,6 +1136,43 @@ export const InstanceFillPage: React.FC = () => {
       return;
     }
     if (role === 'trainer' && workflowStatus === 'waiting_trainer') {
+      const latestAttempt = (Math.max(1, Math.min(3, submissionCount || 1)) as 1 | 2 | 3);
+      const latestResult = getTrainerAttemptOutcome(latestAttempt);
+
+      // Not Yet Competent: allow up to 3 attempts.
+      // Attempt 1 NYC -> extend +5 days and reopen to student.
+      // Attempt 2 NYC -> extend +5 days and reopen to student.
+      // Attempt 3 NYC -> mark failed (no more resubmissions).
+      if (latestResult === 'not_yet_competent') {
+        if (latestAttempt < 3) {
+          try {
+            const inst = await fetchInstance(id);
+            const currentEnd = String((inst as unknown as { end_date?: string | null } | null)?.end_date ?? '').trim();
+            const todayMel = getMelbourneDateStr(new Date());
+            // Extend from the current end_date when present, but never extend from a past date.
+            const baseEnd = isIsoDate(currentEnd) ? (currentEnd < todayMel ? todayMel : currentEnd) : todayMel;
+            const newEnd = addDaysIso(baseEnd, 5);
+            // Align end_date and re-enable student access until end-of-day Melbourne (23:59).
+            await extendInstanceAccessTokensToDate(id, 'student', newEnd);
+            await updateInstanceWorkflowStatus(id, 'draft');
+            await updateInstanceRole(id, 'student');
+            setWorkflowStatus('draft');
+            toast.success(`Not Yet Competent. Attempt ${latestAttempt} complete. Resubmission opened until ${newEnd} (23:59 Melbourne).`);
+          } finally {
+            setWorkflowSubmitting(false);
+          }
+          return;
+        }
+
+        // Attempt 3: fail and lock.
+        await updateInstanceWorkflowStatus(id, 'failed');
+        setWorkflowStatus('failed');
+        await updateInstanceRole(id, 'office');
+        toast.error('Not Yet Competent after 3 attempts. Instance is now Failed.');
+        setWorkflowSubmitting(false);
+        return;
+      }
+
       await updateInstanceWorkflowStatus(id, 'waiting_office');
       setWorkflowStatus('waiting_office');
       await updateInstanceRole(id, 'office');
@@ -1102,7 +1186,7 @@ export const InstanceFillPage: React.FC = () => {
       toast.success('Office check complete. Form is now completed.');
     }
     setWorkflowSubmitting(false);
-  }, [id, role, workflowStatus]);
+  }, [id, role, workflowStatus, submissionCount, getTrainerAttemptOutcome]);
 
   const handleFinalSubmitByRole = useCallback(() => {
     if (role === 'student' && workflowStatus === 'draft') {
@@ -1452,7 +1536,7 @@ export const InstanceFillPage: React.FC = () => {
 
   const showSubmittedPage =
     (role === 'student' && workflowStatus !== 'draft') ||
-    (role === 'trainer' && (workflowStatus === 'waiting_office' || workflowStatus === 'completed'));
+    (role === 'trainer' && (workflowStatus === 'waiting_office' || workflowStatus === 'completed' || workflowStatus === 'failed'));
 
   const canViewPdfPreview = role === 'office';
 

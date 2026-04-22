@@ -666,6 +666,30 @@ export async function fetchAssessmentSummaryData(instanceId: number): Promise<As
   };
 }
 
+export async function fetchAssessmentSummaries(instanceIds: number[]): Promise<Record<number, Pick<AssessmentSummaryDataEntry, 'final_attempt_1_result' | 'final_attempt_2_result' | 'final_attempt_3_result'>>> {
+  const ids = Array.from(new Set((instanceIds || []).map(Number).filter((n) => Number.isFinite(n) && n > 0)));
+  if (ids.length === 0) return {};
+  const { data, error } = await supabase
+    .from('skyline_form_assessment_summary_data')
+    .select('instance_id, final_attempt_1_result, final_attempt_2_result, final_attempt_3_result')
+    .in('instance_id', ids);
+  if (error) {
+    console.error('fetchAssessmentSummaries error', error);
+    return {};
+  }
+  const out: Record<number, Pick<AssessmentSummaryDataEntry, 'final_attempt_1_result' | 'final_attempt_2_result' | 'final_attempt_3_result'>> = {};
+  for (const r of (data as Array<Record<string, unknown>>) || []) {
+    const id = Number(r.instance_id);
+    if (!Number.isFinite(id) || id <= 0) continue;
+    out[id] = {
+      final_attempt_1_result: (r.final_attempt_1_result as string) ?? null,
+      final_attempt_2_result: (r.final_attempt_2_result as string) ?? null,
+      final_attempt_3_result: (r.final_attempt_3_result as string) ?? null,
+    };
+  }
+  return out;
+}
+
 export async function saveAssessmentSummaryData(
   instanceId: number,
   data: Partial<AssessmentSummaryDataEntry>
@@ -4532,7 +4556,7 @@ export async function updateInstanceRole(instanceId: number, roleContext: string
   await supabase.from('skyline_form_instances').update({ role_context: roleContext, updated_by }).eq('id', instanceId);
 }
 
-export type InstanceWorkflowStatus = 'draft' | 'waiting_trainer' | 'waiting_office' | 'completed';
+export type InstanceWorkflowStatus = 'draft' | 'waiting_trainer' | 'waiting_office' | 'completed' | 'failed';
 
 export async function updateInstanceWorkflowStatus(instanceId: number, workflowStatus: InstanceWorkflowStatus): Promise<void> {
   const nowIso = new Date().toISOString();
@@ -4540,7 +4564,7 @@ export async function updateInstanceWorkflowStatus(instanceId: number, workflowS
   // Use legacy status fields only, so this works even without workflow_status migration.
   if (workflowStatus === 'draft') payload.status = 'draft';
   if (workflowStatus === 'waiting_trainer' || workflowStatus === 'waiting_office') payload.status = 'submitted';
-  if (workflowStatus === 'completed') payload.status = 'locked';
+  if (workflowStatus === 'completed' || workflowStatus === 'failed') payload.status = 'locked';
   if (workflowStatus === 'waiting_trainer') {
     const { data: instRow } = await supabase
       .from('skyline_form_instances')
@@ -4555,8 +4579,19 @@ export async function updateInstanceWorkflowStatus(instanceId: number, workflowS
     const current = Number((instRow as { submission_count?: number | null } | null)?.submission_count ?? 0) || 0;
     payload.submission_count = Math.max(current, 1);
   }
-  const { error } = await supabase.from('skyline_form_instances').update(payload).eq('id', instanceId);
-  if (error) console.error('updateInstanceWorkflowStatus error', error);
+  // Best-effort: also persist workflow_status when the column exists.
+  const payloadWithWf: Record<string, unknown> = { ...payload, workflow_status: workflowStatus };
+  const { error } = await supabase.from('skyline_form_instances').update(payloadWithWf).eq('id', instanceId);
+  if (error) {
+    // If the DB doesn't have workflow_status yet, retry without it.
+    const msg = String((error as { message?: string } | null)?.message ?? '');
+    if (msg.toLowerCase().includes('workflow_status')) {
+      const { error: retryErr } = await supabase.from('skyline_form_instances').update(payload).eq('id', instanceId);
+      if (retryErr) console.error('updateInstanceWorkflowStatus retry error', retryErr);
+      return;
+    }
+    console.error('updateInstanceWorkflowStatus error', error);
+  }
 }
 
 /** Skyline induction windows (enrollment hub). */

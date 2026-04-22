@@ -1,14 +1,15 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
-import { LayoutDashboard, RefreshCw, ExternalLink, Search } from 'lucide-react';
-import { requestStudentOtp, studentLoginWithOtp, listStudentAssessmentsPaged, issueInstanceAccessLink } from '../lib/formEngine';
-import type { SubmittedInstanceRow } from '../lib/formEngine';
+import { LayoutDashboard, RefreshCw, ExternalLink, Search, Mail, Phone, CheckCircle } from 'lucide-react';
+import { listStudentAssessmentsPaged, issueInstanceAccessLink, fetchAssessmentSummaries } from '../lib/formEngine';
+import type { Student, SubmittedInstanceRow } from '../lib/formEngine';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Loader } from '../components/ui/Loader';
 import { toast } from '../utils/toast';
 import { AdminListPagination } from '../components/admin/AdminListPagination';
-import { isValidInstitutionalEmail } from '../lib/emailUtils';
+import { supabase } from '../lib/supabase';
+import { useNavigate } from 'react-router-dom';
 
 const MEL_TZ = 'Australia/Melbourne';
 const melDate = (d: Date): string => {
@@ -24,6 +25,94 @@ const formatDDMMYYYY = (value: string | null): string => {
   return v;
 };
 
+function StatusChecks({ row }: { row: SubmittedInstanceRow }) {
+  const studentDone = !!row.submitted_at || (row.submission_count ?? 0) > 0 || row.status === 'locked';
+  const trainerDone = row.status === 'locked' || row.role_context === 'office';
+  const adminDone = row.status === 'locked';
+  const Item = ({ label, ok }: { label: string; ok: boolean }) => (
+    <div className="inline-flex items-center gap-1.5 text-xs">
+      <CheckCircle className={ok ? 'w-4 h-4 text-emerald-600' : 'w-4 h-4 text-gray-300'} />
+      <span className={ok ? 'text-emerald-700 font-medium' : 'text-gray-500'}>{label}</span>
+    </div>
+  );
+  return (
+    <div className="flex flex-wrap gap-x-3 gap-y-1">
+      <Item label="Submitted" ok={studentDone} />
+      <Item label="Trainer" ok={trainerDone} />
+      <Item label="Completed" ok={adminDone} />
+    </div>
+  );
+}
+
+type AttemptResult = 'competent' | 'not_yet_competent' | null;
+
+type DotTone = 'green' | 'red' | 'yellow' | 'gray';
+const dotToneClass: Record<DotTone, string> = {
+  green: 'bg-emerald-500 border-emerald-600',
+  red: 'bg-red-500 border-red-600',
+  yellow: 'bg-amber-400 border-amber-500',
+  gray: 'bg-gray-200 border-gray-300',
+};
+
+function computeAttemptTones(input: {
+  submissionCount: number;
+  results: AttemptResult[];
+}): { student: DotTone[]; trainer: DotTone[] } {
+  const submitted = Math.min(3, Math.max(0, Number(input.submissionCount) || 0));
+  const r = [...input.results, null, null, null].slice(0, 3);
+
+  // Next attempt (yellow for student) if any NYC has occurred, otherwise the next unsubmitted attempt.
+  let nextAttemptIdx: number | null = null;
+  const firstNYC = r.findIndex((x) => x === 'not_yet_competent');
+  if (firstNYC >= 0) nextAttemptIdx = firstNYC + 1 < 3 ? firstNYC + 1 : null;
+  else nextAttemptIdx = submitted < 3 ? submitted : null;
+
+  const student: DotTone[] = [0, 1, 2].map((i) => {
+    if (r[i] === 'competent') return 'green';
+    if (r[i] === 'not_yet_competent') return 'red';
+    if (i < submitted) return 'green'; // student has submitted this attempt, awaiting result
+    if (nextAttemptIdx === i) return 'yellow'; // next attempt to do
+    return 'gray';
+  });
+
+  const trainer: DotTone[] = [0, 1, 2].map((i) => {
+    if (r[i] === 'competent') return 'green';
+    if (r[i] === 'not_yet_competent') return 'red';
+    if (i < submitted) return 'yellow'; // submitted but not yet marked
+    return 'gray';
+  });
+
+  return { student, trainer };
+}
+
+function AttemptDots({ tones, titlePrefix }: { tones: DotTone[]; titlePrefix: string }) {
+  return (
+    <div className="flex items-center gap-1.5">
+      {[0, 1, 2].map((i) => (
+        <div
+          key={i}
+          className={`h-2.5 w-2.5 rounded-full border ${dotToneClass[tones[i] ?? 'gray']}`}
+          title={`${titlePrefix} attempt ${i + 1}`}
+        />
+      ))}
+    </div>
+  );
+}
+
+function getOutcomeLabel(summary: { final_attempt_1_result: AttemptResult; final_attempt_2_result: AttemptResult; final_attempt_3_result: AttemptResult } | null): {
+  label: string;
+  className: string;
+} {
+  const r1 = summary?.final_attempt_1_result ?? null;
+  const r2 = summary?.final_attempt_2_result ?? null;
+  const r3 = summary?.final_attempt_3_result ?? null;
+  const anyCompetent = r1 === 'competent' || r2 === 'competent' || r3 === 'competent';
+  if (anyCompetent) return { label: 'Completed', className: 'text-emerald-700' };
+  const anyNYC = r1 === 'not_yet_competent' || r2 === 'not_yet_competent' || r3 === 'not_yet_competent';
+  if (anyNYC) return { label: 'Not competent', className: 'text-red-700' };
+  return { label: 'In progress', className: 'text-gray-700' };
+}
+
 const withinWindowMelbourne = (row: Pick<SubmittedInstanceRow, 'start_date' | 'end_date'>): { ok: boolean; reason?: string } => {
   const today = melDate(new Date());
   const start = String(row.start_date ?? '').trim();
@@ -36,14 +125,13 @@ const withinWindowMelbourne = (row: Pick<SubmittedInstanceRow, 'start_date' | 'e
 const STORAGE_KEY = 'signflow_student_dashboard_auth_v1';
 
 export const StudentDashboardPage: React.FC = () => {
+  const navigate = useNavigate();
   const PAGE_SIZE = 20;
   const [studentId, setStudentId] = useState<number | null>(null);
   const [studentEmail, setStudentEmail] = useState<string>('');
-
-  const [email, setEmail] = useState('');
-  const [otp, setOtp] = useState('');
-  const [otpSent, setOtpSent] = useState(false);
-  const [authSubmitting, setAuthSubmitting] = useState(false);
+  const [student, setStudent] = useState<Student | null>(null);
+  const [studentCourses, setStudentCourses] = useState<Array<{ id: number; name: string; qualification_code: string | null; enrolled_at?: string }>>([]);
+  const [studentLoading, setStudentLoading] = useState(false);
 
   const [rows, setRows] = useState<SubmittedInstanceRow[]>([]);
   const [totalRows, setTotalRows] = useState(0);
@@ -51,6 +139,9 @@ export const StudentDashboardPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [attemptSummaryByInstanceId, setAttemptSummaryByInstanceId] = useState<
+    Record<number, { final_attempt_1_result: AttemptResult; final_attempt_2_result: AttemptResult; final_attempt_3_result: AttemptResult }>
+  >({});
 
   useEffect(() => {
     try {
@@ -67,10 +158,6 @@ export const StudentDashboardPage: React.FC = () => {
     }
   }, []);
 
-  const emailValid = isValidInstitutionalEmail(email);
-  const canSendOtp = !!email.trim() && emailValid && !otpSent;
-  const canVerifyOtp = !!email.trim() && otp.trim().length >= 6;
-
   const totalPages = Math.max(1, Math.ceil(totalRows / PAGE_SIZE));
 
   const loadRows = useCallback(
@@ -86,44 +173,111 @@ export const StudentDashboardPage: React.FC = () => {
   );
 
   useEffect(() => {
+    if (rows.length === 0) {
+      setAttemptSummaryByInstanceId({});
+      return;
+    }
+    const ids = rows.map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0);
+    let cancelled = false;
+    void (async () => {
+      const m = await fetchAssessmentSummaries(ids);
+      if (cancelled) return;
+      setAttemptSummaryByInstanceId(m as Record<number, { final_attempt_1_result: AttemptResult; final_attempt_2_result: AttemptResult; final_attempt_3_result: AttemptResult }>);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [rows]);
+
+  const loadStudentProfile = useCallback(async () => {
+    if (!studentId) return;
+    setStudentLoading(true);
+    try {
+      const { data: sRow, error: sErr } = await supabase
+        .from('skyline_students')
+        .select('*, skyline_batches(name)')
+        .eq('id', studentId)
+        .single();
+      if (sErr) throw sErr;
+      const batch = (sRow as Record<string, unknown>).skyline_batches as { name?: string } | null;
+      const st: Student = {
+        id: Number((sRow as Record<string, unknown>).id),
+        student_id: (sRow as Record<string, unknown>).student_id ? String((sRow as Record<string, unknown>).student_id) : null,
+        name: String((sRow as Record<string, unknown>).name ?? ''),
+        first_name: (sRow as Record<string, unknown>).first_name ? String((sRow as Record<string, unknown>).first_name) : null,
+        last_name: (sRow as Record<string, unknown>).last_name ? String((sRow as Record<string, unknown>).last_name) : null,
+        email: String((sRow as Record<string, unknown>).email ?? ''),
+        phone: (sRow as Record<string, unknown>).phone ? String((sRow as Record<string, unknown>).phone) : null,
+        batch_id: (sRow as Record<string, unknown>).batch_id != null ? Number((sRow as Record<string, unknown>).batch_id) : null,
+        batch_name: batch?.name ?? null,
+        date_of_birth: (sRow as Record<string, unknown>).date_of_birth ? String((sRow as Record<string, unknown>).date_of_birth) : null,
+        address_line_1: null,
+        address_line_2: null,
+        city: null,
+        state: null,
+        postal_code: null,
+        country: null,
+        guardian_name: null,
+        guardian_phone: null,
+        notes: null,
+        status: (sRow as Record<string, unknown>).status ? String((sRow as Record<string, unknown>).status) : null,
+        created_at: String((sRow as Record<string, unknown>).created_at ?? ''),
+      };
+      setStudent(st);
+
+      const { data: scRows } = await supabase
+        .from('skyline_student_courses')
+        .select('created_at, course_id, skyline_courses(id, name, qualification_code)')
+        .eq('student_id', studentId)
+        .eq('status', 'active')
+        .order('created_at', { ascending: false });
+      const courseList = (
+        (scRows as
+          | Array<{
+              created_at?: string;
+              skyline_courses: { id: number; name: string; qualification_code: string | null } | null;
+            }>
+          | null) || []
+      )
+        .map((r) => {
+          const c = r.skyline_courses;
+          if (!c) return null;
+          return {
+            id: c.id,
+            name: c.name,
+            qualification_code: c.qualification_code,
+            enrolled_at: String(r.created_at ?? ''),
+          };
+        })
+        .filter((c): c is { id: number; name: string; qualification_code: string | null; enrolled_at: string } => !!c);
+      setStudentCourses(courseList);
+    } catch (e) {
+      console.error('StudentDashboardPage load profile error', e);
+      setStudent(null);
+      setStudentCourses([]);
+    } finally {
+      setStudentLoading(false);
+    }
+  }, [studentId]);
+
+  useEffect(() => {
     if (!studentId) return;
     const t = setTimeout(() => void loadRows(currentPage, searchTerm), 250);
     return () => clearTimeout(t);
   }, [studentId, currentPage, searchTerm, loadRows]);
 
   useEffect(() => {
-    setCurrentPage(1);
-  }, [searchTerm, studentId]);
-
-  const handleSendOtp = async () => {
-    if (!email.trim() || !emailValid) return;
-    setAuthSubmitting(true);
-    const res = await requestStudentOtp(email.trim());
-    setAuthSubmitting(false);
-    if (res.success) {
-      setOtpSent(true);
-      toast.success(res.message || 'OTP sent. Check your email.');
-    } else {
-      toast.error(res.message || 'Failed to send OTP');
-    }
-  };
-
-  const handleVerifyOtp = async () => {
-    if (!email.trim() || !otp.trim() || !emailValid) return;
-    setAuthSubmitting(true);
-    const res = await studentLoginWithOtp(email.trim(), otp.trim());
-    setAuthSubmitting(false);
-    if (!res.ok) {
-      toast.error(res.error);
+    if (!studentId) {
+      setStudent(null);
+      setStudentCourses([]);
       return;
     }
-    setStudentId(res.studentId);
-    setStudentEmail(res.email);
-    sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ studentId: res.studentId, email: res.email, at: Date.now() }));
-    setOtp('');
-    setOtpSent(false);
-    toast.success('Welcome');
-  };
+    void loadStudentProfile();
+  }, [studentId, loadStudentProfile]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, studentId]);
 
   const handleRefresh = async () => {
     if (!studentId) return;
@@ -151,13 +305,12 @@ export const StudentDashboardPage: React.FC = () => {
     sessionStorage.removeItem(STORAGE_KEY);
     setStudentId(null);
     setStudentEmail('');
+    setStudent(null);
+    setStudentCourses([]);
     setRows([]);
     setTotalRows(0);
     setCurrentPage(1);
     setSearchTerm('');
-    setEmail('');
-    setOtp('');
-    setOtpSent(false);
   };
 
   const headerRight = useMemo(() => {
@@ -177,7 +330,7 @@ export const StudentDashboardPage: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[var(--bg)]">
-      <div className="w-full px-4 md:px-6 lg:px-8 py-6 max-w-6xl mx-auto space-y-4">
+      <div className="w-full px-4 md:px-6 lg:px-8 py-6 space-y-4">
         <Card>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -201,145 +354,209 @@ export const StudentDashboardPage: React.FC = () => {
 
         {!studentId ? (
           <Card className="max-w-xl">
-            <div className="space-y-4">
-              <div>
-                <Input
-                  type="email"
-                  label="Email"
-                  value={email}
-                  onChange={(e) => {
-                    setEmail(e.target.value);
-                    if (otpSent) setOtpSent(false);
-                  }}
-                  placeholder="firstname.lastname@student.slit.edu.au"
-                  autoComplete="email"
-                  className={email.trim() && !emailValid ? 'border-amber-500' : ''}
-                />
-                {email.trim() && !emailValid ? (
-                  <p className="mt-1.5 text-sm text-amber-600">Only @student.slit.edu.au or @slit.edu.au emails can access.</p>
-                ) : null}
-              </div>
-              {!otpSent ? (
-                <Button type="button" onClick={handleSendOtp} disabled={authSubmitting || !canSendOtp} className="w-full">
-                  {authSubmitting ? 'Sending…' : 'Send OTP'}
+            <div className="space-y-3">
+              <p className="text-sm text-gray-700">
+                You’re not signed in. Please sign in from the main login page to view your dashboard.
+              </p>
+              <div className="flex gap-2">
+                <Button type="button" onClick={() => navigate('/login')} className="min-w-[10rem]">
+                  Go to login
                 </Button>
-              ) : (
-                <div className="space-y-3">
-                  <Input
-                    type="text"
-                    inputMode="numeric"
-                    maxLength={6}
-                    label="6-digit OTP"
-                    value={otp}
-                    onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))}
-                    placeholder="000000"
-                    autoComplete="one-time-code"
-                    className="text-center text-lg tracking-widest"
-                  />
-                  <Button type="button" onClick={handleVerifyOtp} disabled={authSubmitting || !canVerifyOtp} className="w-full">
-                    {authSubmitting ? 'Verifying…' : 'View my assessments'}
-                  </Button>
-                  <button type="button" onClick={() => { setOtpSent(false); setOtp(''); }} className="w-full text-sm text-gray-500 hover:text-gray-700">
-                    Use a different email or resend OTP
-                  </button>
-                </div>
-              )}
+              </div>
             </div>
           </Card>
         ) : (
-          <Card>
-            <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between mb-4">
-              <div>
-                <h2 className="text-lg font-bold text-[var(--text)]">My assessments</h2>
-                <p className="text-sm text-gray-600 mt-1">Open is enabled only during the allowed date window.</p>
-              </div>
-              <div className="relative w-full md:w-[320px]">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-                <Input
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  placeholder="Search unit or status…"
-                  className="!pl-10 w-full"
-                />
-              </div>
+          <div className="flex flex-col lg:flex-row gap-4">
+            <div className="w-full lg:w-[340px] lg:shrink-0">
+              <Card>
+                {studentLoading ? (
+                  <div className="py-10">
+                    <Loader variant="dots" size="lg" message="Loading profile..." />
+                  </div>
+                ) : !student ? (
+                  <div className="space-y-2">
+                    <div className="text-sm text-gray-700 font-medium break-all">{studentEmail}</div>
+                    <div className="text-xs text-gray-500">Profile not available.</div>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div>
+                      <div className="text-xs text-gray-500">Student</div>
+                      <div className="font-semibold text-[var(--text)] break-words">
+                        {[student.first_name, student.last_name].filter(Boolean).join(' ').trim() || student.email}
+                      </div>
+                      {student.student_id ? <div className="text-xs text-gray-500 mt-1">Student ID: {student.student_id}</div> : null}
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-2 text-sm">
+                      <div className="flex items-center gap-2 text-gray-700">
+                        <Mail className="w-4 h-4 text-gray-400" />
+                        <span className="break-all">{student.email}</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-gray-700">
+                        <Phone className="w-4 h-4 text-gray-400" />
+                        <span>{student.phone || '—'}</span>
+                      </div>
+                    </div>
+
+                    <div className="border-t border-gray-100 pt-3 space-y-2 text-sm">
+                      <div className="flex items-start justify-between gap-3">
+                        <span className="text-gray-500">Courses</span>
+                        <div className="text-right text-gray-800">
+                          {studentCourses.length === 0 ? (
+                            '—'
+                          ) : (
+                            <div className="space-y-2">
+                              {studentCourses.map((c) => (
+                                <div key={c.id} className="break-words">
+                                  {c.qualification_code ? `${c.qualification_code} — ` : ''}
+                                  {c.name}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-start justify-between gap-3">
+                        <span className="text-gray-500">Batch</span>
+                        <span className="text-gray-800 text-right break-words">{student.batch_name ?? '—'}</span>
+                      </div>
+                      <div className="flex items-start justify-between gap-3">
+                        <span className="text-gray-500">Status</span>
+                        <span className="text-gray-800">{student.status ?? '—'}</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </Card>
             </div>
 
-            {!loading && totalRows > 0 ? (
-              <AdminListPagination
-                placement="top"
-                totalItems={totalRows}
-                pageSize={PAGE_SIZE}
-                currentPage={currentPage}
-                totalPages={totalPages}
-                onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                onNext={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                onGoToPage={(p) => setCurrentPage(p)}
-                itemLabel="assessments"
-              />
-            ) : null}
+            <div className="min-w-0 flex-1">
+              <Card>
+                <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between mb-4">
+                  <div>
+                    <h2 className="text-lg font-bold text-[var(--text)]">My assessments</h2>
+                    <p className="text-sm text-gray-600 mt-1">Open is enabled only during the allowed date window (end date is 23:59 AEDT).</p>
+                  </div>
+                  <div className="relative w-full md:w-[320px]">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                    <Input
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      placeholder="Search unit or status…"
+                      className="!pl-10 w-full"
+                    />
+                  </div>
+                </div>
 
-            {loading ? (
-              <div className="py-12">
-                <Loader variant="dots" size="lg" message="Loading assessments..." />
-              </div>
-            ) : rows.length === 0 ? (
-              <div className="py-12 text-center text-sm text-gray-500">No assessments found.</div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="min-w-[860px] w-full text-sm border border-[var(--border)] rounded-lg overflow-hidden">
-                  <thead className="bg-gray-50 text-gray-700">
-                    <tr>
-                      <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Unit</th>
-                      <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)] w-[120px]">Start</th>
-                      <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)] w-[120px]">End</th>
-                      <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)] w-[180px]">Status</th>
-                      <th className="text-right px-4 py-3 font-semibold border-b border-[var(--border)] w-[160px]">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((row) => {
-                      const win = withinWindowMelbourne(row);
-                      const disabled = !win.ok;
-                      return (
-                        <tr key={row.id} className="hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors">
-                          <td className="px-4 py-3 border-b border-[var(--border)]">
-                            <div className="font-medium text-[var(--text)] break-words">{row.form_name}</div>
-                            <div className="text-xs text-gray-500">Version {row.form_version ?? '1.0.0'}</div>
-                          </td>
-                          <td className="px-4 py-3 border-b border-[var(--border)] text-gray-700 whitespace-nowrap">{formatDDMMYYYY(row.start_date)}</td>
-                          <td className="px-4 py-3 border-b border-[var(--border)] text-gray-700 whitespace-nowrap">{formatDDMMYYYY(row.end_date)}</td>
-                          <td className="px-4 py-3 border-b border-[var(--border)]">
-                            <div className="text-gray-700">{row.status}</div>
-                            {!win.ok ? <div className="text-xs text-amber-700 mt-1">{win.reason}</div> : null}
-                          </td>
-                          <td className="px-4 py-3 border-b border-[var(--border)] text-right">
-                            <Button variant="outline" size="sm" onClick={() => void handleOpen(row)} disabled={disabled}>
-                              <ExternalLink className="w-4 h-4 mr-2 inline" />
-                              Open
-                            </Button>
-                          </td>
+                {!loading && totalRows > 0 ? (
+                  <AdminListPagination
+                    placement="top"
+                    totalItems={totalRows}
+                    pageSize={PAGE_SIZE}
+                    currentPage={currentPage}
+                    totalPages={totalPages}
+                    onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                    onNext={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                    onGoToPage={(p) => setCurrentPage(p)}
+                    itemLabel="assessments"
+                  />
+                ) : null}
+
+                {loading ? (
+                  <div className="py-12">
+                    <Loader variant="dots" size="lg" message="Loading assessments..." />
+                  </div>
+                ) : rows.length === 0 ? (
+                  <div className="py-12 text-center text-sm text-gray-500">No assessments found.</div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm border border-[var(--border)] rounded-lg overflow-hidden">
+                      <thead className="bg-gray-50 text-gray-700">
+                        <tr>
+                          <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Unit</th>
+                          <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)] whitespace-nowrap">Start</th>
+                          <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)] whitespace-nowrap">End</th>
+                          <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)] min-w-[200px]">Progress</th>
+                          <th className="text-right px-4 py-3 font-semibold border-b border-[var(--border)] whitespace-nowrap">Action</th>
                         </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
+                      </thead>
+                      <tbody>
+                        {rows.map((row) => {
+                          const win = withinWindowMelbourne(row);
+                          const disabled = !win.ok;
+                          return (
+                            <tr key={row.id} className="hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors">
+                              <td className="px-4 py-3 border-b border-[var(--border)]">
+                                <div className="font-medium text-[var(--text)] break-words whitespace-normal">{row.form_name}</div>
+                                <div className="text-xs text-gray-500">Version {row.form_version ?? '1.0.0'}</div>
+                              </td>
+                              <td className="px-4 py-3 border-b border-[var(--border)] text-gray-700 whitespace-nowrap tabular-nums">{formatDDMMYYYY(row.start_date)}</td>
+                              <td className="px-4 py-3 border-b border-[var(--border)] text-gray-700 whitespace-nowrap tabular-nums">{formatDDMMYYYY(row.end_date)}</td>
+                              <td className="px-4 py-3 border-b border-[var(--border)]">
+                                <div className="flex flex-col gap-1">
+                                  <div className="flex items-center justify-between gap-3">
+                                    <StatusChecks row={row} />
+                                  </div>
+                                  {(() => {
+                                    const sum = attemptSummaryByInstanceId[row.id] ?? null;
+                                    const results: AttemptResult[] = [
+                                      sum?.final_attempt_1_result ?? null,
+                                      sum?.final_attempt_2_result ?? null,
+                                      sum?.final_attempt_3_result ?? null,
+                                    ];
+                                    const tones = computeAttemptTones({
+                                      submissionCount: Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0),
+                                      results,
+                                    });
+                                    return (
+                                      <div className="grid grid-cols-3 gap-x-6 gap-y-1">
+                                        <div className="col-span-1">
+                                          <AttemptDots tones={tones.student} titlePrefix="Student" />
+                                        </div>
+                                        <div className="col-span-1">
+                                          <AttemptDots tones={tones.trainer} titlePrefix="Trainer" />
+                                        </div>
+                                        <div className="col-span-1" />
+                                      </div>
+                                    );
+                                  })()}
+                                  <div className={`text-xs font-medium ${getOutcomeLabel(attemptSummaryByInstanceId[row.id] ?? null).className}`}>
+                                    {getOutcomeLabel(attemptSummaryByInstanceId[row.id] ?? null).label}
+                                  </div>
+                                </div>
+                                {!win.ok ? <div className="text-xs text-amber-700 mt-1">{win.reason}</div> : null}
+                              </td>
+                              <td className="px-4 py-3 border-b border-[var(--border)] text-right">
+                                <Button variant="outline" size="sm" onClick={() => void handleOpen(row)} disabled={disabled}>
+                                  <ExternalLink className="w-4 h-4 mr-2 inline" />
+                                  Open
+                                </Button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
 
-            {!loading && totalRows > 0 ? (
-              <AdminListPagination
-                placement="bottom"
-                totalItems={totalRows}
-                pageSize={PAGE_SIZE}
-                currentPage={currentPage}
-                totalPages={totalPages}
-                onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                onNext={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                onGoToPage={(p) => setCurrentPage(p)}
-                itemLabel="assessments"
-              />
-            ) : null}
-          </Card>
+                {!loading && totalRows > 0 ? (
+                  <AdminListPagination
+                    placement="bottom"
+                    totalItems={totalRows}
+                    pageSize={PAGE_SIZE}
+                    currentPage={currentPage}
+                    totalPages={totalPages}
+                    onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                    onNext={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                    onGoToPage={(p) => setCurrentPage(p)}
+                    itemLabel="assessments"
+                  />
+                ) : null}
+              </Card>
+            </div>
+          </div>
         )}
       </div>
     </div>

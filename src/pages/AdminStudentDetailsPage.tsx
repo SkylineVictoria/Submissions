@@ -20,6 +20,7 @@ import {
   listCoursesPaged,
   listSubmittedInstancesPaged,
   updateFormInstanceDates,
+  fetchAssessmentSummaries,
   listActiveFormsByQualificationCode,
   upsertStudentAssessmentsForForms,
   getFormsForCourse,
@@ -60,6 +61,74 @@ function StatusChecks({ row }: { row: SubmittedInstanceRow }) {
   );
 }
 
+type AttemptResult = 'competent' | 'not_yet_competent' | null;
+
+type DotTone = 'green' | 'red' | 'yellow' | 'gray';
+const dotToneClass: Record<DotTone, string> = {
+  green: 'bg-emerald-500 border-emerald-600',
+  red: 'bg-red-500 border-red-600',
+  yellow: 'bg-amber-400 border-amber-500',
+  gray: 'bg-gray-200 border-gray-300',
+};
+
+function computeAttemptTones(input: {
+  submissionCount: number;
+  results: AttemptResult[];
+}): { student: DotTone[]; trainer: DotTone[] } {
+  const submitted = Math.min(3, Math.max(0, Number(input.submissionCount) || 0));
+  const r = [...input.results, null, null, null].slice(0, 3);
+
+  let nextAttemptIdx: number | null = null;
+  const firstNYC = r.findIndex((x) => x === 'not_yet_competent');
+  if (firstNYC >= 0) nextAttemptIdx = firstNYC + 1 < 3 ? firstNYC + 1 : null;
+  else nextAttemptIdx = submitted < 3 ? submitted : null;
+
+  const student: DotTone[] = [0, 1, 2].map((i) => {
+    if (r[i] === 'competent') return 'green';
+    if (r[i] === 'not_yet_competent') return 'red';
+    if (i < submitted) return 'green';
+    if (nextAttemptIdx === i) return 'yellow';
+    return 'gray';
+  });
+
+  const trainer: DotTone[] = [0, 1, 2].map((i) => {
+    if (r[i] === 'competent') return 'green';
+    if (r[i] === 'not_yet_competent') return 'red';
+    if (i < submitted) return 'yellow';
+    return 'gray';
+  });
+
+  return { student, trainer };
+}
+
+function AttemptDots({ tones, titlePrefix }: { tones: DotTone[]; titlePrefix: string }) {
+  return (
+    <div className="flex items-center gap-1.5">
+      {[0, 1, 2].map((i) => (
+        <div
+          key={i}
+          className={`h-2.5 w-2.5 rounded-full border ${dotToneClass[tones[i] ?? 'gray']}`}
+          title={`${titlePrefix} attempt ${i + 1}`}
+        />
+      ))}
+    </div>
+  );
+}
+
+function getOutcomeLabel(summary: { final_attempt_1_result: AttemptResult; final_attempt_2_result: AttemptResult; final_attempt_3_result: AttemptResult } | null): {
+  label: string;
+  className: string;
+} {
+  const r1 = summary?.final_attempt_1_result ?? null;
+  const r2 = summary?.final_attempt_2_result ?? null;
+  const r3 = summary?.final_attempt_3_result ?? null;
+  const anyCompetent = r1 === 'competent' || r2 === 'competent' || r3 === 'competent';
+  if (anyCompetent) return { label: 'Completed', className: 'text-emerald-700' };
+  const anyNYC = r1 === 'not_yet_competent' || r2 === 'not_yet_competent' || r3 === 'not_yet_competent';
+  if (anyNYC) return { label: 'Not competent', className: 'text-red-700' };
+  return { label: 'In progress', className: 'text-gray-700' };
+}
+
 export const AdminStudentDetailsPage: React.FC = () => {
   const { studentId } = useParams();
   const navigate = useNavigate();
@@ -76,6 +145,9 @@ export const AdminStudentDetailsPage: React.FC = () => {
   >([]);
   const [assessments, setAssessments] = useState<SubmittedInstanceRow[]>([]);
   const [assessmentsLoading, setAssessmentsLoading] = useState(false);
+  const [attemptSummaryByInstanceId, setAttemptSummaryByInstanceId] = useState<
+    Record<number, { final_attempt_1_result: AttemptResult; final_attempt_2_result: AttemptResult; final_attempt_3_result: AttemptResult }>
+  >({});
   const [managingId, setManagingId] = useState<number | null>(null);
   const [addAssessmentOpen, setAddAssessmentOpen] = useState(false);
   const [addCourseId, setAddCourseId] = useState<string>('');
@@ -119,6 +191,23 @@ export const AdminStudentDetailsPage: React.FC = () => {
     setAssessments(res.data);
     setAssessmentsLoading(false);
   }, [sid]);
+
+  useEffect(() => {
+    if (assessments.length === 0) {
+      setAttemptSummaryByInstanceId({});
+      return;
+    }
+    const ids = assessments.map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0);
+    let cancelled = false;
+    void (async () => {
+      const m = await fetchAssessmentSummaries(ids);
+      if (cancelled) return;
+      setAttemptSummaryByInstanceId(m as Record<number, { final_attempt_1_result: AttemptResult; final_attempt_2_result: AttemptResult; final_attempt_3_result: AttemptResult }>);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [assessments]);
 
   const loadCoursesOptions = useCallback(async (page: number, search: string) => {
     const res = await listCoursesPaged(page, 20, search || undefined);
@@ -720,7 +809,37 @@ export const AdminStudentDetailsPage: React.FC = () => {
                               {formatDDMMYYYY(row.created_at)}
                             </td>
                             <td className="px-3 py-2 border-b border-[var(--border)]">
-                              <StatusChecks row={row} />
+                              <div className="flex flex-col gap-1">
+                                <div className="flex items-center justify-between gap-3">
+                                  <StatusChecks row={row} />
+                                </div>
+                                {(() => {
+                                  const sum = attemptSummaryByInstanceId[row.id] ?? null;
+                                  const results: AttemptResult[] = [
+                                    sum?.final_attempt_1_result ?? null,
+                                    sum?.final_attempt_2_result ?? null,
+                                    sum?.final_attempt_3_result ?? null,
+                                  ];
+                                  const tones = computeAttemptTones({
+                                    submissionCount: Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0),
+                                    results,
+                                  });
+                                  return (
+                                    <div className="grid grid-cols-3 gap-x-6 gap-y-1">
+                                      <div className="col-span-1">
+                                        <AttemptDots tones={tones.student} titlePrefix="Student" />
+                                      </div>
+                                      <div className="col-span-1">
+                                        <AttemptDots tones={tones.trainer} titlePrefix="Trainer" />
+                                      </div>
+                                      <div className="col-span-1" />
+                                    </div>
+                                  );
+                                })()}
+                                <div className={`text-xs font-medium ${getOutcomeLabel(attemptSummaryByInstanceId[row.id] ?? null).className}`}>
+                                  {getOutcomeLabel(attemptSummaryByInstanceId[row.id] ?? null).label}
+                                </div>
+                              </div>
                             </td>
                             <td className="px-3 py-2 border-b border-[var(--border)] text-right">
                               <div className="flex items-center justify-end gap-2">
