@@ -12,6 +12,7 @@ import { Loader } from '../components/ui/Loader';
 import { toast } from '../utils/toast';
 import { AdminListPagination } from '../components/admin/AdminListPagination';
 import { useAuth } from '../contexts/AuthContext';
+import { FormDocumentsPanel } from '../components/documents/FormDocumentsPanel';
 
 export const AdminFormsListPage: React.FC = () => {
   const { user } = useAuth();
@@ -40,6 +41,7 @@ export const AdminFormsListPage: React.FC = () => {
   const [courseFilter, setCourseFilter] = useState<string>('');
   const [searchTerm, setSearchTerm] = useState('');
   const [formCoursesMap, setFormCoursesMap] = useState<Map<number, { id: number; name: string }[]>>(new Map());
+  const [expandedFormId, setExpandedFormId] = useState<number | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
   const loadFormsPage = useCallback(async (page: number, courseId?: number, search?: string) => {
@@ -275,7 +277,12 @@ export const AdminFormsListPage: React.FC = () => {
             <>
               <div className="space-y-3 lg:hidden">
                 {forms.map((form) => (
-                  <div key={form.id} className="rounded-lg border border-[var(--border)] bg-white p-4 shadow-sm">
+                  <div
+                    key={form.id}
+                    className="rounded-lg border border-[var(--border)] bg-white p-4 shadow-sm hover:bg-[var(--brand)]/10 transition-colors cursor-pointer"
+                    onClick={() => setExpandedFormId((p) => (p === form.id ? null : form.id))}
+                    title="Click to expand documents"
+                  >
                     <div className="flex items-start gap-3">
                       <FileText className="mt-0.5 h-5 w-5 shrink-0 text-gray-400" />
                       <div className="min-w-0 flex-1">
@@ -320,14 +327,17 @@ export const AdminFormsListPage: React.FC = () => {
                             variant="outline"
                             size="sm"
                             className="w-full justify-center"
-                            onClick={() => handlePreview(form.id)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handlePreview(form.id);
+                            }}
                             disabled={previewing !== null}
                           >
                             {previewing === form.id ? <Loader variant="dots" size="sm" inline /> : <Eye className="mr-2 h-4 w-4 shrink-0" />}
                             Preview
                           </Button>
                           {canManageForms ? (
-                            <Link to={`/admin/forms/${form.id}/builder`} className="block w-full">
+                            <Link to={`/admin/forms/${form.id}/builder`} className="block w-full" onClick={(e) => e.stopPropagation()}>
                               <Button variant="outline" size="sm" className="w-full justify-center">
                                 <Edit className="mr-2 h-4 w-4 shrink-0" />
                                 Edit in builder
@@ -335,12 +345,30 @@ export const AdminFormsListPage: React.FC = () => {
                             </Link>
                           ) : null}
                           <div className={`grid gap-2 ${canManageForms ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'}`}>
-                            <Button variant="outline" size="sm" className="w-full justify-center" onClick={() => void handleCopyGenericLink(form.id)} disabled={duplicating !== null}>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="w-full justify-center"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void handleCopyGenericLink(form.id);
+                              }}
+                              disabled={duplicating !== null}
+                            >
                               <Copy className="mr-2 h-4 w-4 shrink-0" />
                               Copy link
                             </Button>
                             {canManageForms ? (
-                              <Button variant="outline" size="sm" className="w-full justify-center" onClick={() => handleDuplicate(form.id)} disabled={duplicating !== null}>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="w-full justify-center"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDuplicate(form.id);
+                                }}
+                                disabled={duplicating !== null}
+                              >
                                 {duplicating === form.id ? <Loader variant="dots" size="sm" inline className="mr-2" /> : <Copy className="mr-2 h-4 w-4 shrink-0" />}
                                 Duplicate
                               </Button>
@@ -350,7 +378,10 @@ export const AdminFormsListPage: React.FC = () => {
                                 variant="outline"
                                 size="sm"
                                 className="w-full justify-center border-red-200 text-red-700 hover:bg-red-50"
-                                onClick={() => setDeleteFormTarget(form)}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setDeleteFormTarget(form);
+                                }}
                                 disabled={deletingFormId !== null}
                               >
                                 <Trash2 className="mr-2 h-4 w-4 shrink-0" />
@@ -359,6 +390,11 @@ export const AdminFormsListPage: React.FC = () => {
                             ) : null}
                           </div>
                         </div>
+                        {expandedFormId === form.id ? (
+                          <div className="mt-3" onClick={(e) => e.stopPropagation()}>
+                            <FormDocumentsPanel formId={form.id} formName={form.name} canUpload={canManageForms} canDelete={canManageForms} />
+                          </div>
+                        ) : null}
                       </div>
                     </div>
                   </div>
@@ -379,7 +415,12 @@ export const AdminFormsListPage: React.FC = () => {
                     </thead>
                     <tbody>
                       {forms.map((form) => (
-                        <tr key={form.id} className="hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors">
+                        <React.Fragment key={form.id}>
+                        <tr
+                          className="hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors cursor-pointer"
+                          onClick={() => setExpandedFormId((p) => (p === form.id ? null : form.id))}
+                          title="Click to expand documents"
+                        >
                           <td className="px-4 py-3 border-b border-[var(--border)]">
                             <div className="flex items-center gap-2">
                               <FileText className="w-4 h-4 text-gray-400 shrink-0" />
@@ -415,7 +456,7 @@ export const AdminFormsListPage: React.FC = () => {
                             {formCoursesMap.get(form.id)?.map((c) => c.name).join(', ') || '-'}
                           </td>
                           <td className="px-4 py-3 border-b border-[var(--border)] text-right">
-                            <div className="flex items-center justify-end gap-2">
+                            <div className="flex items-center justify-end gap-2" onClick={(e) => e.stopPropagation()}>
                               <Button
                                 variant="outline"
                                 size="sm"
@@ -499,6 +540,23 @@ export const AdminFormsListPage: React.FC = () => {
                             </div>
                           </td>
                         </tr>
+                        {expandedFormId === form.id ? (
+                          <tr className="bg-white">
+                            <td colSpan={6} className="px-4 py-3 border-b border-[var(--border)]" onClick={(e) => e.stopPropagation()}>
+                              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                                <FormDocumentsPanel formId={form.id} formName={form.name} canUpload={canManageForms} canDelete={canManageForms} />
+                                <div className="rounded-lg border border-[var(--border)] bg-white p-4">
+                                  <div className="text-sm font-semibold text-[var(--text)]">Form</div>
+                                  <div className="mt-1 text-xs text-gray-600 break-words">{form.name}</div>
+                                  <div className="mt-3 text-xs text-gray-500">
+                                    Upload learning materials here to make them available to students/trainers.
+                                  </div>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        ) : null}
+                        </React.Fragment>
                       ))}
                     </tbody>
                   </table>

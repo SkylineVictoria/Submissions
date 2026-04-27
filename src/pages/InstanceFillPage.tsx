@@ -1146,11 +1146,16 @@ export const InstanceFillPage: React.FC = () => {
       if (latestResult === 'not_yet_competent') {
         if (latestAttempt < 3) {
           try {
-            const inst = await fetchInstance(id);
-            const currentEnd = String((inst as unknown as { end_date?: string | null } | null)?.end_date ?? '').trim();
             const todayMel = getMelbourneDateStr(new Date());
-            // Extend from the current end_date when present, but never extend from a past date.
-            const baseEnd = isIsoDate(currentEnd) ? (currentEnd < todayMel ? todayMel : currentEnd) : todayMel;
+            // Resubmission window is based on trainer's attempt date (not the prior instance end_date).
+            // Example: trainer date 2026-04-24 -> new end_date 2026-04-29.
+            const attemptTrainerDate =
+              latestAttempt === 1
+                ? String(assessmentSummary?.trainer_date_1 ?? '').trim()
+                : latestAttempt === 2
+                  ? String(assessmentSummary?.trainer_date_2 ?? '').trim()
+                  : String(assessmentSummary?.trainer_date_3 ?? '').trim();
+            const baseEnd = isIsoDate(attemptTrainerDate) ? attemptTrainerDate : todayMel;
             const newEnd = addDaysIso(baseEnd, 5);
             // Align end_date and re-enable student access until end-of-day Melbourne (23:59).
             await extendInstanceAccessTokensToDate(id, 'student', newEnd);
@@ -1186,7 +1191,7 @@ export const InstanceFillPage: React.FC = () => {
       toast.success('Office check complete. Form is now completed.');
     }
     setWorkflowSubmitting(false);
-  }, [id, role, workflowStatus, submissionCount, getTrainerAttemptOutcome]);
+  }, [id, role, workflowStatus, submissionCount, getTrainerAttemptOutcome, assessmentSummary]);
 
   const handleFinalSubmitByRole = useCallback(() => {
     if (role === 'student' && workflowStatus === 'draft') {

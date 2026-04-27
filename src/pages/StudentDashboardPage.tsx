@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
-import { LayoutDashboard, RefreshCw, ExternalLink, Search, Mail, Phone, CheckCircle } from 'lucide-react';
+import { LayoutDashboard, RefreshCw, Search, Mail, Phone, CheckCircle } from 'lucide-react';
 import { listStudentAssessmentsPaged, issueInstanceAccessLink, fetchAssessmentSummaries } from '../lib/formEngine';
 import type { Student, SubmittedInstanceRow } from '../lib/formEngine';
 import { Card } from '../components/ui/Card';
@@ -7,15 +7,11 @@ import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Loader } from '../components/ui/Loader';
 import { toast } from '../utils/toast';
-import { AdminListPagination } from '../components/admin/AdminListPagination';
 import { supabase } from '../lib/supabase';
 import { useNavigate } from 'react-router-dom';
-
-const MEL_TZ = 'Australia/Melbourne';
-const melDate = (d: Date): string => {
-  const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: MEL_TZ, year: 'numeric', month: '2-digit', day: '2-digit' });
-  return fmt.format(d);
-};
+import { computeRowUi, melDateString, getStudentAttemptDoneText, getTrainerAttemptFailedText, getMissedAttemptWindowText, type AttemptResult } from '../utils/assessmentRowUi';
+import { FormDocumentsPanel } from '../components/documents/FormDocumentsPanel';
+import { STUDENT_DASHBOARD_AUTH_STORAGE_KEY } from '../lib/formEngine';
 
 const formatDDMMYYYY = (value: string | null): string => {
   const v = (value ?? '').trim();
@@ -43,8 +39,6 @@ function StatusChecks({ row }: { row: SubmittedInstanceRow }) {
     </div>
   );
 }
-
-type AttemptResult = 'competent' | 'not_yet_competent' | null;
 
 type DotTone = 'green' | 'red' | 'yellow' | 'gray';
 const dotToneClass: Record<DotTone, string> = {
@@ -87,7 +81,7 @@ function computeAttemptTones(input: {
 
 function AttemptDots({ tones, titlePrefix }: { tones: DotTone[]; titlePrefix: string }) {
   return (
-    <div className="flex items-center gap-1.5">
+    <div className="flex items-center gap-1.5 shrink-0">
       {[0, 1, 2].map((i) => (
         <div
           key={i}
@@ -114,7 +108,7 @@ function getOutcomeLabel(summary: { final_attempt_1_result: AttemptResult; final
 }
 
 const withinWindowMelbourne = (row: Pick<SubmittedInstanceRow, 'start_date' | 'end_date'>): { ok: boolean; reason?: string } => {
-  const today = melDate(new Date());
+  const today = melDateString(new Date());
   const start = String(row.start_date ?? '').trim();
   const end = String(row.end_date ?? '').trim();
   if (start && today < start) return { ok: false, reason: `Available from ${formatDDMMYYYY(start)}` };
@@ -122,11 +116,12 @@ const withinWindowMelbourne = (row: Pick<SubmittedInstanceRow, 'start_date' | 'e
   return { ok: true };
 };
 
-const STORAGE_KEY = 'signflow_student_dashboard_auth_v1';
+const STORAGE_KEY = STUDENT_DASHBOARD_AUTH_STORAGE_KEY;
 
 export const StudentDashboardPage: React.FC = () => {
   const navigate = useNavigate();
-  const PAGE_SIZE = 20;
+  // Student dashboard is single-page (no pagination).
+  const PAGE_SIZE = 500;
   const [studentId, setStudentId] = useState<number | null>(null);
   const [studentEmail, setStudentEmail] = useState<string>('');
   const [student, setStudent] = useState<Student | null>(null);
@@ -134,14 +129,13 @@ export const StudentDashboardPage: React.FC = () => {
   const [studentLoading, setStudentLoading] = useState(false);
 
   const [rows, setRows] = useState<SubmittedInstanceRow[]>([]);
-  const [totalRows, setTotalRows] = useState(0);
-  const [currentPage, setCurrentPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [attemptSummaryByInstanceId, setAttemptSummaryByInstanceId] = useState<
     Record<number, { final_attempt_1_result: AttemptResult; final_attempt_2_result: AttemptResult; final_attempt_3_result: AttemptResult }>
   >({});
+  const [expandedId, setExpandedId] = useState<number | null>(null);
 
   useEffect(() => {
     try {
@@ -158,15 +152,12 @@ export const StudentDashboardPage: React.FC = () => {
     }
   }, []);
 
-  const totalPages = Math.max(1, Math.ceil(totalRows / PAGE_SIZE));
-
   const loadRows = useCallback(
-    async (page: number, search: string, opts?: { silent?: boolean }) => {
+    async (search: string, opts?: { silent?: boolean }) => {
       if (!studentId) return;
       if (!opts?.silent) setLoading(true);
-      const res = await listStudentAssessmentsPaged(studentId, page, PAGE_SIZE, search.trim() || undefined);
+      const res = await listStudentAssessmentsPaged(studentId, 1, PAGE_SIZE, search.trim() || undefined);
       setRows(res.data);
-      setTotalRows(res.total);
       setLoading(false);
     },
     [studentId]
@@ -262,9 +253,9 @@ export const StudentDashboardPage: React.FC = () => {
 
   useEffect(() => {
     if (!studentId) return;
-    const t = setTimeout(() => void loadRows(currentPage, searchTerm), 250);
+    const t = setTimeout(() => void loadRows(searchTerm), 250);
     return () => clearTimeout(t);
-  }, [studentId, currentPage, searchTerm, loadRows]);
+  }, [studentId, searchTerm, loadRows]);
 
   useEffect(() => {
     if (!studentId) {
@@ -276,13 +267,12 @@ export const StudentDashboardPage: React.FC = () => {
   }, [studentId, loadStudentProfile]);
 
   useEffect(() => {
-    setCurrentPage(1);
   }, [searchTerm, studentId]);
 
   const handleRefresh = async () => {
     if (!studentId) return;
     setRefreshing(true);
-    await loadRows(currentPage, searchTerm, { silent: true });
+    await loadRows(searchTerm, { silent: true });
     setRefreshing(false);
     toast.success('Refreshed');
   };
@@ -308,8 +298,6 @@ export const StudentDashboardPage: React.FC = () => {
     setStudent(null);
     setStudentCourses([]);
     setRows([]);
-    setTotalRows(0);
-    setCurrentPage(1);
     setSearchTerm('');
   };
 
@@ -449,20 +437,6 @@ export const StudentDashboardPage: React.FC = () => {
                   </div>
                 </div>
 
-                {!loading && totalRows > 0 ? (
-                  <AdminListPagination
-                    placement="top"
-                    totalItems={totalRows}
-                    pageSize={PAGE_SIZE}
-                    currentPage={currentPage}
-                    totalPages={totalPages}
-                    onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                    onNext={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                    onGoToPage={(p) => setCurrentPage(p)}
-                    itemLabel="assessments"
-                  />
-                ) : null}
-
                 {loading ? (
                   <div className="py-12">
                     <Loader variant="dots" size="lg" message="Loading assessments..." />
@@ -471,69 +445,149 @@ export const StudentDashboardPage: React.FC = () => {
                   <div className="py-12 text-center text-sm text-gray-500">No assessments found.</div>
                 ) : (
                   <div className="overflow-x-auto">
-                    <table className="w-full text-sm border border-[var(--border)] rounded-lg overflow-hidden">
+                    <table className="min-w-[940px] w-full text-sm border border-[var(--border)] rounded-lg overflow-hidden">
                       <thead className="bg-gray-50 text-gray-700">
                         <tr>
-                          <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Unit</th>
-                          <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)] whitespace-nowrap">Start</th>
-                          <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)] whitespace-nowrap">End</th>
-                          <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)] min-w-[200px]">Progress</th>
-                          <th className="text-right px-4 py-3 font-semibold border-b border-[var(--border)] whitespace-nowrap">Action</th>
+                          <th className="text-left px-3 py-2 font-semibold border-b border-[var(--border)] w-[300px]">
+                            Unit
+                          </th>
+                          <th className="hidden md:table-cell text-left px-3 py-2 font-semibold border-b border-[var(--border)] w-[100px] whitespace-nowrap">
+                            Start
+                          </th>
+                          <th className="hidden md:table-cell text-left px-3 py-2 font-semibold border-b border-[var(--border)] w-[100px] whitespace-nowrap">
+                            End
+                          </th>
+                          <th className="text-left px-3 py-2 font-semibold border-b border-[var(--border)] min-w-[240px]">
+                            Progress
+                          </th>
+                          <th className="text-right px-3 py-2 font-semibold border-b border-[var(--border)] whitespace-nowrap">
+                            Action
+                          </th>
                         </tr>
                       </thead>
                       <tbody>
                         {rows.map((row) => {
+                          const sum = attemptSummaryByInstanceId[row.id] ?? null;
+                          const attemptResults: AttemptResult[] = [
+                            sum?.final_attempt_1_result ?? null,
+                            sum?.final_attempt_2_result ?? null,
+                            sum?.final_attempt_3_result ?? null,
+                          ];
+                          const attemptDoneText = getStudentAttemptDoneText({
+                            submissionCount: Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0),
+                            submittedAt: row.submitted_at ?? null,
+                            attemptResults,
+                          });
+                          const trainerAttemptFailedText = getTrainerAttemptFailedText(attemptResults);
+                          const missedAttemptText = getMissedAttemptWindowText({
+                            noAttemptRollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
+                            didNotAttempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
+                          });
+                          const ui = computeRowUi({ row: { ...row, did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null }, attemptResults });
+                          const disabled = ui.disabled;
                           const win = withinWindowMelbourne(row);
-                          const disabled = !win.ok;
                           return (
-                            <tr key={row.id} className="hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors">
-                              <td className="px-4 py-3 border-b border-[var(--border)]">
+                            <React.Fragment key={row.id}>
+                            <tr
+                              className={`${ui.rowClassName} cursor-pointer`}
+                              onClick={() => setExpandedId((prev) => (prev === row.id ? null : row.id))}
+                              title="Click to expand"
+                            >
+                              <td className="px-3 py-2 border-b border-[var(--border)] align-top">
                                 <div className="font-medium text-[var(--text)] break-words whitespace-normal">{row.form_name}</div>
                                 <div className="text-xs text-gray-500">Version {row.form_version ?? '1.0.0'}</div>
+                                <div className="md:hidden mt-1 text-xs text-gray-600 tabular-nums flex flex-wrap gap-x-3 gap-y-0.5">
+                                  <span>
+                                    <span className="text-gray-500">Start</span> {formatDDMMYYYY(row.start_date)}
+                                  </span>
+                                  <span>
+                                    <span className="text-gray-500">End</span> {formatDDMMYYYY(row.end_date)}
+                                  </span>
+                                </div>
                               </td>
-                              <td className="px-4 py-3 border-b border-[var(--border)] text-gray-700 whitespace-nowrap tabular-nums">{formatDDMMYYYY(row.start_date)}</td>
-                              <td className="px-4 py-3 border-b border-[var(--border)] text-gray-700 whitespace-nowrap tabular-nums">{formatDDMMYYYY(row.end_date)}</td>
-                              <td className="px-4 py-3 border-b border-[var(--border)]">
+                              <td
+                                className="hidden md:table-cell px-3 py-2 border-b border-[var(--border)] text-gray-700 whitespace-nowrap tabular-nums align-top"
+                              >
+                                {formatDDMMYYYY(row.start_date)}
+                              </td>
+                              <td
+                                className="hidden md:table-cell px-3 py-2 border-b border-[var(--border)] text-gray-700 whitespace-nowrap tabular-nums align-top"
+                              >
+                                {formatDDMMYYYY(row.end_date)}
+                              </td>
+                              <td
+                                className="px-3 py-2 border-b border-[var(--border)] min-w-[240px]"
+                              >
                                 <div className="flex flex-col gap-1">
                                   <div className="flex items-center justify-between gap-3">
                                     <StatusChecks row={row} />
                                   </div>
                                   {(() => {
-                                    const sum = attemptSummaryByInstanceId[row.id] ?? null;
-                                    const results: AttemptResult[] = [
-                                      sum?.final_attempt_1_result ?? null,
-                                      sum?.final_attempt_2_result ?? null,
-                                      sum?.final_attempt_3_result ?? null,
-                                    ];
                                     const tones = computeAttemptTones({
                                       submissionCount: Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0),
-                                      results,
+                                      results: attemptResults,
                                     });
                                     return (
-                                      <div className="grid grid-cols-3 gap-x-6 gap-y-1">
-                                        <div className="col-span-1">
-                                          <AttemptDots tones={tones.student} titlePrefix="Student" />
-                                        </div>
-                                        <div className="col-span-1">
-                                          <AttemptDots tones={tones.trainer} titlePrefix="Trainer" />
-                                        </div>
-                                        <div className="col-span-1" />
+                                      <div className="flex items-center gap-6">
+                                        <AttemptDots tones={tones.student} titlePrefix="Student" />
+                                        <AttemptDots tones={tones.trainer} titlePrefix="Trainer" />
                                       </div>
                                     );
                                   })()}
-                                  <div className={`text-xs font-medium ${getOutcomeLabel(attemptSummaryByInstanceId[row.id] ?? null).className}`}>
-                                    {getOutcomeLabel(attemptSummaryByInstanceId[row.id] ?? null).label}
+                                  <div
+                                    className={`text-xs font-medium ${
+                                      ui.kind === 'past_not_competent' ? ui.outcomeClassName : ui.kind === 'past_competent' ? ui.outcomeClassName : getOutcomeLabel(sum).className
+                                    }`}
+                                  >
+                                    {ui.kind === 'past_not_competent' ? ui.outcomeLabel : ui.kind === 'past_competent' ? ui.outcomeLabel : getOutcomeLabel(sum).label}
                                   </div>
+                                  {attemptDoneText ? (
+                                    <div className="text-[11px] text-gray-600">{attemptDoneText}</div>
+                                  ) : null}
+                                  {ui.kind === 'in_progress' && missedAttemptText ? (
+                                    <div className="text-[11px] font-medium text-amber-700">{missedAttemptText}</div>
+                                  ) : null}
+                                  {trainerAttemptFailedText ? (
+                                    <div className="text-[11px] font-medium text-red-700">{trainerAttemptFailedText}</div>
+                                  ) : null}
                                 </div>
-                                {!win.ok ? <div className="text-xs text-amber-700 mt-1">{win.reason}</div> : null}
+                                {disabled && (ui.kind === 'future' || ui.kind === 'expired') ? (
+                                  <div className="text-xs text-amber-700 mt-1">{ui.reason}</div>
+                                ) : !win.ok ? (
+                                  <div className="text-xs text-amber-700 mt-1">{win.reason}</div>
+                                ) : null}
                               </td>
-                              <td className="px-4 py-3 border-b border-[var(--border)] text-right">
-                                <Button variant="outline" size="sm" onClick={() => void handleOpen(row)} disabled={disabled}>
-                                  <ExternalLink className="w-4 h-4 mr-2 inline" />
-                                  Open
-                                </Button>
+                              <td className="px-3 py-2 border-b border-[var(--border)] text-right align-top">
+                                <div className="text-xs text-gray-500">—</div>
                               </td>
                             </tr>
+                            {expandedId === row.id ? (
+                              <tr className={ui.rowClassName}>
+                                <td className="px-3 py-3 border-b border-[var(--border)]" colSpan={5} onClick={(e) => e.stopPropagation()}>
+                                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                                    <FormDocumentsPanel
+                                      formId={Number(row.form_id)}
+                                      formName={String(row.form_name ?? 'Assessment')}
+                                      canUpload={false}
+                                    />
+                                    <button
+                                      type="button"
+                                      className="rounded-lg border border-[var(--border)] bg-white p-4 text-left hover:bg-[var(--brand)]/10 focus-visible:bg-[var(--brand)]/10 transition-colors"
+                                      onClick={() => void handleOpen(row)}
+                                      disabled={disabled}
+                                      title="Open assessment"
+                                    >
+                                      <div className="text-sm font-semibold text-[var(--text)]">Assessment</div>
+                                      <div className="mt-1 text-xs text-gray-600 break-words">{row.form_name}</div>
+                                      <div className="mt-3 inline-flex items-center rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700">
+                                        Open
+                                      </div>
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ) : null}
+                            </React.Fragment>
                           );
                         })}
                       </tbody>
@@ -541,19 +595,6 @@ export const StudentDashboardPage: React.FC = () => {
                   </div>
                 )}
 
-                {!loading && totalRows > 0 ? (
-                  <AdminListPagination
-                    placement="bottom"
-                    totalItems={totalRows}
-                    pageSize={PAGE_SIZE}
-                    currentPage={currentPage}
-                    totalPages={totalPages}
-                    onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                    onNext={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                    onGoToPage={(p) => setCurrentPage(p)}
-                    itemLabel="assessments"
-                  />
-                ) : null}
               </Card>
             </div>
           </div>

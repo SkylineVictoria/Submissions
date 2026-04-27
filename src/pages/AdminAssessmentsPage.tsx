@@ -29,6 +29,9 @@ import { AdminListPagination } from '../components/admin/AdminListPagination';
 import type { SortDirection } from '../components/admin/SortableTh';
 import { SortableTh } from '../components/admin/SortableTh';
 import { supabase } from '../lib/supabase';
+import { computeRowUi, getMissedAttemptWindowText } from '../utils/assessmentRowUi';
+import { FormDocumentsPanel } from '../components/documents/FormDocumentsPanel';
+import { useAuth } from '../contexts/AuthContext';
 
 const PDF_BASE = import.meta.env.VITE_PDF_API_URL ?? '';
 
@@ -69,7 +72,28 @@ const getWorkflowBadgeClass = (row: SubmittedInstanceRow): string => {
   return `${base} bg-gray-50 text-gray-600`;
 };
 
+const getDirectoryRowClass = (row: SubmittedInstanceRow): string => {
+  // Match dashboards:
+  // - Open window => yellow
+  // - Completed => green
+  // - Missed all (did_not_attempt) => red
+  // - Otherwise keep neutral gray but hover with theme
+  if (row.status === 'locked') {
+    return 'bg-emerald-50/70 hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors';
+  }
+  const ui = computeRowUi({
+    row: {
+      start_date: row.start_date,
+      end_date: row.end_date,
+      did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
+    },
+  });
+  return ui.rowClassName || 'hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors';
+};
+
 export const AdminAssessmentsPage: React.FC = () => {
+  const { user } = useAuth();
+  const viewerIsSuperadmin = user?.role === 'superadmin';
   const PAGE_SIZE = 20;
   const [rows, setRows] = useState<SubmittedInstanceRow[]>([]);
   const [totalRows, setTotalRows] = useState(0);
@@ -91,6 +115,7 @@ export const AdminAssessmentsPage: React.FC = () => {
   /** Pending start/end edits until user clicks Apply or Mass apply */
   const [dateDrafts, setDateDrafts] = useState<Record<number, { start?: string | null; end?: string | null }>>({});
   const [massApplying, setMassApplying] = useState(false);
+  const [expandedId, setExpandedId] = useState<number | null>(null);
 
   type DirectorySortKey = 'student' | 'form' | 'start' | 'end' | 'created' | 'workflow';
   const [directorySort, setDirectorySort] = useState<{ key: DirectorySortKey; dir: SortDirection }>({
@@ -669,8 +694,18 @@ export const AdminAssessmentsPage: React.FC = () => {
           ) : (
             <>
               <div className="space-y-3 lg:hidden">
-                {sortedRows.map((row) => (
-                  <div key={row.id} className="rounded-lg border border-[var(--border)] bg-white p-4 shadow-sm">
+                {sortedRows.map((row) => {
+                  const missedAttemptText = getMissedAttemptWindowText({
+                    noAttemptRollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
+                    didNotAttempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
+                  });
+                  return (
+                  <div
+                    key={row.id}
+                    className={`rounded-lg border border-[var(--border)] p-4 shadow-sm ${getDirectoryRowClass(row)} cursor-pointer`}
+                    onClick={() => setExpandedId((p) => (p === row.id ? null : row.id))}
+                    title="Click to view documents"
+                  >
                     <div className="flex items-start gap-3">
                       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gray-100 text-gray-600">
                         <User className="h-5 w-5" />
@@ -747,11 +782,25 @@ export const AdminAssessmentsPage: React.FC = () => {
                             {getWorkflowLabel(row)}
                           </span>
                         </div>
+                        {missedAttemptText ? (
+                          <div className="mt-1 text-[11px] font-medium text-amber-700">{missedAttemptText}</div>
+                        ) : null}
                         {renderAssessmentActions(row, 'stack')}
+                        {expandedId === row.id ? (
+                          <div className="mt-3" onClick={(e) => e.stopPropagation()}>
+                            <FormDocumentsPanel
+                              formId={Number(row.form_id)}
+                              formName={String(row.form_name ?? 'Assessment')}
+                              canUpload
+                              canDelete={viewerIsSuperadmin}
+                            />
+                          </div>
+                        ) : null}
                       </div>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
               <div className="hidden overflow-x-auto lg:block">
                 <table className="w-full text-sm">
@@ -803,15 +852,22 @@ export const AdminAssessmentsPage: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {sortedRows.map((row) => (
-                      <tr
-                        key={row.id}
-                        className="border-b border-gray-100 hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors"
-                      >
-                        <td className="py-3 pr-3">
-                          <div className="font-medium text-gray-900">{row.student_name}</div>
-                          <div className="text-xs text-gray-500">{row.student_email || '-'}</div>
-                        </td>
+                    {sortedRows.map((row) => {
+                      const missedAttemptText = getMissedAttemptWindowText({
+                        noAttemptRollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
+                        didNotAttempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
+                      });
+                      return (
+                        <React.Fragment key={row.id}>
+                          <tr
+                            className={`border-b border-gray-100 ${getDirectoryRowClass(row)} cursor-pointer`}
+                            onClick={() => setExpandedId((p) => (p === row.id ? null : row.id))}
+                            title="Click to view documents"
+                          >
+                            <td className="py-3 pr-3">
+                              <div className="font-medium text-gray-900">{row.student_name}</div>
+                              <div className="text-xs text-gray-500">{row.student_email || '-'}</div>
+                            </td>
                         <td className="py-3 pr-3 w-[220px] max-w-[220px] align-top">
                           <div className="font-medium text-gray-900 break-words whitespace-normal leading-snug">
                             {row.form_name}
@@ -877,10 +933,31 @@ export const AdminAssessmentsPage: React.FC = () => {
                           <span className={`inline-flex rounded-md px-2.5 py-1 text-xs font-medium ${getWorkflowBadgeClass(row)}`}>
                             {getWorkflowLabel(row)}
                           </span>
+                          {missedAttemptText ? (
+                            <div className="mt-1 text-[11px] font-medium text-amber-700">{missedAttemptText}</div>
+                          ) : null}
                         </td>
-                        <td className="py-3 align-middle">{renderAssessmentActions(row, 'toolbar')}</td>
-                      </tr>
-                    ))}
+                            <td className="py-3 align-middle" onClick={(e) => e.stopPropagation()}>
+                              {renderAssessmentActions(row, 'toolbar')}
+                            </td>
+                          </tr>
+                          {expandedId === row.id ? (
+                            <tr className={getDirectoryRowClass(row)}>
+                              <td colSpan={7} className="pb-4" onClick={(e) => e.stopPropagation()}>
+                                <div className="px-3">
+                                  <FormDocumentsPanel
+                                    formId={Number(row.form_id)}
+                                    formName={String(row.form_name ?? 'Assessment')}
+                                    canUpload
+                                    canDelete={viewerIsSuperadmin}
+                                  />
+                                </div>
+                              </td>
+                            </tr>
+                          ) : null}
+                        </React.Fragment>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -968,7 +1045,6 @@ export const AdminAssessmentsPage: React.FC = () => {
             </div>
           )}
         </Modal>
-
       </div>
     </div>
   );

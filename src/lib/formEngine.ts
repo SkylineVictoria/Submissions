@@ -1047,6 +1047,57 @@ export async function studentLoginWithOtp(email: string, otp: string): Promise<{
   return { ok: true, studentId: sid, email: String(rows[0].email ?? e) };
 }
 
+const isIsoDate = (s: string): boolean => /^\d{4}-\d{2}-\d{2}$/.test(String(s || '').trim());
+
+async function syncNoAttemptRollover(
+  instanceIds: number[]
+): Promise<
+  Map<
+    number,
+    {
+      end_date: string | null;
+      no_attempt_rollovers: number;
+      did_not_attempt: boolean;
+      role_context: string | null;
+      status: string | null;
+    }
+  >
+> {
+  const ids = (instanceIds || []).map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0);
+  const out = new Map<
+    number,
+    {
+      end_date: string | null;
+      no_attempt_rollovers: number;
+      did_not_attempt: boolean;
+      role_context: string | null;
+      status: string | null;
+    }
+  >();
+  if (ids.length === 0) return out;
+
+  const { data, error } = await supabase.rpc('skyline_sync_no_attempt_rollover', { p_instance_ids: ids });
+  if (error) {
+    console.warn('syncNoAttemptRollover: skyline_sync_no_attempt_rollover RPC failed', error);
+    return out;
+  }
+
+  const rows = (data as Array<Record<string, unknown>> | null) || [];
+  for (const r of rows) {
+    const id = Number(r.id);
+    if (!Number.isFinite(id) || id <= 0) continue;
+    const end = r.end_date != null ? String(r.end_date).trim() : '';
+    out.set(id, {
+      end_date: end && isIsoDate(end) ? end : null,
+      no_attempt_rollovers: Number(r.no_attempt_rollovers ?? 0) || 0,
+      did_not_attempt: Boolean(r.did_not_attempt ?? false),
+      role_context: r.role_context != null ? String(r.role_context).trim() || null : null,
+      status: r.status != null ? String(r.status).trim() || null : null,
+    });
+  }
+  return out;
+}
+
 export async function listStudentAssessmentsPaged(
   studentId: number,
   page = 1,
@@ -1060,10 +1111,12 @@ export async function listStudentAssessmentsPaged(
   let query = supabase
     .from('skyline_form_instances')
     .select(
-      'id, form_id, student_id, status, role_context, created_at, submitted_at, submission_count, start_date, end_date, skyline_students!inner(id, first_name, last_name, name, email), skyline_forms!inner(id, name, version)',
+      'id, form_id, student_id, status, role_context, created_at, submitted_at, submission_count, start_date, end_date, no_attempt_rollovers, did_not_attempt, skyline_students!inner(id, first_name, last_name, name, email), skyline_forms!inner(id, name, version)',
       { count: 'exact' }
     )
     .eq('student_id', sid)
+    .order('start_date', { ascending: true, nullsFirst: false })
+    .order('end_date', { ascending: true, nullsFirst: false })
     .order('created_at', { ascending: false })
     .order('id', { ascending: false });
 
@@ -1099,6 +1152,8 @@ export async function listStudentAssessmentsPaged(
     }
   }
 
+  const rolloverMap = await syncNoAttemptRollover(instanceIds);
+
   return {
     data: rows.map((r) => {
       const form = (r.skyline_forms as { name?: string | null; version?: string | null } | null) ?? null;
@@ -1106,23 +1161,27 @@ export async function listStudentAssessmentsPaged(
       const first = String(stu?.first_name ?? '').trim();
       const last = String(stu?.last_name ?? '').trim();
       const student_name = [first, last].filter(Boolean).join(' ').trim() || String(stu?.name ?? '') || 'Student';
-      const roleCtx = String(r.role_context ?? 'student');
+      const baseId = Number(r.id);
+      const synced = rolloverMap.get(baseId);
+      const roleCtx = synced?.role_context ?? String(r.role_context ?? 'student');
       const link_expired = tokenMap.get(`${Number(r.id)}:student`) !== false;
       return {
-        id: Number(r.id),
+        id: baseId,
         form_id: Number(r.form_id),
         form_name: String(form?.name ?? ''),
         form_version: form?.version != null ? String(form.version) : null,
         student_id: Number(r.student_id),
         student_name,
         student_email: String(stu?.email ?? ''),
-        status: String(r.status ?? 'draft'),
-        role_context: roleCtx,
+        status: synced?.status ?? String(r.status ?? 'draft'),
+        role_context: String(roleCtx),
         created_at: String(r.created_at ?? ''),
         submitted_at: r.submitted_at ? String(r.submitted_at) : null,
         submission_count: Number((r as { submission_count?: number | null }).submission_count ?? 0) || 0,
         start_date: (r as { start_date?: string | null }).start_date ? String((r as { start_date?: string | null }).start_date) : null,
-        end_date: (r as { end_date?: string | null }).end_date ? String((r as { end_date?: string | null }).end_date) : null,
+        end_date: synced?.end_date ?? ((r as { end_date?: string | null }).end_date ? String((r as { end_date?: string | null }).end_date) : null),
+        no_attempt_rollovers: synced?.no_attempt_rollovers ?? (r as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
+        did_not_attempt: synced?.did_not_attempt ?? (r as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
         link_expired,
       };
     }),
@@ -1562,6 +1621,7 @@ export interface AppUser {
 }
 
 const AUTH_STORAGE_KEY = 'skyline_auth_user';
+export const STUDENT_DASHBOARD_AUTH_STORAGE_KEY = 'signflow_student_dashboard_auth_v1';
 
 export function getStoredUser(): AppUser | null {
   try {
@@ -1955,11 +2015,14 @@ export interface SubmittedInstanceRow {
   student_email: string;
   status: string;
   role_context: string;
+  workflow_status?: string | null;
   created_at: string;
   submitted_at: string | null;
   submission_count: number;
   start_date: string | null;
   end_date: string | null;
+  no_attempt_rollovers?: number | null;
+  did_not_attempt?: boolean | null;
   /** True if the link for this role is revoked or past expiry (show Enable); false = active (show Expire) */
   link_expired: boolean;
 }
@@ -2397,6 +2460,8 @@ export async function listSubmittedInstancesPaged(
   const total = rowsRaw.length > 0 ? Number(rowsRaw[0].total_count ?? rowsRaw.length) : 0;
   const instanceIds = rowsRaw.map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0);
 
+  const rolloverMap = await syncNoAttemptRollover(instanceIds);
+
   const now = Date.now();
   const tokenMap = new Map<string, boolean>();
   if (instanceIds.length > 0) {
@@ -2413,24 +2478,28 @@ export async function listSubmittedInstancesPaged(
   }
   return {
     data: rowsRaw.map((r) => {
-      const roleCtx = String(r.role_context ?? 'student');
-      const tokenKey = `${Number(r.id)}:${roleCtx}`;
+      const baseId = Number(r.id);
+      const synced = rolloverMap.get(baseId);
+      const roleCtx = synced?.role_context ?? String(r.role_context ?? 'student');
+      const tokenKey = `${baseId}:${roleCtx}`;
       const link_expired = tokenMap.get(tokenKey) !== false;
       return {
-        id: Number(r.id),
+        id: baseId,
         form_id: Number(r.form_id),
         form_name: String(r.form_name ?? ''),
         form_version: r.form_version != null ? String(r.form_version) : null,
         student_id: r.student_id == null ? null : Number(r.student_id),
         student_name: String(r.student_name ?? 'Unknown student'),
         student_email: String(r.student_email ?? ''),
-        status: String(r.status ?? 'draft'),
-        role_context: roleCtx,
+        status: synced?.status ?? String(r.status ?? 'draft'),
+        role_context: String(roleCtx),
         created_at: String(r.created_at ?? ''),
         submitted_at: r.submitted_at ? String(r.submitted_at) : null,
         submission_count: Number(r.submission_count ?? 0) || 0,
         start_date: r.start_date ? String(r.start_date) : null,
-        end_date: r.end_date ? String(r.end_date) : null,
+        end_date: synced?.end_date ?? (r.end_date ? String(r.end_date) : null),
+        no_attempt_rollovers: synced?.no_attempt_rollovers ?? null,
+        did_not_attempt: synced?.did_not_attempt ?? null,
         link_expired,
       };
     }),

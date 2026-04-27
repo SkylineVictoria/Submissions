@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import type { SortDirection } from '../components/admin/SortableTh';
 import { SortableTh } from '../components/admin/SortableTh';
 import { useNavigate, useParams } from 'react-router-dom';
-import { CheckCircle, Copy, ExternalLink, Phone, Mail, ArrowLeft, RotateCcw, Download, Trash2 } from 'lucide-react';
+import { CheckCircle, Copy, Phone, Mail, ArrowLeft, RotateCcw, Download, Trash2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -13,6 +13,7 @@ import { toast } from '../utils/toast';
 import { useAuth } from '../contexts/AuthContext';
 import { SelectAsync } from '../components/ui/SelectAsync';
 import { Select } from '../components/ui/Select';
+import { computeRowUi, getStudentAttemptDoneText, getTrainerAttemptFailedText, getMissedAttemptWindowText, type AttemptResult } from '../utils/assessmentRowUi';
 import {
   allowStudentResubmission,
   extendInstanceAccessTokensToDate,
@@ -28,6 +29,8 @@ import {
   deleteStudentSuperadmin,
 } from '../lib/formEngine';
 import type { Student, SubmittedInstanceRow } from '../lib/formEngine';
+import { STUDENT_DASHBOARD_AUTH_STORAGE_KEY } from '../lib/formEngine';
+import { FormDocumentsPanel } from '../components/documents/FormDocumentsPanel';
 
 const PDF_BASE = import.meta.env.VITE_PDF_API_URL ?? '';
 
@@ -60,8 +63,6 @@ function StatusChecks({ row }: { row: SubmittedInstanceRow }) {
     </div>
   );
 }
-
-type AttemptResult = 'competent' | 'not_yet_competent' | null;
 
 type DotTone = 'green' | 'red' | 'yellow' | 'gray';
 const dotToneClass: Record<DotTone, string> = {
@@ -103,7 +104,7 @@ function computeAttemptTones(input: {
 
 function AttemptDots({ tones, titlePrefix }: { tones: DotTone[]; titlePrefix: string }) {
   return (
-    <div className="flex items-center gap-1.5">
+    <div className="flex items-center gap-1.5 shrink-0">
       {[0, 1, 2].map((i) => (
         <div
           key={i}
@@ -163,15 +164,16 @@ export const AdminStudentDetailsPage: React.FC = () => {
   const [massApplying, setMassApplying] = useState(false);
   const [deleteStudentOpen, setDeleteStudentOpen] = useState(false);
   const [deletingStudent, setDeletingStudent] = useState(false);
+  const [expandedId, setExpandedId] = useState<number | null>(null);
 
-  type AssessmentSortKey = 'unit' | 'start' | 'end' | 'created' | 'completed';
+  type AssessmentSortKey = 'unit' | 'start' | 'end' | 'completed';
   const [assessmentSort, setAssessmentSort] = useState<{ key: AssessmentSortKey; dir: SortDirection }>({
-    key: 'unit',
+    key: 'start',
     dir: 'asc',
   });
 
   useEffect(() => {
-    setAssessmentSort({ key: 'unit', dir: 'asc' });
+    setAssessmentSort({ key: 'start', dir: 'asc' });
   }, [sid]);
 
   useEffect(() => {
@@ -395,9 +397,6 @@ export const AdminStudentDetailsPage: React.FC = () => {
         case 'end':
           cmp = compareDateNullsLast(a.end_date, b.end_date, asc);
           break;
-        case 'created':
-          cmp = compareDateNullsLast(a.created_at, b.created_at, asc);
-          break;
         case 'completed':
           cmp = compareDateNullsLast(a.submitted_at, b.submitted_at, asc);
           break;
@@ -529,6 +528,16 @@ export const AdminStudentDetailsPage: React.FC = () => {
   const canDeleteStudent =
     !!student && (viewerIsSuperadmin || (hasAssessmentsLoaded && !hasSubmittedAssessment));
 
+  const loginAsStudent = async () => {
+    if (!viewerIsSuperadmin || !student || !Number.isFinite(sid) || sid <= 0) return;
+    // Store student dashboard session. Keep staff session intact (opens in new tab).
+    sessionStorage.setItem(
+      STUDENT_DASHBOARD_AUTH_STORAGE_KEY,
+      JSON.stringify({ studentId: sid, email: student.email, at: Date.now(), by: user?.id ?? null })
+    );
+    window.open('/student/dashboard', '_blank');
+  };
+
   const confirmDeleteStudent = async () => {
     if (!student || !Number.isFinite(sid) || sid <= 0) return;
     if (!viewerIsSuperadmin && hasSubmittedAssessment) {
@@ -657,6 +666,17 @@ export const AdminStudentDetailsPage: React.FC = () => {
                         <Trash2 className="w-4 h-4 mr-2 inline" />
                         Delete student
                       </Button>
+                      {viewerIsSuperadmin ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="w-full mt-2 border-[var(--brand)]/30 text-[var(--brand)] hover:bg-[var(--brand)]/10"
+                          onClick={() => void loginAsStudent()}
+                          title="Switch to student dashboard for this student"
+                        >
+                          Login as student
+                        </Button>
+                      ) : null}
                     </div>
                   ) : null}
                 </div>
@@ -705,28 +725,21 @@ export const AdminStudentDetailsPage: React.FC = () => {
                           />
                           <SortableTh
                             label="Start"
-                            className="text-left px-3 py-2 border-b border-[var(--border)] w-[100px] whitespace-nowrap"
+                            className="hidden md:table-cell text-left px-3 py-2 border-b border-[var(--border)] w-[100px] whitespace-nowrap"
                             active={assessmentSort.key === 'start'}
                             direction={assessmentSort.dir}
                             onToggle={() => toggleAssessmentSort('start')}
                           />
                           <SortableTh
                             label="End"
-                            className="text-left px-3 py-2 border-b border-[var(--border)] w-[100px] whitespace-nowrap"
+                            className="hidden md:table-cell text-left px-3 py-2 border-b border-[var(--border)] w-[100px] whitespace-nowrap"
                             active={assessmentSort.key === 'end'}
                             direction={assessmentSort.dir}
                             onToggle={() => toggleAssessmentSort('end')}
                           />
                           <SortableTh
-                            label="Created"
-                            className="text-left px-3 py-2 border-b border-[var(--border)] w-[100px] whitespace-nowrap"
-                            active={assessmentSort.key === 'created'}
-                            direction={assessmentSort.dir}
-                            onToggle={() => toggleAssessmentSort('created')}
-                          />
-                          <SortableTh
                             label="Completed"
-                            className="text-left px-3 py-2 border-b border-[var(--border)]"
+                            className="text-left px-3 py-2 border-b border-[var(--border)] min-w-[240px]"
                             active={assessmentSort.key === 'completed'}
                             direction={assessmentSort.dir}
                             onToggle={() => toggleAssessmentSort('completed')}
@@ -735,8 +748,31 @@ export const AdminStudentDetailsPage: React.FC = () => {
                         </tr>
                       </thead>
                       <tbody>
-                        {sortedAssessments.map((row) => (
-                          <tr key={row.id} className="hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors">
+                        {sortedAssessments.map((row) => {
+                          const sum = attemptSummaryByInstanceId[row.id] ?? null;
+                          const results: AttemptResult[] = [
+                            sum?.final_attempt_1_result ?? null,
+                            sum?.final_attempt_2_result ?? null,
+                            sum?.final_attempt_3_result ?? null,
+                          ];
+                          const attemptDoneText = getStudentAttemptDoneText({
+                            submissionCount: Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0),
+                            submittedAt: row.submitted_at ?? null,
+                            attemptResults: results,
+                          });
+                          const trainerAttemptFailedText = getTrainerAttemptFailedText(results);
+                          const missedAttemptText = getMissedAttemptWindowText({
+                            noAttemptRollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
+                            didNotAttempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
+                          });
+                          const ui = computeRowUi({ row: { ...row, did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null }, attemptResults: results });
+                          return (
+                          <React.Fragment key={row.id}>
+                          <tr
+                            className={`${ui.rowClassName} cursor-pointer`}
+                            onClick={() => setExpandedId((p) => (p === row.id ? null : row.id))}
+                            title="Click to expand"
+                          >
                             <td className="px-3 py-2 border-b border-[var(--border)] align-top">
                               {(() => {
                                 return (
@@ -747,11 +783,21 @@ export const AdminStudentDetailsPage: React.FC = () => {
                                     <div className="text-xs text-gray-500 break-words">
                                       {row.form_version ? `(v${row.form_version})` : ''}
                                     </div>
+                                    <div className="md:hidden mt-1 text-xs text-gray-600 tabular-nums flex flex-wrap gap-x-3 gap-y-0.5">
+                                      <span>
+                                        <span className="text-gray-500">Start</span> {formatDDMMYYYY(getEffectiveStart(row) || row.start_date)}
+                                      </span>
+                                      <span>
+                                        <span className="text-gray-500">End</span> {formatDDMMYYYY(getEffectiveEnd(row) || row.end_date)}
+                                      </span>
+                                    </div>
                                   </div>
                                 );
                               })()}
                             </td>
-                            <td className="px-3 py-2 border-b border-[var(--border)] text-gray-700 align-top">
+                            <td
+                              className="hidden md:table-cell px-3 py-2 border-b border-[var(--border)] text-gray-700 align-top"
+                            >
                               {editingDateCell?.id === row.id && editingDateCell.field === 'start' ? (
                                 <DatePicker
                                   value={getEffectiveStart(row)}
@@ -778,7 +824,9 @@ export const AdminStudentDetailsPage: React.FC = () => {
                                 </button>
                               )}
                             </td>
-                            <td className="px-3 py-2 border-b border-[var(--border)] text-gray-700 align-top">
+                            <td
+                              className="hidden md:table-cell px-3 py-2 border-b border-[var(--border)] text-gray-700 align-top"
+                            >
                               {editingDateCell?.id === row.id && editingDateCell.field === 'end' ? (
                                 <DatePicker
                                   value={getEffectiveEnd(row)}
@@ -805,40 +853,52 @@ export const AdminStudentDetailsPage: React.FC = () => {
                                 </button>
                               )}
                             </td>
-                            <td className="px-3 py-2 border-b border-[var(--border)] text-gray-700 whitespace-nowrap">
-                              {formatDDMMYYYY(row.created_at)}
-                            </td>
-                            <td className="px-3 py-2 border-b border-[var(--border)]">
+                            <td
+                              className="px-3 py-2 border-b border-[var(--border)] min-w-[240px]"
+                            >
                               <div className="flex flex-col gap-1">
                                 <div className="flex items-center justify-between gap-3">
                                   <StatusChecks row={row} />
                                 </div>
                                 {(() => {
-                                  const sum = attemptSummaryByInstanceId[row.id] ?? null;
-                                  const results: AttemptResult[] = [
-                                    sum?.final_attempt_1_result ?? null,
-                                    sum?.final_attempt_2_result ?? null,
-                                    sum?.final_attempt_3_result ?? null,
-                                  ];
                                   const tones = computeAttemptTones({
                                     submissionCount: Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0),
                                     results,
                                   });
                                   return (
-                                    <div className="grid grid-cols-3 gap-x-6 gap-y-1">
-                                      <div className="col-span-1">
-                                        <AttemptDots tones={tones.student} titlePrefix="Student" />
-                                      </div>
-                                      <div className="col-span-1">
-                                        <AttemptDots tones={tones.trainer} titlePrefix="Trainer" />
-                                      </div>
-                                      <div className="col-span-1" />
+                                    <div className="flex items-center gap-6">
+                                      <AttemptDots tones={tones.student} titlePrefix="Student" />
+                                      <AttemptDots tones={tones.trainer} titlePrefix="Trainer" />
                                     </div>
                                   );
                                 })()}
-                                <div className={`text-xs font-medium ${getOutcomeLabel(attemptSummaryByInstanceId[row.id] ?? null).className}`}>
-                                  {getOutcomeLabel(attemptSummaryByInstanceId[row.id] ?? null).label}
+                                <div
+                                  className={`text-xs font-medium ${
+                                    ui.kind === 'past_not_competent'
+                                      ? ui.outcomeClassName
+                                      : ui.kind === 'past_competent'
+                                        ? ui.outcomeClassName
+                                        : getOutcomeLabel(sum).className
+                                  }`}
+                                >
+                                  {ui.kind === 'past_not_competent'
+                                    ? ui.outcomeLabel
+                                    : ui.kind === 'past_competent'
+                                      ? ui.outcomeLabel
+                                      : getOutcomeLabel(sum).label}
                                 </div>
+                                {attemptDoneText ? (
+                                  <div className="text-[11px] text-gray-600">{attemptDoneText}</div>
+                                ) : null}
+                                {ui.kind === 'in_progress' && missedAttemptText ? (
+                                  <div className="text-[11px] font-medium text-amber-700">{missedAttemptText}</div>
+                                ) : null}
+                                {trainerAttemptFailedText ? (
+                                  <div className="text-[11px] font-medium text-red-700">{trainerAttemptFailedText}</div>
+                                ) : null}
+                                {ui.kind === 'future' || ui.kind === 'expired' ? (
+                                  <div className="text-xs text-amber-700">{ui.reason}</div>
+                                ) : null}
                               </div>
                             </td>
                             <td className="px-3 py-2 border-b border-[var(--border)] text-right">
@@ -863,10 +923,6 @@ export const AdminStudentDetailsPage: React.FC = () => {
                                         title="Apply date changes"
                                       >
                                         Apply
-                                      </button>
-                                      <button type="button" className={actionBtn} onClick={() => void handleOpen(row)} title="Open">
-                                        <ExternalLink className={actionIcon} />
-                                        <span className={actionText}>Open</span>
                                       </button>
                                       <a
                                         href={downloadPdfHref}
@@ -910,7 +966,35 @@ export const AdminStudentDetailsPage: React.FC = () => {
                               </div>
                             </td>
                           </tr>
-                        ))}
+                          {expandedId === row.id ? (
+                            <tr className={ui.rowClassName}>
+                              <td className="px-3 py-3 border-b border-[var(--border)]" colSpan={6} onClick={(e) => e.stopPropagation()}>
+                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                                  <FormDocumentsPanel
+                                    formId={Number(row.form_id)}
+                                    formName={String(row.form_name ?? 'Assessment')}
+                                    canUpload={true}
+                                    canDelete={viewerIsSuperadmin}
+                                  />
+                                  <button
+                                    type="button"
+                                    className="rounded-lg border border-[var(--border)] bg-white p-4 text-left hover:bg-[var(--brand)]/10 focus-visible:bg-[var(--brand)]/10 transition-colors"
+                                    onClick={() => void handleOpen(row)}
+                                    title="Open assessment"
+                                  >
+                                    <div className="text-sm font-semibold text-[var(--text)]">Assessment</div>
+                                    <div className="mt-1 text-xs text-gray-600 break-words">{row.form_name || '—'}</div>
+                                    <div className="mt-3 inline-flex items-center rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700">
+                                      Open
+                                    </div>
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ) : null}
+                          </React.Fragment>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -1025,6 +1109,21 @@ export const AdminStudentDetailsPage: React.FC = () => {
               Save
             </Button>
           </div>
+
+          {addFormId ? (
+            <div className="pt-2 border-t border-gray-100">
+              <div className="text-sm font-semibold text-[var(--text)] mb-2">Learning materials</div>
+              <FormDocumentsPanel
+                formId={Number(addFormId)}
+                formName={String(addForms.find((f) => String(f.id) === String(addFormId))?.name ?? 'Assessment')}
+                canUpload={true}
+                canDelete={viewerIsSuperadmin}
+              />
+              <div className="text-xs text-gray-500 mt-2">
+                These documents are shared by form (all students taking this unit will see them).
+              </div>
+            </div>
+          ) : null}
         </div>
       </Modal>
 
