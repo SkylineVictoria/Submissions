@@ -549,7 +549,7 @@ export const AdminFormsListPage: React.FC = () => {
                                   <div className="text-sm font-semibold text-[var(--text)]">Form</div>
                                   <div className="mt-1 text-xs text-gray-600 break-words">{form.name}</div>
                                   <div className="mt-3 text-xs text-gray-500">
-                                    Upload learning materials here to make them available to students/trainers.
+                                    Student learning is visible to everyone with access; trainer/assessor uploads are hidden from students.
                                   </div>
                                 </div>
                               </div>

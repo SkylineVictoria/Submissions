@@ -28,6 +28,9 @@ const AdminBatchUnitDatesPage = lazy(() =>
 const AdminCoursesPage = lazy(() => import('./pages/AdminCoursesPage').then(m => ({ default: m.AdminCoursesPage })));
 const AdminCourseStudentsPage = lazy(() => import('./pages/AdminCourseStudentsPage').then(m => ({ default: m.AdminCourseStudentsPage })));
 const DashboardPage = lazy(() => import('./pages/DashboardPage').then(m => ({ default: m.DashboardPage })));
+const TrainerCourseUnitsPage = lazy(() =>
+  import('./pages/TrainerCourseUnitsPage').then((m) => ({ default: m.TrainerCourseUnitsPage }))
+);
 const AdminDashboardPage = lazy(() => import('./pages/AdminDashboardPage').then(m => ({ default: m.AdminDashboardPage })));
 const MyProfilePage = lazy(() => import('./pages/MyProfilePage').then(m => ({ default: m.MyProfilePage })));
 const AdminEnrollmentPage = lazy(() => import('./pages/AdminEnrollmentPage').then(m => ({ default: m.AdminEnrollmentPage })));
@@ -72,6 +75,7 @@ function App() {
             <Route path="/admin" element={<ProtectedRoute><AdminLayout /></ProtectedRoute>}>
             <Route index element={<DashboardOrFormsRedirect />} />
             <Route path="dashboard" element={<DashboardPage />} />
+            <Route path="course-units" element={<TrainerCourseUnitsPage />} />
             <Route path="overview" element={<AdminOnlyRoute><AdminDashboardPage /></AdminOnlyRoute>} />
             <Route path="profile" element={<MyProfilePage />} />
             <Route path="enrollment" element={<AdminOnlyRoute><AdminEnrollmentPage /></AdminOnlyRoute>} />

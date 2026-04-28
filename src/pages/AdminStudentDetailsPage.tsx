@@ -1120,7 +1120,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
                 canDelete={viewerIsSuperadmin}
               />
               <div className="text-xs text-gray-500 mt-2">
-                These documents are shared by form (all students taking this unit will see them).
+                Student-learning files are visible to enrolled students; trainer/assessor files stay staff-only.
               </div>
             </div>
           ) : null}

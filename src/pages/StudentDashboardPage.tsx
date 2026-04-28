@@ -569,6 +569,7 @@ export const StudentDashboardPage: React.FC = () => {
                                       formId={Number(row.form_id)}
                                       formName={String(row.form_name ?? 'Assessment')}
                                       canUpload={false}
+                                      showTrainerSection={false}
                                     />
                                     <button
                                       type="button"

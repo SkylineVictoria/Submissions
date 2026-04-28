@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Plus, Mail, Phone, Pencil, Shield, UserRound, Building2 } from 'lucide-react';
-import { listUsersPaged, createUser, updateUser, listBatchesPaged } from '../lib/formEngine';
+import { Plus, Mail, Phone, Pencil, Shield, UserRound, Building2, LogIn } from 'lucide-react';
+import { listUsersPaged, createUser, updateUser, listBatchesPaged, queueStaffImpersonationTabOpen } from '../lib/formEngine';
 import {
   buildUserEmail,
   buildEmailFromLocalAndDomain,
@@ -10,7 +10,7 @@ import {
   type InstitutionalDomain,
   STAFF_DOMAIN,
 } from '../lib/emailUtils';
-import type { UserRow } from '../lib/formEngine';
+import type { UserRow, AppUser, AppUserRole } from '../lib/formEngine';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
@@ -46,6 +46,17 @@ const STATUS_FILTER_OPTIONS = [
 
 const roleLabel = (role: string) =>
   role === 'superadmin' ? 'Super Admin' : BASE_ROLE_OPTIONS.find((r) => r.value === role)?.label ?? role;
+
+function userRowToAppUser(row: UserRow): AppUser {
+  return {
+    id: row.id,
+    full_name: row.full_name,
+    email: row.email,
+    phone: row.phone,
+    status: row.status,
+    role: row.role as AppUserRole,
+  };
+}
 
 export const AdminUsersPage: React.FC = () => {
   const PAGE_SIZE = 20;
@@ -241,6 +252,22 @@ export const AdminUsersPage: React.FC = () => {
 
   const canEditDirectoryUser = (row: UserRow) => !(row.role === 'superadmin' && !viewerIsSuperadmin);
 
+  const handleOpenAsUser = (row: UserRow) => {
+    if (!viewerIsSuperadmin || !authUser?.id) return;
+    if (row.id === authUser.id) {
+      toast.error('Pick a different user than yourself.');
+      return;
+    }
+    if (row.role === 'superadmin') {
+      toast.error('Super admin accounts cannot be opened in preview from here.');
+      return;
+    }
+    const appUser = userRowToAppUser(row);
+    queueStaffImpersonationTabOpen(appUser, authUser.id);
+    toast.success(`Opening new tab as ${row.full_name}…`);
+    window.open('/admin', '_blank');
+  };
+
   return (
     <div className="min-h-screen bg-[var(--bg)]">
       <div className="w-full px-4 md:px-6 lg:px-8 py-6">
@@ -360,7 +387,7 @@ export const AdminUsersPage: React.FC = () => {
                             {user.status || 'active'}
                           </span>
                         </div>
-                        <div className="mt-3">
+                        <div className="mt-3 flex flex-col gap-2">
                           <Button
                             variant="outline"
                             size="sm"
@@ -377,6 +404,19 @@ export const AdminUsersPage: React.FC = () => {
                             <Pencil className="mr-1 h-4 w-4" />
                             Edit
                           </Button>
+                          {viewerIsSuperadmin ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="w-full"
+                              disabled={user.role === 'superadmin' || user.id === authUser?.id}
+                              title="Open admin app in a new tab as this user"
+                              onClick={() => handleOpenAsUser(user)}
+                            >
+                              <LogIn className="mr-1 h-4 w-4" />
+                              Open as user
+                            </Button>
+                          ) : null}
                         </div>
                       </div>
                     </div>
@@ -456,22 +496,37 @@ export const AdminUsersPage: React.FC = () => {
                         </span>
                       </td>
                       <td className="px-4 py-3 border-b border-[var(--border)] text-right">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={!canEditDirectoryUser(user)}
-                          onClick={() => {
-                            if (!canEditDirectoryUser(user)) {
-                              toast.error('Only a super admin can edit this user.');
-                              return;
-                            }
-                            setEditingId(user.id);
-                          }}
-                          className="inline-flex items-center justify-center gap-1.5 min-w-[96px] whitespace-nowrap"
-                        >
-                          <Pencil className="w-4 h-4" />
-                          Edit
-                        </Button>
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={!canEditDirectoryUser(user)}
+                            onClick={() => {
+                              if (!canEditDirectoryUser(user)) {
+                                toast.error('Only a super admin can edit this user.');
+                                return;
+                              }
+                              setEditingId(user.id);
+                            }}
+                            className="inline-flex items-center justify-center gap-1.5 min-w-[96px] whitespace-nowrap"
+                          >
+                            <Pencil className="w-4 h-4" />
+                            Edit
+                          </Button>
+                          {viewerIsSuperadmin ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={user.role === 'superadmin' || user.id === authUser?.id}
+                              title="Open admin app in a new tab as this user"
+                              onClick={() => handleOpenAsUser(user)}
+                              className="inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
+                            >
+                              <LogIn className="w-4 h-4" />
+                              Open as user
+                            </Button>
+                          ) : null}
+                        </div>
                       </td>
                     </tr>
                   ))}

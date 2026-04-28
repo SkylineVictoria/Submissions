@@ -1622,6 +1622,112 @@ export interface AppUser {
 
 const AUTH_STORAGE_KEY = 'skyline_auth_user';
 export const STUDENT_DASHBOARD_AUTH_STORAGE_KEY = 'signflow_student_dashboard_auth_v1';
+/** Tab-scoped superadmin "view as" another staff user (sessionStorage; does not replace localStorage login). */
+export const STAFF_IMPERSONATION_STORAGE_KEY = 'signflow_staff_impersonation_v1';
+
+export interface StaffImpersonationPayload {
+  user: AppUser;
+  impersonatorUserId: number;
+  at: number;
+}
+
+export function parseStaffImpersonationSession(): StaffImpersonationPayload | null {
+  try {
+    const s = sessionStorage.getItem(STAFF_IMPERSONATION_STORAGE_KEY);
+    if (!s) return null;
+    const raw = JSON.parse(s) as Partial<StaffImpersonationPayload>;
+    const u = raw?.user;
+    if (!u || !Number.isFinite(Number(u.id)) || !u.email || !u.role) return null;
+    const impersonatorUserId = Number(raw.impersonatorUserId);
+    if (!Number.isFinite(impersonatorUserId) || impersonatorUserId <= 0) return null;
+    return {
+      user: {
+        id: Number(u.id),
+        full_name: String(u.full_name ?? ''),
+        email: String(u.email ?? ''),
+        phone: u.phone != null ? String(u.phone) : null,
+        status: u.status != null ? String(u.status) : null,
+        role: u.role as AppUserRole,
+      },
+      impersonatorUserId,
+      at: Number(raw.at) || Date.now(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function setStaffImpersonationSession(user: AppUser, impersonatorUserId: number): void {
+  const payload: StaffImpersonationPayload = { user, impersonatorUserId, at: Date.now() };
+  sessionStorage.setItem(STAFF_IMPERSONATION_STORAGE_KEY, JSON.stringify(payload));
+}
+
+export function clearStaffImpersonationSession(): void {
+  sessionStorage.removeItem(STAFF_IMPERSONATION_STORAGE_KEY);
+}
+
+/** New tabs don't inherit sessionStorage; superadmin “Open as user” queues here briefly, then the new tab moves it into sessionStorage. */
+const STAFF_IMPERSONATION_PENDING_KEY = 'signflow_staff_impersonation_pending_v1';
+const IMPERSONATION_PENDING_MAX_MS = 120_000;
+
+/** Queue impersonation for the next tab opened via window.open (same browser profile / localStorage). */
+export function queueStaffImpersonationTabOpen(user: AppUser, impersonatorUserId: number): void {
+  const payload: StaffImpersonationPayload = { user, impersonatorUserId, at: Date.now() };
+  localStorage.setItem(STAFF_IMPERSONATION_PENDING_KEY, JSON.stringify(payload));
+}
+
+/**
+ * Run once on app load: if superadmin queued “Open as user”, move payload into this tab’s sessionStorage.
+ * Returns true when impersonation was applied.
+ */
+export function consumeStaffImpersonationPendingIfEligible(): boolean {
+  try {
+    const s = localStorage.getItem(STAFF_IMPERSONATION_PENDING_KEY);
+    if (!s) return false;
+    const raw = JSON.parse(s) as Partial<StaffImpersonationPayload>;
+    const u = raw?.user;
+    const stored = getStoredUser();
+    if (!u || !stored || Number(raw.impersonatorUserId) !== stored.id) return false;
+    const age = Date.now() - (Number(raw.at) || 0);
+    if (age > IMPERSONATION_PENDING_MAX_MS || age < 0) {
+      localStorage.removeItem(STAFF_IMPERSONATION_PENDING_KEY);
+      return false;
+    }
+    const appUser: AppUser = {
+      id: Number(u.id),
+      full_name: String(u.full_name ?? ''),
+      email: String(u.email ?? ''),
+      phone: u.phone != null ? String(u.phone) : null,
+      status: u.status != null ? String(u.status) : null,
+      role: u.role as AppUserRole,
+    };
+    if (!Number.isFinite(appUser.id) || appUser.id <= 0 || !appUser.email) return false;
+    localStorage.removeItem(STAFF_IMPERSONATION_PENDING_KEY);
+    setStaffImpersonationSession(appUser, stored.id);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Active staff session for this tab: impersonated user if superadmin opened "Open as user", else localStorage user. */
+export function getEffectiveStoredUser(): AppUser | null {
+  const stored = getStoredUser();
+  const imp = parseStaffImpersonationSession();
+  if (!imp?.user?.id) return stored;
+  if (!stored || imp.impersonatorUserId !== stored.id) {
+    clearStaffImpersonationSession();
+    return stored;
+  }
+  return imp.user;
+}
+
+/** True when this tab is viewing the app as another staff user (superadmin preview). */
+export function isStaffImpersonationActive(): boolean {
+  const stored = getStoredUser();
+  const imp = parseStaffImpersonationSession();
+  return !!(stored && imp && imp.impersonatorUserId === stored.id && imp.user?.id && imp.user.id !== stored.id);
+}
 
 export function getStoredUser(): AppUser | null {
   try {
@@ -1644,7 +1750,7 @@ export function setStoredUser(user: AppUser | null): void {
 
 /** Audit fields for created_by / updated_by (current user). Use for insert/update. */
 function getAuditFields(): { created_by: number | null; updated_by: number | null } {
-  const u = getStoredUser();
+  const u = getEffectiveStoredUser();
   const id = u?.id ?? null;
   return { created_by: id, updated_by: id };
 }
@@ -2519,7 +2625,8 @@ export async function listDashboardInstances(
   search?: string,
   pendingOnly = false
 ): Promise<PaginatedResult<SubmittedInstanceRow>> {
-  let studentIds: number[] = [];
+  /** Instances are scoped to these students only (active / unset status). Avoid filters on embedded `skyline_students.*` in OR — PostgREST often returns PGRST100. */
+  let eligibleStudentIds: number[] = [];
   if (role === 'trainer') {
     const { data: batches } = await supabase
       .from('skyline_batches')
@@ -2532,31 +2639,39 @@ export async function listDashboardInstances(
       .select('id')
       .in('batch_id', batchIds)
       .or('status.is.null,status.eq.active');
-    studentIds = ((students as { id: number }[]) || []).map((s) => s.id);
-    if (studentIds.length === 0) return { data: [], total: 0, page, pageSize };
+    eligibleStudentIds = ((students as { id: number }[]) || []).map((s) => s.id);
+    if (eligibleStudentIds.length === 0) return { data: [], total: 0, page, pageSize };
+  } else {
+    const { data: studs } = await supabase
+      .from('skyline_students')
+      .select('id')
+      .or('status.is.null,status.eq.active');
+    eligibleStudentIds = ((studs as { id: number }[]) || []).map((s) => s.id);
+    if (eligibleStudentIds.length === 0) return { data: [], total: 0, page, pageSize };
   }
 
   const from = Math.max(0, (page - 1) * pageSize);
   const to = from + pageSize - 1;
   let query = supabase
     .from('skyline_form_instances')
-    .select('id, form_id, student_id, status, role_context, created_at, submitted_at, skyline_students!inner(status)', {
-      count: 'exact',
-    })
-    .not('student_id', 'is', null);
-  // Never show inactive students in directories.
-  query = query.or('skyline_students.status.is.null,skyline_students.status.eq.active');
+    .select(
+      'id, form_id, student_id, status, role_context, created_at, submitted_at, start_date, end_date, submission_count, no_attempt_rollovers, did_not_attempt, skyline_students!inner(status)',
+      { count: 'exact' }
+    )
+    .not('student_id', 'is', null)
+    .in('student_id', eligibleStudentIds);
 
   if (role === 'trainer') {
-    query = query.in('student_id', studentIds);
     if (pendingOnly) {
-      query = query.eq('role_context', 'trainer').neq('status', 'locked');
+      // Pending trainer queue: role_context must be trainer; not completed (locked).
+      // Use OR for status: in SQL, `status <> 'locked'` excludes NULL rows — include null explicitly.
+      query = query.eq('role_context', 'trainer').or('status.is.null,status.neq.locked');
     } else {
       query = query.or('role_context.eq.trainer,role_context.eq.office,status.eq.locked');
     }
   } else {
     if (pendingOnly) {
-      query = query.eq('role_context', 'office').neq('status', 'locked');
+      query = query.eq('role_context', 'office').or('status.is.null,status.neq.locked');
     } else {
       query = query.or('role_context.eq.office,status.eq.locked');
     }
@@ -2575,17 +2690,12 @@ export async function listDashboardInstances(
     const { data: studentRows } = await supabase
       .from('skyline_students')
       .select('id')
-      .or(`student_id.ilike.%${escaped}%,name.ilike.%${escaped}%,first_name.ilike.%${escaped}%,last_name.ilike.%${escaped}%,email.ilike.%${escaped}%`)
-      .or('status.is.null,status.eq.active');
+      .or(`student_id.ilike.%${escaped}%,name.ilike.%${escaped}%,first_name.ilike.%${escaped}%,last_name.ilike.%${escaped}%,email.ilike.%${escaped}%`);
     const searchStudentIds = ((studentRows as Array<Record<string, unknown>>) || []).map((s) => Number(s.id)).filter((n) => Number.isFinite(n) && n > 0);
     if (searchStudentIds.length > 0) {
-      if (role === 'trainer') {
-        const overlap = studentIds.filter((id) => searchStudentIds.includes(id));
-        if (overlap.length === 0) return { data: [], total: 0, page, pageSize };
-        conditions.push(`student_id.in.(${overlap.join(',')})`);
-      } else {
-        conditions.push(`student_id.in.(${searchStudentIds.join(',')})`);
-      }
+      const overlap = eligibleStudentIds.filter((id) => searchStudentIds.includes(id));
+      if (overlap.length === 0) return { data: [], total: 0, page, pageSize };
+      conditions.push(`student_id.in.(${overlap.join(',')})`);
     }
     query = query.or(conditions.join(','));
   }
@@ -2593,7 +2703,7 @@ export async function listDashboardInstances(
   query = query.order('created_at', { ascending: false }).order('id', { ascending: false });
   const { data: instances, error, count } = await query.range(from, to);
   if (error) {
-    console.error('listDashboardInstances error', error);
+    console.error('listDashboardInstances error', error.message || error, error);
     return { data: [], total: 0, page, pageSize };
   }
 
@@ -2662,6 +2772,11 @@ export async function listDashboardInstances(
         submission_count: Number(r.submission_count ?? 0) || 0,
         start_date: r.start_date ? String(r.start_date) : null,
         end_date: r.end_date ? String(r.end_date) : null,
+        no_attempt_rollovers:
+          r.no_attempt_rollovers != null && r.no_attempt_rollovers !== ''
+            ? Number(r.no_attempt_rollovers)
+            : null,
+        did_not_attempt: Boolean(r.did_not_attempt),
         link_expired,
       };
     }),
@@ -2715,6 +2830,44 @@ export async function listTrainerBatches(userId: number): Promise<Batch[]> {
   );
 }
 
+/** One row per distinct course attached to batches where this user is the trainer (for units / materials UI). */
+export type TrainerCourseOption = {
+  courseId: number;
+  courseName: string;
+  qualificationCode: string | null;
+  batchNames: string[];
+};
+
+export async function listTrainerCourseOptionsForUnits(userId: number): Promise<TrainerCourseOption[]> {
+  const batches = await listTrainerBatches(userId);
+  const byCourse = new Map<number, Set<string>>();
+  for (const b of batches) {
+    const cid = b.course_id;
+    if (cid == null || !Number.isFinite(Number(cid)) || Number(cid) <= 0) continue;
+    const id = Number(cid);
+    if (!byCourse.has(id)) byCourse.set(id, new Set());
+    byCourse.get(id)!.add(b.name);
+  }
+  if (byCourse.size === 0) return [];
+  const ids = [...byCourse.keys()];
+  const { data: courses, error } = await supabase.from('skyline_courses').select('id, name, qualification_code').in('id', ids);
+  if (error) console.error('listTrainerCourseOptionsForUnits courses error', error);
+  const cmap = new Map((courses as { id: number; name: string; qualification_code: string | null }[] | null)?.map((c) => [c.id, c]) ?? []);
+  const result: TrainerCourseOption[] = [];
+  for (const courseId of ids) {
+    const meta = cmap.get(courseId);
+    const batchNames = [...(byCourse.get(courseId) ?? new Set())].sort();
+    result.push({
+      courseId,
+      courseName: meta?.name?.trim() || `Course ${courseId}`,
+      qualificationCode: meta?.qualification_code ?? null,
+      batchNames,
+    });
+  }
+  result.sort((a, b) => a.courseName.localeCompare(b.courseName));
+  return result;
+}
+
 /** Number of batches assigned to the trainer. */
 export async function getTrainerBatchCount(userId: number): Promise<number> {
   const { count, error } = await supabase
@@ -2734,7 +2887,12 @@ export async function getDashboardPendingCount(role: 'trainer' | 'office', userI
     const { data: batches } = await supabase.from('skyline_batches').select('id').eq('trainer_id', userId);
     const batchIds = ((batches as { id: number }[]) || []).map((b) => b.id);
     if (batchIds.length === 0) return 0;
-    const { data: students } = await supabase.from('skyline_students').select('id').in('batch_id', batchIds);
+    // Match listDashboardInstances: only active students appear in the pending table.
+    const { data: students } = await supabase
+      .from('skyline_students')
+      .select('id')
+      .in('batch_id', batchIds)
+      .or('status.is.null,status.eq.active');
     const studentIds = ((students as { id: number }[]) || []).map((s) => s.id);
     if (studentIds.length === 0) return 0;
     const { count } = await supabase
@@ -2742,15 +2900,21 @@ export async function getDashboardPendingCount(role: 'trainer' | 'office', userI
       .select('id', { count: 'exact', head: true })
       .in('student_id', studentIds)
       .eq('role_context', 'trainer')
-      .neq('status', 'locked');
+      .or('status.is.null,status.neq.locked');
     return Number(count ?? 0);
   }
+  const { data: studs } = await supabase
+    .from('skyline_students')
+    .select('id')
+    .or('status.is.null,status.eq.active');
+  const eligibleOfficeStudentIds = ((studs as { id: number }[]) || []).map((s) => s.id);
+  if (eligibleOfficeStudentIds.length === 0) return 0;
   const { count } = await supabase
     .from('skyline_form_instances')
     .select('id', { count: 'exact', head: true })
+    .in('student_id', eligibleOfficeStudentIds)
     .eq('role_context', 'office')
-    .neq('status', 'locked')
-    .not('student_id', 'is', null);
+    .or('status.is.null,status.neq.locked');
   return Number(count ?? 0);
 }
 

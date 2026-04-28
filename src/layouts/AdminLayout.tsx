@@ -13,10 +13,12 @@ import {
   User,
   GraduationCap,
   Menu,
+  BookOpen,
 } from 'lucide-react';
 import { cn } from '../components/utils/cn';
 import { useAuth } from '../contexts/AuthContext';
 import { useMediaQuery } from '../hooks/useMediaQuery';
+import { toast } from '../utils/toast';
 
 const SIDEBAR_WIDTH_EXPANDED = 220;
 const SIDEBAR_WIDTH_COLLAPSED = 64;
@@ -25,7 +27,7 @@ export const AdminLayout: React.FC = () => {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [logoError, setLogoError] = useState(false);
-  const { user, logout } = useAuth();
+  const { user, logout, exitImpersonation, isImpersonating } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const isMdUp = useMediaQuery('(min-width: 768px)');
@@ -41,7 +43,10 @@ export const AdminLayout: React.FC = () => {
   }, [isMdUp]);
 
   const baseNavItems = isTrainer
-    ? [{ to: '/admin/dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-5 h-5 shrink-0" />, end: true }]
+    ? [
+        { to: '/admin/dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-5 h-5 shrink-0" />, end: true },
+        { to: '/admin/course-units', label: 'Course units', icon: <BookOpen className="w-5 h-5 shrink-0" />, end: true },
+      ]
     : [
         { to: '/admin/overview', label: 'Dashboard', icon: <LayoutDashboard className="w-5 h-5 shrink-0" />, end: true },
         { to: '/admin/forms', label: 'Forms', icon: <FileText className="w-5 h-5 shrink-0" />, end: true },
@@ -163,6 +168,12 @@ export const AdminLayout: React.FC = () => {
               <button
                 type="button"
                 onClick={() => {
+                  if (isImpersonating) {
+                    exitImpersonation();
+                    toast.success('Returned to your account.');
+                    navigate('/admin/users', { replace: true });
+                    return;
+                  }
                   logout();
                   navigate('/login', { replace: true });
                 }}
@@ -172,7 +183,7 @@ export const AdminLayout: React.FC = () => {
                 )}
               >
                 <LogOut className="h-5 w-5 shrink-0" />
-                {showSidebarLabels && <span className="min-w-0">Logout</span>}
+                {showSidebarLabels && <span className="min-w-0">{isImpersonating ? 'Exit preview' : 'Logout'}</span>}
               </button>
             </div>
           ) : null}
@@ -199,6 +210,15 @@ export const AdminLayout: React.FC = () => {
           </header>
         ) : null}
             <div className="min-h-0 min-w-0 flex-1 pb-[env(safe-area-inset-bottom,0px)]">
+              {isImpersonating ? (
+                <div
+                  className="shrink-0 border-b border-amber-200 bg-amber-50 px-3 py-2 text-center text-xs font-medium text-amber-950 sm:text-sm"
+                  role="status"
+                >
+                  Previewing as <span className="font-semibold">{user?.full_name}</span> ({user?.email}). This tab acts as that
+                  user until you exit.
+                </div>
+              ) : null}
               <Outlet />
             </div>
           </main>

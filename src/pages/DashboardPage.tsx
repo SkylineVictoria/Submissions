@@ -1,6 +1,14 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { ExternalLink, RefreshCw, ClipboardCheck, LayoutDashboard, Users } from 'lucide-react';
-import { listDashboardInstances, getDashboardPendingCount, getTrainerBatchCount, listTrainerBatches, listStudentsInBatch, issueInstanceAccessLink } from '../lib/formEngine';
+import { RefreshCw, ClipboardCheck, LayoutDashboard, Users } from 'lucide-react';
+import {
+  listDashboardInstances,
+  getDashboardPendingCount,
+  getTrainerBatchCount,
+  listTrainerBatches,
+  listStudentsInBatch,
+  issueInstanceAccessLink,
+  fetchAssessmentSummaries,
+} from '../lib/formEngine';
 import type { SubmittedInstanceRow, Batch, Student } from '../lib/formEngine';
 import { useAuth } from '../contexts/AuthContext';
 import { Card } from '../components/ui/Card';
@@ -10,12 +18,24 @@ import { Select } from '../components/ui/Select';
 import { Loader } from '../components/ui/Loader';
 import { toast } from '../utils/toast';
 import { AdminListPagination } from '../components/admin/AdminListPagination';
+import {
+  computeRowUi,
+  melDateString,
+  formatDDMMYYYY,
+  getStudentAttemptDoneText,
+  getTrainerAttemptFailedText,
+  getMissedAttemptWindowText,
+  type AttemptResult,
+} from '../utils/assessmentRowUi';
+import { FormDocumentsPanel } from '../components/documents/FormDocumentsPanel';
 
-const formatDateTime = (value: string | null): string => {
-  if (!value) return '-';
-  const dt = new Date(value);
-  if (Number.isNaN(dt.getTime())) return '-';
-  return dt.toLocaleString();
+const withinWindowMelbourne = (row: Pick<SubmittedInstanceRow, 'start_date' | 'end_date'>): { ok: boolean; reason?: string } => {
+  const today = melDateString(new Date());
+  const start = String(row.start_date ?? '').trim();
+  const end = String(row.end_date ?? '').trim();
+  if (start && today < start) return { ok: false, reason: `Available from ${formatDDMMYYYY(start)}` };
+  if (end && today > end) return { ok: false, reason: `Expired on ${formatDDMMYYYY(end)} (23:59 AEDT)` };
+  return { ok: true };
 };
 
 const getWorkflowLabel = (row: SubmittedInstanceRow): string => {
@@ -34,6 +54,24 @@ const getWorkflowBadgeClass = (row: SubmittedInstanceRow): string => {
   return 'bg-gray-100 text-gray-700';
 };
 
+function getOutcomeLabel(summary: {
+  final_attempt_1_result: AttemptResult;
+  final_attempt_2_result: AttemptResult;
+  final_attempt_3_result: AttemptResult;
+} | null): {
+  label: string;
+  className: string;
+} {
+  const r1 = summary?.final_attempt_1_result ?? null;
+  const r2 = summary?.final_attempt_2_result ?? null;
+  const r3 = summary?.final_attempt_3_result ?? null;
+  const anyCompetent = r1 === 'competent' || r2 === 'competent' || r3 === 'competent';
+  if (anyCompetent) return { label: 'Completed', className: 'text-emerald-700' };
+  const anyNYC = r1 === 'not_yet_competent' || r2 === 'not_yet_competent' || r3 === 'not_yet_competent';
+  if (anyNYC) return { label: 'Not competent', className: 'text-red-700' };
+  return { label: 'In progress', className: 'text-gray-700' };
+}
+
 export const DashboardPage: React.FC = () => {
   const { user } = useAuth();
   const role = user?.role === 'trainer' ? 'trainer' : 'office';
@@ -50,6 +88,11 @@ export const DashboardPage: React.FC = () => {
   const [selectedBatchId, setSelectedBatchId] = useState<string>('');
   const [batchStudents, setBatchStudents] = useState<Student[]>([]);
   const [batchStudentsLoading, setBatchStudentsLoading] = useState(false);
+
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [attemptSummaryByInstanceId, setAttemptSummaryByInstanceId] = useState<
+    Record<number, { final_attempt_1_result: AttemptResult; final_attempt_2_result: AttemptResult; final_attempt_3_result: AttemptResult }>
+  >({});
 
   const loadData = useCallback(
     async (page: number, search: string, opts?: { silent?: boolean }) => {
@@ -77,6 +120,25 @@ export const DashboardPage: React.FC = () => {
   }, [currentPage, searchTerm, loadData]);
 
   useEffect(() => {
+    if (rows.length === 0) {
+      setAttemptSummaryByInstanceId({});
+      return;
+    }
+    const ids = rows.map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0);
+    let cancelled = false;
+    void (async () => {
+      const m = await fetchAssessmentSummaries(ids);
+      if (cancelled) return;
+      setAttemptSummaryByInstanceId(
+        m as Record<number, { final_attempt_1_result: AttemptResult; final_attempt_2_result: AttemptResult; final_attempt_3_result: AttemptResult }>
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [rows]);
+
+  useEffect(() => {
     if (role !== 'trainer' || !selectedBatchId) {
       setBatchStudents([]);
       return;
@@ -98,11 +160,21 @@ export const DashboardPage: React.FC = () => {
   };
 
   const handleOpen = async (row: SubmittedInstanceRow) => {
+    const win = withinWindowMelbourne(row);
+    if (!win.ok) {
+      toast.error(win.reason || 'This assessment is not available right now.');
+      return;
+    }
     const targetRole =
-      row.role_context === 'trainer' ? 'trainer'
-      : row.role_context === 'office' ? 'office'
-      : row.status === 'locked' ? (role === 'office' ? 'office' : 'trainer')
-      : 'student';
+      row.role_context === 'trainer'
+        ? 'trainer'
+        : row.role_context === 'office'
+          ? 'office'
+          : row.status === 'locked'
+            ? role === 'office'
+              ? 'office'
+              : 'trainer'
+            : 'student';
     const url = await issueInstanceAccessLink(row.id, targetRole);
     if (!url) {
       toast.error('Failed to open secure link');
@@ -206,7 +278,10 @@ export const DashboardPage: React.FC = () => {
 
         <Card>
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
-            <h2 className="text-lg font-bold text-[var(--text)]">Pending assessments</h2>
+            <div>
+              <h2 className="text-lg font-bold text-[var(--text)]">Pending assessments</h2>
+              <p className="text-sm text-gray-600 mt-1">Open follows the same activity window as the student view (end date 23:59 AEDT).</p>
+            </div>
             <div className="flex items-center gap-2">
               <Input
                 value={searchTerm}
@@ -257,49 +332,143 @@ export const DashboardPage: React.FC = () => {
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-gray-200 text-left text-xs uppercase tracking-wide text-gray-500">
-                    <th className="py-3 pr-3">Student</th>
-                    <th className="py-3 pr-3">Form</th>
-                    <th className="py-3 pr-3">Date</th>
-                    <th className="py-3 pr-3">Workflow</th>
-                    <th className="py-3 text-right">Action</th>
+              <table className="min-w-[960px] w-full text-sm border border-[var(--border)] rounded-lg overflow-hidden">
+                <thead className="bg-gray-50 text-gray-700">
+                  <tr>
+                    <th className="text-left px-3 py-2 font-semibold border-b border-[var(--border)] min-w-[12rem]">Student</th>
+                    <th className="text-left px-3 py-2 font-semibold border-b border-[var(--border)] min-w-[11rem]">Form</th>
+                    <th className="hidden md:table-cell text-left px-3 py-2 font-semibold border-b border-[var(--border)] w-[6.5rem] whitespace-nowrap">
+                      Start
+                    </th>
+                    <th className="hidden md:table-cell text-left px-3 py-2 font-semibold border-b border-[var(--border)] w-[6.5rem] whitespace-nowrap">End</th>
+                    <th className="text-left px-3 py-2 font-semibold border-b border-[var(--border)] min-w-[12rem]">Progress</th>
+                    <th className="text-right px-3 py-2 font-semibold border-b border-[var(--border)] whitespace-nowrap">Action</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((row) => (
-                    <tr key={row.id} className="border-b border-gray-100 hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors">
-                      <td className="py-3 pr-3">
-                        <div className="font-medium text-gray-900">{row.student_name}</div>
-                        <div className="text-xs text-gray-500">{row.student_email || '-'}</div>
-                      </td>
-                      <td className="py-3 pr-3">
-                        <div className="font-medium text-gray-900">{row.form_name}</div>
-                        <div className="text-xs text-gray-500">v{row.form_version ?? '1.0.0'}</div>
-                      </td>
-                      <td className="py-3 pr-3 text-gray-700">{formatDateTime(row.submitted_at || row.created_at)}</td>
-                      <td className="py-3 pr-3">
-                        <span
-                          className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${getWorkflowBadgeClass(row)}`}
+                  {rows.map((row) => {
+                    const sum = attemptSummaryByInstanceId[row.id] ?? null;
+                    const attemptResults: AttemptResult[] = [
+                      sum?.final_attempt_1_result ?? null,
+                      sum?.final_attempt_2_result ?? null,
+                      sum?.final_attempt_3_result ?? null,
+                    ];
+                    const attemptDoneText = getStudentAttemptDoneText({
+                      submissionCount: Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0),
+                      submittedAt: row.submitted_at ?? null,
+                      attemptResults,
+                    });
+                    const trainerAttemptFailedText = getTrainerAttemptFailedText(attemptResults);
+                    const missedAttemptText = getMissedAttemptWindowText({
+                      noAttemptRollovers: row.no_attempt_rollovers ?? null,
+                      didNotAttempt: row.did_not_attempt ?? null,
+                    });
+                    const ui = computeRowUi({
+                      row: { ...row, did_not_attempt: row.did_not_attempt ?? null },
+                      attemptResults,
+                    });
+                    const disabled = ui.disabled;
+                    const win = withinWindowMelbourne(row);
+                    const outcome = getOutcomeLabel(sum);
+                    return (
+                      <React.Fragment key={row.id}>
+                        <tr
+                          className={`${ui.rowClassName} cursor-pointer`}
+                          onClick={() => setExpandedId((prev) => (prev === row.id ? null : row.id))}
+                          title="Click to expand"
                         >
-                          {getWorkflowLabel(row)}
-                        </span>
-                      </td>
-                      <td className="py-3 text-right">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleOpen(row)}
-                          className="inline-flex items-center gap-1.5"
-                        >
-                          <ExternalLink className="w-4 h-4" />
-                          Open
-                        </Button>
-                      </td>
-                    </tr>
-                  ))}
+                          <td className="px-3 py-2 border-b border-[var(--border)] align-top">
+                            <div className="font-medium text-[var(--text)] break-words">{row.student_name}</div>
+                            <div className="text-xs text-gray-500 break-all">{row.student_email || '—'}</div>
+                            <div className="md:hidden mt-1 text-xs text-gray-600 tabular-nums flex flex-wrap gap-x-3 gap-y-0.5">
+                              <span>
+                                <span className="text-gray-500">Start</span> {formatDDMMYYYY(row.start_date)}
+                              </span>
+                              <span>
+                                <span className="text-gray-500">End</span> {formatDDMMYYYY(row.end_date)}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 border-b border-[var(--border)] align-top">
+                            <div className="font-medium text-[var(--text)] break-words">{row.form_name}</div>
+                            <div className="text-xs text-gray-500">v{row.form_version ?? '1.0.0'}</div>
+                          </td>
+                          <td className="hidden md:table-cell px-3 py-2 border-b border-[var(--border)] text-gray-700 whitespace-nowrap tabular-nums align-top">
+                            {formatDDMMYYYY(row.start_date)}
+                          </td>
+                          <td className="hidden md:table-cell px-3 py-2 border-b border-[var(--border)] text-gray-700 whitespace-nowrap tabular-nums align-top">
+                            {formatDDMMYYYY(row.end_date)}
+                          </td>
+                          <td className="px-3 py-2 border-b border-[var(--border)] align-top min-w-[12rem]">
+                            <div className="flex flex-col gap-1">
+                              <span
+                                className={`inline-flex w-fit rounded-full px-2.5 py-1 text-xs font-medium ${getWorkflowBadgeClass(row)}`}
+                              >
+                                {getWorkflowLabel(row)}
+                              </span>
+                              <div
+                                className={`text-xs font-medium ${
+                                  ui.kind === 'past_not_competent'
+                                    ? ui.outcomeClassName ?? ''
+                                    : ui.kind === 'past_competent'
+                                      ? ui.outcomeClassName ?? ''
+                                      : outcome.className
+                                }`}
+                              >
+                                {ui.kind === 'past_not_competent'
+                                  ? ui.outcomeLabel
+                                  : ui.kind === 'past_competent'
+                                    ? ui.outcomeLabel
+                                    : outcome.label}
+                              </div>
+                              {attemptDoneText ? <div className="text-[11px] text-gray-600">{attemptDoneText}</div> : null}
+                              {ui.kind === 'in_progress' && missedAttemptText ? (
+                                <div className="text-[11px] font-medium text-amber-700">{missedAttemptText}</div>
+                              ) : null}
+                              {trainerAttemptFailedText ? (
+                                <div className="text-[11px] font-medium text-red-700">{trainerAttemptFailedText}</div>
+                              ) : null}
+                              {disabled && (ui.kind === 'future' || ui.kind === 'expired') ? (
+                                <div className="text-xs text-amber-700">{ui.reason}</div>
+                              ) : !win.ok ? (
+                                <div className="text-xs text-amber-700">{win.reason}</div>
+                              ) : null}
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 border-b border-[var(--border)] text-right align-top">
+                            <div className="text-xs text-gray-500">—</div>
+                          </td>
+                        </tr>
+                        {expandedId === row.id ? (
+                          <tr className={ui.rowClassName}>
+                            <td className="px-3 py-3 border-b border-[var(--border)]" colSpan={6} onClick={(e) => e.stopPropagation()}>
+                              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                                <FormDocumentsPanel
+                                  formId={Number(row.form_id)}
+                                  formName={String(row.form_name ?? 'Assessment')}
+                                  canUpload={false}
+                                  showTrainerSection={role === 'trainer'}
+                                />
+                                <button
+                                  type="button"
+                                  className="rounded-lg border border-[var(--border)] bg-white p-4 text-left hover:bg-[var(--brand)]/10 focus-visible:bg-[var(--brand)]/10 transition-colors"
+                                  onClick={() => void handleOpen(row)}
+                                  disabled={disabled}
+                                  title="Open assessment"
+                                >
+                                  <div className="text-sm font-semibold text-[var(--text)]">Assessment</div>
+                                  <div className="mt-1 text-xs text-gray-600 break-words">{row.form_name}</div>
+                                  <div className="mt-3 inline-flex items-center rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700">
+                                    Open
+                                  </div>
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ) : null}
+                      </React.Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
