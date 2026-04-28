@@ -15,8 +15,8 @@ export interface InductionInteractiveBindings {
   readOnly?: boolean;
   /** When false (default), OFFICE USE ONLY is read-only (student induction). Set true for admin/trainer tools. */
   allowOfficeUseEdit?: boolean;
-  /** Skyline induction row id — uploads go to `photomedia/skyline/induction/{id}/`. */
-  inductionId?: number;
+  /** Folder for uploads — admin uses numeric submission id; public induction uses session token. */
+  inductionSubmissionFolder?: number | string;
 }
 
 function melbourneMonthYear(iso: string | null | undefined): string {
@@ -803,8 +803,10 @@ export const InductionDocumentPages: React.FC<{
               {INDUCTION_DOCUMENT_KEYS.map((key) => {
                 const label = INDUCTION_DOCUMENT_LABELS[key];
                 const row = interactive.value.documents[key];
-                const iid = interactive.inductionId;
-                const canUpload = !interactive.readOnly && typeof iid === 'number' && iid > 0;
+                const folder = interactive.inductionSubmissionFolder;
+                const canUpload =
+                  !interactive.readOnly &&
+                  ((typeof folder === 'number' && folder > 0) || (typeof folder === 'string' && folder.trim().length > 0));
                 return (
                   <li key={key} className="border-b border-gray-200 pb-3">
                     <div className="flex flex-col gap-2">
@@ -820,9 +822,9 @@ export const InductionDocumentPages: React.FC<{
                             onChange={async (ev) => {
                               const f = ev.target.files?.[0];
                               ev.target.value = '';
-                              if (!f || !canUpload || iid == null) return;
+                              if (!f || !canUpload || folder == null) return;
                               setUploadingDoc(key);
-                              const { url, error } = await uploadInductionDocument(iid, key, f);
+                              const { url, error } = await uploadInductionDocument(folder, key, f);
                               setUploadingDoc(null);
                               if (error || !url) {
                                 toast.error(error || 'Upload failed.');

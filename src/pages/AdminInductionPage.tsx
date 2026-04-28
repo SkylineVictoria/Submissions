@@ -699,7 +699,7 @@ export const AdminInductionPage: React.FC = () => {
                           onChange: (next) => setEditPayload(next),
                           readOnly: false,
                           allowOfficeUseEdit: true,
-                          inductionId: submissionsModal?.id,
+                          inductionSubmissionFolder: editPayloadSub.id,
                         }}
                       />
                     </div>

@@ -153,17 +153,28 @@ export async function uploadInstructionImage(
   return { url: data.publicUrl, error: null };
 }
 
-/** Optional induction document — one object per `docKey` under `skyline/induction/{inductionId}/` (replaces previous upload). */
+/** Optional induction document — one object per `docKey` under `skyline/induction/{submissionFolder}/`.
+ * For admin views this is the numeric `skyline_induction_submissions.id`.
+ * For public induction (before final submit), we use the session token so each user's in-progress submission stays isolated.
+ * (Replaces previous upload for the same docKey.)
+ */
 export async function uploadInductionDocument(
-  inductionId: number,
+  submissionFolder: number | string,
   docKey: string,
   file: File
 ): Promise<UploadResult> {
   const toUpload = await ensurePdfCompatibleImage(file);
-  const id = Number.isFinite(inductionId) && inductionId > 0 ? Math.floor(inductionId) : 0;
+  const folder =
+    typeof submissionFolder === 'number'
+      ? Number.isFinite(submissionFolder) && submissionFolder > 0
+        ? String(Math.floor(submissionFolder))
+        : ''
+      : String(submissionFolder ?? '').trim();
+  const safeFolder = folder.replace(/[^a-z0-9_-]/gi, '_').slice(0, 80);
+  if (!safeFolder) return { url: null, error: 'Missing submission folder.' };
   const safeKey = String(docKey).replace(/[^a-z0-9_]/gi, '_').slice(0, 40);
   /* Stable path (no timestamp) so re-upload replaces; no extension in key so PDF ↔ image swap does not leave two objects. */
-  const path = `${FOLDER}/induction/${id}/${safeKey}`;
+  const path = `${FOLDER}/induction/${safeFolder}/${safeKey}`;
 
   const { error } = await supabase.storage.from(BUCKET).upload(path, toUpload, {
     upsert: true,

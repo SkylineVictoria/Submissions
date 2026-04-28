@@ -169,7 +169,7 @@ export const PublicInductionPage: React.FC = () => {
     [row, row?.start_at, row?.end_at, windowTick],
   );
   /** Only client window + already submitted disable the button — not `outsideWindowServer` (server can disagree with browser time; submit still validates server-side). */
-  const submitBlocked = submitted || windowStatus !== 'open';
+  const submitBlocked = windowStatus !== 'open';
 
   const handleSendOtp = async () => {
     if (!email.trim() || !emailOkForInduction) return;
@@ -228,7 +228,7 @@ export const PublicInductionPage: React.FC = () => {
   };
 
   const handleSubmitForm = async () => {
-    if (!token || !session || submitted || submitBlocked) return;
+    if (!token || !session || submitBlocked) return;
     const err = validateInductionFormPayload(form);
     if (err) {
       toast.error(err);
@@ -246,7 +246,7 @@ export const PublicInductionPage: React.FC = () => {
       return;
     }
     setSubmitted(true);
-    toast.success('Induction submitted. Thank you.');
+    toast.success(submitted ? 'Induction updated. Thank you.' : 'Induction submitted. Thank you.');
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -427,10 +427,7 @@ export const PublicInductionPage: React.FC = () => {
         {submitted ? (
           <Card className="mb-4 border-green-200 bg-green-50/90 p-4 text-sm text-gray-800">
             <p className="font-semibold text-green-900">Induction submitted</p>
-            <p className="mt-1">
-              Your responses are on file for this induction window. You cannot submit again. Contact the office if anything
-              needs to be corrected.
-            </p>
+            <p className="mt-1">Your responses are on file. You can update and submit again to replace your previous submission.</p>
           </Card>
         ) : !submitBlocked ? (
           <Card className="mb-4 border-amber-100 bg-amber-50/80 p-4 text-sm text-gray-800">
@@ -450,8 +447,8 @@ export const PublicInductionPage: React.FC = () => {
           interactive={{
             value: form,
             onChange: mergeInductionForm,
-            readOnly: submitted,
-            inductionId: row.id,
+            readOnly: false,
+            inductionSubmissionFolder: session?.email?.trim().toLowerCase() || undefined,
           }}
         />
       </div>
