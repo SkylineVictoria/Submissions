@@ -472,7 +472,8 @@ export const InstanceFillPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [accessDenied, setAccessDenied] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  /** Debounce saves per answer key (questionId + rowId). A single shared timer causes grid tables to only persist the last row edited. */
+  const saveTimeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const formScrollRef = useRef<HTMLFormElement>(null);
 
   const id = instanceId ? Number(instanceId) : 0;
@@ -576,6 +577,7 @@ export const InstanceFillPage: React.FC = () => {
       const isSig = field === 'student_signature' || field === 'trainer_signature';
       const normalized = isSig ? normalizeSignatureValue(value) : (value != null ? String(value).trim() || null : null);
       let rejectReason: string | null = null;
+      let alsoSetTrainerFooterDate: string | null = null;
       setResultsData((prev) => {
         const rd = prev[sectionId];
         const base = rd ?? ({ section_id: sectionId } as import('../lib/formEngine').ResultsDataEntry);
@@ -605,9 +607,16 @@ export const InstanceFillPage: React.FC = () => {
 
         const next = { ...prev };
         const prevRd = prev[sectionId];
+        // If trainer enters an attempt date, also populate the footer date under trainer signature (if empty).
+        const isAttemptDateField = field === 'first_attempt_date' || field === 'second_attempt_date' || field === 'third_attempt_date';
+        const existingTrainerFooterDate = String((base as unknown as { trainer_date?: string | null }).trainer_date ?? '').trim();
+        if (isAttemptDateField && normalized && !existingTrainerFooterDate) {
+          alsoSetTrainerFooterDate = normalized;
+        }
         next[sectionId] = {
           ...(prevRd ?? ({ section_id: sectionId } as import('../lib/formEngine').ResultsDataEntry)),
           [field]: normalized,
+          ...(alsoSetTrainerFooterDate ? { trainer_date: alsoSetTrainerFooterDate } : null),
         } as import('../lib/formEngine').ResultsDataEntry;
         return next;
       });
@@ -615,7 +624,7 @@ export const InstanceFillPage: React.FC = () => {
         toast.error(rejectReason);
         return;
       }
-      await saveResultsData(id, sectionId, { [field]: normalized });
+      await saveResultsData(id, sectionId, { [field]: normalized, ...(alsoSetTrainerFooterDate ? { trainer_date: alsoSetTrainerFooterDate } : null) });
       setPdfRefresh((r) => r + 1);
     },
     [id, normalizeSignatureValue, assessmentSummary]
@@ -1013,16 +1022,33 @@ export const InstanceFillPage: React.FC = () => {
     return { text, number: num, json };
   };
 
+  const clearPendingSave = useCallback((key: string) => {
+    const t = saveTimeoutsRef.current.get(key);
+    if (t) clearTimeout(t);
+    saveTimeoutsRef.current.delete(key);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      // Cleanup any pending timeouts on unmount.
+      for (const t of saveTimeoutsRef.current.values()) clearTimeout(t);
+      saveTimeoutsRef.current.clear();
+    };
+  }, []);
+
   const debouncedSave = useCallback(
     (questionId: number, rowId: number | null, value: string | number | boolean | Record<string, unknown> | string[]) => {
-      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-      saveTimeoutRef.current = setTimeout(async () => {
+      const key = getAnswerKey(questionId, rowId);
+      clearPendingSave(key);
+      const t = setTimeout(async () => {
         const payload = valueToSavePayload(value);
         await saveAnswer(id, questionId, rowId, payload);
         setPdfRefresh((r) => r + 1);
+        saveTimeoutsRef.current.delete(key);
       }, 300);
+      saveTimeoutsRef.current.set(key, t);
     },
-    [id]
+    [id, clearPendingSave]
   );
 
   const handleAnswerChange = useCallback(
@@ -1030,15 +1056,14 @@ export const InstanceFillPage: React.FC = () => {
       const key = getAnswerKey(questionId, rowId);
       setAnswers((prev) => ({ ...prev, [key]: value }));
       if (immediate) {
-        if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-        saveTimeoutRef.current = undefined;
+        clearPendingSave(key);
         const payload = valueToSavePayload(value);
         saveAnswer(id, questionId, rowId, payload).then(() => setPdfRefresh((r) => r + 1));
       } else {
         debouncedSave(questionId, rowId, value);
       }
     },
-    [debouncedSave, id]
+    [debouncedSave, id, clearPendingSave]
   );
 
   const handleTrainerAssessmentChange = useCallback(
@@ -2517,17 +2542,25 @@ export const InstanceFillPage: React.FC = () => {
                                                 const onGridChange = (v: string | number | boolean | Record<string, unknown> | string[]) => {
                                                   const o = v as Record<string, string>;
                                                   if (!o || typeof o !== 'object') return;
-                                                  const byRow = new Map<number, Record<string, string>>();
-                                                  for (const [k, val] of Object.entries(o)) {
-                                                    const match = /^r(\d+)_c/.exec(k);
-                                                    if (match) {
-                                                      const rowId = Number(match[1]);
-                                                      if (!byRow.has(rowId)) byRow.set(rowId, {});
-                                                      byRow.get(rowId)![k] = String(val);
-                                                    }
+                                                  // Only save rows that actually changed (GridTableQuestion emits the whole grid object on each keystroke).
+                                                  const prevMerged: Record<string, string> = {};
+                                                  for (const r of q.rows) {
+                                                    const prev = answers[getAnswerKey(q.id, r.id)];
+                                                    if (prev && typeof prev === 'object') Object.assign(prevMerged, prev as Record<string, string>);
                                                   }
-                                                  for (const [rowId, rowData] of byRow.entries()) {
-                                                    handleAnswerChange(q.id, rowId, rowData);
+                                                  const changedByRow = new Map<number, Record<string, string>>();
+                                                  for (const [k, val] of Object.entries(o)) {
+                                                    if (String(prevMerged[k] ?? '') === String(val ?? '')) continue;
+                                                    const match = /^r(\d+)_c/.exec(k);
+                                                    if (!match) continue;
+                                                    const rowId = Number(match[1]);
+                                                    if (!changedByRow.has(rowId)) changedByRow.set(rowId, {});
+                                                    changedByRow.get(rowId)![k] = String(val ?? '');
+                                                  }
+                                                  for (const [rowId, patch] of changedByRow.entries()) {
+                                                    const existing = answers[getAnswerKey(q.id, rowId)];
+                                                    const base = existing && typeof existing === 'object' && !Array.isArray(existing) ? (existing as Record<string, string>) : {};
+                                                    handleAnswerChange(q.id, rowId, { ...base, ...patch });
                                                   }
                                                 };
                                                 const satQ = trainerAssessments[q.id];
@@ -2711,17 +2744,24 @@ export const InstanceFillPage: React.FC = () => {
                                                 const onGridChange = (v: string | number | boolean | Record<string, unknown> | string[]) => {
                                                   const o = v as Record<string, string>;
                                                   if (!o || typeof o !== 'object') return;
-                                                  const byRow = new Map<number, Record<string, string>>();
-                                                  for (const [k, val] of Object.entries(o)) {
-                                                    const match = /^r(\d+)_c/.exec(k);
-                                                    if (match) {
-                                                      const rowId = Number(match[1]);
-                                                      if (!byRow.has(rowId)) byRow.set(rowId, {});
-                                                      byRow.get(rowId)![k] = String(val);
-                                                    }
+                                                  const prevMerged: Record<string, string> = {};
+                                                  for (const r of childQ.rows) {
+                                                    const prev = answers[getAnswerKey(childQ.id, r.id)];
+                                                    if (prev && typeof prev === 'object') Object.assign(prevMerged, prev as Record<string, string>);
                                                   }
-                                                  for (const [rowId, rowData] of byRow.entries()) {
-                                                    handleAnswerChange(childQ.id, rowId, rowData);
+                                                  const changedByRow = new Map<number, Record<string, string>>();
+                                                  for (const [k, val] of Object.entries(o)) {
+                                                    if (String(prevMerged[k] ?? '') === String(val ?? '')) continue;
+                                                    const match = /^r(\d+)_c/.exec(k);
+                                                    if (!match) continue;
+                                                    const rowId = Number(match[1]);
+                                                    if (!changedByRow.has(rowId)) changedByRow.set(rowId, {});
+                                                    changedByRow.get(rowId)![k] = String(val ?? '');
+                                                  }
+                                                  for (const [rowId, patch] of changedByRow.entries()) {
+                                                    const existing = answers[getAnswerKey(childQ.id, rowId)];
+                                                    const base = existing && typeof existing === 'object' && !Array.isArray(existing) ? (existing as Record<string, string>) : {};
+                                                    handleAnswerChange(childQ.id, rowId, { ...base, ...patch });
                                                   }
                                                 };
                                                 return wrapWithHeader(key, block.headerText, <QuestionRenderer instanceId={id} question={childQ} value={Object.keys(merged).length ? merged : null} onChange={onGridChange} disabled={!editable} error={errors[`q-${childQ.id}`]} studentResubmissionReadOnlyForSatisfactoryRows={isResubmissionAfterTrainer} taskQuestionDisplayNumber={taskQNumbers.get(childQ.id)} highlightAsFill={editable} />);
@@ -2743,19 +2783,26 @@ export const InstanceFillPage: React.FC = () => {
                                                       if (v && typeof v === 'object') Object.assign(merged, v as Record<string, string>);
                                                     }
                                                     const onGridChange = (v: string | number | boolean | Record<string, unknown> | string[]) => {
-                                                      const byRow = new Map<number, Record<string, string>>();
                                                       const o = v as Record<string, string>;
                                                       if (!o || typeof o !== 'object') return;
-                                                      for (const [k, val] of Object.entries(o)) {
-                                                        const match = /^r(\d+)_c/.exec(k);
-                                                        if (match) {
-                                                          const rowId = Number(match[1]);
-                                                          if (!byRow.has(rowId)) byRow.set(rowId, {});
-                                                          byRow.get(rowId)![k] = String(val);
-                                                        }
+                                                      const prevMerged: Record<string, string> = {};
+                                                      for (const r of q.rows) {
+                                                        const prev = answers[getAnswerKey(q.id, r.id)];
+                                                        if (prev && typeof prev === 'object') Object.assign(prevMerged, prev as Record<string, string>);
                                                       }
-                                                      for (const [rowId, rowData] of byRow.entries()) {
-                                                        handleAnswerChange(q.id, rowId, rowData);
+                                                      const changedByRow = new Map<number, Record<string, string>>();
+                                                      for (const [k, val] of Object.entries(o)) {
+                                                        if (String(prevMerged[k] ?? '') === String(val ?? '')) continue;
+                                                        const match = /^r(\d+)_c/.exec(k);
+                                                        if (!match) continue;
+                                                        const rowId = Number(match[1]);
+                                                        if (!changedByRow.has(rowId)) changedByRow.set(rowId, {});
+                                                        changedByRow.get(rowId)![k] = String(val ?? '');
+                                                      }
+                                                      for (const [rowId, patch] of changedByRow.entries()) {
+                                                        const existing = answers[getAnswerKey(q.id, rowId)];
+                                                        const base = existing && typeof existing === 'object' && !Array.isArray(existing) ? (existing as Record<string, string>) : {};
+                                                        handleAnswerChange(q.id, rowId, { ...base, ...patch });
                                                       }
                                                     };
                                                     return <QuestionRenderer instanceId={id} question={q} value={Object.keys(merged).length ? merged : null} onChange={onGridChange} disabled={!editable} error={errors[`q-${q.id}`]} studentResubmissionReadOnlyForSatisfactoryRows={isResubmissionAfterTrainer} taskQuestionDisplayNumber={taskQNumbers.get(q.id)} highlightAsFill={editable} />;
