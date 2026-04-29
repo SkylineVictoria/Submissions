@@ -13,7 +13,16 @@ import { toast } from '../utils/toast';
 import { useAuth } from '../contexts/AuthContext';
 import { SelectAsync } from '../components/ui/SelectAsync';
 import { Select } from '../components/ui/Select';
-import { computeRowUi, getStudentAttemptDoneText, getTrainerAttemptFailedText, getMissedAttemptWindowText, type AttemptResult } from '../utils/assessmentRowUi';
+import {
+  computeRowUi,
+  getStudentAttemptDoneText,
+  getTrainerAttemptFailedText,
+  getMissedAttemptWindowText,
+  computeAttemptTones,
+  hasCompetentAttempt,
+  type AttemptResult,
+  type AttemptDotTone,
+} from '../utils/assessmentRowUi';
 import {
   allowStudentResubmission,
   extendInstanceAccessTokensToDate,
@@ -51,8 +60,8 @@ const formatDDMMYYYY = (value: string | null): string => {
   return `${pad2(dt.getDate())}/${pad2(dt.getMonth() + 1)}/${dt.getFullYear()}`;
 };
 
-function StatusChecks({ row }: { row: SubmittedInstanceRow }) {
-  const studentDone = !!row.submitted_at || (row.submission_count ?? 0) > 0 || row.status === 'locked';
+function StatusChecks({ row, attemptResults }: { row: SubmittedInstanceRow; attemptResults: AttemptResult[] }) {
+  const studentDone = hasCompetentAttempt(attemptResults);
   const trainerDone = row.status === 'locked' || row.role_context === 'office';
   const adminDone = row.status === 'locked';
   const Item = ({ label, ok }: { label: string; ok: boolean }) => (
@@ -70,45 +79,14 @@ function StatusChecks({ row }: { row: SubmittedInstanceRow }) {
   );
 }
 
-type DotTone = 'green' | 'red' | 'yellow' | 'gray';
-const dotToneClass: Record<DotTone, string> = {
+const dotToneClass: Record<AttemptDotTone, string> = {
   green: 'bg-emerald-500 border-emerald-600',
   red: 'bg-red-500 border-red-600',
   yellow: 'bg-amber-400 border-amber-500',
   gray: 'bg-gray-200 border-gray-300',
 };
 
-function computeAttemptTones(input: {
-  submissionCount: number;
-  results: AttemptResult[];
-}): { student: DotTone[]; trainer: DotTone[] } {
-  const submitted = Math.min(3, Math.max(0, Number(input.submissionCount) || 0));
-  const r = [...input.results, null, null, null].slice(0, 3);
-
-  let nextAttemptIdx: number | null = null;
-  const firstNYC = r.findIndex((x) => x === 'not_yet_competent');
-  if (firstNYC >= 0) nextAttemptIdx = firstNYC + 1 < 3 ? firstNYC + 1 : null;
-  else nextAttemptIdx = submitted < 3 ? submitted : null;
-
-  const student: DotTone[] = [0, 1, 2].map((i) => {
-    if (r[i] === 'competent') return 'green';
-    if (r[i] === 'not_yet_competent') return 'red';
-    if (i < submitted) return 'green';
-    if (nextAttemptIdx === i) return 'yellow';
-    return 'gray';
-  });
-
-  const trainer: DotTone[] = [0, 1, 2].map((i) => {
-    if (r[i] === 'competent') return 'green';
-    if (r[i] === 'not_yet_competent') return 'red';
-    if (i < submitted) return 'yellow';
-    return 'gray';
-  });
-
-  return { student, trainer };
-}
-
-function AttemptDots({ tones, titlePrefix }: { tones: DotTone[]; titlePrefix: string }) {
+function AttemptDots({ tones, titlePrefix }: { tones: AttemptDotTone[]; titlePrefix: string }) {
   return (
     <div className="flex items-center gap-1.5 shrink-0">
       {[0, 1, 2].map((i) => (
@@ -745,12 +723,13 @@ export const AdminStudentDetailsPage: React.FC = () => {
                             onToggle={() => toggleAssessmentSort('end')}
                           />
                           <SortableTh
-                            label="Completed"
-                            className="text-left px-3 py-2 border-b border-[var(--border)] min-w-[240px]"
+                            label="Progress"
+                            className="text-left px-3 py-2 border-b border-[var(--border)] min-w-[220px]"
                             active={assessmentSort.key === 'completed'}
                             direction={assessmentSort.dir}
                             onToggle={() => toggleAssessmentSort('completed')}
                           />
+                          <th className="text-left px-3 py-2 font-semibold border-b border-[var(--border)] min-w-[220px]">Comments</th>
                           <th className="text-right px-3 py-2 font-semibold border-b border-[var(--border)]">Action</th>
                         </tr>
                       </thead>
@@ -863,12 +842,10 @@ export const AdminStudentDetailsPage: React.FC = () => {
                                 </button>
                               )}
                             </td>
-                            <td
-                              className="px-3 py-2 border-b border-[var(--border)] min-w-[240px]"
-                            >
+                            <td className="px-3 py-2 border-b border-[var(--border)] min-w-[220px]">
                               <div className="flex flex-col gap-1">
                                 <div className="flex items-center justify-between gap-3">
-                                  <StatusChecks row={row} />
+                                  <StatusChecks row={row} attemptResults={results} />
                                 </div>
                                 {(() => {
                                   const tones = computeAttemptTones({
@@ -882,34 +859,51 @@ export const AdminStudentDetailsPage: React.FC = () => {
                                     </div>
                                   );
                                 })()}
-                                <div
-                                  className={`text-xs font-medium ${
-                                    ui.kind === 'past_not_competent'
+                              </div>
+                            </td>
+                            <td className="px-3 py-2 border-b border-[var(--border)] align-top min-w-[220px]">
+                              {(() => {
+                                const outcomeClass =
+                                  ui.kind === 'past_not_competent'
+                                    ? ui.outcomeClassName
+                                    : ui.kind === 'past_competent'
                                       ? ui.outcomeClassName
-                                      : ui.kind === 'past_competent'
-                                        ? ui.outcomeClassName
-                                        : getOutcomeLabel(sum).className
-                                  }`}
-                                >
-                                  {ui.kind === 'past_not_competent'
+                                      : getOutcomeLabel(sum).className;
+                                const outcomeLabel =
+                                  ui.kind === 'past_not_competent'
                                     ? ui.outcomeLabel
                                     : ui.kind === 'past_competent'
                                       ? ui.outcomeLabel
-                                      : getOutcomeLabel(sum).label}
-                                </div>
-                                {attemptDoneText ? (
-                                  <div className="text-[11px] text-gray-600">{attemptDoneText}</div>
-                                ) : null}
-                                {ui.kind === 'in_progress' && missedAttemptText ? (
-                                  <div className="text-[11px] font-medium text-amber-700">{missedAttemptText}</div>
-                                ) : null}
-                                {trainerAttemptFailedText ? (
-                                  <div className="text-[11px] font-medium text-red-700">{trainerAttemptFailedText}</div>
-                                ) : null}
-                                {ui.kind === 'future' || ui.kind === 'expired' ? (
-                                  <div className="text-xs text-amber-700">{ui.reason}</div>
-                                ) : null}
-                              </div>
+                                      : getOutcomeLabel(sum).label;
+                                const comments: Array<{ text: string; className: string }> = [];
+                                const missedAll = missedAttemptText === "Didn't attempt any";
+                                if (missedAll) {
+                                  comments.push({ text: "Didn't attempt any", className: 'text-[11px] font-medium text-red-700' });
+                                } else {
+                                  comments.push({ text: outcomeLabel, className: `text-xs font-medium ${outcomeClass}` });
+                                  if (trainerAttemptFailedText) {
+                                    comments.push({ text: trainerAttemptFailedText, className: 'text-[11px] font-medium text-red-700' });
+                                  }
+                                  if (attemptDoneText) comments.push({ text: attemptDoneText, className: 'text-[11px] text-gray-600' });
+                                  if (ui.kind === 'in_progress' && missedAttemptText) {
+                                    comments.push({ text: missedAttemptText, className: 'text-[11px] font-medium text-amber-700' });
+                                  }
+                                }
+                                if (ui.kind === 'future' || ui.kind === 'expired') {
+                                  comments.push({ text: ui.reason, className: 'text-xs text-amber-700' });
+                                }
+                                return (
+                                  <div className="flex flex-col gap-1">
+                                    {comments
+                                      .filter((c) => c.text.trim().length > 0)
+                                      .map((c, idx) => (
+                                        <div key={`${row.id}-comment-${idx}`} className={c.className}>
+                                          {c.text}
+                                        </div>
+                                      ))}
+                                  </div>
+                                );
+                              })()}
                             </td>
                             <td className="px-3 py-2 border-b border-[var(--border)] text-right">
                               <div className="flex items-center justify-end gap-2">
@@ -978,7 +972,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
                           </tr>
                           {expandedId === row.id ? (
                             <tr className={cn(ui.rowClassName, trainerHighlightExtra)}>
-                              <td className="px-3 py-3 border-b border-[var(--border)]" colSpan={6} onClick={(e) => e.stopPropagation()}>
+                              <td className="px-3 py-3 border-b border-[var(--border)]" colSpan={7} onClick={(e) => e.stopPropagation()}>
                                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                                   <FormDocumentsPanel
                                     formId={Number(row.form_id)}

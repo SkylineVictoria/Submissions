@@ -116,15 +116,22 @@ export function getStudentAttemptDoneText(input: {
   submittedAt?: string | null;
   attemptResults?: AttemptResult[] | null;
 }): string | null {
+  const r = (input.attemptResults ?? []).slice(0, 3);
+  // Once trainer marks NYC, next-attempt requirement text takes precedence.
+  if (r.some((x) => x === 'not_yet_competent')) return null;
   const submitted = Math.min(
     3,
     Math.max(0, Number(input.submissionCount ?? 0) || (String(input.submittedAt ?? '').trim() ? 1 : 0))
   );
-  if (submitted >= 3) return 'Third Attempt Done';
-  if (submitted >= 2) return 'Second Attempt Done';
-  if (submitted >= 1) return 'First Attempt Done';
+  if (submitted >= 3) return 'Submitted 3rd attempt awaiting trainer';
+  if (submitted >= 2) return 'Submitted 2nd attempt awaiting trainer';
+  if (submitted >= 1) return 'Submitted First Attempt awaiting trainer';
   // Fallback to trainer result-based text when submissions aren't tracked (older data).
-  return getAttemptDoneText(input.attemptResults);
+  const fallback = getAttemptDoneText(input.attemptResults);
+  if (fallback === 'First Attempt Done') return 'Submitted First Attempt awaiting trainer';
+  if (fallback === 'Second Attempt Done') return 'Submitted 2nd attempt awaiting trainer';
+  if (fallback === 'Third Attempt Done') return 'Submitted 3rd attempt awaiting trainer';
+  return fallback;
 }
 
 export function getTrainerAttemptFailedText(attemptResults?: AttemptResult[] | null): string | null {
@@ -142,6 +149,7 @@ export function getMissedAttemptWindowText(input: {
 }): string | null {
   const rollovers = Math.max(0, Number(input.noAttemptRollovers ?? 0) || 0);
   const finalMiss = Boolean(input.didNotAttempt ?? false);
+  if (finalMiss && rollovers >= 2) return "Didn't attempt any";
 
   // rollovers: 0 = none missed, 1 = missed 1st window, 2 = missed 1st+2nd windows
   // didNotAttempt: final (3rd) window missed as well.
@@ -154,5 +162,64 @@ export function getMissedAttemptWindowText(input: {
   if (missed.length === 0) return null;
 
   return `Missed ${missed.join(', ')}`;
+}
+
+/** Student row check: green only once any attempt is marked competent (not merely submitted). */
+export function hasCompetentAttempt(results: (AttemptResult | null | undefined)[] | null | undefined): boolean {
+  const r = (results ?? []).slice(0, 3);
+  return r.some((x) => x === 'competent');
+}
+
+export type AttemptDotTone = 'green' | 'red' | 'yellow' | 'gray';
+
+function isWaitingTrainerMark(r: AttemptResult[], submitted: number, slotIndex: number): boolean {
+  if (r[slotIndex] !== null) return false;
+  return submitted >= slotIndex + 1;
+}
+
+/**
+ * Which student attempt slot should show as "next" (yellow): only when the student may submit that attempt,
+ * not while an earlier attempt is still awaiting trainer marking (avoids yellow on attempt 2 while attempt 1 is pending).
+ */
+function computeStudentNextYellowIndex(r: AttemptResult[], submitted: number): number | null {
+  if (r.some((x) => x === 'competent')) return null;
+  for (let i = 0; i < 3; i++) {
+    if (r[i] === 'competent') return null;
+    if (r[i] === 'not_yet_competent') continue;
+    // r[i] === null
+    for (let j = 0; j < i; j++) {
+      if (r[j] === null) return null;
+    }
+    if (isWaitingTrainerMark(r, submitted, i)) continue;
+    return i;
+  }
+  return null;
+}
+
+export function computeAttemptTones(input: {
+  submissionCount: number;
+  results: AttemptResult[];
+}): { student: AttemptDotTone[]; trainer: AttemptDotTone[] } {
+  const submitted = Math.min(3, Math.max(0, Number(input.submissionCount) || 0));
+  const r = [...input.results, null, null, null].slice(0, 3) as AttemptResult[];
+
+  const studentNextYellow = computeStudentNextYellowIndex(r, submitted);
+
+  const student: AttemptDotTone[] = [0, 1, 2].map((i) => {
+    if (r[i] === 'competent') return 'green';
+    if (r[i] === 'not_yet_competent') return 'red';
+    if (i < submitted) return 'green';
+    if (studentNextYellow === i) return 'yellow';
+    return 'gray';
+  });
+
+  const trainer: AttemptDotTone[] = [0, 1, 2].map((i) => {
+    if (r[i] === 'competent') return 'green';
+    if (r[i] === 'not_yet_competent') return 'red';
+    if (i < submitted) return 'yellow';
+    return 'gray';
+  });
+
+  return { student, trainer };
 }
 
