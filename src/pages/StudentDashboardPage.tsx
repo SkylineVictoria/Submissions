@@ -12,6 +12,12 @@ import { useNavigate } from 'react-router-dom';
 import { computeRowUi, melDateString, getStudentAttemptDoneText, getTrainerAttemptFailedText, getMissedAttemptWindowText, type AttemptResult } from '../utils/assessmentRowUi';
 import { FormDocumentsPanel } from '../components/documents/FormDocumentsPanel';
 import { STUDENT_DASHBOARD_AUTH_STORAGE_KEY } from '../lib/formEngine';
+import { cn } from '../components/utils/cn';
+import {
+  rowMatchesTrainerHighlightCourse,
+  TRAINER_HIGHLIGHT_ROW_EXTRA_CLASS,
+  useTrainerHighlightCourseId,
+} from '../utils/trainerCourseHighlight';
 
 const formatDDMMYYYY = (value: string | null): string => {
   const v = (value ?? '').trim();
@@ -136,6 +142,7 @@ export const StudentDashboardPage: React.FC = () => {
     Record<number, { final_attempt_1_result: AttemptResult; final_attempt_2_result: AttemptResult; final_attempt_3_result: AttemptResult }>
   >({});
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const trainerHighlightCourseId = useTrainerHighlightCourseId();
 
   useEffect(() => {
     try {
@@ -486,10 +493,13 @@ export const StudentDashboardPage: React.FC = () => {
                           const ui = computeRowUi({ row: { ...row, did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null }, attemptResults });
                           const disabled = ui.disabled;
                           const win = withinWindowMelbourne(row);
+                          const trainerHighlightExtra = rowMatchesTrainerHighlightCourse(row, trainerHighlightCourseId)
+                            ? TRAINER_HIGHLIGHT_ROW_EXTRA_CLASS
+                            : '';
                           return (
                             <React.Fragment key={row.id}>
                             <tr
-                              className={`${ui.rowClassName} cursor-pointer`}
+                              className={cn(ui.rowClassName, 'cursor-pointer', trainerHighlightExtra)}
                               onClick={() => setExpandedId((prev) => (prev === row.id ? null : row.id))}
                               title="Click to expand"
                             >
@@ -562,7 +572,7 @@ export const StudentDashboardPage: React.FC = () => {
                               </td>
                             </tr>
                             {expandedId === row.id ? (
-                              <tr className={ui.rowClassName}>
+                              <tr className={cn(ui.rowClassName, trainerHighlightExtra)}>
                                 <td className="px-3 py-3 border-b border-[var(--border)]" colSpan={5} onClick={(e) => e.stopPropagation()}>
                                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                                     <FormDocumentsPanel

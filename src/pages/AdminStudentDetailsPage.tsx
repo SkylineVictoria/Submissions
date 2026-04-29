@@ -31,6 +31,12 @@ import {
 import type { Student, SubmittedInstanceRow } from '../lib/formEngine';
 import { STUDENT_DASHBOARD_AUTH_STORAGE_KEY } from '../lib/formEngine';
 import { FormDocumentsPanel } from '../components/documents/FormDocumentsPanel';
+import { cn } from '../components/utils/cn';
+import {
+  rowMatchesTrainerHighlightCourse,
+  TRAINER_HIGHLIGHT_ROW_EXTRA_CLASS,
+  useTrainerHighlightCourseId,
+} from '../utils/trainerCourseHighlight';
 
 const PDF_BASE = import.meta.env.VITE_PDF_API_URL ?? '';
 
@@ -165,6 +171,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
   const [deleteStudentOpen, setDeleteStudentOpen] = useState(false);
   const [deletingStudent, setDeletingStudent] = useState(false);
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const trainerHighlightCourseId = useTrainerHighlightCourseId();
 
   type AssessmentSortKey = 'unit' | 'start' | 'end' | 'completed';
   const [assessmentSort, setAssessmentSort] = useState<{ key: AssessmentSortKey; dir: SortDirection }>({
@@ -766,10 +773,13 @@ export const AdminStudentDetailsPage: React.FC = () => {
                             didNotAttempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
                           });
                           const ui = computeRowUi({ row: { ...row, did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null }, attemptResults: results });
+                          const trainerHighlightExtra = rowMatchesTrainerHighlightCourse(row, trainerHighlightCourseId)
+                            ? TRAINER_HIGHLIGHT_ROW_EXTRA_CLASS
+                            : '';
                           return (
                           <React.Fragment key={row.id}>
                           <tr
-                            className={`${ui.rowClassName} cursor-pointer`}
+                            className={cn(ui.rowClassName, 'cursor-pointer', trainerHighlightExtra)}
                             onClick={() => setExpandedId((p) => (p === row.id ? null : row.id))}
                             title="Click to expand"
                           >
@@ -967,7 +977,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
                             </td>
                           </tr>
                           {expandedId === row.id ? (
-                            <tr className={ui.rowClassName}>
+                            <tr className={cn(ui.rowClassName, trainerHighlightExtra)}>
                               <td className="px-3 py-3 border-b border-[var(--border)]" colSpan={6} onClick={(e) => e.stopPropagation()}>
                                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                                   <FormDocumentsPanel

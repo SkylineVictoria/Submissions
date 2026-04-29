@@ -28,6 +28,12 @@ import {
   type AttemptResult,
 } from '../utils/assessmentRowUi';
 import { FormDocumentsPanel } from '../components/documents/FormDocumentsPanel';
+import { cn } from '../components/utils/cn';
+import {
+  rowMatchesTrainerHighlightCourse,
+  TRAINER_HIGHLIGHT_ROW_EXTRA_CLASS,
+  useTrainerHighlightCourseId,
+} from '../utils/trainerCourseHighlight';
 
 const withinWindowMelbourne = (row: Pick<SubmittedInstanceRow, 'start_date' | 'end_date'>): { ok: boolean; reason?: string } => {
   const today = melDateString(new Date());
@@ -90,6 +96,7 @@ export const DashboardPage: React.FC = () => {
   const [batchStudentsLoading, setBatchStudentsLoading] = useState(false);
 
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const trainerHighlightCourseId = useTrainerHighlightCourseId();
   const [attemptSummaryByInstanceId, setAttemptSummaryByInstanceId] = useState<
     Record<number, { final_attempt_1_result: AttemptResult; final_attempt_2_result: AttemptResult; final_attempt_3_result: AttemptResult }>
   >({});
@@ -370,10 +377,13 @@ export const DashboardPage: React.FC = () => {
                     const disabled = ui.disabled;
                     const win = withinWindowMelbourne(row);
                     const outcome = getOutcomeLabel(sum);
+                    const trainerHighlightExtra = rowMatchesTrainerHighlightCourse(row, trainerHighlightCourseId)
+                      ? TRAINER_HIGHLIGHT_ROW_EXTRA_CLASS
+                      : '';
                     return (
                       <React.Fragment key={row.id}>
                         <tr
-                          className={`${ui.rowClassName} cursor-pointer`}
+                          className={cn(ui.rowClassName, 'cursor-pointer', trainerHighlightExtra)}
                           onClick={() => setExpandedId((prev) => (prev === row.id ? null : row.id))}
                           title="Click to expand"
                         >
@@ -440,7 +450,7 @@ export const DashboardPage: React.FC = () => {
                           </td>
                         </tr>
                         {expandedId === row.id ? (
-                          <tr className={ui.rowClassName}>
+                          <tr className={cn(ui.rowClassName, trainerHighlightExtra)}>
                             <td className="px-3 py-3 border-b border-[var(--border)]" colSpan={6} onClick={(e) => e.stopPropagation()}>
                               <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                                 <FormDocumentsPanel

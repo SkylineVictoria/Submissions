@@ -1154,8 +1154,7 @@ export async function listStudentAssessmentsPaged(
 
   const rolloverMap = await syncNoAttemptRollover(instanceIds);
 
-  return {
-    data: rows.map((r) => {
+  const mapped = rows.map((r) => {
       const form = (r.skyline_forms as { name?: string | null; version?: string | null } | null) ?? null;
       const stu = (r.skyline_students as { first_name?: string | null; last_name?: string | null; name?: string | null; email?: string | null } | null) ?? null;
       const first = String(stu?.first_name ?? '').trim();
@@ -1184,7 +1183,10 @@ export async function listStudentAssessmentsPaged(
         did_not_attempt: synced?.did_not_attempt ?? (r as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
         link_expired,
       };
-    }),
+    });
+
+  return {
+    data: await withFormCourseIds(mapped),
     total,
     page,
     pageSize,
@@ -2129,8 +2131,33 @@ export interface SubmittedInstanceRow {
   end_date: string | null;
   no_attempt_rollovers?: number | null;
   did_not_attempt?: boolean | null;
+  /** Course IDs this form is linked to (via `skyline_course_forms`). Filled for list queries that need trainer course highlight. */
+  form_course_ids?: number[];
   /** True if the link for this role is revoked or past expiry (show Enable); false = active (show Expire) */
   link_expired: boolean;
+}
+
+/** Batch-attach `form_course_ids` for assessment directory / dashboards. */
+async function withFormCourseIds<T extends SubmittedInstanceRow>(rows: T[]): Promise<T[]> {
+  const formIds = [...new Set(rows.map((r) => r.form_id).filter((n) => Number.isFinite(n) && n > 0))];
+  if (formIds.length === 0) return rows;
+  const { data, error } = await supabase.from('skyline_course_forms').select('form_id, course_id').in('form_id', formIds);
+  if (error) {
+    console.error('withFormCourseIds error', error);
+    return rows;
+  }
+  const byForm = new Map<number, number[]>();
+  for (const row of (data as { form_id: number; course_id: number }[] | null) || []) {
+    const fid = Number(row.form_id);
+    const cid = Number(row.course_id);
+    if (!Number.isFinite(fid) || fid <= 0) continue;
+    if (!byForm.has(fid)) byForm.set(fid, []);
+    if (Number.isFinite(cid) && cid > 0) byForm.get(fid)!.push(cid);
+  }
+  return rows.map((r) => ({
+    ...r,
+    form_course_ids: [...new Set(byForm.get(r.form_id) ?? [])],
+  }));
 }
 
 export interface AdminDashboardStatsV2 {
@@ -2582,8 +2609,7 @@ export async function listSubmittedInstancesPaged(
       else if (!tokenMap.has(key)) tokenMap.set(key, true);
     }
   }
-  return {
-    data: rowsRaw.map((r) => {
+  const mappedDir = rowsRaw.map((r) => {
       const baseId = Number(r.id);
       const synced = rolloverMap.get(baseId);
       const roleCtx = synced?.role_context ?? String(r.role_context ?? 'student');
@@ -2608,7 +2634,10 @@ export async function listSubmittedInstancesPaged(
         did_not_attempt: synced?.did_not_attempt ?? null,
         link_expired,
       };
-    }),
+    });
+
+  return {
+    data: await withFormCourseIds(mappedDir),
     total,
     page,
     pageSize,
@@ -2749,8 +2778,7 @@ export async function listDashboardInstances(
   }
 
   const targetRole = role === 'trainer' ? 'trainer' : 'office';
-  return {
-    data: rows.map((r) => {
+  const mappedDash = rows.map((r) => {
       const formId = Number(r.form_id);
       const studentId = r.student_id == null ? null : Number(r.student_id);
       const form = formMap.get(formId);
@@ -2779,7 +2807,10 @@ export async function listDashboardInstances(
         did_not_attempt: Boolean(r.did_not_attempt),
         link_expired,
       };
-    }),
+    });
+
+  return {
+    data: await withFormCourseIds(mappedDash),
     total: Number(count ?? 0),
     page,
     pageSize,

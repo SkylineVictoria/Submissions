@@ -4,7 +4,8 @@ import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { Loader } from '../ui/Loader';
 import { toast } from '../../utils/toast';
-import { getLearningDocPublicUrl, listLearningDocs, uploadLearningDoc, type LearningDoc } from '../../lib/formDocuments';
+import { listLearningDocs, uploadLearningDoc, zipAndDownloadLearningDocs, type LearningDoc } from '../../lib/formDocuments';
+import { LearningDocRows } from './LearningDocRows';
 
 type Props = {
   isOpen: boolean;
@@ -14,19 +15,6 @@ type Props = {
   canUpload: boolean;
   /** When false, trainer/assessor folder is omitted (e.g. read-only student context). Default true. */
   showTrainerSection?: boolean;
-};
-
-const formatBytes = (n: number | null): string => {
-  const v = Number(n ?? 0);
-  if (!Number.isFinite(v) || v <= 0) return '—';
-  const units = ['B', 'KB', 'MB', 'GB'];
-  let x = v;
-  let i = 0;
-  while (x >= 1024 && i < units.length - 1) {
-    x /= 1024;
-    i++;
-  }
-  return `${x.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 };
 
 export const FormDocumentsModal: React.FC<Props> = ({
@@ -41,8 +29,53 @@ export const FormDocumentsModal: React.FC<Props> = ({
   const [uploading, setUploading] = useState(false);
   const [studentDocs, setStudentDocs] = useState<LearningDoc[]>([]);
   const [trainerDocs, setTrainerDocs] = useState<LearningDoc[]>([]);
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(() => new Set());
+  const [zipping, setZipping] = useState(false);
 
   const title = useMemo(() => `Documents — ${formName}`, [formName]);
+
+  const togglePath = useCallback((path: string) => {
+    setSelectedPaths((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }, []);
+
+  const bulkSelectDocs = useCallback((docs: LearningDoc[], select: boolean) => {
+    setSelectedPaths((prev) => {
+      const next = new Set(prev);
+      for (const d of docs) {
+        if (select) next.add(d.path);
+        else next.delete(d.path);
+      }
+      return next;
+    });
+  }, []);
+
+  const downloadZipForDocs = useCallback(
+    async (pickFrom: LearningDoc[]) => {
+      const picked = pickFrom.filter((d) => selectedPaths.has(d.path));
+      if (picked.length === 0) return;
+      setZipping(true);
+      try {
+        await zipAndDownloadLearningDocs(picked, formName?.trim() ? formName : `form-${formId}`);
+        toast.success(`Prepared zip with ${picked.length} file${picked.length === 1 ? '' : 's'}`);
+      } catch (e) {
+        console.error('FormDocumentsModal zip download error', e);
+        toast.error(e instanceof Error ? e.message : 'Zip download failed');
+      } finally {
+        setZipping(false);
+      }
+    },
+    [selectedPaths, formName, formId]
+  );
+
+  const handleDownloadSelectedZip = useCallback(() => {
+    const all = [...studentDocs, ...(showTrainerSection ? trainerDocs : [])];
+    void downloadZipForDocs(all);
+  }, [studentDocs, trainerDocs, showTrainerSection, downloadZipForDocs]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -54,11 +87,13 @@ export const FormDocumentsModal: React.FC<Props> = ({
       const [s, t] = await Promise.all([studentP, trainerP]);
       setStudentDocs(s);
       setTrainerDocs(t);
+      setSelectedPaths(new Set());
     } catch (e) {
       console.error('FormDocumentsModal list error', e);
       toast.error(e instanceof Error ? e.message : 'Failed to load documents');
       setStudentDocs([]);
       setTrainerDocs([]);
+      setSelectedPaths(new Set());
     } finally {
       setLoading(false);
     }
@@ -84,36 +119,9 @@ export const FormDocumentsModal: React.FC<Props> = ({
     }
   };
 
-  const renderRows = (docs: LearningDoc[]) =>
-    docs.map((d) => {
-      const href = getLearningDocPublicUrl(d.path);
-      return (
-        <div
-          key={d.path}
-          className="flex items-center justify-between gap-3 px-4 py-3 bg-white hover:bg-[var(--brand)]/10 transition-colors"
-        >
-          <div className="min-w-0">
-            <div className="font-medium text-[var(--text)] break-words">{d.name}</div>
-            <div className="text-xs text-gray-500">
-              <span>{formatBytes(d.size)}</span>
-              {d.updatedAt ? <span className="ml-2">Updated {new Date(d.updatedAt).toLocaleString()}</span> : null}
-            </div>
-          </div>
-          <a
-            href={href}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-2 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-[var(--brand)]/10 hover:border-[var(--brand)]/40 hover:text-[var(--brand)] transition-colors shrink-0"
-            title="Download"
-          >
-            <Download className="h-4 w-4" />
-            Download
-          </a>
-        </div>
-      );
-    });
-
   const totalCount = studentDocs.length + (showTrainerSection ? trainerDocs.length : 0);
+
+  const noopDelete = () => {};
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={title} size="md">
@@ -123,10 +131,30 @@ export const FormDocumentsModal: React.FC<Props> = ({
             <span className="font-medium">{totalCount}</span>
             <span className="text-gray-500">document{totalCount === 1 ? '' : 's'}</span>
           </div>
-          <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading || uploading}>
-            <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            {selectedPaths.size > 0 ? (
+              <>
+                <span className="text-xs text-gray-600 whitespace-nowrap">{selectedPaths.size} selected</span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void handleDownloadSelectedZip()}
+                  disabled={loading || uploading || zipping}
+                >
+                  {zipping ? <Loader variant="dots" size="sm" inline className="mr-2" /> : <Download className="mr-2 h-4 w-4" />}
+                  Download zip
+                </Button>
+                <Button type="button" variant="ghost" size="sm" onClick={() => setSelectedPaths(new Set())} disabled={loading || uploading}>
+                  Clear
+                </Button>
+              </>
+            ) : null}
+            <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading || uploading}>
+              <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+              Refresh
+            </Button>
+          </div>
         </div>
 
         {loading ? (
@@ -158,15 +186,20 @@ export const FormDocumentsModal: React.FC<Props> = ({
                   </label>
                 ) : null}
               </div>
-              {studentDocs.length === 0 ? (
-                <div className="rounded-lg border border-[var(--border)] bg-gray-50 p-4 text-sm text-gray-600">
-                  No student learning documents yet.
-                </div>
-              ) : (
-                <div className="rounded-lg border border-[var(--border)] overflow-hidden divide-y divide-[var(--border)]">
-                  {renderRows(studentDocs)}
-                </div>
-              )}
+              <LearningDocRows
+                docs={studentDocs}
+                uploading={uploading}
+                loading={loading}
+                canDelete={false}
+                onDeleteClick={noopDelete}
+                selectedPaths={selectedPaths}
+                onTogglePath={togglePath}
+                onBulkSelectDocs={bulkSelectDocs}
+                emptyMessage="No student learning documents yet."
+                spacing="comfortable"
+                onDownloadSectionZip={() => void downloadZipForDocs(studentDocs)}
+                zipping={zipping}
+              />
             </div>
 
             {showTrainerSection ? (
@@ -194,15 +227,20 @@ export const FormDocumentsModal: React.FC<Props> = ({
                   ) : null}
                 </div>
                 <p className="text-xs text-amber-800 mb-2">Not shown to students.</p>
-                {trainerDocs.length === 0 ? (
-                  <div className="rounded-lg border border-[var(--border)] bg-gray-50 p-4 text-sm text-gray-600">
-                    No trainer documents yet.
-                  </div>
-                ) : (
-                  <div className="rounded-lg border border-[var(--border)] overflow-hidden divide-y divide-[var(--border)]">
-                    {renderRows(trainerDocs)}
-                  </div>
-                )}
+                <LearningDocRows
+                  docs={trainerDocs}
+                  uploading={uploading}
+                  loading={loading}
+                  canDelete={false}
+                  onDeleteClick={noopDelete}
+                  selectedPaths={selectedPaths}
+                  onTogglePath={togglePath}
+                  onBulkSelectDocs={bulkSelectDocs}
+                  emptyMessage="No trainer documents yet."
+                  spacing="comfortable"
+                  onDownloadSectionZip={() => void downloadZipForDocs(trainerDocs)}
+                  zipping={zipping}
+                />
               </div>
             ) : null}
           </div>

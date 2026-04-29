@@ -1,3 +1,4 @@
+import JSZip from 'jszip';
 import { supabase } from './supabase';
 
 // Project uses a single media bucket (photomedia/skyline/...). Learning materials live under:
@@ -110,4 +111,66 @@ export async function deleteLearningDoc(path: string): Promise<void> {
 export function getLearningDocPublicUrl(path: string): string {
   const { data } = supabase.storage.from(LEARNING_BUCKET).getPublicUrl(path);
   return data.publicUrl;
+}
+
+export async function downloadLearningDocBlob(storagePath: string): Promise<Blob> {
+  const p = String(storagePath ?? '').trim();
+  if (!p) throw new Error('Missing storage path');
+  const { data, error } = await supabase.storage.from(LEARNING_BUCKET).download(p);
+  if (error) throw error;
+  return data;
+}
+
+/** Paths inside the zip: `student/…` vs `trainer/…` so filenames never collide across sections. */
+export function zipEntryNameForLearningDoc(doc: LearningDoc): string {
+  const isTrainer = doc.path.includes(`/${TRAINER_LEARNING_SEGMENT}/`);
+  const prefix = isTrainer ? 'trainer' : 'student';
+  const safe = doc.name.replace(/[/\\]+/g, '_');
+  return `${prefix}/${safe}`;
+}
+
+function slugForZipDownloadBase(name: string): string {
+  const s = String(name ?? 'documents')
+    .replace(/[/\\?%*:|"<>]/g, '-')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 80);
+  return s || 'documents';
+}
+
+/** Builds a zip from storage using the authenticated client (works when the bucket is not public). */
+export async function zipAndDownloadLearningDocs(docs: LearningDoc[], zipBaseName: string): Promise<void> {
+  if (docs.length === 0) return;
+  const zip = new JSZip();
+  const used = new Set<string>();
+  for (const doc of docs) {
+    const blob = await downloadLearningDocBlob(doc.path);
+    let entry = zipEntryNameForLearningDoc(doc);
+    let n = 2;
+    while (used.has(entry)) {
+      const base = doc.name.replace(/[/\\]+/g, '_');
+      const dot = base.lastIndexOf('.');
+      const stem = dot > 0 ? base.slice(0, dot) : base;
+      const ext = dot > 0 ? base.slice(dot) : '';
+      const prefix = entry.startsWith('trainer/') ? 'trainer' : 'student';
+      entry = `${prefix}/${stem}-${n}${ext}`;
+      n++;
+    }
+    used.add(entry);
+    zip.file(entry, blob);
+  }
+  const out = await zip.generateAsync({ type: 'blob' });
+  const url = URL.createObjectURL(out);
+  try {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${slugForZipDownloadBase(zipBaseName)}-documents.zip`;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }

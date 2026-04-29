@@ -32,6 +32,11 @@ import { supabase } from '../lib/supabase';
 import { computeRowUi, getMissedAttemptWindowText } from '../utils/assessmentRowUi';
 import { FormDocumentsPanel } from '../components/documents/FormDocumentsPanel';
 import { useAuth } from '../contexts/AuthContext';
+import {
+  rowMatchesTrainerHighlightCourse,
+  TRAINER_HIGHLIGHT_ROW_EXTRA_CLASS,
+  useTrainerHighlightCourseId,
+} from '../utils/trainerCourseHighlight';
 
 const PDF_BASE = import.meta.env.VITE_PDF_API_URL ?? '';
 
@@ -72,27 +77,34 @@ const getWorkflowBadgeClass = (row: SubmittedInstanceRow): string => {
   return `${base} bg-gray-50 text-gray-600`;
 };
 
-const getDirectoryRowClass = (row: SubmittedInstanceRow): string => {
+const getDirectoryRowClass = (row: SubmittedInstanceRow, trainerHighlightCourseId: number | null = null): string => {
   // Match dashboards:
   // - Open window => yellow
   // - Completed => green
   // - Missed all (did_not_attempt) => red
   // - Otherwise keep neutral gray but hover with theme
+  let base: string;
   if (row.status === 'locked') {
-    return 'bg-emerald-50/70 hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors';
+    base = 'bg-emerald-50/70 hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors';
+  } else {
+    const ui = computeRowUi({
+      row: {
+        start_date: row.start_date,
+        end_date: row.end_date,
+        did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
+      },
+    });
+    base = ui.rowClassName || 'hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors';
   }
-  const ui = computeRowUi({
-    row: {
-      start_date: row.start_date,
-      end_date: row.end_date,
-      did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
-    },
-  });
-  return ui.rowClassName || 'hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors';
+  if (trainerHighlightCourseId != null && rowMatchesTrainerHighlightCourse(row, trainerHighlightCourseId)) {
+    return `${base} ${TRAINER_HIGHLIGHT_ROW_EXTRA_CLASS}`;
+  }
+  return base;
 };
 
 export const AdminAssessmentsPage: React.FC = () => {
   const { user } = useAuth();
+  const trainerHighlightCourseId = useTrainerHighlightCourseId();
   const viewerIsSuperadmin = user?.role === 'superadmin';
   const PAGE_SIZE = 20;
   const [rows, setRows] = useState<SubmittedInstanceRow[]>([]);
@@ -702,7 +714,7 @@ export const AdminAssessmentsPage: React.FC = () => {
                   return (
                   <div
                     key={row.id}
-                    className={`rounded-lg border border-[var(--border)] p-4 shadow-sm ${getDirectoryRowClass(row)} cursor-pointer`}
+                    className={`rounded-lg border border-[var(--border)] p-4 shadow-sm ${getDirectoryRowClass(row, trainerHighlightCourseId)} cursor-pointer`}
                     onClick={() => setExpandedId((p) => (p === row.id ? null : row.id))}
                     title="Click to view documents"
                   >
@@ -860,7 +872,7 @@ export const AdminAssessmentsPage: React.FC = () => {
                       return (
                         <React.Fragment key={row.id}>
                           <tr
-                            className={`border-b border-gray-100 ${getDirectoryRowClass(row)} cursor-pointer`}
+                            className={`border-b border-gray-100 ${getDirectoryRowClass(row, trainerHighlightCourseId)} cursor-pointer`}
                             onClick={() => setExpandedId((p) => (p === row.id ? null : row.id))}
                             title="Click to view documents"
                           >
@@ -942,7 +954,7 @@ export const AdminAssessmentsPage: React.FC = () => {
                             </td>
                           </tr>
                           {expandedId === row.id ? (
-                            <tr className={getDirectoryRowClass(row)}>
+                            <tr className={getDirectoryRowClass(row, trainerHighlightCourseId)}>
                               <td colSpan={7} className="pb-4" onClick={(e) => e.stopPropagation()}>
                                 <div className="px-3">
                                   <FormDocumentsPanel
