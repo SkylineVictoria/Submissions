@@ -8,7 +8,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Layers,
-  LogOut,
   LayoutDashboard,
   User,
   GraduationCap,
@@ -19,6 +18,9 @@ import { cn } from '../components/utils/cn';
 import { useAuth } from '../contexts/AuthContext';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 import { toast } from '../utils/toast';
+import { NotificationBell } from '../components/NotificationBell';
+import { UserMenu } from '../components/UserMenu';
+import { ensureFcmToken } from '../services/pushNotificationService';
 
 const SIDEBAR_WIDTH_EXPANDED = 220;
 const SIDEBAR_WIDTH_COLLAPSED = 64;
@@ -37,6 +39,12 @@ export const AdminLayout: React.FC = () => {
   useEffect(() => {
     setMobileNavOpen(false);
   }, [location.pathname]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    // If the user already allowed notifications earlier, keep token saved/updated without prompting.
+    void ensureFcmToken(user.id);
+  }, [user?.id]);
 
   useEffect(() => {
     if (isMdUp) setMobileNavOpen(false);
@@ -66,6 +74,17 @@ export const AdminLayout: React.FC = () => {
 
   const showSidebarLabels = isMdUp ? !sidebarCollapsed : true;
   const hideNavForStudentDetails = /^\/admin\/students\/\d+\/?$/.test(location.pathname);
+
+  const handleLogout = () => {
+    if (isImpersonating) {
+      exitImpersonation();
+      toast.success('Returned to your account.');
+      navigate('/admin/users', { replace: true });
+      return;
+    }
+    logout();
+    navigate('/login', { replace: true });
+  };
 
   return (
     <div className="flex min-h-[100dvh] min-h-screen w-full max-w-[100vw] overflow-x-hidden bg-[var(--bg)]">
@@ -165,26 +184,13 @@ export const AdminLayout: React.FC = () => {
           </ul>
           {user ? (
             <div className="shrink-0 border-t border-[var(--border)] p-2 pb-[max(0.5rem,env(safe-area-inset-bottom,0px))]">
-              <button
-                type="button"
-                onClick={() => {
-                  if (isImpersonating) {
-                    exitImpersonation();
-                    toast.success('Returned to your account.');
-                    navigate('/admin/users', { replace: true });
-                    return;
-                  }
-                  logout();
-                  navigate('/login', { replace: true });
-                }}
-                className={cn(
-                  'flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100',
-                  !showSidebarLabels ? 'justify-center' : ''
-                )}
-              >
-                <LogOut className="h-5 w-5 shrink-0" />
-                {showSidebarLabels && <span className="min-w-0">{isImpersonating ? 'Exit preview' : 'Logout'}</span>}
-              </button>
+              <UserMenu
+                name={user.full_name}
+                onLogout={handleLogout}
+                extraItems={isImpersonating ? [{ label: 'Exit preview', onClick: handleLogout }] : undefined}
+                notificationUserId={user.id}
+                className={cn(!showSidebarLabels ? 'w-full flex justify-center' : '')}
+              />
             </div>
           ) : null}
         </nav>
@@ -197,7 +203,7 @@ export const AdminLayout: React.FC = () => {
           >
         {/* Mobile top bar — opens drawer nav (sidebar toggle is desktop-only) */}
         {!isMdUp ? (
-          <header className="sticky top-0 z-20 flex shrink-0 items-center gap-3 border-b border-[var(--border)] bg-white px-3 py-2.5 pt-[max(0.625rem,env(safe-area-inset-top,0px))] pl-[max(0.75rem,env(safe-area-inset-left,0px))] pr-[max(0.75rem,env(safe-area-inset-right,0px))] shadow-sm">
+          <header className="sticky top-0 z-20 flex shrink-0 items-center gap-2 border-b border-[var(--border)] bg-white px-3 py-2.5 pt-[max(0.625rem,env(safe-area-inset-top,0px))] pl-[max(0.75rem,env(safe-area-inset-left,0px))] pr-[max(0.75rem,env(safe-area-inset-right,0px))] shadow-sm">
             <button
               type="button"
               onClick={() => setMobileNavOpen(true)}
@@ -206,7 +212,29 @@ export const AdminLayout: React.FC = () => {
             >
               <Menu className="h-6 w-6" />
             </button>
-            <span className="min-w-0 truncate text-base font-semibold text-[var(--text)]">Skyline</span>
+            <span className="min-w-0 flex-1 truncate text-base font-semibold text-[var(--text)]">Skyline</span>
+            {user ? (
+              <div className="flex items-center gap-1.5">
+                <NotificationBell userId={user.id} />
+                <UserMenu
+                  name={user.full_name}
+                  onLogout={handleLogout}
+                  extraItems={isImpersonating ? [{ label: 'Exit preview', onClick: handleLogout }] : undefined}
+                  notificationUserId={user.id}
+                />
+              </div>
+            ) : null}
+          </header>
+        ) : null}
+        {isMdUp && user ? (
+          <header className="sticky top-0 z-20 flex shrink-0 items-center justify-end gap-2 border-b border-[var(--border)] bg-white px-4 py-2 shadow-sm">
+            <NotificationBell userId={user.id} />
+            <UserMenu
+              name={user.full_name}
+              onLogout={handleLogout}
+              extraItems={isImpersonating ? [{ label: 'Exit preview', onClick: handleLogout }] : undefined}
+              notificationUserId={user.id}
+            />
           </header>
         ) : null}
             <div className="min-h-0 min-w-0 flex-1 pb-[env(safe-area-inset-bottom,0px)]">

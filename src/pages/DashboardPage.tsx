@@ -34,6 +34,7 @@ import {
   TRAINER_HIGHLIGHT_ROW_EXTRA_CLASS,
   useTrainerHighlightCourseId,
 } from '../utils/trainerCourseHighlight';
+import { TrainerGradeMePanel } from '../components/trainer/TrainerGradeMePanel';
 
 const withinWindowMelbourne = (row: Pick<SubmittedInstanceRow, 'start_date' | 'end_date'>): { ok: boolean; reason?: string } => {
   const today = melDateString(new Date());
@@ -232,6 +233,8 @@ export const DashboardPage: React.FC = () => {
             )}
           </Card>
         </div>
+
+        {role === 'trainer' && user?.id ? <TrainerGradeMePanel trainerUserId={user.id} /> : null}
 
         {role === 'trainer' && trainerBatches.length > 0 && (
           <Card className="mb-6">

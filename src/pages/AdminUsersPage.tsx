@@ -103,6 +103,7 @@ export const AdminUsersPage: React.FC = () => {
     phone: string;
     status: string;
     role: string;
+    can_login_as_student: boolean;
   } | null>(null);
 
   const userFullName = `${draft.first_name} ${draft.last_name}`.trim();
@@ -209,6 +210,8 @@ export const AdminUsersPage: React.FC = () => {
       phone: editingUser.phone ?? '',
       status: editingUser.status ?? 'active',
       role: editingUser.role ?? 'trainer',
+      // Single toggle controls both student+trainer login rights.
+      can_login_as_student: Boolean(editingUser.can_login_as_student || editingUser.can_login_as_trainer),
     });
   }, [editingUser]);
 
@@ -228,6 +231,8 @@ export const AdminUsersPage: React.FC = () => {
       phone: editDraft.phone,
       status: editDraft.status,
       role: editDraft.role as CreateUserInput['role'],
+      can_login_as_student: editDraft.can_login_as_student,
+      can_login_as_trainer: editDraft.can_login_as_student,
     });
     setSavingEdit(false);
     if (!updated) {
@@ -677,6 +682,28 @@ export const AdminUsersPage: React.FC = () => {
               options={STATUS_OPTIONS}
               label="Status"
             />
+            {viewerIsSuperadmin ? (
+              <div className="rounded-lg border border-[var(--border)] bg-gray-50 px-3 py-3">
+                <div className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-2">Rights</div>
+                <div className="space-y-2">
+                  <label className="flex items-center gap-2 text-sm text-gray-700">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 rounded border-gray-300 text-[var(--brand)] focus:ring-[var(--brand)]"
+                      checked={editDraft.can_login_as_student}
+                      onChange={(e) =>
+                        setEditDraft((p) => (p ? { ...p, can_login_as_student: e.target.checked } : p))
+                      }
+                      disabled={editDraft.role !== 'admin'}
+                    />
+                    Allow login as student or trainer
+                  </label>
+                </div>
+                {editDraft.role !== 'admin' ? (
+                  <p className="mt-2 text-[11px] text-gray-500">These rights are configurable for admin users.</p>
+                ) : null}
+              </div>
+            ) : null}
             <div className="flex flex-col gap-2 pt-2 sm:flex-row sm:items-center sm:justify-end sm:pt-1">
               <Button variant="outline" size="sm" className="w-full sm:w-auto" onClick={() => setEditingId(null)}>
                 Cancel
@@ -695,6 +722,7 @@ export const AdminUsersPage: React.FC = () => {
           </div>
         </Modal>
       )}
+
     </div>
   );
 };

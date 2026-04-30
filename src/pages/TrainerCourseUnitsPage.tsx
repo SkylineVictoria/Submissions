@@ -1,14 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Navigate } from 'react-router-dom';
-import { BookOpen } from 'lucide-react';
+import { Link, Navigate } from 'react-router-dom';
+import { BookOpen, ChevronDown } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { Card } from '../components/ui/Card';
 import { Select } from '../components/ui/Select';
 import { Loader } from '../components/ui/Loader';
+import { Button } from '../components/ui/Button';
 import { FormDocumentsPanel } from '../components/documents/FormDocumentsPanel';
 import {
   getFormsForCourse,
+  listTrainerBatches,
   listTrainerCourseOptionsForUnits,
+  type Batch,
   type TrainerCourseOption,
 } from '../lib/formEngine';
 import type { Form } from '../types/database';
@@ -20,20 +23,28 @@ export const TrainerCourseUnitsPage: React.FC = () => {
   const [courseOptions, setCourseOptions] = useState<TrainerCourseOption[]>([]);
   const [coursesLoading, setCoursesLoading] = useState(true);
   const [selectedCourseId, setSelectedCourseId] = useState<string>('');
+  const [trainerBatches, setTrainerBatches] = useState<Batch[]>([]);
+  const [selectedBatchId, setSelectedBatchId] = useState<string>('');
   const [forms, setForms] = useState<Form[]>([]);
   const [formsLoading, setFormsLoading] = useState(false);
   const [selectedFormId, setSelectedFormId] = useState<string>('');
+  const [expandedFormId, setExpandedFormId] = useState<number | null>(null);
 
   const loadCourses = useCallback(async () => {
     const uid = user?.id;
     if (!uid) return;
     setCoursesLoading(true);
     try {
-      const opts = await listTrainerCourseOptionsForUnits(uid);
+      const [opts, batches] = await Promise.all([listTrainerCourseOptionsForUnits(uid), listTrainerBatches(uid)]);
       setCourseOptions(opts);
+      setTrainerBatches(batches);
+      setSelectedBatchId((prev) => {
+        if (prev && batches.some((b) => String(b.id) === prev)) return prev;
+        return '';
+      });
       setSelectedCourseId((prev) => {
         if (prev && opts.some((o) => String(o.courseId) === prev)) return prev;
-        return opts.length > 0 ? String(opts[0].courseId) : '';
+        return '';
       });
     } finally {
       setCoursesLoading(false);
@@ -68,7 +79,7 @@ export const TrainerCourseUnitsPage: React.FC = () => {
   useEffect(() => {
     setSelectedFormId((prev) => {
       if (forms.some((f) => String(f.id) === prev)) return prev;
-      return forms.length > 0 ? String(forms[0].id) : '';
+      return '';
     });
   }, [forms]);
 
@@ -81,16 +92,32 @@ export const TrainerCourseUnitsPage: React.FC = () => {
     setTrainerHighlightCourseId(cid);
   }, [selectedCourseId]);
 
+  const filteredCourseOptions = useMemo(() => {
+    const bid = Number(selectedBatchId);
+    if (!Number.isFinite(bid) || bid <= 0) return courseOptions;
+    const selectedBatch = trainerBatches.find((b) => Number(b.id) === bid);
+    const selectedBatchCourseId = selectedBatch?.course_id != null ? Number(selectedBatch.course_id) : null;
+    if (selectedBatchCourseId == null || !Number.isFinite(selectedBatchCourseId) || selectedBatchCourseId <= 0) return [];
+    return courseOptions.filter((o) => o.courseId === selectedBatchCourseId);
+  }, [courseOptions, trainerBatches, selectedBatchId]);
+
+  useEffect(() => {
+    setSelectedCourseId((prev) => {
+      if (prev && filteredCourseOptions.some((o) => String(o.courseId) === prev)) return prev;
+      return filteredCourseOptions.length > 0 ? String(filteredCourseOptions[0].courseId) : '';
+    });
+  }, [filteredCourseOptions]);
+
   const selectedCourse = courseOptions.find((o) => String(o.courseId) === selectedCourseId);
   const selectedForm = useMemo(() => forms.find((f) => String(f.id) === selectedFormId) ?? null, [forms, selectedFormId]);
 
   const unitSelectOptions = useMemo(
     () =>
-      forms.map((f) => {
+      [{ value: '', label: 'All units' }, ...forms.map((f) => {
         const codePart = f.unit_code ? `Unit ${f.unit_code}` : null;
         const label = [codePart, f.name].filter(Boolean).join(' · ');
         return { value: String(f.id), label: label || f.name };
-      }),
+      })],
     [forms]
   );
 
@@ -106,10 +133,7 @@ export const TrainerCourseUnitsPage: React.FC = () => {
             <BookOpen className="w-7 h-7 text-[var(--brand)]" />
             Course units
           </h1>
-          <p className="text-sm text-gray-600 mt-1">
-            Choose a course, then a unit to view student learning materials and trainer / assessor documents linked to your
-            batches.
-          </p>
+          <p className="text-sm text-gray-600 mt-1">Choose a course and optionally a unit. Leave as "All units" to view everything.</p>
         </div>
 
         {coursesLoading ? (
@@ -128,13 +152,26 @@ export const TrainerCourseUnitsPage: React.FC = () => {
         ) : (
           <>
             <Card className="mb-6">
-              <div className="grid gap-6 md:grid-cols-2 md:items-start max-w-4xl">
+              <div className="grid gap-6 md:grid-cols-3 md:items-start max-w-6xl">
+                <div className="max-w-xl min-w-0">
+                  <Select
+                    label="Batch"
+                    value={selectedBatchId}
+                    onChange={setSelectedBatchId}
+                    options={[
+                      { value: '', label: 'All batches' },
+                      ...trainerBatches.map((b) => ({ value: String(b.id), label: b.name })),
+                    ]}
+                    searchable={trainerBatches.length > 8}
+                    searchPlaceholder="Search batches…"
+                  />
+                </div>
                 <div className="max-w-xl min-w-0">
                   <Select
                     label="Course"
                     value={selectedCourseId}
                     onChange={setSelectedCourseId}
-                    options={courseOptions.map((o) => ({
+                    options={filteredCourseOptions.map((o) => ({
                       value: String(o.courseId),
                       label: o.qualificationCode ? `${o.courseName} (${o.qualificationCode})` : o.courseName,
                     }))}
@@ -178,8 +215,57 @@ export const TrainerCourseUnitsPage: React.FC = () => {
                 <div className="py-10">
                   <Loader variant="dots" size="lg" message="Loading units..." />
                 </div>
-              ) : !selectedForm ? (
+              ) : forms.length === 0 ? (
                 <div className="text-sm text-gray-600 py-6">No active units are linked to this course.</div>
+              ) : !selectedForm ? (
+                <div className="space-y-2">
+                  {forms.map((form) => {
+                    const isOpen = expandedFormId === form.id;
+                    return (
+                      <div
+                        key={form.id}
+                        className={cn(
+                          'rounded-lg border border-[var(--border)] bg-white overflow-hidden',
+                          TRAINER_HIGHLIGHT_ROW_EXTRA_CLASS
+                        )}
+                      >
+                        <button
+                          type="button"
+                          className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left hover:bg-[var(--brand)]/10 transition-colors"
+                          onClick={() => setExpandedFormId((prev) => (prev === form.id ? null : form.id))}
+                          aria-expanded={isOpen}
+                        >
+                          <div className="min-w-0">
+                            <div className="font-semibold text-[var(--text)] break-words">{form.name}</div>
+                            <div className="text-xs text-gray-500 mt-1 flex flex-wrap gap-x-3 gap-y-1">
+                              {form.unit_code ? <span>Unit {form.unit_code}</span> : null}
+                              {form.unit_name ? <span>{form.unit_name}</span> : null}
+                              {form.version ? <span>v{form.version}</span> : null}
+                            </div>
+                          </div>
+                          <ChevronDown className={cn('h-5 w-5 shrink-0 text-gray-400 transition-transform', isOpen && 'rotate-180')} />
+                        </button>
+                        {isOpen ? (
+                          <div className="px-3 py-3 bg-gray-50/80 border-t border-[var(--border)]">
+                            <div className="flex items-center justify-end pb-3">
+                              <Link to={`/admin/course-units/${form.id}/submissions`}>
+                                <Button variant="outline" size="sm">View student submissions</Button>
+                              </Link>
+                            </div>
+                            <FormDocumentsPanel
+                              formId={form.id}
+                              formName={form.name}
+                              canUpload={false}
+                              canDelete={false}
+                              showTrainerSection
+                              autoLoad
+                            />
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
               ) : (
                 <div
                   className={cn(
@@ -193,6 +279,11 @@ export const TrainerCourseUnitsPage: React.FC = () => {
                       {selectedForm.unit_code ? <span>Unit {selectedForm.unit_code}</span> : null}
                       {selectedForm.unit_name ? <span>{selectedForm.unit_name}</span> : null}
                       {selectedForm.version ? <span>v{selectedForm.version}</span> : null}
+                    </div>
+                    <div className="mt-3 flex items-center justify-end">
+                      <Link to={`/admin/course-units/${selectedForm.id}/submissions`}>
+                        <Button variant="outline" size="sm">View student submissions</Button>
+                      </Link>
                     </div>
                   </div>
                   <div className="px-3 py-3 bg-gray-50/80">

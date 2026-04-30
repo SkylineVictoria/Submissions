@@ -405,8 +405,16 @@ export const AdminDashboardPage: React.FC = () => {
                       <tr
                         key={r.id}
                         className="border-b border-gray-100 hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 cursor-pointer transition-colors"
-                        onClick={() => navigate('/admin/assessments')}
-                        title="Open assessments directory"
+                        onClick={() => {
+                          const sid = r.student_id;
+                          const fid = r.form_id;
+                          if (sid && Number.isFinite(sid) && fid && Number.isFinite(Number(fid))) {
+                            navigate(`/admin/students/${sid}?formId=${fid}`);
+                          } else {
+                            navigate('/admin/assessments');
+                          }
+                        }}
+                        title="Open this student’s assessment record"
                       >
                         <td className="py-2.5 px-3">
                           <div className="font-semibold text-gray-900 break-words">{r.student_name || '—'}</div>

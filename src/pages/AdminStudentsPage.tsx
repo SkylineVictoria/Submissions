@@ -581,9 +581,17 @@ export const AdminStudentsPage: React.FC = () => {
       const dd = String(d.d).padStart(2, '0');
       return `${yyyy}-${mm}-${dd}`;
     }
-    const s = String(val).trim();
+    // Normalize Excel/CSV punctuation so DD-MM-YYYY and yyyy-mm-dd match reliably.
+    const s = String(val)
+      .trim()
+      .replace(/[\u2013\u2014\u2212]/g, '-');
     if (!s) return undefined;
-    // Accept dd/mm/yyyy, dd-mm-yyyy (common in AU spreadsheets), or yyyy-mm-dd-ish.
+    // ISO 8601 first: yyyy-mm-dd (optional time). Literal Y-M-D only — no Date() (UTC/local day shift).
+    const mIso = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:$|[Tt\s].*)$/);
+    if (mIso) {
+      return `${mIso[1]}-${mIso[2].padStart(2, '0')}-${mIso[3].padStart(2, '0')}`;
+    }
+    // AU import spreadsheets: dd/mm/yyyy and dd-mm-yyyy (day first, then month; not US mm-dd-yyyy).
     const m1 = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
     if (m1) {
       const dd = String(m1[1]).padStart(2, '0');

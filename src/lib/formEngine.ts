@@ -1583,6 +1583,8 @@ export interface UserRow {
   phone: string | null;
   status: string | null;
   role: string;
+  can_login_as_student?: boolean;
+  can_login_as_trainer?: boolean;
   created_at: string;
 }
 
@@ -1592,6 +1594,8 @@ export interface CreateUserInput {
   phone?: string;
   status?: string;
   role: 'superadmin' | 'admin' | 'trainer' | 'office';
+  can_login_as_student?: boolean;
+  can_login_as_trainer?: boolean;
   password?: string;
 }
 
@@ -1848,6 +1852,8 @@ function mapUserRow(row: Record<string, unknown>): UserRow {
     phone: row.phone ? String(row.phone) : null,
     status: row.status ? String(row.status) : null,
     role: String(row.role ?? 'trainer'),
+    can_login_as_student: Boolean(row.can_login_as_student),
+    can_login_as_trainer: Boolean(row.can_login_as_trainer),
     created_at: String(row.created_at ?? ''),
   };
 }
@@ -2020,6 +2026,8 @@ export async function updateUser(id: number, input: UpdateUserInput): Promise<Us
   if (input.phone !== undefined) payload.phone = input.phone?.trim() || null;
   if (input.status !== undefined) payload.status = input.status?.trim() || null;
   if (input.role !== undefined) payload.role = input.role;
+  if (input.can_login_as_student !== undefined) payload.can_login_as_student = Boolean(input.can_login_as_student);
+  if (input.can_login_as_trainer !== undefined) payload.can_login_as_trainer = Boolean(input.can_login_as_trainer);
   payload.updated_by = getAuditFields().updated_by;
   const { data, error } = await supabase
     .from('skyline_users')
@@ -2118,6 +2126,8 @@ export interface SubmittedInstanceRow {
   form_id: number;
   form_name: string;
   form_version: string | null;
+  /** Unit of competency code from skyline_forms (when loaded). */
+  form_unit_code?: string | null;
   student_id: number | null;
   student_name: string;
   student_email: string;
@@ -2756,11 +2766,15 @@ export async function listDashboardInstances(
     }
   }
 
-  const formMap = new Map<number, { name: string; version: string | null }>();
+  const formMap = new Map<number, { name: string; version: string | null; unit_code: string | null }>();
   if (formIds.length > 0) {
-    const { data: forms } = await supabase.from('skyline_forms').select('id, name, version').in('id', formIds);
+    const { data: forms } = await supabase.from('skyline_forms').select('id, name, version, unit_code').in('id', formIds);
     for (const f of (forms as Array<Record<string, unknown>>) || []) {
-      formMap.set(Number(f.id), { name: String(f.name ?? ''), version: f.version ? String(f.version) : null });
+      formMap.set(Number(f.id), {
+        name: String(f.name ?? ''),
+        version: f.version ? String(f.version) : null,
+        unit_code: f.unit_code != null && String(f.unit_code).trim() ? String(f.unit_code).trim() : null,
+      });
     }
   }
   const studentMap = new Map<number, { name: string; email: string }>();
@@ -2790,6 +2804,7 @@ export async function listDashboardInstances(
         form_id: formId,
         form_name: form?.name || `Form #${formId}`,
         form_version: form?.version ?? null,
+        form_unit_code: form?.unit_code ?? null,
         student_id: studentId,
         student_name: student?.name || 'Unknown student',
         student_email: student?.email || '',
@@ -2811,6 +2826,161 @@ export async function listDashboardInstances(
 
   return {
     data: await withFormCourseIds(mappedDash),
+    total: Number(count ?? 0),
+    page,
+    pageSize,
+  };
+}
+
+/** Max rows to load for trainer “Grade me” grouped view (two pages of 1000 if needed). */
+export const TRAINER_GRADE_ME_MAX_INSTANCES = 2000;
+
+/** All pending trainer assessments (up to {@link TRAINER_GRADE_ME_MAX_INSTANCES} rows) for grouped / per-unit UI. */
+export async function listTrainerPendingForGradeMePanel(
+  trainerUserId: number
+): Promise<{ rows: SubmittedInstanceRow[]; total: number; truncated: boolean }> {
+  const pageSize = 1000;
+  const first = await listDashboardInstances('trainer', trainerUserId, 1, pageSize, '', true);
+  let rows = first.data;
+  const total = first.total;
+  if (total > pageSize && rows.length === pageSize) {
+    const second = await listDashboardInstances('trainer', trainerUserId, 2, pageSize, '', true);
+    rows = [...rows, ...second.data];
+  }
+  const truncated = total > TRAINER_GRADE_ME_MAX_INSTANCES;
+  const capped = rows.slice(0, TRAINER_GRADE_ME_MAX_INSTANCES);
+  return { rows: capped, total, truncated };
+}
+
+/** Trainer view: list all instances for a specific unit/form, limited to students in trainer's batches. */
+export async function listTrainerUnitInstancesPaged(
+  trainerUserId: number,
+  formId: number,
+  page = 1,
+  pageSize = 20,
+  search?: string
+): Promise<PaginatedResult<SubmittedInstanceRow>> {
+  const tid = Number(trainerUserId);
+  const fid = Number(formId);
+  if (!Number.isFinite(tid) || tid <= 0 || !Number.isFinite(fid) || fid <= 0) {
+    return { data: [], total: 0, page, pageSize };
+  }
+
+  const { data: batches } = await supabase.from('skyline_batches').select('id').eq('trainer_id', tid);
+  const batchIds = ((batches as { id: number }[]) || []).map((b) => Number(b.id)).filter((n) => Number.isFinite(n) && n > 0);
+  if (batchIds.length === 0) return { data: [], total: 0, page, pageSize };
+
+  const { data: students } = await supabase
+    .from('skyline_students')
+    .select('id')
+    .in('batch_id', batchIds)
+    .or('status.is.null,status.eq.active');
+  const eligibleStudentIds = ((students as { id: number }[]) || [])
+    .map((s) => Number(s.id))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  if (eligibleStudentIds.length === 0) return { data: [], total: 0, page, pageSize };
+
+  const from = Math.max(0, (page - 1) * pageSize);
+  const to = from + pageSize - 1;
+
+  let query = supabase
+    .from('skyline_form_instances')
+    .select('id, form_id, student_id, status, role_context, created_at, submitted_at, start_date, end_date, submission_count', {
+      count: 'exact',
+    })
+    .eq('form_id', fid)
+    .not('student_id', 'is', null)
+    .in('student_id', eligibleStudentIds);
+
+  const q = (search ?? '').trim();
+  if (q) {
+    const escaped = q.replace(/[%_,]/g, '');
+    const { data: studentRows } = await supabase
+      .from('skyline_students')
+      .select('id')
+      .or(
+        `student_id.ilike.%${escaped}%,name.ilike.%${escaped}%,first_name.ilike.%${escaped}%,last_name.ilike.%${escaped}%,email.ilike.%${escaped}%`
+      );
+    const searchStudentIds = ((studentRows as Array<Record<string, unknown>>) || [])
+      .map((s) => Number(s.id))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    if (searchStudentIds.length === 0) return { data: [], total: 0, page, pageSize };
+    const overlap = eligibleStudentIds.filter((id) => searchStudentIds.includes(id));
+    if (overlap.length === 0) return { data: [], total: 0, page, pageSize };
+    query = query.in('student_id', overlap);
+  }
+
+  query = query.order('created_at', { ascending: false }).order('id', { ascending: false });
+  const { data: instances, error, count } = await query.range(from, to);
+  if (error) {
+    console.error('listTrainerUnitInstancesPaged error', error.message || error, error);
+    return { data: [], total: 0, page, pageSize };
+  }
+
+  const rows = (instances as Array<Record<string, unknown>>) || [];
+  const instanceIds = rows.map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0);
+  const studentIds = Array.from(new Set(rows.map((r) => Number(r.student_id)).filter((n) => Number.isFinite(n) && n > 0)));
+
+  const now = Date.now();
+  const tokenMap = new Map<string, boolean>();
+  if (instanceIds.length > 0) {
+    const { data: tokens } = await supabase
+      .from('skyline_instance_access_tokens')
+      .select('instance_id, role_context, expires_at, revoked_at')
+      .in('instance_id', instanceIds)
+      .eq('role_context', 'trainer');
+    for (const t of (tokens as Array<{ instance_id: number; role_context: string; expires_at: string; revoked_at: string | null }>) || []) {
+      const key = `${t.instance_id}:${t.role_context}`;
+      const valid = t.revoked_at == null && t.expires_at && new Date(t.expires_at).getTime() > now;
+      if (valid) tokenMap.set(key, false);
+      else if (!tokenMap.has(key)) tokenMap.set(key, true);
+    }
+  }
+
+  const form = await fetchForm(fid, { allowInactiveForAdmin: true });
+  const formName = form?.name ?? `Form #${fid}`;
+  const formVersion = form?.version ?? null;
+
+  const studentMap = new Map<number, { name: string; email: string }>();
+  if (studentIds.length > 0) {
+    const { data: studentsRows } = await supabase
+      .from('skyline_students')
+      .select('id, name, first_name, last_name, email')
+      .in('id', studentIds);
+    for (const s of (studentsRows as Array<Record<string, unknown>>) || []) {
+      const first = String(s.first_name ?? '').trim();
+      const last = String(s.last_name ?? '').trim();
+      const name = [first, last].filter(Boolean).join(' ').trim() || String(s.name ?? '');
+      studentMap.set(Number(s.id), { name, email: String(s.email ?? '') });
+    }
+  }
+
+  const mapped = rows.map((r) => {
+    const instanceId = Number(r.id);
+    const studentId = r.student_id == null ? null : Number(r.student_id);
+    const student = studentId != null ? studentMap.get(studentId) : undefined;
+    const link_expired = tokenMap.get(`${instanceId}:trainer`) !== false;
+    return {
+      id: instanceId,
+      form_id: fid,
+      form_name: formName,
+      form_version: formVersion,
+      student_id: studentId,
+      student_name: student?.name || 'Unknown student',
+      student_email: student?.email || '',
+      status: String(r.status ?? 'draft'),
+      role_context: String(r.role_context ?? 'student'),
+      created_at: String(r.created_at ?? ''),
+      submitted_at: r.submitted_at ? String(r.submitted_at) : null,
+      submission_count: Number(r.submission_count ?? 0) || 0,
+      start_date: r.start_date ? String(r.start_date) : null,
+      end_date: r.end_date ? String(r.end_date) : null,
+      link_expired,
+    } satisfies SubmittedInstanceRow;
+  });
+
+  return {
+    data: await withFormCourseIds(mapped),
     total: Number(count ?? 0),
     page,
     pageSize,
@@ -5193,4 +5363,73 @@ export async function deleteBatchSuperadmin(
   const j = data as { ok?: boolean; error?: string } | null;
   if (!j?.ok) return { ok: false, error: j?.error || 'Could not delete batch.' };
   return { ok: true };
+}
+
+/** Resolved ids/messages for workflow push + in-app notifications (send-notification edge function). */
+export type InstanceWorkflowNotificationContext = {
+  formName: string;
+  /** `skyline_students.id` as string — used as `skyline_notifications.user_id` for student in-app rows + optional future student push. */
+  studentNotificationUserId: string | null;
+  /** `skyline_users.id` for the trainer assigned to the student’s batch. */
+  trainerUserId: number | null;
+};
+
+export async function getInstanceWorkflowNotificationContext(instanceId: number): Promise<InstanceWorkflowNotificationContext | null> {
+  const iid = Number(instanceId);
+  if (!Number.isFinite(iid) || iid <= 0) return null;
+  const inst = await fetchInstance(iid);
+  if (!inst) return null;
+  const form = await fetchForm(inst.form_id);
+  const formName = form?.name?.trim() || 'Assessment';
+  const rawSid = (inst as { student_id?: number | null }).student_id;
+  const sid = rawSid != null ? Number(rawSid) : null;
+  if (!sid || !Number.isFinite(sid) || sid <= 0) {
+    return { formName, studentNotificationUserId: null, trainerUserId: null };
+  }
+  const studentNotificationUserId = String(sid);
+  let trainerUserId: number | null = null;
+  const { data: st, error: stErr } = await supabase
+    .from('skyline_students')
+    .select('batch_id')
+    .eq('id', sid)
+    .maybeSingle();
+  if (stErr) console.error('getInstanceWorkflowNotificationContext student', stErr);
+  const batchId = st?.batch_id != null ? Number((st as { batch_id?: unknown }).batch_id) : null;
+  if (batchId && Number.isFinite(batchId) && batchId > 0) {
+    const { data: b, error: bErr } = await supabase
+      .from('skyline_batches')
+      .select('trainer_id')
+      .eq('id', batchId)
+      .maybeSingle();
+    if (bErr) console.error('getInstanceWorkflowNotificationContext batch', bErr);
+    const tid = b?.trainer_id != null ? Number((b as { trainer_id?: unknown }).trainer_id) : null;
+    if (tid && Number.isFinite(tid) && tid > 0) trainerUserId = tid;
+  }
+  return { formName, studentNotificationUserId, trainerUserId };
+}
+
+/** Fire-and-forget in-app + FCM via Edge Function (service role inside function). */
+export async function invokeWorkflowSendNotification(input: {
+  userIds: string[];
+  title: string;
+  message: string;
+  url?: string;
+  type?: string;
+}): Promise<void> {
+  const userIds = [...new Set((input.userIds || []).map((x) => String(x).trim()).filter(Boolean))];
+  if (userIds.length === 0) return;
+  try {
+    const { error } = await supabase.functions.invoke('send-notification', {
+      body: {
+        userIds,
+        title: input.title.trim(),
+        message: input.message.trim(),
+        url: (input.url ?? '/').trim() || '/',
+        type: (input.type ?? 'workflow').trim() || 'workflow',
+      },
+    });
+    if (error) console.error('invokeWorkflowSendNotification', error.message);
+  } catch (e) {
+    console.error('invokeWorkflowSendNotification', e);
+  }
 }

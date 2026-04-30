@@ -50,6 +50,9 @@ import {
   validateInstanceAccessToken,
   revokeRoleAccessTokens,
   extendInstanceAccessTokensToDate,
+  updateFormInstanceDates,
+  getInstanceWorkflowNotificationContext,
+  invokeWorkflowSendNotification,
 } from '../lib/formEngine';
 import type { FormTemplate, FormQuestionWithOptionsAndRows, FormSectionWithQuestions } from '../lib/formEngine';
 import { getTaskQuestionDisplayNumbers } from '../lib/taskQuestionsNumbering';
@@ -438,6 +441,30 @@ export const InstanceFillPage: React.FC = () => {
   const [role, setRole] = useState<FormRole>('student');
   const [workflowStatus, setWorkflowStatus] = useState<'draft' | 'waiting_trainer' | 'waiting_office' | 'completed' | 'failed'>('draft');
   const [submissionCount, setSubmissionCount] = useState<number>(0);
+  /** Instance access window (student link validity); editable by trainer/office on Introduction step. */
+  const [instanceWindowDates, setInstanceWindowDates] = useState<{ start_date: string | null; end_date: string | null }>({
+    start_date: null,
+    end_date: null,
+  });
+
+  /** Trainer (and office) may edit fields marked student-only in the template so they can correct student answers. */
+  const isQuestionEditableForRole = useCallback(
+    (re: Record<string, boolean> | null | undefined) => {
+      const editability = re || {};
+      if (role === 'office') {
+        return (
+          isRoleEditable(editability, 'office') ||
+          isRoleEditable(editability, 'trainer') ||
+          isRoleEditable(editability, 'student')
+        );
+      }
+      if (role === 'trainer') {
+        return isRoleEditable(editability, 'trainer') || isRoleEditable(editability, 'student');
+      }
+      return isRoleEditable(editability, role);
+    },
+    [role]
+  );
 
   const getTrainerAttemptOutcome = useCallback(
     (attempt: 1 | 2 | 3): AttemptOutcome => {
@@ -538,6 +565,10 @@ export const InstanceFillPage: React.FC = () => {
     const instSubmittedAt = (inst as unknown as { submitted_at?: string } | null)?.submitted_at;
     const instSubmissionCount = Number((inst as unknown as { submission_count?: number | null } | null)?.submission_count ?? 0) || 0;
     setSubmissionCount(instSubmissionCount || (instSubmittedAt ? 1 : 0));
+    setInstanceWindowDates({
+      start_date: (inst as { start_date?: string | null }).start_date ? String((inst as { start_date?: string | null }).start_date) : null,
+      end_date: (inst as { end_date?: string | null }).end_date ? String((inst as { end_date?: string | null }).end_date) : null,
+    });
     const ansMap: Record<string, string | number | boolean | Record<string, unknown> | string[]> = {};
     for (const a of ans) {
       const key = getAnswerKey(a.question_id, a.row_id);
@@ -1104,10 +1135,36 @@ export const InstanceFillPage: React.FC = () => {
   const canRoleEditCurrentWorkflow = useMemo(() => {
     if (workflowStatus === 'completed' || workflowStatus === 'failed') return false;
     if (role === 'student') return workflowStatus === 'draft';
-    if (role === 'trainer') return workflowStatus === 'waiting_trainer';
+    // Trainer can review/edit student work whenever the instance is not terminal (completed/failed ruled out above).
+    if (role === 'trainer') return true;
     if (role === 'office') return workflowStatus === 'waiting_office';
     return false;
   }, [role, workflowStatus]);
+
+  const handleInstanceWindowDateChange = useCallback(
+    async (field: 'start_date' | 'end_date', value: string | null) => {
+      if (!id || !canRoleEditCurrentWorkflow) return;
+      const v = value?.trim() || null;
+      const nextStart = field === 'start_date' ? v : instanceWindowDates.start_date;
+      const nextEnd = field === 'end_date' ? v : instanceWindowDates.end_date;
+      if (nextStart && nextEnd && nextStart > nextEnd) {
+        toast.error('Start date cannot be later than end date');
+        return;
+      }
+      setInstanceWindowDates({ start_date: nextStart, end_date: nextEnd });
+      try {
+        await updateFormInstanceDates(id, { [field]: v });
+        if (field === 'end_date' && nextEnd) {
+          await extendInstanceAccessTokensToDate(id, 'student', nextEnd);
+        }
+        toast.success('Assessment dates updated');
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : 'Failed to update dates');
+        void loadData();
+      }
+    },
+    [id, canRoleEditCurrentWorkflow, instanceWindowDates.start_date, instanceWindowDates.end_date, loadData]
+  );
 
   /** True when student is resubmitting after trainer sent back; parts marked Satisfactory Yes become read-only */
   const isResubmissionAfterTrainer = useMemo(
@@ -1148,108 +1205,21 @@ export const InstanceFillPage: React.FC = () => {
       .replace(/([A-Za-z])\s*\r?\n\s*([A-Za-z])/g, '$1$2');
   }, []);
 
-  const runFinalSubmitByRole = useCallback(async () => {
-    if (!id) return;
-    setWorkflowSubmitting(true);
-    if (role === 'student' && workflowStatus === 'draft') {
-      await updateInstanceWorkflowStatus(id, 'waiting_trainer');
-      await updateInstanceRole(id, 'trainer');
-      await revokeRoleAccessTokens(id, 'student');
-      setWorkflowStatus('waiting_trainer');
-      toast.success('Submitted successfully. Waiting for trainer checking.');
-      setWorkflowSubmitting(false);
-      return;
-    }
-    if (role === 'trainer' && workflowStatus === 'waiting_trainer') {
-      const latestAttempt = (Math.max(1, Math.min(3, submissionCount || 1)) as 1 | 2 | 3);
-      const latestResult = getTrainerAttemptOutcome(latestAttempt);
-
-      // Not Yet Competent: allow up to 3 attempts.
-      // Attempt 1 NYC -> extend +5 days and reopen to student.
-      // Attempt 2 NYC -> extend +5 days and reopen to student.
-      // Attempt 3 NYC -> mark failed (no more resubmissions).
-      if (latestResult === 'not_yet_competent') {
-        if (latestAttempt < 3) {
-          try {
-            const todayMel = getMelbourneDateStr(new Date());
-            // Resubmission window is based on trainer's attempt date (not the prior instance end_date).
-            // Example: trainer date 2026-04-24 -> new end_date 2026-04-29.
-            const attemptTrainerDate =
-              latestAttempt === 1
-                ? String(assessmentSummary?.trainer_date_1 ?? '').trim()
-                : latestAttempt === 2
-                  ? String(assessmentSummary?.trainer_date_2 ?? '').trim()
-                  : String(assessmentSummary?.trainer_date_3 ?? '').trim();
-            const baseEnd = isIsoDate(attemptTrainerDate) ? attemptTrainerDate : todayMel;
-            const newEnd = addDaysIso(baseEnd, 5);
-            // Align end_date and re-enable student access until end-of-day Melbourne (23:59).
-            await extendInstanceAccessTokensToDate(id, 'student', newEnd);
-            await updateInstanceWorkflowStatus(id, 'draft');
-            await updateInstanceRole(id, 'student');
-            setWorkflowStatus('draft');
-            toast.success(`Not Yet Competent. Attempt ${latestAttempt} complete. Resubmission opened until ${newEnd} (23:59 Melbourne).`);
-          } finally {
-            setWorkflowSubmitting(false);
-          }
-          return;
-        }
-
-        // Attempt 3: fail and lock.
-        await updateInstanceWorkflowStatus(id, 'failed');
-        setWorkflowStatus('failed');
-        await updateInstanceRole(id, 'office');
-        toast.error('Not Yet Competent after 3 attempts. Instance is now Failed.');
-        setWorkflowSubmitting(false);
-        return;
-      }
-
-      await updateInstanceWorkflowStatus(id, 'waiting_office');
-      setWorkflowStatus('waiting_office');
-      await updateInstanceRole(id, 'office');
-      toast.success('Submitted successfully. Waiting for office checking.');
-      setWorkflowSubmitting(false);
-      return;
-    }
-    if (role === 'office' && workflowStatus === 'waiting_office') {
-      await updateInstanceWorkflowStatus(id, 'completed');
-      setWorkflowStatus('completed');
-      toast.success('Office check complete. Form is now completed.');
-    }
-    setWorkflowSubmitting(false);
-  }, [id, role, workflowStatus, submissionCount, getTrainerAttemptOutcome, assessmentSummary]);
-
-  const handleFinalSubmitByRole = useCallback(() => {
-    if (role === 'student' && workflowStatus === 'draft') {
-      setConfirmConfig({
-        title: 'Final Submit',
-        message: 'After submitting, you will not be able to edit this form again. Please verify all answers before continuing.',
-        confirmLabel: 'Submit',
-      });
-      return;
-    }
-    if (role === 'trainer' && workflowStatus === 'waiting_trainer') {
-      setConfirmConfig({
-        title: 'Final Submit',
-        message: 'After submitting, you will not be able to edit this form again. Please verify all answers before continuing.',
-        confirmLabel: 'Submit',
-      });
-      return;
-    }
-    if (role === 'office' && workflowStatus === 'waiting_office') {
-      setConfirmConfig({
-        title: 'Office Check',
-        message: 'Finalize office checking? This will complete and lock the form.',
-        confirmLabel: 'Finalize',
-      });
-    }
-  }, [role, workflowStatus]);
-
-  const validateStep = useCallback(
-    (stepNumber: number): boolean => {
-      if (!template || stepNumber <= 1) return true;
-      const stepData = template.steps[stepNumber - 2];
-      if (!stepData) return true;
+  /** Collect validation errors for one wizard step (matches Stepper visible steps, incl. Appendix A rules). */
+  const getStepValidationErrors = useCallback(
+    (stepNumber: number): Record<string, string> => {
+      if (!template || stepNumber <= 1) return {};
+      const visibleStepsForValidation = (template.steps ?? []).filter(
+        (s) => role !== 'student' || !/Appendix\s*A/i.test((s.title || '').trim())
+      );
+      const stepData = visibleStepsForValidation[stepNumber - 2];
+      if (!stepData) return {};
       const stepErrors: Record<string, string> = {};
+      /** Trainer/office must finish result sheets + summary by resubmission cycle before leaving review. */
+      const strictReviewCycle =
+        (workflowStatus === 'waiting_trainer' && role === 'trainer') ||
+        (workflowStatus === 'waiting_office' && role === 'office');
+      const resubmissionCycle = Math.min(Math.max(submissionCount || 1, 1), 3);
       const taskResultIdsAppendixVal = (template.steps ?? [])
         .flatMap((st) => st.sections)
         .filter((s) => s.pdf_render_mode === 'task_results')
@@ -1270,7 +1240,8 @@ export const InstanceFillPage: React.FC = () => {
         if (section.pdf_render_mode === 'task_results') {
           const rd = resultsData[section.id];
           const trainerCanEdit = role === 'trainer' || role === 'office';
-          const studentCanEdit = role === 'student' || role === 'office';
+          const studentCanEdit =
+            role === 'student' || role === 'office' || (role === 'trainer' && canRoleEditCurrentWorkflow);
 
           if (studentCanEdit) {
             if (!rowAnswerHasContent(rd?.student_name ?? undefined)) {
@@ -1282,7 +1253,6 @@ export const InstanceFillPage: React.FC = () => {
           }
 
           if (trainerCanEdit) {
-            // Attempt dates must be filled for the attempt being completed (same rules as task_results UI).
             const firstAttemptComplete =
               rowAnswerHasContent(rd?.first_attempt_satisfactory ?? undefined) &&
               rowAnswerHasContent(rd?.first_attempt_date ?? undefined);
@@ -1296,40 +1266,73 @@ export const InstanceFillPage: React.FC = () => {
             const secondAttemptComplete =
               rowAnswerHasContent(rd?.second_attempt_satisfactory ?? undefined) &&
               rowAnswerHasContent(rd?.second_attempt_date ?? undefined);
+            const thirdAttemptComplete =
+              rowAnswerHasContent(rd?.third_attempt_satisfactory ?? undefined) &&
+              rowAnswerHasContent(rd?.third_attempt_date ?? undefined);
 
-            const firstAttemptEditable = trainerCanEdit && submissionCount < 2 && !secondOrThirdHasData;
-            const secondAttemptUnlockedByResubmission = submissionCount >= 2;
-            const thirdAttemptUnlockedByResubmission = submissionCount >= 3;
-            const secondAttemptEditable =
-              trainerCanEdit &&
-              firstAttemptComplete &&
-              secondAttemptUnlockedByResubmission &&
-              !thirdAttemptHasData;
-            const thirdAttemptEditable =
-              trainerCanEdit && secondAttemptComplete && thirdAttemptUnlockedByResubmission;
+            if (strictReviewCycle) {
+              if (!firstAttemptComplete) {
+                if (!rowAnswerHasContent(rd?.first_attempt_satisfactory ?? undefined)) {
+                  stepErrors[`task-results-${section.id}-first_attempt_satisfactory`] =
+                    'First attempt outcome (S/NS) is required on every task result sheet';
+                }
+                if (!rowAnswerHasContent(rd?.first_attempt_date ?? undefined)) {
+                  stepErrors[`task-results-${section.id}-first_attempt_date`] =
+                    'First attempt date is required on every task result sheet';
+                }
+              } else if (resubmissionCycle >= 2 && !secondAttemptComplete) {
+                if (!rowAnswerHasContent(rd?.second_attempt_satisfactory ?? undefined)) {
+                  stepErrors[`task-results-${section.id}-second_attempt_satisfactory`] =
+                    'Second attempt outcome (S/NS) is required (complete attempt 1 first, then attempt 2)';
+                }
+                if (!rowAnswerHasContent(rd?.second_attempt_date ?? undefined)) {
+                  stepErrors[`task-results-${section.id}-second_attempt_date`] =
+                    'Second attempt date is required (complete attempt 1 first, then attempt 2)';
+                }
+              } else if (resubmissionCycle >= 3 && !thirdAttemptComplete) {
+                if (!rowAnswerHasContent(rd?.third_attempt_satisfactory ?? undefined)) {
+                  stepErrors[`task-results-${section.id}-third_attempt_satisfactory`] =
+                    'Third attempt outcome (S/NS) is required';
+                }
+                if (!rowAnswerHasContent(rd?.third_attempt_date ?? undefined)) {
+                  stepErrors[`task-results-${section.id}-third_attempt_date`] = 'Third attempt date is required';
+                }
+              }
+            } else {
+              const firstAttemptEditable = trainerCanEdit && submissionCount < 2 && !secondOrThirdHasData;
+              const secondAttemptUnlockedByResubmission = submissionCount >= 2;
+              const thirdAttemptUnlockedByResubmission = submissionCount >= 3;
+              const secondAttemptEditable =
+                trainerCanEdit &&
+                firstAttemptComplete &&
+                secondAttemptUnlockedByResubmission &&
+                !thirdAttemptHasData;
+              const thirdAttemptEditable =
+                trainerCanEdit && secondAttemptComplete && thirdAttemptUnlockedByResubmission;
 
-            if (firstAttemptEditable) {
-              if (!rowAnswerHasContent(rd?.first_attempt_satisfactory ?? undefined)) {
-                stepErrors[`task-results-${section.id}-first_attempt_satisfactory`] = 'First attempt outcome (S/NS) is required';
+              if (firstAttemptEditable) {
+                if (!rowAnswerHasContent(rd?.first_attempt_satisfactory ?? undefined)) {
+                  stepErrors[`task-results-${section.id}-first_attempt_satisfactory`] = 'First attempt outcome (S/NS) is required';
+                }
+                if (!rowAnswerHasContent(rd?.first_attempt_date ?? undefined)) {
+                  stepErrors[`task-results-${section.id}-first_attempt_date`] = 'First attempt date is required';
+                }
               }
-              if (!rowAnswerHasContent(rd?.first_attempt_date ?? undefined)) {
-                stepErrors[`task-results-${section.id}-first_attempt_date`] = 'First attempt date is required';
+              if (secondAttemptEditable) {
+                if (!rowAnswerHasContent(rd?.second_attempt_satisfactory ?? undefined)) {
+                  stepErrors[`task-results-${section.id}-second_attempt_satisfactory`] = 'Second attempt outcome (S/NS) is required';
+                }
+                if (!rowAnswerHasContent(rd?.second_attempt_date ?? undefined)) {
+                  stepErrors[`task-results-${section.id}-second_attempt_date`] = 'Second attempt date is required';
+                }
               }
-            }
-            if (secondAttemptEditable) {
-              if (!rowAnswerHasContent(rd?.second_attempt_satisfactory ?? undefined)) {
-                stepErrors[`task-results-${section.id}-second_attempt_satisfactory`] = 'Second attempt outcome (S/NS) is required';
-              }
-              if (!rowAnswerHasContent(rd?.second_attempt_date ?? undefined)) {
-                stepErrors[`task-results-${section.id}-second_attempt_date`] = 'Second attempt date is required';
-              }
-            }
-            if (thirdAttemptEditable) {
-              if (!rowAnswerHasContent(rd?.third_attempt_satisfactory ?? undefined)) {
-                stepErrors[`task-results-${section.id}-third_attempt_satisfactory`] = 'Third attempt outcome (S/NS) is required';
-              }
-              if (!rowAnswerHasContent(rd?.third_attempt_date ?? undefined)) {
-                stepErrors[`task-results-${section.id}-third_attempt_date`] = 'Third attempt date is required';
+              if (thirdAttemptEditable) {
+                if (!rowAnswerHasContent(rd?.third_attempt_satisfactory ?? undefined)) {
+                  stepErrors[`task-results-${section.id}-third_attempt_satisfactory`] = 'Third attempt outcome (S/NS) is required';
+                }
+                if (!rowAnswerHasContent(rd?.third_attempt_date ?? undefined)) {
+                  stepErrors[`task-results-${section.id}-third_attempt_date`] = 'Third attempt date is required';
+                }
               }
             }
 
@@ -1352,7 +1355,8 @@ export const InstanceFillPage: React.FC = () => {
           const sum = assessmentSummary || ({} as import('../lib/formEngine').AssessmentSummaryDataEntry);
 
           const trainerCanEdit = role === 'trainer' || role === 'office';
-          const studentCanEdit = role === 'student' || role === 'office';
+          const studentCanEdit =
+            role === 'student' || role === 'office' || (role === 'trainer' && canRoleEditCurrentWorkflow);
 
           if (rowAnswerHasContent(sum.start_date ?? undefined) && rowAnswerHasContent(sum.end_date ?? undefined)) {
             const start = String(sum.start_date ?? '');
@@ -1393,37 +1397,87 @@ export const InstanceFillPage: React.FC = () => {
           const sumThirdEditable = sumSecondComplete && submissionCount >= 3;
 
           if (trainerCanEdit) {
-            if (sumFirstEditable) {
-              if (!rowAnswerHasContent(sum.final_attempt_1_result ?? undefined)) {
-                stepErrors['assessment-summary-final_attempt_1_result'] = 'Attempt 1 result (Competent / Not Yet Competent) is required';
+            if (strictReviewCycle) {
+              const sumTrainerAttempt1Complete =
+                rowAnswerHasContent(sum.final_attempt_1_result ?? undefined) &&
+                rowAnswerHasContent(sum.trainer_sig_1 ?? undefined) &&
+                rowAnswerHasContent(sum.trainer_date_1 ?? undefined);
+              const sumTrainerAttempt2Complete =
+                rowAnswerHasContent(sum.final_attempt_2_result ?? undefined) &&
+                rowAnswerHasContent(sum.trainer_sig_2 ?? undefined) &&
+                rowAnswerHasContent(sum.trainer_date_2 ?? undefined);
+              const sumTrainerAttempt3Complete =
+                rowAnswerHasContent(sum.final_attempt_3_result ?? undefined) &&
+                rowAnswerHasContent(sum.trainer_sig_3 ?? undefined) &&
+                rowAnswerHasContent(sum.trainer_date_3 ?? undefined);
+
+              if (resubmissionCycle >= 1 && !sumTrainerAttempt1Complete) {
+                if (!rowAnswerHasContent(sum.final_attempt_1_result ?? undefined)) {
+                  stepErrors['assessment-summary-final_attempt_1_result'] =
+                    'Assessment summary: attempt 1 result (Competent / Not Yet Competent) is required';
+                }
+                if (!rowAnswerHasContent(sum.trainer_sig_1 ?? undefined)) {
+                  stepErrors['assessment-summary-trainer_sig_1'] = 'Assessment summary: trainer signature (attempt 1) is required';
+                }
+                if (!rowAnswerHasContent(sum.trainer_date_1 ?? undefined)) {
+                  stepErrors['assessment-summary-trainer_date_1'] = 'Assessment summary: trainer date (attempt 1) is required';
+                }
+              } else if (resubmissionCycle >= 2 && !sumTrainerAttempt2Complete) {
+                if (!rowAnswerHasContent(sum.final_attempt_2_result ?? undefined)) {
+                  stepErrors['assessment-summary-final_attempt_2_result'] =
+                    'Assessment summary: attempt 2 result (Competent / Not Yet Competent) is required';
+                }
+                if (!rowAnswerHasContent(sum.trainer_sig_2 ?? undefined)) {
+                  stepErrors['assessment-summary-trainer_sig_2'] = 'Assessment summary: trainer signature (attempt 2) is required';
+                }
+                if (!rowAnswerHasContent(sum.trainer_date_2 ?? undefined)) {
+                  stepErrors['assessment-summary-trainer_date_2'] = 'Assessment summary: trainer date (attempt 2) is required';
+                }
+              } else if (resubmissionCycle >= 3 && !sumTrainerAttempt3Complete) {
+                if (!rowAnswerHasContent(sum.final_attempt_3_result ?? undefined)) {
+                  stepErrors['assessment-summary-final_attempt_3_result'] =
+                    'Assessment summary: attempt 3 result (Competent / Not Yet Competent) is required';
+                }
+                if (!rowAnswerHasContent(sum.trainer_sig_3 ?? undefined)) {
+                  stepErrors['assessment-summary-trainer_sig_3'] = 'Assessment summary: trainer signature (attempt 3) is required';
+                }
+                if (!rowAnswerHasContent(sum.trainer_date_3 ?? undefined)) {
+                  stepErrors['assessment-summary-trainer_date_3'] = 'Assessment summary: trainer date (attempt 3) is required';
+                }
               }
-              if (!rowAnswerHasContent(sum.trainer_sig_1 ?? undefined)) {
-                stepErrors['assessment-summary-trainer_sig_1'] = 'Trainer signature (attempt 1) is required';
+            } else {
+              if (sumFirstEditable) {
+                if (!rowAnswerHasContent(sum.final_attempt_1_result ?? undefined)) {
+                  stepErrors['assessment-summary-final_attempt_1_result'] = 'Attempt 1 result (Competent / Not Yet Competent) is required';
+                }
+                if (!rowAnswerHasContent(sum.trainer_sig_1 ?? undefined)) {
+                  stepErrors['assessment-summary-trainer_sig_1'] = 'Trainer signature (attempt 1) is required';
+                }
+                if (!rowAnswerHasContent(sum.trainer_date_1 ?? undefined)) {
+                  stepErrors['assessment-summary-trainer_date_1'] = 'Trainer date (attempt 1) is required';
+                }
               }
-              if (!rowAnswerHasContent(sum.trainer_date_1 ?? undefined)) {
-                stepErrors['assessment-summary-trainer_date_1'] = 'Trainer date (attempt 1) is required';
+              if (sumSecondEditable) {
+                if (!rowAnswerHasContent(sum.final_attempt_2_result ?? undefined)) {
+                  stepErrors['assessment-summary-final_attempt_2_result'] = 'Attempt 2 result (Competent / Not Yet Competent) is required';
+                }
+                if (!rowAnswerHasContent(sum.trainer_sig_2 ?? undefined)) {
+                  stepErrors['assessment-summary-trainer_sig_2'] = 'Trainer signature (attempt 2) is required';
+                }
+                if (!rowAnswerHasContent(sum.trainer_date_2 ?? undefined)) {
+                  stepErrors['assessment-summary-trainer_date_2'] = 'Trainer date (attempt 2) is required';
+                }
               }
-            }
-            if (sumSecondEditable) {
-              if (!rowAnswerHasContent(sum.final_attempt_2_result ?? undefined)) {
-                stepErrors['assessment-summary-final_attempt_2_result'] = 'Attempt 2 result (Competent / Not Yet Competent) is required';
-              }
-              if (!rowAnswerHasContent(sum.trainer_sig_2 ?? undefined)) {
-                stepErrors['assessment-summary-trainer_sig_2'] = 'Trainer signature (attempt 2) is required';
-              }
-              if (!rowAnswerHasContent(sum.trainer_date_2 ?? undefined)) {
-                stepErrors['assessment-summary-trainer_date_2'] = 'Trainer date (attempt 2) is required';
-              }
-            }
-            if (sumThirdEditable) {
-              if (!rowAnswerHasContent(sum.final_attempt_3_result ?? undefined)) {
-                stepErrors['assessment-summary-final_attempt_3_result'] = 'Attempt 3 result (Competent / Not Yet Competent) is required';
-              }
-              if (!rowAnswerHasContent(sum.trainer_sig_3 ?? undefined)) {
-                stepErrors['assessment-summary-trainer_sig_3'] = 'Trainer signature (attempt 3) is required';
-              }
-              if (!rowAnswerHasContent(sum.trainer_date_3 ?? undefined)) {
-                stepErrors['assessment-summary-trainer_date_3'] = 'Trainer date (attempt 3) is required';
+              if (sumThirdEditable) {
+                if (!rowAnswerHasContent(sum.final_attempt_3_result ?? undefined)) {
+                  stepErrors['assessment-summary-final_attempt_3_result'] = 'Attempt 3 result (Competent / Not Yet Competent) is required';
+                }
+                if (!rowAnswerHasContent(sum.trainer_sig_3 ?? undefined)) {
+                  stepErrors['assessment-summary-trainer_sig_3'] = 'Trainer signature (attempt 3) is required';
+                }
+                if (!rowAnswerHasContent(sum.trainer_date_3 ?? undefined)) {
+                  stepErrors['assessment-summary-trainer_date_3'] = 'Trainer date (attempt 3) is required';
+                }
               }
             }
           }
@@ -1468,7 +1522,7 @@ export const InstanceFillPage: React.FC = () => {
           if (q.type === 'instruction_block' || q.type === 'page_break') continue;
           if ((q.pdf_meta as Record<string, unknown>)?.isAdditionalBlockOf) continue;
           if (!isRoleVisible((q.role_visibility as Record<string, boolean>) || {}, role)) continue;
-          const baseEditable = isRoleEditable((q.role_editability as Record<string, boolean>) || {}, role) && canRoleEditCurrentWorkflow;
+          const baseEditable = isQuestionEditableForRole((q.role_editability as Record<string, boolean>) || {}) && canRoleEditCurrentWorkflow;
           const editable = baseEditable && !isQuestionReadOnlyByTrainer(q.id);
           const effectiveEditable = editable && appendixFirstCycleEditableForStep;
           if (!q.required || !effectiveEditable) continue;
@@ -1529,16 +1583,223 @@ export const InstanceFillPage: React.FC = () => {
           }
         }
       }
+      return stepErrors;
+    },
+    [
+      template,
+      role,
+      workflowStatus,
+      answers,
+      resultsData,
+      assessmentSummary,
+      submissionCount,
+      canRoleEditCurrentWorkflow,
+      isQuestionReadOnlyByTrainer,
+      isQuestionEditableForRole,
+    ]
+  );
+
+  const validateStep = useCallback(
+    (stepNumber: number): boolean => {
+      const stepErrors = getStepValidationErrors(stepNumber);
       setErrors(stepErrors);
       if (Object.keys(stepErrors).length > 0) {
-        // For result/summary fields we don't always render field-specific errors,
-        // so show a clear message to explain why "Next" is blocked.
         toast.error(Object.values(stepErrors)[0]);
       }
       return Object.keys(stepErrors).length === 0;
     },
-    [template, role, answers, resultsData, assessmentSummary, submissionCount, canRoleEditCurrentWorkflow, isQuestionReadOnlyByTrainer]
+    [getStepValidationErrors]
   );
+
+  /** Every content step must validate before trainer can submit (not only the last step). */
+  const validateAllStepsForTrainerSubmit = useCallback((): boolean => {
+    if (!template || role !== 'trainer') return true;
+    // Trainers see all template steps (Appendix A is only hidden for students in the stepper).
+    const visibleStepsForValidation = template.steps ?? [];
+    const totalSteps = 1 + visibleStepsForValidation.length;
+    const merged: Record<string, string> = {};
+    for (let stepNumber = 2; stepNumber <= totalSteps; stepNumber++) {
+      Object.assign(merged, getStepValidationErrors(stepNumber));
+    }
+    setErrors(merged);
+    if (Object.keys(merged).length > 0) {
+      toast.error(Object.values(merged)[0]);
+      return false;
+    }
+    return true;
+  }, [template, role, getStepValidationErrors]);
+
+  const runFinalSubmitByRole = useCallback(async () => {
+    if (!id) return;
+    setWorkflowSubmitting(true);
+    if (role === 'student' && workflowStatus === 'draft') {
+      await updateInstanceWorkflowStatus(id, 'waiting_trainer');
+      await updateInstanceRole(id, 'trainer');
+      await revokeRoleAccessTokens(id, 'student');
+      setWorkflowStatus('waiting_trainer');
+      toast.success('Submitted successfully. Waiting for trainer checking.');
+      void (async () => {
+        const ctx = await getInstanceWorkflowNotificationContext(id);
+        if (!ctx?.trainerUserId) return;
+        await invokeWorkflowSendNotification({
+          userIds: [String(ctx.trainerUserId)],
+          title: `New submission: ${ctx.formName}`,
+          message: 'A student submitted an assessment for your review.',
+          url: '/admin/dashboard',
+          type: 'workflow_student_submit',
+        });
+      })();
+      setWorkflowSubmitting(false);
+      setConfirmConfig(null);
+      return;
+    }
+    if (role === 'trainer' && workflowStatus === 'waiting_trainer') {
+      if (!validateAllStepsForTrainerSubmit()) {
+        setWorkflowSubmitting(false);
+        setConfirmConfig(null);
+        return;
+      }
+      const latestAttempt = (Math.max(1, Math.min(3, submissionCount || 1)) as 1 | 2 | 3);
+      const latestResult = getTrainerAttemptOutcome(latestAttempt);
+      const hasTaskResultSections = (template?.steps ?? []).some((st) =>
+        st.sections.some((s) => s.pdf_render_mode === 'task_results')
+      );
+      if (hasTaskResultSections && latestResult == null) {
+        toast.error('Mark every task result sheet (S or NS) for the current attempt, and complete the assessment summary, before submitting.');
+        setWorkflowSubmitting(false);
+        setConfirmConfig(null);
+        return;
+      }
+
+      // Not Yet Competent: allow up to 3 attempts.
+      if (latestResult === 'not_yet_competent') {
+        if (latestAttempt < 3) {
+          try {
+            const todayMel = getMelbourneDateStr(new Date());
+            const attemptTrainerDate =
+              latestAttempt === 1
+                ? String(assessmentSummary?.trainer_date_1 ?? '').trim()
+                : latestAttempt === 2
+                  ? String(assessmentSummary?.trainer_date_2 ?? '').trim()
+                  : String(assessmentSummary?.trainer_date_3 ?? '').trim();
+            const baseEnd = isIsoDate(attemptTrainerDate) ? attemptTrainerDate : todayMel;
+            const newEnd = addDaysIso(baseEnd, 5);
+            await extendInstanceAccessTokensToDate(id, 'student', newEnd);
+            await updateInstanceWorkflowStatus(id, 'draft');
+            await updateInstanceRole(id, 'student');
+            setWorkflowStatus('draft');
+            toast.success(`Not Yet Competent. Attempt ${latestAttempt} complete. Resubmission opened until ${newEnd} (23:59 Melbourne).`);
+            void (async () => {
+              const ctx = await getInstanceWorkflowNotificationContext(id);
+              if (!ctx?.studentNotificationUserId) return;
+              await invokeWorkflowSendNotification({
+                userIds: [ctx.studentNotificationUserId],
+                title: `Resubmission required: ${ctx.formName}`,
+                message: `Your trainer recorded Not Yet Competent for attempt ${latestAttempt}. A new submission window is open (until ${newEnd} Melbourne).`,
+                url: '/student/dashboard',
+                type: 'workflow_resubmit',
+              });
+            })();
+          } finally {
+            setWorkflowSubmitting(false);
+          }
+          setConfirmConfig(null);
+          return;
+        }
+
+        await updateInstanceWorkflowStatus(id, 'failed');
+        setWorkflowStatus('failed');
+        await updateInstanceRole(id, 'office');
+        toast.error('Not Yet Competent after 3 attempts. Instance is now Failed.');
+        void (async () => {
+          const ctx = await getInstanceWorkflowNotificationContext(id);
+          if (!ctx?.studentNotificationUserId) return;
+          await invokeWorkflowSendNotification({
+            userIds: [ctx.studentNotificationUserId],
+            title: `Assessment outcome: ${ctx.formName}`,
+            message: 'This assessment is recorded as not competent after 3 attempts. The instance is closed.',
+            url: '/student/dashboard',
+            type: 'workflow_failed',
+          });
+        })();
+        setWorkflowSubmitting(false);
+        setConfirmConfig(null);
+        return;
+      }
+
+      await updateInstanceWorkflowStatus(id, 'waiting_office');
+      setWorkflowStatus('waiting_office');
+      await updateInstanceRole(id, 'office');
+      toast.success('Submitted successfully. Waiting for office checking.');
+      void (async () => {
+        const ctx = await getInstanceWorkflowNotificationContext(id);
+        if (!ctx?.studentNotificationUserId) return;
+        await invokeWorkflowSendNotification({
+          userIds: [ctx.studentNotificationUserId],
+          title: `Trainer review complete: ${ctx.formName}`,
+          message: 'Your trainer has completed their review and sent this assessment for office processing.',
+          url: '/student/dashboard',
+          type: 'workflow_to_office',
+        });
+      })();
+      setWorkflowSubmitting(false);
+      setConfirmConfig(null);
+      return;
+    }
+    if (role === 'office' && workflowStatus === 'waiting_office') {
+      await updateInstanceWorkflowStatus(id, 'completed');
+      setWorkflowStatus('completed');
+      toast.success('Office check complete. Form is now completed.');
+      void (async () => {
+        const ctx = await getInstanceWorkflowNotificationContext(id);
+        if (!ctx?.studentNotificationUserId) return;
+        await invokeWorkflowSendNotification({
+          userIds: [ctx.studentNotificationUserId],
+          title: `Assessment finalised: ${ctx.formName}`,
+          message: 'Office processing is complete. Your assessment is now finalised.',
+          url: '/student/dashboard',
+          type: 'workflow_completed',
+        });
+      })();
+      setConfirmConfig(null);
+    }
+    setWorkflowSubmitting(false);
+  }, [
+    id,
+    role,
+    workflowStatus,
+    submissionCount,
+    getTrainerAttemptOutcome,
+    assessmentSummary,
+    validateAllStepsForTrainerSubmit,
+    template,
+  ]);
+
+  const handleFinalSubmitByRole = useCallback(() => {
+    if (role === 'student' && workflowStatus === 'draft') {
+      setConfirmConfig({
+        title: 'Final Submit',
+        message: 'After submitting, you will not be able to edit this form again. Please verify all answers before continuing.',
+        confirmLabel: 'Submit',
+      });
+      return;
+    }
+    if (role === 'trainer' && workflowStatus === 'waiting_trainer') {
+      setConfirmConfig({
+        title: 'Final Submit',
+        message: 'After submitting, you will not be able to edit this form again. Please verify all answers before continuing.',
+        confirmLabel: 'Submit',
+      });
+      return;
+    }
+    if (role === 'office' && workflowStatus === 'waiting_office') {
+      setConfirmConfig({
+        title: 'Office Check',
+        message: 'Finalize office checking? This will complete and lock the form.',
+        confirmLabel: 'Finalize',
+      });
+    }
+  }, [role, workflowStatus]);
 
   if (loading) {
     return <Loader fullPage variant="dots" size="lg" message="Loading..." />;
@@ -1681,6 +1942,29 @@ export const InstanceFillPage: React.FC = () => {
                   <li>The Student Pack is a document for students to complete to demonstrate their competency. This document includes context and conditions of assessment, tasks to be administered to the student, and an outline of the evidence to be gathered from the student.</li>
                   <li>The Unit Mapping is a document that contains information and comprehensive mapping with the training package requirements.</li>
                 </ul>
+                {(role === 'trainer' || role === 'office') && canRoleEditCurrentWorkflow ? (
+                  <div className="mt-8 pt-6 border-t border-[var(--border)] space-y-3">
+                    <h4 className="font-semibold text-gray-800">Assessment access window</h4>
+                    <p className="text-sm text-gray-600">
+                      Start and end dates control when the enrolled student can open this assessment (Melbourne calendar dates). Updating the end date aligns the student access link.
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-xl">
+                      <DatePicker
+                        label="Start date"
+                        value={instanceWindowDates.start_date ?? ''}
+                        onChange={(v) => void handleInstanceWindowDateChange('start_date', v)}
+                        compact
+                      />
+                      <DatePicker
+                        label="End date"
+                        value={instanceWindowDates.end_date ?? ''}
+                        onChange={(v) => void handleInstanceWindowDateChange('end_date', v)}
+                        compact
+                        minDate={instanceWindowDates.start_date ?? undefined}
+                      />
+                    </div>
+                  </div>
+                ) : null}
               </Card>
             ) : currentStepData ? (
               (() => {
@@ -1751,7 +2035,7 @@ export const InstanceFillPage: React.FC = () => {
                               .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
                               .map((q) => {
                                 const re = (q.role_editability as Record<string, boolean>) || {};
-                                const editable = isRoleEditable(re, role) && canRoleEditCurrentWorkflow;
+                                const editable = isQuestionEditableForRole(re) && canRoleEditCurrentWorkflow;
                                 const secondOrThirdHasDataAppendix = !!(
                                   firstTaskRdForRA?.second_attempt_date ||
                                   firstTaskRdForRA?.second_attempt_satisfactory ||
@@ -1917,7 +2201,7 @@ export const InstanceFillPage: React.FC = () => {
                           const checklistQ = section.questions.find((q) => q.code === 'written.evidence.checklist' && q.type === 'single_choice' && q.rows.length > 0);
                           if (!checklistQ) return null;
                           const re = (checklistQ.role_editability as Record<string, boolean>) || {};
-                          const editable = isRoleEditable(re, role) && canRoleEditCurrentWorkflow;
+                          const editable = isQuestionEditableForRole(re) && canRoleEditCurrentWorkflow;
                           return (
                             <div className="overflow-x-auto">
                               <table className="w-full border-collapse border border-black text-sm">
@@ -1977,7 +2261,7 @@ export const InstanceFillPage: React.FC = () => {
                           const perfQ = section.questions.find((q) => q.code === 'assessment.marking.performance_outcome' && q.type === 'single_choice' && (q.rows?.length ?? 0) > 0);
                           if (!evidenceQ && !perfQ) return null;
                           const re = { student: false, trainer: true, office: true };
-                          const editable = isRoleEditable(re, role) && canRoleEditCurrentWorkflow;
+                          const editable = isQuestionEditableForRole(re) && canRoleEditCurrentWorkflow;
                           const renderChecklistTable = (checklistQ: typeof evidenceQ, title: string, questionText: string) => {
                             if (!checklistQ || !checklistQ.rows?.length) return null;
                             return (
@@ -2046,7 +2330,7 @@ export const InstanceFillPage: React.FC = () => {
                                       const rawVal = answers[getAnswerKey(q.id, null)];
                                       const currentArr = Array.isArray(rawVal) ? rawVal : (typeof rawVal === 'string' ? rawVal.split(',').map((s) => s.trim()).filter(Boolean) : []);
                                       const selected = currentArr.includes(opt.value);
-                                      const submissionEditable = section.pdf_render_mode === 'assessment_submission' || isRoleEditable((q.role_editability as Record<string, boolean>) || {}, role);
+                                      const submissionEditable = canRoleEditCurrentWorkflow;
                                       return (
                                         <label
                                           key={opt.id}
@@ -2078,7 +2362,7 @@ export const InstanceFillPage: React.FC = () => {
                                       type="text"
                                       value={(answers[getAnswerKey(q.id, null)] as string) ?? ''}
                                       onChange={(e) => handleAnswerChange(q.id, null, e.target.value)}
-                                      disabled={!(section.pdf_render_mode === 'assessment_submission' || isRoleEditable((q.role_editability as Record<string, boolean>) || {}, role))}
+                                      disabled={!canRoleEditCurrentWorkflow}
                                       className="w-full max-w-[300px] mx-auto border-0 border-b border-gray-600 bg-transparent px-2 py-1 text-center focus:outline-none focus:ring-0"
                                       placeholder=""
                                     />
@@ -2373,7 +2657,7 @@ export const InstanceFillPage: React.FC = () => {
                                     .filter((q) => q.type !== 'instruction_block' && q.type !== 'page_break' && !(q.pdf_meta as Record<string, unknown>)?.isAdditionalBlockOf && isRoleVisible((q.role_visibility as Record<string, boolean>) || {}, role))
                                     .map((q) => {
                                       const re = (q.role_editability as Record<string, boolean>) || {};
-                                      const baseEditable = isRoleEditable(re, role) && canRoleEditCurrentWorkflow;
+                                      const baseEditable = isQuestionEditableForRole(re) && canRoleEditCurrentWorkflow;
                                       const editable = baseEditable && !isQuestionReadOnlyByTrainer(q.id);
                                       const trainerEditable = role === 'trainer' || role === 'office';
                                       const pm = (q.pdf_meta as Record<string, unknown>) || {};
@@ -2676,7 +2960,7 @@ export const InstanceFillPage: React.FC = () => {
                                   .filter((q) => q.type !== 'instruction_block' && q.type !== 'page_break' && !(q.pdf_meta as Record<string, unknown>)?.isAdditionalBlockOf && isRoleVisible((q.role_visibility as Record<string, boolean>) || {}, role))
                                   .map((q, qIdx) => {
                                     const re = (q.role_editability as Record<string, boolean>) || {};
-                                    const baseEditable = isRoleEditable(re, role) && canRoleEditCurrentWorkflow;
+                                    const baseEditable = isQuestionEditableForRole(re) && canRoleEditCurrentWorkflow;
                                     const editable = baseEditable && !isQuestionReadOnlyByTrainer(q.id);
                                     const trainerEditable = role === 'trainer' || role === 'office';
                                     const sat = trainerAssessments[q.id];
@@ -2854,7 +3138,8 @@ export const InstanceFillPage: React.FC = () => {
                         (() => {
                           const rd = resultsData[section.id];
                           const trainerCanEdit = role === 'trainer' || role === 'office';
-                          const studentCanEdit = role === 'student' || role === 'office';
+                          const studentCanEdit =
+                            role === 'student' || role === 'office' || (role === 'trainer' && canRoleEditCurrentWorkflow);
                           const taskResultSectionIds = (template?.steps || []).flatMap((st) => st.sections).filter((s) => s.pdf_render_mode === 'task_results').map((s) => s.id);
                           const firstTaskSectionId = taskResultSectionIds[0];
                           const firstTaskData = firstTaskSectionId && firstTaskSectionId !== section.id ? resultsData[firstTaskSectionId] : null;
@@ -3198,7 +3483,8 @@ export const InstanceFillPage: React.FC = () => {
                         (() => {
                           const sum = assessmentSummary || ({} as import('../lib/formEngine').AssessmentSummaryDataEntry);
                           const trainerCanEdit = role === 'trainer' || role === 'office';
-                          const studentCanEdit = role === 'student' || role === 'office';
+                          const studentCanEdit =
+                            role === 'student' || role === 'office' || (role === 'trainer' && canRoleEditCurrentWorkflow);
                           const officeCanEdit = role === 'office';
                           const taskRowsOrdered: { id: number; row_label: string }[] = [];
                           const taskRowToSectionId = new Map<number, number>();
@@ -3382,12 +3668,12 @@ export const InstanceFillPage: React.FC = () => {
                                       <td colSpan={3} className="border border-gray-400 p-1.5">
                                         <p className="text-[10px] text-gray-600 mb-1.5">I declare that I have been assessed in this unit, and I have been advised of my result. I also am aware of my appeal rights.</p>
                                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 min-w-0">
-                                          <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_1 ?? null} onChange={(v) => { handleAssessmentSummaryChange('student_sig_1', v); const cur = String(sum.student_date_1 ?? '').trim(); if (!cur || (minStudentDate1 && isCalendarBefore(cur, minStudentDate1))) handleAssessmentSummaryChange('student_date_1', minStudentDate1 ?? null); }} disabled={!studentCanEdit || !sumFirstEditable} className="mt-0.5" highlight={role === 'student' && sumFirstEditable} suggestionFrom={studentRefSig} onSuggestionClick={studentRefSig ? () => { handleAssessmentSummaryChange('student_sig_1', studentRefSig); const next = maxIsoDate(studentRefDate, minStudentDate1) ?? minStudentDate1 ?? studentRefDate; handleAssessmentSummaryChange('student_date_1', next || null); } : undefined} /></div>
-                                          <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_2 ?? null} onChange={(v) => { handleAssessmentSummaryChange('student_sig_2', v); const cur = String(sum.student_date_2 ?? '').trim(); if (!cur || (minStudentDate2 && isCalendarBefore(cur, minStudentDate2))) handleAssessmentSummaryChange('student_date_2', minStudentDate2 ?? null); }} disabled={!studentCanEdit || !sumSecondEditable} className="mt-0.5" highlight={role === 'student' && sumSecondEditable} suggestionFrom={sumSecondEditable ? (sum.student_sig_1 ?? undefined) : undefined} onSuggestionClick={sumSecondEditable && sum.student_sig_1 ? () => { handleAssessmentSummaryChange('student_sig_2', sum.student_sig_1); const next = maxIsoDate(sum.student_date_1, minStudentDate2) ?? minStudentDate2 ?? sum.student_date_1; handleAssessmentSummaryChange('student_date_2', next || null); } : undefined} /></div>
-                                          <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_3 ?? null} onChange={(v) => { handleAssessmentSummaryChange('student_sig_3', v); const cur = String(sum.student_date_3 ?? '').trim(); if (!cur || (minStudentDate3 && isCalendarBefore(cur, minStudentDate3))) handleAssessmentSummaryChange('student_date_3', minStudentDate3 ?? null); }} disabled={!studentCanEdit || !sumThirdEditable} className="mt-0.5" highlight={role === 'student' && sumThirdEditable} suggestionFrom={sumThirdEditable ? (sum.student_sig_1 ?? undefined) : undefined} onSuggestionClick={sumThirdEditable && sum.student_sig_1 ? () => { handleAssessmentSummaryChange('student_sig_3', sum.student_sig_1); const next = maxIsoDate(sum.student_date_2, minStudentDate3) ?? minStudentDate3 ?? sum.student_date_2; handleAssessmentSummaryChange('student_date_3', next || null); } : undefined} /></div>
-                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_1 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_1', clampIsoToMin(v || null, minStudentDate1))} disabled={!studentCanEdit || !sumFirstEditable} highlight={role === 'student' && sumFirstEditable} compact placement="above" className="w-full" minDate={minStudentDate1} /></div>
-                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_2 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_2', clampIsoToMin(v || null, minStudentDate2))} disabled={!studentCanEdit || !sumSecondEditable} highlight={role === 'student' && sumSecondEditable} compact placement="above" className="w-full" minDate={minStudentDate2} /></div>
-                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_3 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_3', clampIsoToMin(v || null, minStudentDate3))} disabled={!studentCanEdit || !sumThirdEditable} highlight={role === 'student' && sumThirdEditable} compact placement="above" className="w-full" minDate={minStudentDate3} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_1 ?? null} onChange={(v) => { handleAssessmentSummaryChange('student_sig_1', v); const cur = String(sum.student_date_1 ?? '').trim(); if (!cur || (minStudentDate1 && isCalendarBefore(cur, minStudentDate1))) handleAssessmentSummaryChange('student_date_1', minStudentDate1 ?? null); }} disabled={!studentCanEdit || !sumFirstEditable} className="mt-0.5" highlight={studentCanEdit && sumFirstEditable} suggestionFrom={studentRefSig} onSuggestionClick={studentRefSig ? () => { handleAssessmentSummaryChange('student_sig_1', studentRefSig); const next = maxIsoDate(studentRefDate, minStudentDate1) ?? minStudentDate1 ?? studentRefDate; handleAssessmentSummaryChange('student_date_1', next || null); } : undefined} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_2 ?? null} onChange={(v) => { handleAssessmentSummaryChange('student_sig_2', v); const cur = String(sum.student_date_2 ?? '').trim(); if (!cur || (minStudentDate2 && isCalendarBefore(cur, minStudentDate2))) handleAssessmentSummaryChange('student_date_2', minStudentDate2 ?? null); }} disabled={!studentCanEdit || !sumSecondEditable} className="mt-0.5" highlight={studentCanEdit && sumSecondEditable} suggestionFrom={sumSecondEditable ? (sum.student_sig_1 ?? undefined) : undefined} onSuggestionClick={sumSecondEditable && sum.student_sig_1 ? () => { handleAssessmentSummaryChange('student_sig_2', sum.student_sig_1); const next = maxIsoDate(sum.student_date_1, minStudentDate2) ?? minStudentDate2 ?? sum.student_date_1; handleAssessmentSummaryChange('student_date_2', next || null); } : undefined} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_3 ?? null} onChange={(v) => { handleAssessmentSummaryChange('student_sig_3', v); const cur = String(sum.student_date_3 ?? '').trim(); if (!cur || (minStudentDate3 && isCalendarBefore(cur, minStudentDate3))) handleAssessmentSummaryChange('student_date_3', minStudentDate3 ?? null); }} disabled={!studentCanEdit || !sumThirdEditable} className="mt-0.5" highlight={studentCanEdit && sumThirdEditable} suggestionFrom={sumThirdEditable ? (sum.student_sig_1 ?? undefined) : undefined} onSuggestionClick={sumThirdEditable && sum.student_sig_1 ? () => { handleAssessmentSummaryChange('student_sig_3', sum.student_sig_1); const next = maxIsoDate(sum.student_date_2, minStudentDate3) ?? minStudentDate3 ?? sum.student_date_2; handleAssessmentSummaryChange('student_date_3', next || null); } : undefined} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_1 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_1', clampIsoToMin(v || null, minStudentDate1))} disabled={!studentCanEdit || !sumFirstEditable} highlight={studentCanEdit && sumFirstEditable} compact placement="above" className="w-full" minDate={minStudentDate1} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_2 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_2', clampIsoToMin(v || null, minStudentDate2))} disabled={!studentCanEdit || !sumSecondEditable} highlight={studentCanEdit && sumSecondEditable} compact placement="above" className="w-full" minDate={minStudentDate2} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_3 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_3', clampIsoToMin(v || null, minStudentDate3))} disabled={!studentCanEdit || !sumThirdEditable} highlight={studentCanEdit && sumThirdEditable} compact placement="above" className="w-full" minDate={minStudentDate3} /></div>
                                         </div>
                                       </td>
                                     </tr>
@@ -3426,15 +3712,18 @@ export const InstanceFillPage: React.FC = () => {
                               return v != null ? String(v) : null;
                             }}
                             onChange={(qId, rId, val) => handleAnswerChange(qId, rId, val)}
-                            disabled={!section.questions.some((q) =>
-                              isRoleEditable((q.role_editability as Record<string, boolean>) || {}, role)
-                            )}
+                            disabled={
+                              !canRoleEditCurrentWorkflow ||
+                              !section.questions.some((q) =>
+                                isQuestionEditableForRole((q.role_editability as Record<string, boolean>) || {})
+                              )
+                            }
                           />
                           {section.questions
                             .filter((q) => q.type !== 'likert_5' && isRoleVisible((q.role_visibility as Record<string, boolean>) || {}, role))
                             .map((q) => {
                               const re = (q.role_editability as Record<string, boolean>) || {};
-                              const editable = isRoleEditable(re, role) && canRoleEditCurrentWorkflow;
+                              const editable = isQuestionEditableForRole(re) && canRoleEditCurrentWorkflow;
                               const key = getAnswerKey(q.id, null);
                               const val = answers[key];
                               if (q.type === 'signature' && (q.code === 'student.declarationSignature' || String(q.code || '').startsWith('student.'))) {
@@ -3543,7 +3832,7 @@ export const InstanceFillPage: React.FC = () => {
                             ? false
                             : isEvalTrainerName || isEvalEmployer || isEvalTrainingDates || isEvalEvaluationDate
                               ? (trainerCanEditHere && canRoleEditCurrentWorkflow)
-                              : (isRoleEditable(re, role) && canRoleEditCurrentWorkflow);
+                              : (isQuestionEditableForRole(re) && canRoleEditCurrentWorkflow);
                           if (q.type === 'likert_5' && q.rows.length > 0) {
                             const val =
                               q.rows.length === 1

@@ -134,7 +134,7 @@ export const FormDocumentsPanel: React.FC<Props> = ({
   };
 
   return (
-    <div className="rounded-lg border border-[var(--border)] bg-white p-4">
+    <div className="rounded-xl border-2 border-amber-200/80 bg-amber-50/35 p-4 shadow-sm ring-1 ring-amber-100/70">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="inline-flex items-center gap-2 text-sm text-gray-700">
           <Paperclip className="h-4 w-4 text-gray-500" />

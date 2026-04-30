@@ -24,6 +24,7 @@ import {
 import { isValidInstitutionalEmail } from '../lib/emailUtils';
 import { toast } from '../utils/toast';
 import { formatMelbourneDateTime, inductionWindowStatus } from '../utils/melbourneTime';
+import { requestNotificationPreference } from '../services/pushNotificationService';
 
 function inductionSessionStorageKey(accessToken: string): string {
   return `signflow.induction.session.${accessToken}`;
@@ -224,6 +225,17 @@ export const PublicInductionPage: React.FC = () => {
       return;
     }
     persistSession({ sessionToken: result.sessionToken, email: email.trim() });
+    // Ask for notification preference at authentication time (best-effort; does not affect induction flow).
+    try {
+      const key = 'signflow.notifications.induction_prompted_v1';
+      const already = sessionStorage.getItem(key);
+      if (!already && typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
+        sessionStorage.setItem(key, '1');
+        void requestNotificationPreference();
+      }
+    } catch {
+      void requestNotificationPreference();
+    }
     toast.success('Welcome — complete all sections below, then submit.');
   };
 

@@ -1,7 +1,7 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { SortDirection } from '../components/admin/SortableTh';
 import { SortableTh } from '../components/admin/SortableTh';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { CheckCircle, Copy, Phone, Mail, ArrowLeft, RotateCcw, Download, Trash2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { Card } from '../components/ui/Card';
@@ -9,6 +9,7 @@ import { Button } from '../components/ui/Button';
 import { Loader } from '../components/ui/Loader';
 import { Modal } from '../components/ui/Modal';
 import { DatePicker } from '../components/ui/DatePicker';
+import { Input } from '../components/ui/Input';
 import { toast } from '../utils/toast';
 import { useAuth } from '../contexts/AuthContext';
 import { SelectAsync } from '../components/ui/SelectAsync';
@@ -117,6 +118,7 @@ function getOutcomeLabel(summary: { final_attempt_1_result: AttemptResult; final
 export const AdminStudentDetailsPage: React.FC = () => {
   const { studentId } = useParams();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useAuth();
   const viewerIsSuperadmin = user?.role === 'superadmin';
   const sid = Number(studentId);
@@ -149,6 +151,10 @@ export const AdminStudentDetailsPage: React.FC = () => {
   const [deleteStudentOpen, setDeleteStudentOpen] = useState(false);
   const [deletingStudent, setDeletingStudent] = useState(false);
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [unitSearch, setUnitSearch] = useState('');
+  const [selectedFormFilter, setSelectedFormFilter] = useState('');
+  const scrollToFormKeyRef = useRef<string | null>(null);
+  const prevStudentRouteId = useRef<number | undefined>(undefined);
   const trainerHighlightCourseId = useTrainerHighlightCourseId();
 
   type AssessmentSortKey = 'unit' | 'start' | 'end' | 'completed';
@@ -159,7 +165,14 @@ export const AdminStudentDetailsPage: React.FC = () => {
 
   useEffect(() => {
     setAssessmentSort({ key: 'start', dir: 'asc' });
-  }, [sid]);
+    scrollToFormKeyRef.current = null;
+    if (prevStudentRouteId.current !== undefined && prevStudentRouteId.current !== sid) {
+      setUnitSearch('');
+      setSelectedFormFilter('');
+      setSearchParams(new URLSearchParams(), { replace: true });
+    }
+    prevStudentRouteId.current = sid;
+  }, [sid, setSearchParams]);
 
   useEffect(() => {
     setDateDrafts({});
@@ -393,6 +406,86 @@ export const AdminStudentDetailsPage: React.FC = () => {
     });
     return rows;
   }, [assessments, assessmentSort]);
+
+  const unitFilterOptions = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const a of assessments) {
+      if (!map.has(a.form_id)) {
+        map.set(a.form_id, (a.form_name || `Form #${a.form_id}`).trim() || `Form #${a.form_id}`);
+      }
+    }
+    return [...map.entries()]
+      .sort((x, y) => x[1].localeCompare(y[1], undefined, { sensitivity: 'base' }))
+      .map(([id, name]) => ({ value: String(id), label: name }));
+  }, [assessments]);
+
+  const formIdFromUrl = searchParams.get('formId')?.trim() ?? '';
+
+  useEffect(() => {
+    if (!formIdFromUrl || assessments.length === 0) return;
+    const match = assessments.find((a) => String(a.form_id) === formIdFromUrl);
+    if (!match) return;
+    setSelectedFormFilter(formIdFromUrl);
+    const name = String(match.form_name ?? '');
+    const segs = name.split('_');
+    const searchHint = segs.length >= 2 ? segs[1] : name;
+    setUnitSearch((prev) => (prev.trim() ? prev : searchHint));
+  }, [assessments, formIdFromUrl]);
+
+  useEffect(() => {
+    if (!formIdFromUrl) setSelectedFormFilter('');
+  }, [formIdFromUrl]);
+
+  const displayedAssessments = useMemo(() => {
+    let rows = sortedAssessments;
+    const q = unitSearch.trim().toLowerCase();
+    if (q) {
+      rows = rows.filter((r) => String(r.form_name ?? '').toLowerCase().includes(q));
+    }
+    if (selectedFormFilter) {
+      rows = rows.filter((r) => String(r.form_id) === selectedFormFilter);
+    }
+    return rows;
+  }, [sortedAssessments, unitSearch, selectedFormFilter]);
+
+  useEffect(() => {
+    const key = `${sid}:${formIdFromUrl}`;
+    if (!formIdFromUrl || assessments.length === 0) return;
+    if (scrollToFormKeyRef.current === key) return;
+    const row = assessments.find((r) => String(r.form_id) === formIdFromUrl);
+    if (!row) return;
+    scrollToFormKeyRef.current = key;
+    const t = window.setTimeout(() => {
+      document.getElementById(`assessment-row-${row.id}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }, 150);
+    return () => window.clearTimeout(t);
+  }, [sid, formIdFromUrl, assessments]);
+
+  const onChangeUnitFilter = useCallback(
+    (value: string) => {
+      setSelectedFormFilter(value);
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (value) next.set('formId', value);
+          else next.delete('formId');
+          return next;
+        },
+        { replace: true }
+      );
+    },
+    [setSearchParams]
+  );
+
+  const unitFilterSelectOptions = useMemo(
+    () => [{ value: '', label: 'All units' }, ...unitFilterOptions],
+    [unitFilterOptions]
+  );
+
+  const filterAssessmentsActive = unitSearch.trim() !== '' || selectedFormFilter !== '';
+  const assessmentCountLabel = filterAssessmentsActive
+    ? `${displayedAssessments.length} shown of ${assessments.length} total`
+    : `${assessments.length} total`;
 
   const getEffectiveStart = useCallback(
     (row: SubmittedInstanceRow) => {
@@ -670,23 +763,47 @@ export const AdminStudentDetailsPage: React.FC = () => {
 
             <div className="min-w-0 flex-1">
               <Card>
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-3">
-                  <h3 className="font-bold text-[var(--text)]">Assessment records</h3>
-                  <div className="flex flex-wrap items-center gap-2 justify-end">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="border-[#ea580c]/40 text-[#c2410c] hover:bg-[#fff7ed]"
-                      onClick={() => void massApplyDates()}
-                      disabled={massApplying || assessments.length === 0 || !assessments.some(hasRowDateChanges)}
-                    >
-                      {massApplying ? 'Applying…' : 'Mass apply'}
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={() => setAddAssessmentOpen(true)}>
-                      + Add Assessment
-                    </Button>
-                    <div className="text-xs text-gray-500">{assessments.length} total</div>
+                <div className="flex flex-col gap-3 mb-3">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <h3 className="font-bold text-[var(--text)]">Assessment records</h3>
+                    <div className="flex flex-wrap items-center gap-2 justify-end">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="border-[#ea580c]/40 text-[#c2410c] hover:bg-[#fff7ed]"
+                        onClick={() => void massApplyDates()}
+                        disabled={massApplying || assessments.length === 0 || !assessments.some(hasRowDateChanges)}
+                      >
+                        {massApplying ? 'Applying…' : 'Mass apply'}
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={() => setAddAssessmentOpen(true)}>
+                        + Add Assessment
+                      </Button>
+                      <div className="text-xs text-gray-500">{assessmentCountLabel}</div>
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:gap-3">
+                    <div className="min-w-0 flex-1">
+                      <Input
+                        label="Search unit"
+                        value={unitSearch}
+                        onChange={(e) => setUnitSearch(e.target.value)}
+                        placeholder="Name or code (e.g. CPCCCA3006)"
+                        className="w-full"
+                      />
+                    </div>
+                    <div className="w-full sm:w-[min(100%,320px)] sm:flex-shrink-0">
+                      <Select
+                        label="Unit"
+                        value={selectedFormFilter}
+                        onChange={onChangeUnitFilter}
+                        options={unitFilterSelectOptions}
+                        searchable
+                        searchPlaceholder="Filter by unit…"
+                        className="w-full"
+                      />
+                    </div>
                   </div>
                 </div>
 
@@ -696,6 +813,8 @@ export const AdminStudentDetailsPage: React.FC = () => {
                   </div>
                 ) : assessments.length === 0 ? (
                   <p className="text-gray-600">No assessments for this student.</p>
+                ) : displayedAssessments.length === 0 ? (
+                  <p className="text-gray-600">No assessments match the current search or unit filter.</p>
                 ) : (
                   <div className="overflow-x-auto">
                     <table className="min-w-[940px] w-full text-sm border border-[var(--border)] rounded-lg overflow-hidden">
@@ -734,7 +853,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
                         </tr>
                       </thead>
                       <tbody>
-                        {sortedAssessments.map((row) => {
+                        {displayedAssessments.map((row) => {
                           const sum = attemptSummaryByInstanceId[row.id] ?? null;
                           const results: AttemptResult[] = [
                             sum?.final_attempt_1_result ?? null,
@@ -755,10 +874,19 @@ export const AdminStudentDetailsPage: React.FC = () => {
                           const trainerHighlightExtra = rowMatchesTrainerHighlightCourse(row, trainerHighlightCourseId)
                             ? TRAINER_HIGHLIGHT_ROW_EXTRA_CLASS
                             : '';
+                          const dashboardUnitHighlight =
+                            Boolean(formIdFromUrl && String(row.form_id) === formIdFromUrl) &&
+                            'bg-[#fff7ed] ring-1 ring-[#ea580c]/25';
                           return (
                           <React.Fragment key={row.id}>
                           <tr
-                            className={cn(ui.rowClassName, 'cursor-pointer', trainerHighlightExtra)}
+                            id={`assessment-row-${row.id}`}
+                            className={cn(
+                              ui.rowClassName,
+                              'cursor-pointer',
+                              trainerHighlightExtra,
+                              dashboardUnitHighlight
+                            )}
                             onClick={() => setExpandedId((p) => (p === row.id ? null : row.id))}
                             title="Click to expand"
                           >

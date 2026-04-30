@@ -36,6 +36,7 @@
     "autoprefixer": "^10.4.24",
     "buffer": "^6.0.3",
     "date-fns": "^4.1.0",
+    "firebase": "^12.12.1",
     "heic2any": "^0.0.4",
     "jszip": "^3.10.1",
     "lucide-react": "^0.563.0",

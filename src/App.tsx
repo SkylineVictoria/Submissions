@@ -31,9 +31,13 @@ const DashboardPage = lazy(() => import('./pages/DashboardPage').then(m => ({ de
 const TrainerCourseUnitsPage = lazy(() =>
   import('./pages/TrainerCourseUnitsPage').then((m) => ({ default: m.TrainerCourseUnitsPage }))
 );
+const TrainerUnitSubmissionsPage = lazy(() =>
+  import('./pages/TrainerUnitSubmissionsPage').then((m) => ({ default: m.TrainerUnitSubmissionsPage }))
+);
 const AdminDashboardPage = lazy(() => import('./pages/AdminDashboardPage').then(m => ({ default: m.AdminDashboardPage })));
 const MyProfilePage = lazy(() => import('./pages/MyProfilePage').then(m => ({ default: m.MyProfilePage })));
 const AdminEnrollmentPage = lazy(() => import('./pages/AdminEnrollmentPage').then(m => ({ default: m.AdminEnrollmentPage })));
+const NotificationsPage = lazy(() => import('./pages/NotificationsPage').then(m => ({ default: m.NotificationsPage })));
 const AdminInductionPage = lazy(() => import('./pages/AdminInductionPage'));
 const FormStartPage = lazy(() => import('./pages/FormStartPage').then(m => ({ default: m.FormStartPage })));
 const StudentAccessPage = lazy(() => import('./pages/StudentAccessPage').then(m => ({ default: m.StudentAccessPage })));
@@ -76,9 +80,11 @@ function App() {
             <Route index element={<DashboardOrFormsRedirect />} />
             <Route path="dashboard" element={<DashboardPage />} />
             <Route path="course-units" element={<TrainerCourseUnitsPage />} />
+            <Route path="course-units/:formId/submissions" element={<TrainerUnitSubmissionsPage />} />
             <Route path="overview" element={<AdminOnlyRoute><AdminDashboardPage /></AdminOnlyRoute>} />
             <Route path="profile" element={<MyProfilePage />} />
             <Route path="enrollment" element={<AdminOnlyRoute><AdminEnrollmentPage /></AdminOnlyRoute>} />
+            <Route path="notifications" element={<NotificationsPage />} />
             <Route path="enrollment/induction" element={<AdminOnlyRoute><AdminInductionPage /></AdminOnlyRoute>} />
             <Route path="forms" element={<AdminOnlyRoute><AdminFormsListPage /></AdminOnlyRoute>} />
             <Route path="forms/:formId/builder" element={<AdminOnlyRoute><SuperAdminOnlyRoute><AdminFormBuilderPage /></SuperAdminOnlyRoute></AdminOnlyRoute>} />
