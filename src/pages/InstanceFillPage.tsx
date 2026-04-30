@@ -460,6 +460,25 @@ export const InstanceFillPage: React.FC = () => {
     [role]
   );
 
+  /** Trainer/office may also VIEW fields marked student-visible so they can review/correct student work. */
+  const isQuestionVisibleForRole = useCallback(
+    (rv: Record<string, boolean> | null | undefined) => {
+      const visibility = rv || {};
+      if (role === 'office') {
+        return (
+          isRoleVisible(visibility, 'office') ||
+          isRoleVisible(visibility, 'trainer') ||
+          isRoleVisible(visibility, 'student')
+        );
+      }
+      if (role === 'trainer') {
+        return isRoleVisible(visibility, 'trainer') || isRoleVisible(visibility, 'student');
+      }
+      return isRoleVisible(visibility, role);
+    },
+    [role]
+  );
+
   const getTrainerAttemptOutcome = useCallback(
     (attempt: 1 | 2 | 3): AttemptOutcome => {
       if (!template) return null;
@@ -1131,40 +1150,7 @@ export const InstanceFillPage: React.FC = () => {
     return false;
   }, [role, workflowStatus]);
 
-  const studentDeclaration = useMemo(() => {
-    const empty = {
-      questionId: null as number | null,
-      label: 'Student signature',
-      signature: null as string | null,
-      date: '',
-      showDateField: true,
-      roleEditability: null as Record<string, boolean> | null,
-    };
-    if (!template) return empty;
-    const q = template.steps
-      ?.flatMap((st) => st.sections)
-      .flatMap((s) => s.questions)
-      .find((qq) => qq.code === 'student.declarationSignature' && qq.type === 'signature');
-    if (!q) return empty;
-    const raw = answers[getAnswerKey(q.id, null)];
-    const obj = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
-    const sig =
-      (obj?.signature as string | undefined) ??
-      (obj?.imageDataUrl as string | undefined) ??
-      (typeof raw === 'string' ? raw : null);
-    const dateRaw = obj ? String(obj.date ?? obj.signedAtDate ?? '') : '';
-    const date = dateRaw ? (normalizeCalendarDateToIso(dateRaw) ?? dateRaw) : '';
-    const showDateField = (q.pdf_meta as { showDateField?: boolean } | undefined)?.showDateField ?? true;
-    const roleEditability = (q.role_editability as Record<string, boolean>) || null;
-    return {
-      questionId: q.id,
-      label: q.label || 'Student signature',
-      signature: sig ? String(sig) : null,
-      date,
-      showDateField,
-      roleEditability,
-    };
-  }, [template, answers]);
+  // Student declaration signature/date is rendered in the Declarations section (not duplicated inside submission method).
 
   /** True when student is resubmitting after trainer sent back; parts marked Satisfactory Yes become read-only */
   const isResubmissionAfterTrainer = useMemo(
@@ -1215,6 +1201,9 @@ export const InstanceFillPage: React.FC = () => {
       const stepData = visibleStepsForValidation[stepNumber - 2];
       if (!stepData) return {};
       const stepErrors: Record<string, string> = {};
+      const assessmentSubmissionHasDeclSig = stepData.sections.some(
+        (s) => s.pdf_render_mode === 'assessment_submission' && s.questions.some((q) => q.code === 'student.declarationSignature')
+      );
       /** Trainer/office must finish result sheets + summary by resubmission cycle before leaving review. */
       const strictReviewCycle =
         (workflowStatus === 'waiting_trainer' && role === 'trainer') ||
@@ -1521,7 +1510,16 @@ export const InstanceFillPage: React.FC = () => {
         for (const q of section.questions) {
           if (q.type === 'instruction_block' || q.type === 'page_break') continue;
           if ((q.pdf_meta as Record<string, unknown>)?.isAdditionalBlockOf) continue;
-          if (!isRoleVisible((q.role_visibility as Record<string, boolean>) || {}, role)) continue;
+          if (!isQuestionVisibleForRole((q.role_visibility as Record<string, boolean>) || {})) continue;
+          // If the submission section already renders the student declaration signature, don't require (or validate)
+          // the duplicate declaration question on this step.
+          if (
+            assessmentSubmissionHasDeclSig &&
+            section.pdf_render_mode === 'declarations' &&
+            q.code === 'student.declarationSignature'
+          ) {
+            continue;
+          }
           const baseEditable = isQuestionEditableForRole((q.role_editability as Record<string, boolean>) || {}) && canRoleEditCurrentWorkflow;
           const editable = baseEditable && !isQuestionReadOnlyByTrainer(q.id);
           const effectiveEditable = editable && appendixFirstCycleEditableForStep;
@@ -1568,7 +1566,17 @@ export const InstanceFillPage: React.FC = () => {
           const val = answers[key];
           // For signatures, `val` is usually an object; `String(val)` becomes "[object Object]"
           // which incorrectly passes the "required" check. Use content-based validation instead.
-          if (!rowAnswerHasContent(val as AnswersMap[string] | undefined)) {
+          if (q.type === 'signature') {
+            const obj = val && typeof val === 'object' && !Array.isArray(val) ? (val as Record<string, unknown>) : null;
+            const sig = obj ? (obj.signature ?? obj.imageDataUrl ?? null) : (typeof val === 'string' ? val : null);
+            const dateVal = obj ? String(obj.date ?? obj.signedAtDate ?? '') : '';
+            const needsDate = ((q.pdf_meta as { showDateField?: boolean } | undefined)?.showDateField ?? false) === true;
+            if (!String(sig ?? '').trim()) {
+              stepErrors[`q-${q.id}`] = `${q.label} is required`;
+            } else if (needsDate && !String(dateVal ?? '').trim()) {
+              stepErrors[`q-${q.id}`] = `${q.label}: date is required`;
+            }
+          } else if (!rowAnswerHasContent(val as AnswersMap[string] | undefined)) {
             stepErrors[`q-${q.id}`] = `${q.label} is required`;
           } else if (q.code === 'evaluation.evaluationDate' && rowAnswerHasContent(val as AnswersMap[string] | undefined)) {
             const trIds = (template?.steps ?? [])
@@ -1945,8 +1953,18 @@ export const InstanceFillPage: React.FC = () => {
               </Card>
             ) : currentStepData ? (
               (() => {
+                const assessmentSubmissionHasDeclSig = false;
                 const filteredSections = currentStepData.sections.filter((section) => {
                   if (section.pdf_render_mode === 'reasonable_adjustment' && role === 'student') return false;
+                  // Avoid duplicating the student declaration signature/date when it's already shown inside the
+                  // Assessment Submission block on this step.
+                  if (assessmentSubmissionHasDeclSig && section.pdf_render_mode === 'declarations') {
+                    const visibleQs = section.questions
+                      .filter((q) => q.type !== 'instruction_block' && isQuestionVisibleForRole((q.role_visibility as Record<string, boolean>) || {}));
+                    if (visibleQs.length === 1 && visibleQs[0].code === 'student.declarationSignature') {
+                      return false;
+                    }
+                  }
                   /* Hide Written Evidence Checklist section when it has no rows - avoids blank header */
                   if (section.questions.some((q) => q.code === 'written.evidence.checklist')) {
                     const checklistQ = section.questions.find((q) => q.code === 'written.evidence.checklist' && q.type === 'single_choice');
@@ -1961,7 +1979,7 @@ export const InstanceFillPage: React.FC = () => {
                     if (evidenceRows === 0 && perfRows === 0) return false;
                   }
                   const hasInteractive = section.questions.some(
-                    (q) => q.type !== 'instruction_block' && isRoleVisible((q.role_visibility as Record<string, boolean>) || {}, role)
+                    (q) => q.type !== 'instruction_block' && isQuestionVisibleForRole((q.role_visibility as Record<string, boolean>) || {})
                   );
                   return hasInteractive || section.pdf_render_mode === 'assessment_tasks' || section.pdf_render_mode === 'assessment_submission' || section.pdf_render_mode === 'reasonable_adjustment' || section.pdf_render_mode === 'reasonable_adjustment_indicator' || section.pdf_render_mode === 'additional_instructions' || section.pdf_render_mode === 'task_instructions' || section.pdf_render_mode === 'task_questions' || section.pdf_render_mode === 'task_written_evidence_checklist' || section.pdf_render_mode === 'task_marking_checklist' || section.pdf_render_mode === 'task_results' || section.pdf_render_mode === 'assessment_summary';
                 });
@@ -2008,7 +2026,11 @@ export const InstanceFillPage: React.FC = () => {
                           </div>
                           <div className="p-4 space-y-4">
                             {section.questions
-                              .filter((q) => isRoleVisible((q.role_visibility as Record<string, boolean>) || {}, role))
+                              .filter(
+                                (q) =>
+                                  isQuestionVisibleForRole((q.role_visibility as Record<string, boolean>) || {}) &&
+                                  !(assessmentSubmissionHasDeclSig && section.pdf_render_mode === 'declarations' && q.code === 'student.declarationSignature')
+                              )
                               .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
                               .map((q) => {
                                 const re = (q.role_editability as Record<string, boolean>) || {};
@@ -2376,57 +2398,6 @@ export const InstanceFillPage: React.FC = () => {
                                 ) : null
                               )}
                           </div>
-                          {(studentDeclaration.signature || studentDeclaration.date) && studentDeclaration.questionId ? (
-                            <div className="mt-4 pt-4 border-t border-gray-300">
-                              <div className="text-sm font-semibold text-gray-700 mb-2">
-                                {studentDeclaration.label}
-                              </div>
-                              <div className="flex items-center gap-4 flex-wrap">
-                                <div className="flex-1 min-w-[220px] max-w-[520px]">
-                                  <SignatureField
-                                    value={studentDeclaration.signature}
-                                    onChange={(v) => {
-                                      const img = typeof v === 'string' ? v : null;
-                                      const qid = studentDeclaration.questionId;
-                                      if (!qid) return;
-                                      const rawVal = answers[getAnswerKey(qid, null)];
-                                      const sigObj =
-                                        rawVal && typeof rawVal === 'object' && !Array.isArray(rawVal)
-                                          ? (rawVal as Record<string, unknown>)
-                                          : null;
-                                      const base = (sigObj && typeof sigObj === 'object' ? { ...sigObj } : {}) as Record<string, unknown>;
-                                      const merged = img != null ? { ...base, signature: img } : { ...base, signature: null };
-                                      handleAnswerChange(qid, null, merged as string | number | boolean | Record<string, unknown> | string[]);
-                                    }}
-                                    disabled={!(isQuestionEditableForRole(studentDeclaration.roleEditability) && canRoleEditCurrentWorkflow)}
-                                  />
-                                </div>
-                                {studentDeclaration.showDateField ? (
-                                  <div className="flex items-center gap-2 min-w-[180px]">
-                                    <span className="text-sm font-semibold text-gray-700 shrink-0">Date:</span>
-                                    <DatePicker
-                                      value={studentDeclaration.date}
-                                      onChange={(newDate) => {
-                                        const qid = studentDeclaration.questionId;
-                                        if (!qid) return;
-                                        const rawVal = answers[getAnswerKey(qid, null)];
-                                        const sigObj =
-                                          rawVal && typeof rawVal === 'object' && !Array.isArray(rawVal)
-                                            ? (rawVal as Record<string, unknown>)
-                                            : null;
-                                        const base = sigObj || (typeof rawVal === 'string' ? { signature: rawVal } : {});
-                                        handleAnswerChange(qid, null, { ...base, date: newDate } as string | number | boolean | Record<string, unknown> | string[]);
-                                      }}
-                                      disabled={!(isQuestionEditableForRole(studentDeclaration.roleEditability) && canRoleEditCurrentWorkflow)}
-                                      compact
-                                      placement="above"
-                                      className="flex-1 min-w-0"
-                                    />
-                                  </div>
-                                ) : null}
-                              </div>
-                            </div>
-                          ) : null}
                         </div>
                       ) : section.pdf_render_mode === 'additional_instructions' ? (
                         (() => {
@@ -3776,7 +3747,12 @@ export const InstanceFillPage: React.FC = () => {
                             }
                           />
                           {section.questions
-                            .filter((q) => q.type !== 'likert_5' && isRoleVisible((q.role_visibility as Record<string, boolean>) || {}, role))
+                            .filter(
+                              (q) =>
+                                q.type !== 'likert_5' &&
+                                isQuestionVisibleForRole((q.role_visibility as Record<string, boolean>) || {}) &&
+                                !(assessmentSubmissionHasDeclSig && section.pdf_render_mode === 'declarations' && q.code === 'student.declarationSignature')
+                            )
                             .map((q) => {
                               const re = (q.role_editability as Record<string, boolean>) || {};
                               const editable = isQuestionEditableForRole(re) && canRoleEditCurrentWorkflow;
@@ -3862,7 +3838,12 @@ export const InstanceFillPage: React.FC = () => {
                         </>
                       ) : (
                         section.questions
-                        .filter((q) => q.type !== 'instruction_block' && isRoleVisible((q.role_visibility as Record<string, boolean>) || {}, role))
+                        .filter(
+                          (q) =>
+                            q.type !== 'instruction_block' &&
+                            isQuestionVisibleForRole((q.role_visibility as Record<string, boolean>) || {}) &&
+                            !(assessmentSubmissionHasDeclSig && section.pdf_render_mode === 'declarations' && q.code === 'student.declarationSignature')
+                        )
                         .map((q) => {
                           const taskResultSectionIdsForEval = (template?.steps ?? [])
                             .flatMap((st) => st.sections)

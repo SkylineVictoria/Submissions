@@ -1,6 +1,5 @@
 import React from 'react';
 import type { FormQuestionWithOptionsAndRows } from '../../lib/formEngine';
-import { Input } from '../ui/Input';
 import { DatePicker } from '../ui/DatePicker';
 import { Textarea } from '../ui/Textarea';
 import { RadioGroup } from '../ui/RadioGroup';
@@ -425,7 +424,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
             imageWidthPercent={(pm.imageWidthPercent as number) ?? 50}
           >
             <div className="mt-2">
-              <Input
+              <Textarea
                 value={(value as string) || ''}
                 onChange={(e) => {
                   const next = e.target.value;
@@ -436,6 +435,8 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
                 className={fillBgClass}
                 required={question.required && !disabled}
                 helperText={wordLimit ? `${countWords(String(value || ''))} / ${wordLimit} words` : undefined}
+                rows={wordLimit ? Math.max(2, Math.min(6, Math.ceil(wordLimit / 12))) : 3}
+                maxWords={wordLimit ?? undefined}
               />
             </div>
           </QuestionLabelWithImage>
@@ -443,7 +444,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
       );
     }
     return (
-      <Input
+      <Textarea
         label={taskLabel(question.label)}
         value={(value as string) || ''}
         onChange={(e) => {
@@ -455,6 +456,8 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
         className={fillBgClass}
         required={question.required && !disabled}
         helperText={[question.help_text, wordLimit ? `${countWords(String(value || ''))} / ${wordLimit} words` : null].filter(Boolean).join(' • ') || undefined}
+        rows={wordLimit ? Math.max(2, Math.min(6, Math.ceil(wordLimit / 12))) : 3}
+        maxWords={wordLimit ?? undefined}
       />
     );
   }
