@@ -50,7 +50,6 @@ import {
   validateInstanceAccessToken,
   revokeRoleAccessTokens,
   extendInstanceAccessTokensToDate,
-  updateFormInstanceDates,
   getInstanceWorkflowNotificationContext,
   invokeWorkflowSendNotification,
 } from '../lib/formEngine';
@@ -441,11 +440,6 @@ export const InstanceFillPage: React.FC = () => {
   const [role, setRole] = useState<FormRole>('student');
   const [workflowStatus, setWorkflowStatus] = useState<'draft' | 'waiting_trainer' | 'waiting_office' | 'completed' | 'failed'>('draft');
   const [submissionCount, setSubmissionCount] = useState<number>(0);
-  /** Instance access window (student link validity); editable by trainer/office on Introduction step. */
-  const [instanceWindowDates, setInstanceWindowDates] = useState<{ start_date: string | null; end_date: string | null }>({
-    start_date: null,
-    end_date: null,
-  });
 
   /** Trainer (and office) may edit fields marked student-only in the template so they can correct student answers. */
   const isQuestionEditableForRole = useCallback(
@@ -565,16 +559,6 @@ export const InstanceFillPage: React.FC = () => {
     const instSubmittedAt = (inst as unknown as { submitted_at?: string } | null)?.submitted_at;
     const instSubmissionCount = Number((inst as unknown as { submission_count?: number | null } | null)?.submission_count ?? 0) || 0;
     setSubmissionCount(instSubmissionCount || (instSubmittedAt ? 1 : 0));
-    setInstanceWindowDates({
-      start_date: (() => {
-        const raw = (inst as { start_date?: string | null }).start_date ? String((inst as { start_date?: string | null }).start_date) : null;
-        return raw ? (normalizeCalendarDateToIso(raw) ?? raw) : null;
-      })(),
-      end_date: (() => {
-        const raw = (inst as { end_date?: string | null }).end_date ? String((inst as { end_date?: string | null }).end_date) : null;
-        return raw ? (normalizeCalendarDateToIso(raw) ?? raw) : null;
-      })(),
-    });
     const ansMap: Record<string, string | number | boolean | Record<string, unknown> | string[]> = {};
     for (const a of ans) {
       const key = getAnswerKey(a.question_id, a.row_id);
@@ -1147,37 +1131,40 @@ export const InstanceFillPage: React.FC = () => {
     return false;
   }, [role, workflowStatus]);
 
-  const canEditInstanceAccessWindow = useMemo(() => {
-    // Trainers frequently need to extend access even after a submission is marked completed.
-    // Only block in a failed terminal state.
-    if (workflowStatus === 'failed') return false;
-    return role === 'trainer' || role === 'office';
-  }, [role, workflowStatus]);
-
-  const handleInstanceWindowDateChange = useCallback(
-    async (field: 'start_date' | 'end_date', value: string | null) => {
-      if (!id || !canEditInstanceAccessWindow) return;
-      const v = value?.trim() || null;
-      const nextStart = field === 'start_date' ? v : instanceWindowDates.start_date;
-      const nextEnd = field === 'end_date' ? v : instanceWindowDates.end_date;
-      if (nextStart && nextEnd && nextStart > nextEnd) {
-        toast.error('Start date cannot be later than end date');
-        return;
-      }
-      setInstanceWindowDates({ start_date: nextStart, end_date: nextEnd });
-      try {
-        await updateFormInstanceDates(id, { [field]: v });
-        if (field === 'end_date' && nextEnd) {
-          await extendInstanceAccessTokensToDate(id, 'student', nextEnd);
-        }
-        toast.success('Assessment dates updated');
-      } catch (e) {
-        toast.error(e instanceof Error ? e.message : 'Failed to update dates');
-        void loadData();
-      }
-    },
-    [id, canEditInstanceAccessWindow, instanceWindowDates.start_date, instanceWindowDates.end_date, loadData]
-  );
+  const studentDeclaration = useMemo(() => {
+    const empty = {
+      questionId: null as number | null,
+      label: 'Student signature',
+      signature: null as string | null,
+      date: '',
+      showDateField: true,
+      roleEditability: null as Record<string, boolean> | null,
+    };
+    if (!template) return empty;
+    const q = template.steps
+      ?.flatMap((st) => st.sections)
+      .flatMap((s) => s.questions)
+      .find((qq) => qq.code === 'student.declarationSignature' && qq.type === 'signature');
+    if (!q) return empty;
+    const raw = answers[getAnswerKey(q.id, null)];
+    const obj = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
+    const sig =
+      (obj?.signature as string | undefined) ??
+      (obj?.imageDataUrl as string | undefined) ??
+      (typeof raw === 'string' ? raw : null);
+    const dateRaw = obj ? String(obj.date ?? obj.signedAtDate ?? '') : '';
+    const date = dateRaw ? (normalizeCalendarDateToIso(dateRaw) ?? dateRaw) : '';
+    const showDateField = (q.pdf_meta as { showDateField?: boolean } | undefined)?.showDateField ?? true;
+    const roleEditability = (q.role_editability as Record<string, boolean>) || null;
+    return {
+      questionId: q.id,
+      label: q.label || 'Student signature',
+      signature: sig ? String(sig) : null,
+      date,
+      showDateField,
+      roleEditability,
+    };
+  }, [template, answers]);
 
   /** True when student is resubmitting after trainer sent back; parts marked Satisfactory Yes become read-only */
   const isResubmissionAfterTrainer = useMemo(
@@ -1955,31 +1942,6 @@ export const InstanceFillPage: React.FC = () => {
                   <li>The Student Pack is a document for students to complete to demonstrate their competency. This document includes context and conditions of assessment, tasks to be administered to the student, and an outline of the evidence to be gathered from the student.</li>
                   <li>The Unit Mapping is a document that contains information and comprehensive mapping with the training package requirements.</li>
                 </ul>
-                {role !== 'student' ? (
-                  <div className="mt-8 pt-6 border-t border-[var(--border)] space-y-3">
-                    <h4 className="font-semibold text-gray-800">Assessment access window</h4>
-                    <p className="text-sm text-gray-600">
-                      Start and end dates control when the enrolled student can open this assessment (Melbourne calendar dates). Updating the end date aligns the student access link.
-                    </p>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-xl">
-                      <DatePicker
-                        label="Start date"
-                        value={instanceWindowDates.start_date ?? ''}
-                        onChange={(v) => void handleInstanceWindowDateChange('start_date', v)}
-                        compact
-                        disabled={!canEditInstanceAccessWindow}
-                      />
-                      <DatePicker
-                        label="End date"
-                        value={instanceWindowDates.end_date ?? ''}
-                        onChange={(v) => void handleInstanceWindowDateChange('end_date', v)}
-                        compact
-                        minDate={instanceWindowDates.start_date ?? undefined}
-                        disabled={!canEditInstanceAccessWindow}
-                      />
-                    </div>
-                  </div>
-                ) : null}
               </Card>
             ) : currentStepData ? (
               (() => {
@@ -2279,9 +2241,37 @@ export const InstanceFillPage: React.FC = () => {
                           const editable = isQuestionEditableForRole(re) && canRoleEditCurrentWorkflow;
                           const renderChecklistTable = (checklistQ: typeof evidenceQ, title: string, questionText: string) => {
                             if (!checklistQ || !checklistQ.rows?.length) return null;
+                            const setAll = (v: 'yes' | 'no') => {
+                              if (!editable) return;
+                              for (const r of checklistQ.rows) {
+                                handleAnswerChange(checklistQ.id, r.id, v);
+                              }
+                            };
                             return (
                               <div key={checklistQ.id} className="mt-6 overflow-x-auto">
-                                <div className="bg-[#5E5E5E] text-white font-bold px-4 py-2">{title}</div>
+                                <div className="bg-[#5E5E5E] text-white font-bold px-4 py-2 flex items-center justify-between gap-3">
+                                  <span>{title}</span>
+                                  <div className="flex items-center gap-2">
+                                    <button
+                                      type="button"
+                                      className="text-xs font-semibold bg-white/10 hover:bg-white/15 border border-white/20 rounded px-2 py-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                                      onClick={() => setAll('yes')}
+                                      disabled={!editable}
+                                      title="Mark all rows as Yes"
+                                    >
+                                      All Yes
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="text-xs font-semibold bg-white/10 hover:bg-white/15 border border-white/20 rounded px-2 py-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                                      onClick={() => setAll('no')}
+                                      disabled={!editable}
+                                      title="Mark all rows as No"
+                                    >
+                                      All No
+                                    </button>
+                                  </div>
+                                </div>
                                 <p className="text-sm text-gray-700 py-2">{questionText}</p>
                                 <table className="w-full border-collapse border border-black text-sm">
                                   <thead>
@@ -2386,6 +2376,57 @@ export const InstanceFillPage: React.FC = () => {
                                 ) : null
                               )}
                           </div>
+                          {(studentDeclaration.signature || studentDeclaration.date) && studentDeclaration.questionId ? (
+                            <div className="mt-4 pt-4 border-t border-gray-300">
+                              <div className="text-sm font-semibold text-gray-700 mb-2">
+                                {studentDeclaration.label}
+                              </div>
+                              <div className="flex items-center gap-4 flex-wrap">
+                                <div className="flex-1 min-w-[220px] max-w-[520px]">
+                                  <SignatureField
+                                    value={studentDeclaration.signature}
+                                    onChange={(v) => {
+                                      const img = typeof v === 'string' ? v : null;
+                                      const qid = studentDeclaration.questionId;
+                                      if (!qid) return;
+                                      const rawVal = answers[getAnswerKey(qid, null)];
+                                      const sigObj =
+                                        rawVal && typeof rawVal === 'object' && !Array.isArray(rawVal)
+                                          ? (rawVal as Record<string, unknown>)
+                                          : null;
+                                      const base = (sigObj && typeof sigObj === 'object' ? { ...sigObj } : {}) as Record<string, unknown>;
+                                      const merged = img != null ? { ...base, signature: img } : { ...base, signature: null };
+                                      handleAnswerChange(qid, null, merged as string | number | boolean | Record<string, unknown> | string[]);
+                                    }}
+                                    disabled={!(isQuestionEditableForRole(studentDeclaration.roleEditability) && canRoleEditCurrentWorkflow)}
+                                  />
+                                </div>
+                                {studentDeclaration.showDateField ? (
+                                  <div className="flex items-center gap-2 min-w-[180px]">
+                                    <span className="text-sm font-semibold text-gray-700 shrink-0">Date:</span>
+                                    <DatePicker
+                                      value={studentDeclaration.date}
+                                      onChange={(newDate) => {
+                                        const qid = studentDeclaration.questionId;
+                                        if (!qid) return;
+                                        const rawVal = answers[getAnswerKey(qid, null)];
+                                        const sigObj =
+                                          rawVal && typeof rawVal === 'object' && !Array.isArray(rawVal)
+                                            ? (rawVal as Record<string, unknown>)
+                                            : null;
+                                        const base = sigObj || (typeof rawVal === 'string' ? { signature: rawVal } : {});
+                                        handleAnswerChange(qid, null, { ...base, date: newDate } as string | number | boolean | Record<string, unknown> | string[]);
+                                      }}
+                                      disabled={!(isQuestionEditableForRole(studentDeclaration.roleEditability) && canRoleEditCurrentWorkflow)}
+                                      compact
+                                      placement="above"
+                                      className="flex-1 min-w-0"
+                                    />
+                                  </div>
+                                ) : null}
+                              </div>
+                            </div>
+                          ) : null}
                         </div>
                       ) : section.pdf_render_mode === 'additional_instructions' ? (
                         (() => {
@@ -3738,10 +3779,7 @@ export const InstanceFillPage: React.FC = () => {
                             .filter((q) => q.type !== 'likert_5' && isRoleVisible((q.role_visibility as Record<string, boolean>) || {}, role))
                             .map((q) => {
                               const re = (q.role_editability as Record<string, boolean>) || {};
-                              const editable =
-                                section.pdf_render_mode === 'declarations' && role === 'trainer'
-                                  ? isRoleEditable(re, 'trainer') && canRoleEditCurrentWorkflow
-                                  : isQuestionEditableForRole(re) && canRoleEditCurrentWorkflow;
+                              const editable = isQuestionEditableForRole(re) && canRoleEditCurrentWorkflow;
                               const key = getAnswerKey(q.id, null);
                               const val = answers[key];
                               if (q.type === 'signature' && (q.code === 'student.declarationSignature' || String(q.code || '').startsWith('student.'))) {
@@ -3758,7 +3796,7 @@ export const InstanceFillPage: React.FC = () => {
                                 const minDeclDate = getStudentResubDeclarationMinDate(firstTaskRdForDecl, submissionCount);
                                 // Declaration must only ever be set on the first attempt cycle.
                                 // After attempt 1 is completed / resubmission begins, keep it read-only (historical).
-                                const declarationLockedToFirstAttempt = q.code === 'student.declarationSignature' && submissionCount >= 2;
+                                const declarationLockedToFirstAttempt = role === 'student' && q.code === 'student.declarationSignature' && submissionCount >= 2;
                                 const effectiveEditable = editable && !declarationLockedToFirstAttempt;
                                 return (
                                   <div key={q.id} className="space-y-2">
@@ -3851,10 +3889,7 @@ export const InstanceFillPage: React.FC = () => {
                             : isEvalTrainerName || isEvalEmployer || isEvalTrainingDates || isEvalEvaluationDate
                               ? (trainerCanEditHere && canRoleEditCurrentWorkflow)
                               : (isQuestionEditableForRole(re) && canRoleEditCurrentWorkflow);
-                          const editable =
-                            section.pdf_render_mode === 'declarations' && role === 'trainer'
-                              ? isRoleEditable(re, 'trainer') && canRoleEditCurrentWorkflow
-                              : baseEditable;
+                          const editable = baseEditable;
                           if (q.type === 'likert_5' && q.rows.length > 0) {
                             const val =
                               q.rows.length === 1
