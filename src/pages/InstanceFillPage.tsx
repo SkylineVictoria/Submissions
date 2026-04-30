@@ -566,8 +566,14 @@ export const InstanceFillPage: React.FC = () => {
     const instSubmissionCount = Number((inst as unknown as { submission_count?: number | null } | null)?.submission_count ?? 0) || 0;
     setSubmissionCount(instSubmissionCount || (instSubmittedAt ? 1 : 0));
     setInstanceWindowDates({
-      start_date: (inst as { start_date?: string | null }).start_date ? String((inst as { start_date?: string | null }).start_date) : null,
-      end_date: (inst as { end_date?: string | null }).end_date ? String((inst as { end_date?: string | null }).end_date) : null,
+      start_date: (() => {
+        const raw = (inst as { start_date?: string | null }).start_date ? String((inst as { start_date?: string | null }).start_date) : null;
+        return raw ? (normalizeCalendarDateToIso(raw) ?? raw) : null;
+      })(),
+      end_date: (() => {
+        const raw = (inst as { end_date?: string | null }).end_date ? String((inst as { end_date?: string | null }).end_date) : null;
+        return raw ? (normalizeCalendarDateToIso(raw) ?? raw) : null;
+      })(),
     });
     const ansMap: Record<string, string | number | boolean | Record<string, unknown> | string[]> = {};
     for (const a of ans) {
@@ -1141,9 +1147,16 @@ export const InstanceFillPage: React.FC = () => {
     return false;
   }, [role, workflowStatus]);
 
+  const canEditInstanceAccessWindow = useMemo(() => {
+    // Trainers frequently need to extend access even after a submission is marked completed.
+    // Only block in a failed terminal state.
+    if (workflowStatus === 'failed') return false;
+    return role === 'trainer' || role === 'office';
+  }, [role, workflowStatus]);
+
   const handleInstanceWindowDateChange = useCallback(
     async (field: 'start_date' | 'end_date', value: string | null) => {
-      if (!id || !canRoleEditCurrentWorkflow) return;
+      if (!id || !canEditInstanceAccessWindow) return;
       const v = value?.trim() || null;
       const nextStart = field === 'start_date' ? v : instanceWindowDates.start_date;
       const nextEnd = field === 'end_date' ? v : instanceWindowDates.end_date;
@@ -1163,7 +1176,7 @@ export const InstanceFillPage: React.FC = () => {
         void loadData();
       }
     },
-    [id, canRoleEditCurrentWorkflow, instanceWindowDates.start_date, instanceWindowDates.end_date, loadData]
+    [id, canEditInstanceAccessWindow, instanceWindowDates.start_date, instanceWindowDates.end_date, loadData]
   );
 
   /** True when student is resubmitting after trainer sent back; parts marked Satisfactory Yes become read-only */
@@ -1942,7 +1955,7 @@ export const InstanceFillPage: React.FC = () => {
                   <li>The Student Pack is a document for students to complete to demonstrate their competency. This document includes context and conditions of assessment, tasks to be administered to the student, and an outline of the evidence to be gathered from the student.</li>
                   <li>The Unit Mapping is a document that contains information and comprehensive mapping with the training package requirements.</li>
                 </ul>
-                {(role === 'trainer' || role === 'office') && canRoleEditCurrentWorkflow ? (
+                {role !== 'student' ? (
                   <div className="mt-8 pt-6 border-t border-[var(--border)] space-y-3">
                     <h4 className="font-semibold text-gray-800">Assessment access window</h4>
                     <p className="text-sm text-gray-600">
@@ -1954,6 +1967,7 @@ export const InstanceFillPage: React.FC = () => {
                         value={instanceWindowDates.start_date ?? ''}
                         onChange={(v) => void handleInstanceWindowDateChange('start_date', v)}
                         compact
+                        disabled={!canEditInstanceAccessWindow}
                       />
                       <DatePicker
                         label="End date"
@@ -1961,6 +1975,7 @@ export const InstanceFillPage: React.FC = () => {
                         onChange={(v) => void handleInstanceWindowDateChange('end_date', v)}
                         compact
                         minDate={instanceWindowDates.start_date ?? undefined}
+                        disabled={!canEditInstanceAccessWindow}
                       />
                     </div>
                   </div>
@@ -3723,7 +3738,10 @@ export const InstanceFillPage: React.FC = () => {
                             .filter((q) => q.type !== 'likert_5' && isRoleVisible((q.role_visibility as Record<string, boolean>) || {}, role))
                             .map((q) => {
                               const re = (q.role_editability as Record<string, boolean>) || {};
-                              const editable = isQuestionEditableForRole(re) && canRoleEditCurrentWorkflow;
+                              const editable =
+                                section.pdf_render_mode === 'declarations' && role === 'trainer'
+                                  ? isRoleEditable(re, 'trainer') && canRoleEditCurrentWorkflow
+                                  : isQuestionEditableForRole(re) && canRoleEditCurrentWorkflow;
                               const key = getAnswerKey(q.id, null);
                               const val = answers[key];
                               if (q.type === 'signature' && (q.code === 'student.declarationSignature' || String(q.code || '').startsWith('student.'))) {
@@ -3828,11 +3846,15 @@ export const InstanceFillPage: React.FC = () => {
                           const isEvalTrainingDates = q.code === 'evaluation.trainingDates';
                           const isEvalEvaluationDate = q.code === 'evaluation.evaluationDate';
                           const trainerCanEditHere = role === 'trainer' || role === 'office';
-                          const editable = isQualUnitField || isEvalUnitName
+                          const baseEditable = isQualUnitField || isEvalUnitName
                             ? false
                             : isEvalTrainerName || isEvalEmployer || isEvalTrainingDates || isEvalEvaluationDate
                               ? (trainerCanEditHere && canRoleEditCurrentWorkflow)
                               : (isQuestionEditableForRole(re) && canRoleEditCurrentWorkflow);
+                          const editable =
+                            section.pdf_render_mode === 'declarations' && role === 'trainer'
+                              ? isRoleEditable(re, 'trainer') && canRoleEditCurrentWorkflow
+                              : baseEditable;
                           if (q.type === 'likert_5' && q.rows.length > 0) {
                             const val =
                               q.rows.length === 1

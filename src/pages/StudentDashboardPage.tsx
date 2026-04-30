@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
-import { LayoutDashboard, RefreshCw, Search, Mail, Phone, CheckCircle } from 'lucide-react';
+import { LayoutDashboard, RefreshCw, Search, Mail, Phone, CheckCircle, ChevronDown } from 'lucide-react';
 import { listStudentAssessmentsPaged, issueInstanceAccessLink, fetchAssessmentSummaries } from '../lib/formEngine';
 import type { Student, SubmittedInstanceRow } from '../lib/formEngine';
 import { Card } from '../components/ui/Card';
@@ -572,7 +572,15 @@ export const StudentDashboardPage: React.FC = () => {
                                 })()}
                               </td>
                               <td className="px-3 py-2 border-b border-[var(--border)] text-right align-top">
-                                <div className="text-xs text-gray-500">—</div>
+                                <div className="inline-flex w-full justify-end">
+                                  <ChevronDown
+                                    className={cn(
+                                      'h-4 w-4 text-gray-400 transition-transform',
+                                      expandedId === row.id && 'rotate-180'
+                                    )}
+                                    aria-hidden="true"
+                                  />
+                                </div>
                               </td>
                             </tr>
                             {expandedId === row.id ? (
