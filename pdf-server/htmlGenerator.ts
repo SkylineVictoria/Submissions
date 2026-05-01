@@ -1182,8 +1182,25 @@ export function buildHtml(data: {
             : legacyAb ? [{ type: String(legacyAb.type ?? 'instruction_block'), content: legacyAb.content as string, questionId: legacyAb.questionId as number }] : [];
           const blockHeaderHtml = (ht: string | undefined) => (ht ? `<div class="task-q-text-above-header">${labelToHtml(ht)}</div>` : '');
           for (const block of contentBlocks) {
-            if (block.type === 'instruction_block' && (block.content as string)) {
-              html += `<div class="task-q-content-block mt-3">${blockHeaderHtml(block.headerText)}<div class="task-q-additional-instruction">${block.content as string}</div></div>`;
+            const blockImgUrl = (block as { imageUrl?: string }).imageUrl;
+            const blockContent = String(block.content ?? '');
+            const isImageBlock = block.type === 'image';
+            if (
+              (block.type === 'instruction_block' && (blockContent || blockImgUrl)) ||
+              (isImageBlock && blockImgUrl)
+            ) {
+              const textOnly = isImageBlock ? '' : blockContent;
+              const blockLayout = (block as { imageLayout?: string }).imageLayout || (isImageBlock ? 'above' : 'side_by_side');
+              const blockPct = Math.max(20, Math.min(80, (block as { imageWidthPercent?: number }).imageWidthPercent || 50));
+              const imgTag = blockImgUrl
+                ? `<img src="${blockImgUrl}" alt="" style="max-width:100%;max-height:280px;object-fit:contain;border:1px solid #ddd;border-radius:4px" />`
+                : '';
+              let innerHtml = '';
+              if (!imgTag) innerHtml = `<div class="task-q-additional-instruction">${textOnly}</div>`;
+              else if (blockLayout === 'above') innerHtml = `<div style="margin-bottom:8px">${imgTag}</div><div class="task-q-additional-instruction">${textOnly}</div>`;
+              else if (blockLayout === 'below') innerHtml = `<div class="task-q-additional-instruction">${textOnly}</div><div style="margin-top:8px">${imgTag}</div>`;
+              else innerHtml = `<div style="display:flex;gap:16px;align-items:flex-start"><div style="flex:1;min-width:0"><div class="task-q-additional-instruction">${textOnly}</div></div><div style="width:${blockPct}%;flex-shrink:0">${imgTag}</div></div>`;
+              html += `<div class="task-q-content-block mt-3">${blockHeaderHtml(block.headerText)}${innerHtml}</div>`;
               continue;
             }
             if ((block.type === 'short_text' || block.type === 'long_text') && block.questionId) {

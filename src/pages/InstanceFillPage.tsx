@@ -2730,6 +2730,28 @@ export const InstanceFillPage: React.FC = () => {
                                           );
                                           return wrapWithHeader(key, block.headerText, blockContent);
                                         }
+                                        if (block.type === 'image' && block.imageUrl) {
+                                          const imgUrl = block.imageUrl;
+                                          const layout = block.imageLayout || 'above';
+                                          const pct = Math.max(20, Math.min(80, block.imageWidthPercent || 50));
+                                          const imgEl = <img src={imgUrl} alt="" className="max-w-full h-auto object-contain rounded border border-gray-200" style={{ maxHeight: 280 }} />;
+                                          let blockContent: React.ReactNode;
+                                          if (layout === 'above') blockContent = <div className="mb-2">{imgEl}</div>;
+                                          else if (layout === 'below') blockContent = <div className="mt-2">{imgEl}</div>;
+                                          else
+                                            blockContent = (
+                                              <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+                                                <div className="order-2 min-w-0 flex-1 sm:order-1" />
+                                                <div
+                                                  className="order-1 w-full max-w-full shrink-0 sm:order-2 sm:w-[var(--side-img-pct)] sm:max-w-[min(100%,var(--side-img-pct))]"
+                                                  style={{ ['--side-img-pct' as string]: `${pct}%` } as React.CSSProperties}
+                                                >
+                                                  {imgEl}
+                                                </div>
+                                              </div>
+                                            );
+                                          return wrapWithHeader(key, block.headerText, blockContent);
+                                        }
                                         const childQ = block.questionId ? section.questions.find((x) => x.id === block.questionId) : null;
                                         if (!childQ) return null;
                                         if (block.type === 'grid_table' && childQ.rows?.length) {
@@ -3042,6 +3064,28 @@ export const InstanceFillPage: React.FC = () => {
                                               </div>
                                             </div>
                                           );
+                                                return wrapWithHeader(key, block.headerText, blockContent);
+                                              }
+                                              if (block.type === 'image' && block.imageUrl) {
+                                                const imgUrl = block.imageUrl;
+                                                const layout = block.imageLayout || 'above';
+                                                const pct = Math.max(20, Math.min(80, block.imageWidthPercent || 50));
+                                                const imgEl = <img src={imgUrl} alt="" className="max-w-full h-auto object-contain rounded border border-gray-200" style={{ maxHeight: 280 }} />;
+                                                let blockContent: React.ReactNode;
+                                                if (layout === 'above') blockContent = <div className="mb-2">{imgEl}</div>;
+                                                else if (layout === 'below') blockContent = <div className="mt-2">{imgEl}</div>;
+                                                else
+                                                  blockContent = (
+                                                    <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+                                                      <div className="order-2 min-w-0 flex-1 sm:order-1" />
+                                                      <div
+                                                        className="order-1 w-full max-w-full shrink-0 sm:order-2 sm:w-[var(--side-img-pct)] sm:max-w-[min(100%,var(--side-img-pct))]"
+                                                        style={{ ['--side-img-pct' as string]: `${pct}%` } as React.CSSProperties}
+                                                      >
+                                                        {imgEl}
+                                                      </div>
+                                                    </div>
+                                                  );
                                                 return wrapWithHeader(key, block.headerText, blockContent);
                                               }
                                               const childQ = block.questionId ? section.questions.find((x) => x.id === block.questionId) : null;

@@ -1746,10 +1746,14 @@ function buildHtml(data: {
               : legacyAb ? [{ type: String(legacyAb.type ?? 'instruction_block'), content: legacyAb.content as string, questionId: legacyAb.questionId as number }] : [];
             const blockHeaderHtml = (ht: string | undefined) => (ht ? `<div class="task-q-text-above-header">${labelToHtml(ht)}</div>` : '');
             for (const block of contentBlocks) {
-              if (block.type === 'instruction_block' && ((block.content as string) || (block as { imageUrl?: string }).imageUrl)) {
-                const blockContent = block.content as string;
+              if (
+                (block.type === 'instruction_block' && ((block.content as string) || (block as { imageUrl?: string }).imageUrl)) ||
+                (block.type === 'image' && (block as { imageUrl?: string }).imageUrl)
+              ) {
+                const isImageOnly = block.type === 'image';
+                const blockContent = isImageOnly ? '' : (block.content as string) || '';
                 const blockImgUrl = (block as { imageUrl?: string }).imageUrl;
-                const blockLayout = (block as { imageLayout?: string }).imageLayout || 'side_by_side';
+                const blockLayout = (block as { imageLayout?: string }).imageLayout || (isImageOnly ? 'above' : 'side_by_side');
                 const blockPct = Math.max(20, Math.min(80, (block as { imageWidthPercent?: number }).imageWidthPercent || 50));
                 const imgTag = blockImgUrl ? `<img src="${blockImgUrl}" alt="" style="max-width:100%;max-height:280px;object-fit:contain;border:1px solid #ddd;border-radius:4px" />` : '';
                 let innerHtml = '';
@@ -1946,10 +1950,14 @@ function buildHtml(data: {
             : legacyAb ? [{ type: String(legacyAb.type ?? 'instruction_block'), content: legacyAb.content as string, questionId: legacyAb.questionId as number }] : [];
           const blockHeaderHtml = (ht: string | undefined) => (ht ? `<div class="task-q-text-above-header">${labelToHtml(ht)}</div>` : '');
           for (const block of contentBlocks) {
-            if (block.type === 'instruction_block' && ((block.content as string) || (block as { imageUrl?: string }).imageUrl)) {
-              const blockContent = block.content as string;
+            if (
+              (block.type === 'instruction_block' && ((block.content as string) || (block as { imageUrl?: string }).imageUrl)) ||
+              (block.type === 'image' && (block as { imageUrl?: string }).imageUrl)
+            ) {
+              const isImageOnly = block.type === 'image';
+              const blockContent = isImageOnly ? '' : (block.content as string) || '';
               const blockImgUrl = (block as { imageUrl?: string }).imageUrl;
-              const blockLayout = (block as { imageLayout?: string }).imageLayout || 'side_by_side';
+              const blockLayout = (block as { imageLayout?: string }).imageLayout || (isImageOnly ? 'above' : 'side_by_side');
               const blockPct = Math.max(20, Math.min(80, (block as { imageWidthPercent?: number }).imageWidthPercent || 50));
               const imgTag = blockImgUrl ? `<img src="${blockImgUrl}" alt="" style="max-width:100%;max-height:280px;object-fit:contain;border:1px solid #ddd;border-radius:4px" />` : '';
               let innerHtml = '';

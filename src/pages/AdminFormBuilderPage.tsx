@@ -94,9 +94,10 @@ const CONTENT_BLOCK_TYPES = [
   { value: 'grid_table', label: 'Grid table' },
   { value: 'short_text', label: 'Short text' },
   { value: 'long_text', label: 'Long text' },
+  { value: 'image', label: 'Image' },
 ];
 
-type ContentBlockType = 'instruction_block' | 'grid_table' | 'short_text' | 'long_text';
+type ContentBlockType = 'instruction_block' | 'grid_table' | 'short_text' | 'long_text' | 'image';
 
 type ImageLayoutOption = 'side_by_side' | 'above' | 'below';
 
@@ -107,7 +108,7 @@ interface ContentBlock {
   wordLimit?: number;
   /** Optional bold hint text above this block (e.g. "Painting terminology:", "Decorating terminologies:") */
   headerText?: string;
-  /** Image URL (stored in photomedia/skyline/{questionId}/) for instruction_block or question blocks */
+  /** Image URL (stored in photomedia/skyline/{questionId}/) for instruction_block, image block, or question blocks */
   imageUrl?: string;
   /** Layout: side_by_side (text+image), above (image then question), below (question then image) */
   imageLayout?: ImageLayoutOption;
@@ -2286,9 +2287,9 @@ export const AdminFormBuilderPage: React.FC = () => {
                             updateQuestion(q.id, { pdf_meta: { ...rest, contentBlocks: next } as unknown as Json });
                           };
                           const addBlock = (type: ContentBlockType) => {
-                            const next = [...blocks, { type }];
+                            const next = [...blocks, type === 'image' ? { type, imageLayout: 'above' as ImageLayoutOption } : { type }];
                             setBlocks(next);
-                            if (type === 'instruction_block') return;
+                            if (type === 'instruction_block' || type === 'image') return;
                             createContentBlockQuestion(q, type, next.length - 1, next);
                           };
                           const removeBlock = (idx: number) => {
@@ -2393,6 +2394,75 @@ export const AdminFormBuilderPage: React.FC = () => {
                                         )}
                                       </div>
                                     </>
+                                  )}
+                                  {block.type === 'image' && (
+                                    <div className="space-y-2">
+                                      <p className="text-xs text-gray-500">Optional image shown below the main question (same style as question image in the PDF).</p>
+                                      <div className="flex flex-wrap gap-2 items-center">
+                                        <input
+                                          type="file"
+                                          accept="image/*"
+                                          className="hidden"
+                                          id={`block-img-only-${q.id}-${idx}`}
+                                          onChange={async (e) => {
+                                            const file = e.target.files?.[0];
+                                            if (!file || !file.type.startsWith('image/')) return;
+                                            const { url, error } = await uploadQuestionImage(q.id, file);
+                                            e.target.value = '';
+                                            if (error) alert(`Upload failed: ${error}`);
+                                            else if (url) updateBlock(idx, { imageUrl: url });
+                                          }}
+                                        />
+                                        <Button type="button" variant="outline" size="sm" onClick={() => document.getElementById(`block-img-only-${q.id}-${idx}`)?.click()}>
+                                          <ImagePlus className="w-4 h-4 mr-1" /> Upload
+                                        </Button>
+                                        <Button
+                                          type="button"
+                                          variant="outline"
+                                          size="sm"
+                                          onClick={async () => {
+                                            const file = await pasteImageFromClipboard();
+                                            if (!file) {
+                                              alert('No image in clipboard. Take a screenshot (Print Screen) or copy an image first, then paste.');
+                                              return;
+                                            }
+                                            const { url, error } = await uploadQuestionImage(q.id, file);
+                                            if (error) alert(`Upload failed: ${error}`);
+                                            else if (url) updateBlock(idx, { imageUrl: url });
+                                          }}
+                                        >
+                                          <ClipboardPaste className="w-4 h-4 mr-1" /> Paste
+                                        </Button>
+                                        {block.imageUrl && (
+                                          <>
+                                            <img src={block.imageUrl} alt="" className="h-12 object-contain border rounded" />
+                                            <button type="button" className="text-xs text-red-600" onClick={() => updateBlock(idx, { imageUrl: undefined })}>Remove</button>
+                                          </>
+                                        )}
+                                      </div>
+                                      {block.imageUrl && (
+                                        <div className="flex flex-wrap gap-4">
+                                          <div>
+                                            <label className="text-xs text-gray-500">Layout</label>
+                                            <Select
+                                              value={block.imageLayout || 'above'}
+                                              onChange={(v) => updateBlock(idx, { imageLayout: (v as ImageLayoutOption) || 'above' })}
+                                              options={[
+                                                { value: 'side_by_side', label: 'Text & image side-by-side' },
+                                                { value: 'above', label: 'Image above, text below' },
+                                                { value: 'below', label: 'Text above, image below' },
+                                              ]}
+                                            />
+                                          </div>
+                                          {(block.imageLayout || 'above') === 'side_by_side' && (
+                                            <div>
+                                              <label className="text-xs text-gray-500">Image width %</label>
+                                              <Input type="number" min={20} max={80} value={block.imageWidthPercent ?? 50} onChange={(e) => updateBlock(idx, { imageWidthPercent: Math.max(20, Math.min(80, Number(e.target.value) || 50)) })} />
+                                            </div>
+                                          )}
+                                        </div>
+                                      )}
+                                    </div>
                                   )}
                                   {(block.type === 'short_text' || block.type === 'long_text') && (() => {
                                     const childQ = block.questionId ? selectedSection.questions.find((x) => x.id === block.questionId) : null;
