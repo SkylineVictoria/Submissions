@@ -407,7 +407,9 @@ function isRequiredSatisfiedByContentBlocks(
       if (!isGridTableFilled(childQ, answers)) allGridsOk = false;
     } else if (b.type === 'short_text' || b.type === 'long_text') {
       anyTextBlock = true;
-      if (childQ.required && !String(answers[getAnswerKey(childQ.id, null)] ?? '').trim()) allTextBlocksOk = false;
+      if (childQ.required && !rowAnswerHasContent(answers[getAnswerKey(childQ.id, null)] as string | number | boolean | Record<string, unknown> | string[] | undefined)) {
+        allTextBlocksOk = false;
+      }
     }
   }
 
@@ -421,7 +423,14 @@ function isRequiredSatisfiedByContentBlocks(
 }
 
 function parseAnswerValue(a: FormAnswer): string | number | boolean | Record<string, unknown> | string[] | null {
-  if (a.value_text) return a.value_text;
+  const j =
+    a.value_json != null && typeof a.value_json === 'object' && !Array.isArray(a.value_json)
+      ? (a.value_json as Record<string, unknown>)
+      : null;
+  if (j && typeof j.answerImageUrl === 'string' && j.answerImageUrl.trim()) {
+    return { text: String(a.value_text ?? j.text ?? ''), answerImageUrl: j.answerImageUrl };
+  }
+  if (a.value_text != null) return a.value_text;
   if (a.value_number != null) return a.value_number;
   if (a.value_json != null) return a.value_json as Record<string, unknown> | string[];
   return null;
@@ -1058,7 +1067,14 @@ export const InstanceFillPage: React.FC = () => {
     else if (typeof value === 'number') num = value;
     else if (typeof value === 'boolean') text = value ? 'true' : 'false';
     else if (Array.isArray(value)) json = value;
-    else if (value && typeof value === 'object') json = value;
+    else if (value && typeof value === 'object') {
+      const o = value as Record<string, unknown>;
+      if (typeof o.text === 'string' && Object.keys(o).every((k) => k === 'text' || k === 'answerImageUrl')) {
+        const url = typeof o.answerImageUrl === 'string' && o.answerImageUrl.trim() ? o.answerImageUrl : null;
+        return { text: o.text, json: url ? { answerImageUrl: url } : null };
+      }
+      json = value;
+    }
     return { text, number: num, json };
   };
 

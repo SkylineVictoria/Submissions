@@ -1,4 +1,5 @@
 import React from 'react';
+import { ClipboardPaste, ImagePlus } from 'lucide-react';
 import type { FormQuestionWithOptionsAndRows } from '../../lib/formEngine';
 import { DatePicker } from '../ui/DatePicker';
 import { Textarea } from '../ui/Textarea';
@@ -265,6 +266,161 @@ function ImageAnswerField({
   );
 }
 
+type TextWithAnswerImage = { text: string; answerImageUrl?: string };
+
+function normalizeTextWithAnswerImage(raw: QuestionRendererProps['value']): TextWithAnswerImage {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const o = raw as Record<string, unknown>;
+    if (typeof o.text === 'string' && Object.keys(o).every((k) => k === 'text' || k === 'answerImageUrl')) {
+      return {
+        text: String(o.text ?? ''),
+        answerImageUrl: typeof o.answerImageUrl === 'string' && o.answerImageUrl.trim() ? o.answerImageUrl : undefined,
+      };
+    }
+  }
+  return { text: String(raw ?? '') };
+}
+
+async function pasteImageFromClipboard(): Promise<File | null> {
+  try {
+    const items = await navigator.clipboard.read();
+    for (const item of items) {
+      for (const type of item.types) {
+        if (type.startsWith('image/')) {
+          const blob = await item.getType(type);
+          const ext = type === 'image/png' ? 'png' : type === 'image/gif' ? 'gif' : type === 'image/webp' ? 'webp' : 'jpg';
+          return new File([blob], `pasted-image.${ext}`, { type });
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('Paste image failed:', e);
+  }
+  return null;
+}
+
+function OptionalAnswerImageAttachBar({
+  instanceId,
+  questionId,
+  answerImageUrl,
+  onImageUrl,
+  disabled,
+}: {
+  instanceId?: number;
+  questionId: number;
+  answerImageUrl?: string;
+  onImageUrl: (url: string | undefined) => void;
+  disabled?: boolean;
+}) {
+  const [uploading, setUploading] = React.useState(false);
+  const [localErr, setLocalErr] = React.useState<string | null>(null);
+  const fileRef = React.useRef<HTMLInputElement>(null);
+  const canUpload = !disabled && Number.isFinite(Number(instanceId)) && Number(instanceId) > 0;
+
+  const applyFile = async (file: File | null) => {
+    if (!file || !canUpload) return;
+    const okType =
+      file.type.startsWith('image/') || /\.heic$/i.test(file.name) || /\.heif$/i.test(file.name);
+    if (!okType) {
+      setLocalErr('Please choose an image file.');
+      return;
+    }
+    setLocalErr(null);
+    setUploading(true);
+    try {
+      const res = await uploadAnswerImage(Number(instanceId), questionId, file);
+      if (!res.url) {
+        setLocalErr(res.error || 'Upload failed');
+        return;
+      }
+      onImageUrl(res.url);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const remove = async () => {
+    if (!answerImageUrl) return;
+    setLocalErr(null);
+    setUploading(true);
+    try {
+      const res = await deleteAnswerImageByPublicUrl(answerImageUrl);
+      if (!res.success) {
+        setLocalErr(res.error || 'Could not remove file from storage');
+        return;
+      }
+      onImageUrl(undefined);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div className="mt-3 space-y-2 rounded-lg border border-gray-200 bg-gray-50/90 p-3">
+      <span className="text-xs font-medium text-gray-700">Image with answer (optional)</span>
+      <p className="text-xs text-gray-500">Photos from phones (incl. iPhone HEIC) are accepted and converted for display and PDF.</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*,.heic,.heif"
+          className="hidden"
+          disabled={!canUpload || uploading}
+          onChange={(e) => {
+            const f = e.target.files?.[0] ?? null;
+            e.target.value = '';
+            void applyFile(f);
+          }}
+        />
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={!canUpload || uploading}
+          onClick={() => fileRef.current?.click()}
+        >
+          {uploading ? (
+            <>
+              <Loader variant="dots" size="sm" inline className="mr-1.5" />
+              Uploading…
+            </>
+          ) : (
+            <>
+              <ImagePlus className="w-4 h-4 mr-1" /> Upload
+            </>
+          )}
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={!canUpload || uploading}
+          onClick={async () => {
+            const file = await pasteImageFromClipboard();
+            if (!file) {
+              setLocalErr('No image in clipboard. Copy or screenshot an image first.');
+              return;
+            }
+            await applyFile(file);
+          }}
+        >
+          <ClipboardPaste className="w-4 h-4 mr-1" /> Paste
+        </Button>
+        {answerImageUrl && (
+          <Button type="button" variant="outline" size="sm" disabled={disabled || uploading} onClick={() => void remove()}>
+            Remove image
+          </Button>
+        )}
+      </div>
+      {answerImageUrl && (
+        <img src={answerImageUrl} alt="" className="max-h-44 max-w-full rounded border border-gray-200 object-contain" />
+      )}
+      {localErr && <p className="text-sm text-red-600">{localErr}</p>}
+      {!canUpload && <p className="text-xs text-amber-800">Save the form instance before attaching images.</p>}
+    </div>
+  );
+}
+
 export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
   question,
   value,
@@ -413,6 +569,68 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
       );
     }
     const imgUrl = pm.imageUrl as string | undefined;
+    const allowAnswerImage = !!pm.allowAnswerImage;
+
+    if (allowAnswerImage) {
+      const norm = normalizeTextWithAnswerImage(value);
+      const emit = (patch: Partial<TextWithAnswerImage>) =>
+        onChange({
+          text: patch.text ?? norm.text,
+          answerImageUrl: patch.answerImageUrl !== undefined ? patch.answerImageUrl : norm.answerImageUrl,
+        } as Record<string, unknown>);
+      const wordHelp = wordLimit ? `${countWords(norm.text)} / ${wordLimit} words` : undefined;
+      const textEl = (
+        <Textarea
+          label={imgUrl ? undefined : taskLabel(question.label)}
+          value={norm.text}
+          onChange={(e) => {
+            const next = e.target.value;
+            emit({ text: wordLimit ? truncateToWordLimit(next, wordLimit) : next });
+          }}
+          disabled={disabled}
+          error={error}
+          className={fillBgClass}
+          required={false}
+          helperText={imgUrl ? wordHelp : [question.help_text, wordHelp].filter(Boolean).join(' • ') || undefined}
+          rows={wordLimit ? Math.max(2, Math.min(6, Math.ceil(wordLimit / 12))) : 3}
+          maxWords={wordLimit ?? undefined}
+        />
+      );
+      const attach = (
+        <OptionalAnswerImageAttachBar
+          instanceId={instanceId}
+          questionId={question.id}
+          answerImageUrl={norm.answerImageUrl}
+          onImageUrl={(u) => emit({ answerImageUrl: u })}
+          disabled={disabled}
+        />
+      );
+      if (imgUrl) {
+        return (
+          <div>
+            <QuestionLabelWithImage
+              label={taskLabel(question.label)}
+              helpText={question.help_text}
+              imageUrl={imgUrl}
+              imageLayout={(pm.imageLayout as ImageLayoutOption) || 'side_by_side'}
+              imageWidthPercent={(pm.imageWidthPercent as number) ?? 50}
+            >
+              <div className="mt-2">
+                {textEl}
+                {attach}
+              </div>
+            </QuestionLabelWithImage>
+          </div>
+        );
+      }
+      return (
+        <div>
+          {textEl}
+          {attach}
+        </div>
+      );
+    }
+
     if (imgUrl) {
       return (
         <div>
@@ -464,6 +682,66 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
 
   if (question.type === 'long_text') {
     const imgUrl = pm.imageUrl as string | undefined;
+    const allowAnswerImage = !!pm.allowAnswerImage;
+
+    if (allowAnswerImage) {
+      const norm = normalizeTextWithAnswerImage(value);
+      const emit = (patch: Partial<TextWithAnswerImage>) =>
+        onChange({
+          text: patch.text ?? norm.text,
+          answerImageUrl: patch.answerImageUrl !== undefined ? patch.answerImageUrl : norm.answerImageUrl,
+        } as Record<string, unknown>);
+      const wordHelp = wordLimit ? `${countWords(norm.text)} / ${wordLimit} words` : undefined;
+      const textEl = (
+        <Textarea
+          label={imgUrl ? undefined : taskLabel(question.label)}
+          value={norm.text}
+          onChange={(e) => emit({ text: e.target.value })}
+          disabled={disabled}
+          error={error}
+          className={fillBgClass}
+          required={false}
+          helperText={imgUrl ? wordHelp : [question.help_text, wordHelp].filter(Boolean).join(' • ') || undefined}
+          rows={wordLimit ? Math.max(2, Math.min(10, Math.ceil(wordLimit / 10))) : 8}
+          maxWords={wordLimit ?? undefined}
+          fixedHeightFromWordLimit={!!wordLimit}
+        />
+      );
+      const attach = (
+        <OptionalAnswerImageAttachBar
+          instanceId={instanceId}
+          questionId={question.id}
+          answerImageUrl={norm.answerImageUrl}
+          onImageUrl={(u) => emit({ answerImageUrl: u })}
+          disabled={disabled}
+        />
+      );
+      if (imgUrl) {
+        return (
+          <div>
+            <QuestionLabelWithImage
+              label={taskLabel(question.label)}
+              helpText={question.help_text}
+              imageUrl={imgUrl}
+              imageLayout={(pm.imageLayout as ImageLayoutOption) || 'side_by_side'}
+              imageWidthPercent={(pm.imageWidthPercent as number) ?? 50}
+            >
+              <div className="mt-2">
+                {textEl}
+                {attach}
+              </div>
+            </QuestionLabelWithImage>
+          </div>
+        );
+      }
+      return (
+        <div>
+          {textEl}
+          {attach}
+        </div>
+      );
+    }
+
     if (imgUrl) {
       return (
         <div>

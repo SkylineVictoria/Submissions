@@ -280,6 +280,26 @@ function labelToHtml(s: string | null | undefined): string {
   return escaped.replace(/\n/g, '<br>');
 }
 
+function escapeHtmlAttr(s: string): string {
+  return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
+
+function formatShortLongAnswerCellHtml(val: string | number | Record<string, unknown> | undefined): string {
+  if (val != null && typeof val === 'object' && !Array.isArray(val)) {
+    const o = val as Record<string, unknown>;
+    if ('text' in o || 'answerImageUrl' in o) {
+      const t = labelToHtml(String(o.text ?? ''));
+      const u = typeof o.answerImageUrl === 'string' && o.answerImageUrl.trim() ? o.answerImageUrl : '';
+      const img = u
+        ? `<div style="margin-top:8px"><img src="${escapeHtmlAttr(u)}" alt="" style="max-width:100%;max-height:280px;object-fit:contain;border:1px solid #ddd;border-radius:4px"/></div>`
+        : '';
+      return (t ? `<div style="white-space:pre-line">${t}</div>` : '') + img;
+    }
+  }
+  if (val == null) return '';
+  return labelToHtml(String(val));
+}
+
 async function getTemplateForInstance(instanceId: number) {
   const { data: instance } = await supabase
     .from('skyline_form_instances')
@@ -460,6 +480,14 @@ function getAnswerMap(answers: FormAnswer[]): Map<string, string | number | Reco
   const m = new Map<string, string | number | Record<string, unknown>>();
   for (const a of answers) {
     const key = a.row_id === null ? `q-${a.question_id}` : `q-${a.question_id}-${a.row_id}`;
+    const j =
+      a.value_json != null && typeof a.value_json === 'object' && !Array.isArray(a.value_json)
+        ? (a.value_json as Record<string, unknown>)
+        : null;
+    if (j && typeof j.answerImageUrl === 'string' && j.answerImageUrl.trim()) {
+      m.set(key, { text: String(a.value_text ?? j.text ?? ''), answerImageUrl: j.answerImageUrl });
+      continue;
+    }
     if (a.value_text != null) m.set(key, a.value_text);
     else if (a.value_number != null) m.set(key, a.value_number);
     else if (a.value_json != null) m.set(key, a.value_json as Record<string, unknown>);
@@ -1301,7 +1329,8 @@ function buildHtml(data: {
         html += '</tbody></table>';
         const commentsQ = questions.find(q => q.question.type === 'long_text' && q.question.code?.includes('Comments'));
         if (commentsQ) {
-          const commentsVal = String(answers.get(`q-${commentsQ.question.id}`) ?? '');
+          const commentsRaw = answers.get(`q-${commentsQ.question.id}`);
+          const commentsVal = formatShortLongAnswerCellHtml(commentsRaw as string | number | Record<string, unknown> | undefined);
           html += `<div class="question" style="margin-top:8px;font-family:'Calibri','Calibri Light',Arial,sans-serif;font-size:11pt"><div class="question-label" style="font-weight:600;margin-bottom:4px">${commentsQ.question.label}</div>`;
           html += `<div class="answer-box answer-box-large" style="min-height:50px;font-size:11pt">${commentsVal}</div></div>`;
         }
@@ -1455,7 +1484,9 @@ function buildHtml(data: {
       } else if (section.pdf_render_mode === 'assessment_submission') {
         const multiChoice = questions.find((q) => q.question.type === 'multi_choice');
         const otherDescQ = questions.find((q) => q.question.type === 'short_text');
-        const otherDescVal = otherDescQ ? String(answers.get(`q-${otherDescQ.question.id}`) ?? '') : '';
+        const otherDescVal = otherDescQ
+          ? formatShortLongAnswerCellHtml(answers.get(`q-${otherDescQ.question.id}`) as string | number | Record<string, unknown> | undefined)
+          : '';
         const mcVal = multiChoice ? answers.get(`q-${multiChoice.question.id}`) : undefined;
         const selected = new Set(Array.isArray(mcVal) ? (mcVal as string[]) : []);
         const opts = multiChoice?.options ?? [];
@@ -1737,7 +1768,7 @@ function buildHtml(data: {
               const qWordLimit = typeof qPm?.wordLimit === 'number' && qPm.wordLimit > 0 ? qPm.wordLimit : null;
               const blockClass = question.type === 'long_text' ? 'task-q-answer-block task-q-answer-large' : 'task-q-answer-block';
               const blockStyle = qWordLimit ? `min-height:${heightFromWordLimit(qWordLimit)}px;max-height:${heightFromWordLimit(qWordLimit)}px;height:${heightFromWordLimit(qWordLimit)}px;` : '';
-              html += `<div class="${blockClass}"${blockStyle ? ` style="${blockStyle}"` : ''}>${val ?? ''}</div>`;
+              html += `<div class="${blockClass}"${blockStyle ? ` style="${blockStyle}"` : ''}>${formatShortLongAnswerCellHtml(val as string | number | Record<string, unknown> | undefined)}</div>`;
               if (!useTopRightSatisfactory) html += '<div class="mt-3" style="margin-top:10px"><span style="font-weight:600;margin-right:8px">Satisfactory response:</span><span class="grid-status-cb' + (satYes ? ' checked' : '') + '"></span> Yes <span style="margin-left:12px" class="grid-status-cb' + (satNo ? ' checked' : '') + '"></span> No</div>';
             }
             const legacyAb = pmTop?.additionalBlock as Record<string, unknown> | undefined;
@@ -1784,7 +1815,7 @@ function buildHtml(data: {
                     else if (cqLayout === 'below') labelHtml += `<div style="margin-top:8px">${cqImgTag}</div>`;
                     else labelHtml = `<div style="display:flex;gap:16px;align-items:flex-start"><div style="flex:1;min-width:0">${labelHtml}</div><div style="width:${cqPct}%;flex-shrink:0">${cqImgTag}</div></div>`;
                   }
-                  html += `<div class="task-q-content-block mt-3">${blockHeaderHtml(block.headerText)}${labelHtml}<div class="${blockClass}"${blockStyle ? ` style="${blockStyle}"` : ''}>${val ?? ''}</div></div>`;
+                  html += `<div class="task-q-content-block mt-3">${blockHeaderHtml(block.headerText)}${labelHtml}<div class="${blockClass}"${blockStyle ? ` style="${blockStyle}"` : ''}>${formatShortLongAnswerCellHtml(val as string | number | Record<string, unknown> | undefined)}</div></div>`;
                 }
               } else if (block.type === 'grid_table' && block.questionId) {
                 const childQ = questions.find((x) => x.question.id === block.questionId);
@@ -1942,7 +1973,7 @@ function buildHtml(data: {
             const qWordLimit = typeof qPm?.wordLimit === 'number' && qPm.wordLimit > 0 ? qPm.wordLimit : null;
             const blockClass = question.type === 'long_text' ? 'task-q-answer-block task-q-answer-large' : 'task-q-answer-block';
             const blockStyle = qWordLimit ? `min-height:${heightFromWordLimit(qWordLimit)}px;max-height:${heightFromWordLimit(qWordLimit)}px;height:${heightFromWordLimit(qWordLimit)}px;` : '';
-            html += `<div class="${blockClass}"${blockStyle ? ` style="${blockStyle}"` : ''}>${val ?? ''}</div>`;
+            html += `<div class="${blockClass}"${blockStyle ? ` style="${blockStyle}"` : ''}>${formatShortLongAnswerCellHtml(val as string | number | Record<string, unknown> | undefined)}</div>`;
           }
           const legacyAb = pmTop?.additionalBlock as Record<string, unknown> | undefined;
           const contentBlocks: Array<{ type: string; content?: string; questionId?: number; headerText?: string }> = Array.isArray(pmTop?.contentBlocks)
@@ -1990,7 +2021,7 @@ function buildHtml(data: {
                   else if (cqLayout === 'below') labelHtml += `<div style="margin-top:8px">${cqImgTag}</div>`;
                   else labelHtml = `<div style="display:flex;gap:16px;align-items:flex-start"><div style="flex:1;min-width:0">${labelHtml}</div><div style="width:${cqPct}%;flex-shrink:0">${cqImgTag}</div></div>`;
                 }
-                html += `<div class="task-q-content-block mt-3">${blockHeaderHtml(block.headerText)}${labelHtml}<div class="${blockClass}"${blockStyle ? ` style="${blockStyle}"` : ''}>${val ?? ''}</div></div>`;
+                html += `<div class="task-q-content-block mt-3">${blockHeaderHtml(block.headerText)}${labelHtml}<div class="${blockClass}"${blockStyle ? ` style="${blockStyle}"` : ''}>${formatShortLongAnswerCellHtml(val as string | number | Record<string, unknown> | undefined)}</div></div>`;
               }
               continue;
             }
@@ -2408,6 +2439,9 @@ function buildHtml(data: {
               const val = answers.get(`q-${question.id}`);
               const checked = String(val || '').toLowerCase() === 'yes' || String(val || '').toLowerCase() === 'true';
               html += `<div class="question declaration-checkbox"><span class="cb ${checked ? 'checked' : ''}">${checked ? '✓' : ''}</span><span class="question-label">${question.label}</span></div>`;
+            } else if (question.type === 'short_text' || question.type === 'long_text') {
+              const val = answers.get(`q-${question.id}`);
+              html += `<div class="question"><div class="question-label">${question.label}</div><div class="answer-box">${formatShortLongAnswerCellHtml(val as string | number | Record<string, unknown> | undefined)}</div></div>`;
             } else {
               const val = answers.get(`q-${question.id}`);
               html += `<div class="question"><div class="question-label">${question.label}</div><div class="answer-box">${val ?? ''}</div></div>`;
@@ -2449,7 +2483,11 @@ function buildHtml(data: {
               const rawVal = answers.get(key);
               const val = (rawVal != null && rawVal !== '') ? rawVal : (question.code ? codeToValue.get(question.code) : undefined);
               const rowClass = rowIdx++ % 2 === 0 ? 'row-normal' : 'row-alt';
-              html += `<tr class="${rowClass}"><td class="label-cell">${question.label}</td><td class="value-cell">${val ?? ''}</td></tr>`;
+              const cellHtml =
+                question.type === 'short_text' || question.type === 'long_text'
+                  ? formatShortLongAnswerCellHtml(val as string | number | Record<string, unknown> | undefined)
+                  : (val ?? '');
+              html += `<tr class="${rowClass}"><td class="label-cell">${question.label}</td><td class="value-cell">${cellHtml}</td></tr>`;
             }
           }
           html += '</table>';

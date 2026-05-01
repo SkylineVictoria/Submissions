@@ -1990,18 +1990,29 @@ export const AdminFormBuilderPage: React.FC = () => {
                       options={QUESTION_TYPES}
                     />
                     {(q.type === 'short_text' || q.type === 'long_text') && (
-                      <Input
-                        label="Word limit (optional)"
-                        type="number"
-                        min={1}
-                        value={questionWordLimit ?? ''}
-                        onChange={(e) =>
-                          updateQuestion(q.id, {
-                            pdf_meta: { ...pm, wordLimit: normalizeWordLimit(e.target.value) },
-                          })
-                        }
-                        placeholder="e.g. 50"
-                      />
+                      <>
+                        <Input
+                          label="Word limit (optional)"
+                          type="number"
+                          min={1}
+                          value={questionWordLimit ?? ''}
+                          onChange={(e) =>
+                            updateQuestion(q.id, {
+                              pdf_meta: { ...pm, wordLimit: normalizeWordLimit(e.target.value) },
+                            })
+                          }
+                          placeholder="e.g. 50"
+                        />
+                        <Checkbox
+                          label="Allow image upload with answer (optional for respondent; HEIC/iPhone photos are converted for PDF)"
+                          checked={!!pm.allowAnswerImage}
+                          onChange={(v) =>
+                            updateQuestion(q.id, {
+                              pdf_meta: { ...pm, allowAnswerImage: !!v },
+                            })
+                          }
+                        />
+                      </>
                     )}
                     {(q.type !== 'page_break') && (
                       <div className="space-y-2">
@@ -2473,6 +2484,11 @@ export const AdminFormBuilderPage: React.FC = () => {
                                       <div className="space-y-2">
                                         <Input label="Label" value={childQ.label} onChange={(e) => updateQuestion(childQ.id, { label: e.target.value })} />
                                         <Input label="Word limit" type="number" min={1} value={wl ?? ''} onChange={(e) => updateQuestion(childQ.id, { pdf_meta: { ...childPm, wordLimit: normalizeWordLimit(e.target.value) } })} placeholder="e.g. 100" />
+                                        <Checkbox
+                                          label="Allow image upload with answer (optional; HEIC/iPhone converted for PDF)"
+                                          checked={!!childPm.allowAnswerImage}
+                                          onChange={(v) => updateQuestion(childQ.id, { pdf_meta: { ...childPm, allowAnswerImage: !!v } })}
+                                        />
                                         <div className="space-y-1">
                                           <span className="text-xs font-medium text-gray-600">Image (optional)</span>
                                           <div className="flex flex-wrap gap-2 items-center">
