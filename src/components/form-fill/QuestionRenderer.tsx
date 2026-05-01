@@ -34,6 +34,7 @@ function QuestionLabelWithImage({
   imageUrl,
   imageLayout = 'side_by_side',
   imageWidthPercent = 50,
+  imageFullWidth = false,
   children,
 }: {
   label: React.ReactNode;
@@ -41,10 +42,21 @@ function QuestionLabelWithImage({
   imageUrl?: string | null;
   imageLayout?: ImageLayoutOption;
   imageWidthPercent?: number;
+  imageFullWidth?: boolean;
   children?: React.ReactNode;
 }) {
   const imgEl = imageUrl ? (
-    <img src={imageUrl} alt="" className="max-w-full h-auto object-contain rounded border border-gray-200" style={{ maxHeight: 280 }} />
+    <img
+      src={imageUrl}
+      alt=""
+      className="max-w-full h-auto object-contain rounded border border-gray-200"
+      style={{
+        maxHeight: imageFullWidth ? 520 : 280,
+        width: imageFullWidth ? '100%' : undefined,
+        display: imageFullWidth ? 'block' : undefined,
+        margin: imageFullWidth ? '0 auto' : undefined,
+      }}
+    />
   ) : null;
   const textBlock = (
     <div className="flex-1 min-w-0">
@@ -64,7 +76,7 @@ function QuestionLabelWithImage({
     );
   }
 
-  if (imageLayout === 'above') {
+  if (imageFullWidth || imageLayout === 'above') {
     return (
       <div>
         <div className="mb-2">{imgEl}</div>
@@ -456,6 +468,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
           imageUrl={imgUrl}
           imageLayout={(pm.imageLayout as ImageLayoutOption) || 'side_by_side'}
           imageWidthPercent={(pm.imageWidthPercent as number) ?? 50}
+          imageFullWidth={!!(pm.imageFullWidth as boolean | undefined)}
         />
       </div>
     );
@@ -614,6 +627,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
               imageUrl={imgUrl}
               imageLayout={(pm.imageLayout as ImageLayoutOption) || 'side_by_side'}
               imageWidthPercent={(pm.imageWidthPercent as number) ?? 50}
+              imageFullWidth={!!(pm.imageFullWidth as boolean | undefined)}
             >
               <div className="mt-2">
                 {textEl}
@@ -640,6 +654,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
             imageUrl={imgUrl}
             imageLayout={(pm.imageLayout as ImageLayoutOption) || 'side_by_side'}
             imageWidthPercent={(pm.imageWidthPercent as number) ?? 50}
+            imageFullWidth={!!(pm.imageFullWidth as boolean | undefined)}
           >
             <div className="mt-2">
               <Textarea
@@ -725,6 +740,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
               imageUrl={imgUrl}
               imageLayout={(pm.imageLayout as ImageLayoutOption) || 'side_by_side'}
               imageWidthPercent={(pm.imageWidthPercent as number) ?? 50}
+              imageFullWidth={!!(pm.imageFullWidth as boolean | undefined)}
             >
               <div className="mt-2">
                 {textEl}
@@ -751,6 +767,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
             imageUrl={imgUrl}
             imageLayout={(pm.imageLayout as ImageLayoutOption) || 'side_by_side'}
             imageWidthPercent={(pm.imageWidthPercent as number) ?? 50}
+            imageFullWidth={!!(pm.imageFullWidth as boolean | undefined)}
           >
             <div className="mt-2">
               <Textarea

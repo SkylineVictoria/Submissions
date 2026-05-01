@@ -1222,10 +1222,11 @@ export function buildHtml(data: {
               (isImageBlock && blockImgUrl)
             ) {
               const textOnly = isImageBlock ? '' : blockContent;
-              const blockLayout = (block as { imageLayout?: string }).imageLayout || (isImageBlock ? 'above' : 'side_by_side');
+              const blockFull = (block as { imageFullWidth?: boolean }).imageFullWidth === true;
+              const blockLayout = blockFull ? 'above' : ((block as { imageLayout?: string }).imageLayout || (isImageBlock ? 'above' : 'side_by_side'));
               const blockPct = Math.max(20, Math.min(80, (block as { imageWidthPercent?: number }).imageWidthPercent || 50));
               const imgTag = blockImgUrl
-                ? `<img src="${blockImgUrl}" alt="" style="max-width:100%;max-height:280px;object-fit:contain;border:1px solid #ddd;border-radius:4px" />`
+                ? `<img src="${blockImgUrl}" alt="" style="max-width:100%;${blockFull ? 'width:100%;display:block;margin:0 auto;' : ''}max-height:${blockFull ? 520 : 280}px;object-fit:contain;border:1px solid #ddd;border-radius:4px" />`
                 : '';
               let innerHtml = '';
               if (!imgTag) innerHtml = `<div class="task-q-additional-instruction">${textOnly}</div>`;

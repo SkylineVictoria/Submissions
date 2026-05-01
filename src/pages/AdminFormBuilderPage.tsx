@@ -114,6 +114,8 @@ interface ContentBlock {
   imageLayout?: ImageLayoutOption;
   /** Image width % in side_by_side layout (default 50) */
   imageWidthPercent?: number;
+  /** When true, image is rendered full-width (stacked, not side-by-side) */
+  imageFullWidth?: boolean;
 }
 
 function normalizeGridColumnType(raw: unknown): GridColumnType {
@@ -2056,17 +2058,22 @@ export const AdminFormBuilderPage: React.FC = () => {
                           {(pm.imageUrl as string) && (
                             <>
                               <img src={pm.imageUrl as string} alt="" className="h-12 object-contain border rounded" />
-                              <button type="button" className="text-xs text-red-600" onClick={() => updateQuestion(q.id, { pdf_meta: { ...pm, imageUrl: undefined, imageLayout: undefined, imageWidthPercent: undefined } })}>Remove</button>
+                              <button type="button" className="text-xs text-red-600" onClick={() => updateQuestion(q.id, { pdf_meta: { ...pm, imageUrl: undefined, imageLayout: undefined, imageWidthPercent: undefined, imageFullWidth: undefined } })}>Remove</button>
                             </>
                           )}
                         </div>
                         {(pm.imageUrl as string) && (
                           <div className="flex flex-wrap gap-4 pt-1">
+                            <Checkbox
+                              label="Full width image"
+                              checked={!!(pm.imageFullWidth as boolean | undefined)}
+                              onChange={(v) => updateQuestion(q.id, { pdf_meta: { ...pm, imageFullWidth: !!v, imageLayout: v ? 'above' : (pm.imageLayout as string) } })}
+                            />
                             <div>
                               <label className="text-xs text-gray-500">Layout</label>
                               <Select
                                 value={(pm.imageLayout as string) || 'side_by_side'}
-                                onChange={(v) => updateQuestion(q.id, { pdf_meta: { ...pm, imageLayout: (v as ImageLayoutOption) || 'side_by_side' } })}
+                                onChange={(v) => updateQuestion(q.id, { pdf_meta: { ...pm, imageLayout: (v as ImageLayoutOption) || 'side_by_side', imageFullWidth: ((v as string) === 'side_by_side') ? (pm.imageFullWidth as boolean | undefined) : (pm.imageFullWidth as boolean | undefined) } })}
                                 options={[
                                   { value: 'side_by_side', label: 'Text & image side-by-side' },
                                   { value: 'above', label: 'Image above, question below' },
@@ -2074,7 +2081,7 @@ export const AdminFormBuilderPage: React.FC = () => {
                                 ]}
                               />
                             </div>
-                            {((pm.imageLayout as string) || 'side_by_side') === 'side_by_side' && (
+                            {!((pm.imageFullWidth as boolean | undefined) ?? false) && (((pm.imageLayout as string) || 'side_by_side') === 'side_by_side') && (
                               <div>
                                 <label className="text-xs text-gray-500">Image width %</label>
                                 <Input type="number" min={20} max={80} value={(pm.imageWidthPercent as number) ?? 50} onChange={(e) => updateQuestion(q.id, { pdf_meta: { ...pm, imageWidthPercent: Math.max(20, Math.min(80, Number(e.target.value) || 50)) } })} />
@@ -2377,17 +2384,23 @@ export const AdminFormBuilderPage: React.FC = () => {
                                           {block.imageUrl && (
                                             <>
                                               <img src={block.imageUrl} alt="" className="h-12 object-contain border rounded" />
-                                              <button type="button" className="text-xs text-red-600" onClick={() => updateBlock(idx, { imageUrl: undefined })}>Remove</button>
+                                              <button type="button" className="text-xs text-red-600" onClick={() => updateBlock(idx, { imageUrl: undefined, imageFullWidth: undefined })}>Remove</button>
                                             </>
                                           )}
                                         </div>
                                         {block.imageUrl && (
                                           <div className="flex flex-wrap gap-4">
+                                            <Checkbox
+                                              label="Full width image"
+                                              checked={!!block.imageFullWidth}
+                                              onChange={(v) => updateBlock(idx, { imageFullWidth: !!v, imageLayout: v ? 'above' : block.imageLayout })}
+                                            />
                                             <div>
                                               <label className="text-xs text-gray-500">Layout</label>
                                               <Select
                                                 value={block.imageLayout || 'side_by_side'}
                                                 onChange={(v) => updateBlock(idx, { imageLayout: (v as ImageLayoutOption) || 'side_by_side' })}
+                                                attachDropdown="trigger"
                                                 options={[
                                                   { value: 'side_by_side', label: 'Text & image side-by-side' },
                                                   { value: 'above', label: 'Image above, text below' },
@@ -2395,7 +2408,7 @@ export const AdminFormBuilderPage: React.FC = () => {
                                                 ]}
                                               />
                                             </div>
-                                            {(block.imageLayout || 'side_by_side') === 'side_by_side' && (
+                                            {!block.imageFullWidth && ((block.imageLayout || 'side_by_side') === 'side_by_side') && (
                                               <div>
                                                 <label className="text-xs text-gray-500">Image width %</label>
                                                 <Input type="number" min={20} max={80} value={block.imageWidthPercent ?? 50} onChange={(e) => updateBlock(idx, { imageWidthPercent: Math.max(20, Math.min(80, Number(e.target.value) || 50)) })} />
@@ -2447,17 +2460,23 @@ export const AdminFormBuilderPage: React.FC = () => {
                                         {block.imageUrl && (
                                           <>
                                             <img src={block.imageUrl} alt="" className="h-12 object-contain border rounded" />
-                                            <button type="button" className="text-xs text-red-600" onClick={() => updateBlock(idx, { imageUrl: undefined })}>Remove</button>
+                                            <button type="button" className="text-xs text-red-600" onClick={() => updateBlock(idx, { imageUrl: undefined, imageFullWidth: undefined })}>Remove</button>
                                           </>
                                         )}
                                       </div>
                                       {block.imageUrl && (
                                         <div className="flex flex-wrap gap-4">
+                                          <Checkbox
+                                            label="Full width image"
+                                            checked={!!block.imageFullWidth}
+                                            onChange={(v) => updateBlock(idx, { imageFullWidth: !!v, imageLayout: v ? 'above' : block.imageLayout })}
+                                          />
                                           <div>
                                             <label className="text-xs text-gray-500">Layout</label>
                                             <Select
                                               value={block.imageLayout || 'above'}
                                               onChange={(v) => updateBlock(idx, { imageLayout: (v as ImageLayoutOption) || 'above' })}
+                                              attachDropdown="trigger"
                                               options={[
                                                 { value: 'side_by_side', label: 'Text & image side-by-side' },
                                                 { value: 'above', label: 'Image above, text below' },
@@ -2465,7 +2484,7 @@ export const AdminFormBuilderPage: React.FC = () => {
                                               ]}
                                             />
                                           </div>
-                                          {(block.imageLayout || 'above') === 'side_by_side' && (
+                                          {!block.imageFullWidth && ((block.imageLayout || 'above') === 'side_by_side') && (
                                             <div>
                                               <label className="text-xs text-gray-500">Image width %</label>
                                               <Input type="number" min={20} max={80} value={block.imageWidthPercent ?? 50} onChange={(e) => updateBlock(idx, { imageWidthPercent: Math.max(20, Math.min(80, Number(e.target.value) || 50)) })} />
@@ -2529,21 +2548,47 @@ export const AdminFormBuilderPage: React.FC = () => {
                                             {(childPm.imageUrl as string) && (
                                               <>
                                                 <img src={childPm.imageUrl as string} alt="" className="h-12 object-contain border rounded" />
-                                                <button type="button" className="text-xs text-red-600" onClick={() => updateQuestion(childQ.id, { pdf_meta: { ...childPm, imageUrl: undefined, imageLayout: undefined, imageWidthPercent: undefined } })}>Remove</button>
+                                                <button type="button" className="text-xs text-red-600" onClick={() => updateQuestion(childQ.id, { pdf_meta: { ...childPm, imageUrl: undefined, imageLayout: undefined, imageWidthPercent: undefined, imageFullWidth: undefined } })}>Remove</button>
                                               </>
                                             )}
                                           </div>
                                           {(childPm.imageUrl as string) && (
-                                            <Select
-                                              label="Image layout"
-                                              value={(childPm.imageLayout as string) || 'side_by_side'}
-                                              onChange={(v) => updateQuestion(childQ.id, { pdf_meta: { ...childPm, imageLayout: (v as ImageLayoutOption) || 'side_by_side' } })}
-                                              options={[
-                                                { value: 'side_by_side', label: 'Text & image side-by-side' },
-                                                { value: 'above', label: 'Image above' },
-                                                { value: 'below', label: 'Image below' },
-                                              ]}
-                                            />
+                                            <div className="flex flex-wrap gap-4 items-end">
+                                              <Checkbox
+                                                label="Full width image"
+                                                checked={!!(childPm.imageFullWidth as boolean | undefined)}
+                                                onChange={(v) => updateQuestion(childQ.id, { pdf_meta: { ...childPm, imageFullWidth: !!v, imageLayout: v ? 'above' : (childPm.imageLayout as string) } })}
+                                              />
+                                              <div style={{ minWidth: 220 }}>
+                                                <Select
+                                                  label="Image layout"
+                                                  value={(childPm.imageLayout as string) || 'side_by_side'}
+                                                  onChange={(v) => updateQuestion(childQ.id, { pdf_meta: { ...childPm, imageLayout: (v as ImageLayoutOption) || 'side_by_side' } })}
+                                                  attachDropdown="trigger"
+                                                  options={[
+                                                    { value: 'side_by_side', label: 'Text & image side-by-side' },
+                                                    { value: 'above', label: 'Image above' },
+                                                    { value: 'below', label: 'Image below' },
+                                                  ]}
+                                                />
+                                              </div>
+                                              {!((childPm.imageFullWidth as boolean | undefined) ?? false) && (((childPm.imageLayout as string) || 'side_by_side') === 'side_by_side') && (
+                                                <div>
+                                                  <label className="text-xs text-gray-500">Image width %</label>
+                                                  <Input
+                                                    type="number"
+                                                    min={20}
+                                                    max={80}
+                                                    value={(childPm.imageWidthPercent as number) ?? 50}
+                                                    onChange={(e) =>
+                                                      updateQuestion(childQ.id, {
+                                                        pdf_meta: { ...childPm, imageWidthPercent: Math.max(20, Math.min(80, Number(e.target.value) || 50)) },
+                                                      })
+                                                    }
+                                                  />
+                                                </div>
+                                              )}
+                                            </div>
                                           )}
                                         </div>
                                       </div>

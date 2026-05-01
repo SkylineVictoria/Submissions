@@ -1784,9 +1784,10 @@ function buildHtml(data: {
                 const isImageOnly = block.type === 'image';
                 const blockContent = isImageOnly ? '' : (block.content as string) || '';
                 const blockImgUrl = (block as { imageUrl?: string }).imageUrl;
-                const blockLayout = (block as { imageLayout?: string }).imageLayout || (isImageOnly ? 'above' : 'side_by_side');
+                const blockFull = (block as { imageFullWidth?: boolean }).imageFullWidth === true;
+                const blockLayout = blockFull ? 'above' : ((block as { imageLayout?: string }).imageLayout || (isImageOnly ? 'above' : 'side_by_side'));
                 const blockPct = Math.max(20, Math.min(80, (block as { imageWidthPercent?: number }).imageWidthPercent || 50));
-                const imgTag = blockImgUrl ? `<img src="${blockImgUrl}" alt="" style="max-width:100%;max-height:280px;object-fit:contain;border:1px solid #ddd;border-radius:4px" />` : '';
+                const imgTag = blockImgUrl ? `<img src="${blockImgUrl}" alt="" style="max-width:100%;${blockFull ? 'width:100%;display:block;margin:0 auto;' : ''}max-height:${blockFull ? 520 : 280}px;object-fit:contain;border:1px solid #ddd;border-radius:4px" />` : '';
                 let innerHtml = '';
                 if (!imgTag) innerHtml = `<div class="task-q-additional-instruction">${blockContent || ''}</div>`;
                 else if (blockLayout === 'above') innerHtml = `<div style="margin-bottom:8px">${imgTag}</div><div class="task-q-additional-instruction">${blockContent || ''}</div>`;
@@ -1890,10 +1891,11 @@ function buildHtml(data: {
           const textAboveHeader = String(pmTop.textAboveHeader ?? '').trim();
           let labelCellContent = `<div class="task-q-question-label">${labelToHtml(question.label)}</div>` + (textAboveHeader ? `<div class="task-q-text-above-header">${labelToHtml(textAboveHeader)}</div>` : '');
           const qImgUrl = pmTop?.imageUrl as string | undefined;
-          const qLayout = (pmTop?.imageLayout as string) || 'side_by_side';
+          const qFull = (pmTop?.imageFullWidth as boolean | undefined) === true;
+          const qLayout = qFull ? 'above' : ((pmTop?.imageLayout as string) || 'side_by_side');
           const qPct = Math.max(20, Math.min(80, (pmTop?.imageWidthPercent as number) || 50));
           if (qImgUrl) {
-            const qImgTag = `<img src="${qImgUrl}" alt="" style="max-width:100%;max-height:280px;object-fit:contain;border:1px solid #ddd;border-radius:4px" />`;
+            const qImgTag = `<img src="${qImgUrl}" alt="" style="max-width:100%;${qFull ? 'width:100%;display:block;margin:0 auto;' : ''}max-height:${qFull ? 520 : 280}px;object-fit:contain;border:1px solid #ddd;border-radius:4px" />`;
             if (qLayout === 'above') labelCellContent = `<div style="margin-bottom:8px">${qImgTag}</div>${labelCellContent}`;
             else if (qLayout === 'below') labelCellContent += `<div style="margin-top:8px">${qImgTag}</div>`;
             else labelCellContent = `<div style="display:flex;gap:16px;align-items:flex-start"><div style="flex:1;min-width:0">${labelCellContent}</div><div style="width:${qPct}%;flex-shrink:0">${qImgTag}</div></div>`;
@@ -1988,9 +1990,10 @@ function buildHtml(data: {
               const isImageOnly = block.type === 'image';
               const blockContent = isImageOnly ? '' : (block.content as string) || '';
               const blockImgUrl = (block as { imageUrl?: string }).imageUrl;
-              const blockLayout = (block as { imageLayout?: string }).imageLayout || (isImageOnly ? 'above' : 'side_by_side');
+              const blockFull = (block as { imageFullWidth?: boolean }).imageFullWidth === true;
+              const blockLayout = blockFull ? 'above' : ((block as { imageLayout?: string }).imageLayout || (isImageOnly ? 'above' : 'side_by_side'));
               const blockPct = Math.max(20, Math.min(80, (block as { imageWidthPercent?: number }).imageWidthPercent || 50));
-              const imgTag = blockImgUrl ? `<img src="${blockImgUrl}" alt="" style="max-width:100%;max-height:280px;object-fit:contain;border:1px solid #ddd;border-radius:4px" />` : '';
+              const imgTag = blockImgUrl ? `<img src="${blockImgUrl}" alt="" style="max-width:100%;${blockFull ? 'width:100%;display:block;margin:0 auto;' : ''}max-height:${blockFull ? 520 : 280}px;object-fit:contain;border:1px solid #ddd;border-radius:4px" />` : '';
               let innerHtml = '';
               if (!imgTag) innerHtml = `<div class="task-q-additional-instruction">${blockContent || ''}</div>`;
               else if (blockLayout === 'above') innerHtml = `<div style="margin-bottom:8px">${imgTag}</div><div class="task-q-additional-instruction">${blockContent || ''}</div>`;

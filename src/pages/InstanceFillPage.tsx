@@ -2715,7 +2715,7 @@ export const InstanceFillPage: React.FC = () => {
                                           {content}
                                         </div>
                                       );
-                                      const renderBlock = (block: { type: string; content?: string; questionId?: number; headerText?: string; imageUrl?: string; imageLayout?: string; imageWidthPercent?: number }, key: string) => {
+                                      const renderBlock = (block: { type: string; content?: string; questionId?: number; headerText?: string; imageUrl?: string; imageLayout?: string; imageWidthPercent?: number; imageFullWidth?: boolean }, key: string) => {
                                         if (block.type === 'instruction_block' && (block.content || (block as { imageUrl?: string }).imageUrl)) {
                                             const content = block.content ? (
                                               <div className="overflow-x-hidden">
@@ -2726,9 +2726,10 @@ export const InstanceFillPage: React.FC = () => {
                                               </div>
                                             ) : null;
                                           const imgUrl = (block as { imageUrl?: string }).imageUrl;
-                                          const layout = (block as { imageLayout?: string }).imageLayout || 'side_by_side';
+                                          const full = !!(block as { imageFullWidth?: boolean }).imageFullWidth;
+                                          const layout = full ? 'above' : ((block as { imageLayout?: string }).imageLayout || 'side_by_side');
                                           const pct = Math.max(20, Math.min(80, (block as { imageWidthPercent?: number }).imageWidthPercent || 50));
-                                          const imgEl = imgUrl ? <img src={imgUrl} alt="" className="max-w-full h-auto object-contain rounded border border-gray-200" style={{ maxHeight: 280 }} /> : null;
+                                          const imgEl = imgUrl ? <img src={imgUrl} alt="" className="max-w-full h-auto object-contain rounded border border-gray-200" style={{ maxHeight: full ? 520 : 280, width: full ? '100%' : undefined, display: full ? 'block' : undefined, margin: full ? '0 auto' : undefined }} /> : null;
                                           let blockContent: React.ReactNode;
                                           if (!imgEl) blockContent = content;
                                           else if (layout === 'above') blockContent = <div><div className="mb-2">{imgEl}</div>{content}</div>;
@@ -2748,9 +2749,21 @@ export const InstanceFillPage: React.FC = () => {
                                         }
                                         if (block.type === 'image' && block.imageUrl) {
                                           const imgUrl = block.imageUrl;
-                                          const layout = block.imageLayout || 'above';
+                                          const layout = block.imageFullWidth ? 'above' : (block.imageLayout || 'above');
                                           const pct = Math.max(20, Math.min(80, block.imageWidthPercent || 50));
-                                          const imgEl = <img src={imgUrl} alt="" className="max-w-full h-auto object-contain rounded border border-gray-200" style={{ maxHeight: 280 }} />;
+                                          const imgEl = (
+                                            <img
+                                              src={imgUrl}
+                                              alt=""
+                                              className="max-w-full h-auto object-contain rounded border border-gray-200"
+                                              style={{
+                                                maxHeight: 280,
+                                                width: block.imageFullWidth ? '100%' : undefined,
+                                                display: block.imageFullWidth ? 'block' : undefined,
+                                                margin: block.imageFullWidth ? '0 auto' : undefined,
+                                              }}
+                                            />
+                                          );
                                           let blockContent: React.ReactNode;
                                           if (layout === 'above') blockContent = <div className="mb-2">{imgEl}</div>;
                                           else if (layout === 'below') blockContent = <div className="mt-2">{imgEl}</div>;
@@ -2853,7 +2866,20 @@ export const InstanceFillPage: React.FC = () => {
                                                 const imgUrl = qPm.imageUrl as string | undefined;
                                                 const layout = (qPm.imageLayout as string) || 'side_by_side';
                                                 const pct = Math.max(20, Math.min(80, (qPm.imageWidthPercent as number) || 50));
-                                                const imgEl = imgUrl ? <img src={imgUrl} alt="" className="max-w-full h-auto object-contain rounded border border-gray-200" style={{ maxHeight: 280 }} /> : null;
+                                                const fullWidth = (qPm.imageFullWidth as boolean | undefined) === true;
+                                                const imgEl = imgUrl ? (
+                                                  <img
+                                                    src={imgUrl}
+                                                    alt=""
+                                                    className="max-w-full h-auto object-contain rounded border border-gray-200"
+                                                    style={{
+                                                      maxHeight: fullWidth ? 520 : 280,
+                                                      width: fullWidth ? '100%' : undefined,
+                                                      display: fullWidth ? 'block' : undefined,
+                                                      margin: fullWidth ? '0 auto' : undefined,
+                                                    }}
+                                                  />
+                                                ) : null;
                                                 if (!imgEl) return <>{q.label}</>;
                                                 if (layout === 'above') return <><div className="mb-2">{imgEl}</div><div>{q.label}</div></>;
                                                 if (layout === 'below') return <><div>{q.label}</div><div className="mt-2">{imgEl}</div></>;
@@ -3051,7 +3077,7 @@ export const InstanceFillPage: React.FC = () => {
                                                 {content}
                                               </div>
                                             );
-                                            const renderBlock = (block: { type: string; content?: string; questionId?: number; headerText?: string; imageUrl?: string; imageLayout?: string; imageWidthPercent?: number }, key: string) => {
+                                            const renderBlock = (block: { type: string; content?: string; questionId?: number; headerText?: string; imageUrl?: string; imageLayout?: string; imageWidthPercent?: number; imageFullWidth?: boolean }, key: string) => {
                                               if (block.type === 'instruction_block' && (block.content || block.imageUrl)) {
                                                 const content = block.content ? (
                                                   <div className="overflow-x-auto">
@@ -3062,9 +3088,9 @@ export const InstanceFillPage: React.FC = () => {
                                                   </div>
                                                 ) : null;
                                                 const imgUrl = block.imageUrl;
-                                                const layout = block.imageLayout || 'side_by_side';
+                                                const layout = block.imageFullWidth ? 'above' : (block.imageLayout || 'side_by_side');
                                                 const pct = Math.max(20, Math.min(80, block.imageWidthPercent || 50));
-                                                const imgEl = imgUrl ? <img src={imgUrl} alt="" className="max-w-full h-auto object-contain rounded border border-gray-200" style={{ maxHeight: 280 }} /> : null;
+                                                const imgEl = imgUrl ? <img src={imgUrl} alt="" className="max-w-full h-auto object-contain rounded border border-gray-200" style={{ maxHeight: (block.imageFullWidth ? 520 : 280), width: block.imageFullWidth ? '100%' : undefined, display: block.imageFullWidth ? 'block' : undefined, margin: block.imageFullWidth ? '0 auto' : undefined }} /> : null;
                                                 let blockContent: React.ReactNode;
                                                 if (!imgEl) blockContent = content;
                                                 else if (layout === 'above') blockContent = <div><div className="mb-2">{imgEl}</div>{content}</div>;
@@ -3084,9 +3110,21 @@ export const InstanceFillPage: React.FC = () => {
                                               }
                                               if (block.type === 'image' && block.imageUrl) {
                                                 const imgUrl = block.imageUrl;
-                                                const layout = block.imageLayout || 'above';
+                                                const layout = block.imageFullWidth ? 'above' : (block.imageLayout || 'above');
                                                 const pct = Math.max(20, Math.min(80, block.imageWidthPercent || 50));
-                                                const imgEl = <img src={imgUrl} alt="" className="max-w-full h-auto object-contain rounded border border-gray-200" style={{ maxHeight: 280 }} />;
+                                                const imgEl = (
+                                                  <img
+                                                    src={imgUrl}
+                                                    alt=""
+                                                    className="max-w-full h-auto object-contain rounded border border-gray-200"
+                                                    style={{
+                                                      maxHeight: 280,
+                                                      width: block.imageFullWidth ? '100%' : undefined,
+                                                      display: block.imageFullWidth ? 'block' : undefined,
+                                                      margin: block.imageFullWidth ? '0 auto' : undefined,
+                                                    }}
+                                                  />
+                                                );
                                                 let blockContent: React.ReactNode;
                                                 if (layout === 'above') blockContent = <div className="mb-2">{imgEl}</div>;
                                                 else if (layout === 'below') blockContent = <div className="mt-2">{imgEl}</div>;
