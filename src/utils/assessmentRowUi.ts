@@ -170,6 +170,26 @@ export function hasCompetentAttempt(results: (AttemptResult | null | undefined)[
   return r.some((x) => x === 'competent');
 }
 
+/**
+ * While the instance is still with the trainer (`role_context === 'trainer'`), the summary may already
+ * contain `competent` from auto-sync before the trainer submits to office. Dashboard UI should not show
+ * green "Completed" / competent styling until the trainer finishes their review (handoff to office or terminal lock).
+ * NYC remains visible so resubmission messaging stays accurate.
+ */
+export function maskCompetentWhileAwaitingTrainer(
+  row: Pick<{ role_context?: string; status?: string }, 'role_context' | 'status'>,
+  results: (AttemptResult | null | undefined)[] | null | undefined,
+): AttemptResult[] {
+  const triple = [...(results ?? []), null, null, null].slice(0, 3).map((x) =>
+    x === 'competent' || x === 'not_yet_competent' ? x : null,
+  ) as AttemptResult[];
+  const rc = String(row.role_context ?? '').trim();
+  const st = String(row.status ?? '').trim();
+  const awaitingTrainer = rc === 'trainer' && st !== 'locked';
+  if (!awaitingTrainer) return triple;
+  return triple.map((x) => (x === 'competent' ? null : x));
+}
+
 export type AttemptDotTone = 'green' | 'red' | 'yellow' | 'gray';
 
 function isWaitingTrainerMark(r: AttemptResult[], submitted: number, slotIndex: number): boolean {
@@ -208,7 +228,8 @@ export function computeAttemptTones(input: {
   const student: AttemptDotTone[] = [0, 1, 2].map((i) => {
     if (r[i] === 'competent') return 'green';
     if (r[i] === 'not_yet_competent') return 'red';
-    if (i < submitted) return 'green';
+    // Submitted but no published competent outcome yet — amber (not green) until trainer completes review.
+    if (i < submitted) return 'yellow';
     if (studentNextYellow === i) return 'yellow';
     return 'gray';
   });

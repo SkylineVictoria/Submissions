@@ -19,6 +19,7 @@ import {
   getStudentAttemptDoneText,
   getMissedAttemptWindowText,
   melDateString,
+  maskCompetentWhileAwaitingTrainer,
   type AttemptResult,
 } from '../../utils/assessmentRowUi';
 import {
@@ -208,11 +209,12 @@ export const TrainerGradeMePanel: React.FC<Props> = ({ trainerUserId }) => {
                     <div className="border-t border-[var(--border)] bg-white px-2 py-2 space-y-1">
                       {unitRows.map((row) => {
                         const sum = attemptSummaryByInstanceId[row.id] ?? null;
-                        const attemptResults: AttemptResult[] = [
+                        const rawAttemptResults: AttemptResult[] = [
                           sum?.final_attempt_1_result ?? null,
                           sum?.final_attempt_2_result ?? null,
                           sum?.final_attempt_3_result ?? null,
                         ];
+                        const attemptResults = maskCompetentWhileAwaitingTrainer(row, rawAttemptResults);
                         const ui = computeRowUi({
                           row: { ...row, did_not_attempt: row.did_not_attempt ?? null },
                           attemptResults,
@@ -220,7 +222,7 @@ export const TrainerGradeMePanel: React.FC<Props> = ({ trainerUserId }) => {
                         const attemptDoneText = getStudentAttemptDoneText({
                           submissionCount: Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0),
                           submittedAt: row.submitted_at ?? null,
-                          attemptResults,
+                          attemptResults: rawAttemptResults,
                         });
                         const missedAttemptText = getMissedAttemptWindowText({
                           noAttemptRollovers: row.no_attempt_rollovers ?? null,

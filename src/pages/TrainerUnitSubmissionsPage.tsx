@@ -15,7 +15,7 @@ import {
   updateFormInstanceDates,
   type SubmittedInstanceRow,
 } from '../lib/formEngine';
-import { formatDDMMYYYY, type AttemptResult } from '../utils/assessmentRowUi';
+import { formatDDMMYYYY, maskCompetentWhileAwaitingTrainer, type AttemptResult } from '../utils/assessmentRowUi';
 import { cn } from '../components/utils/cn';
 import { DatePicker } from '../components/ui/DatePicker';
 import { toast } from '../utils/toast';
@@ -36,15 +36,19 @@ const getWorkflowBadgeClass = (row: SubmittedInstanceRow): string => {
   return 'bg-gray-100 text-gray-700';
 };
 
-function getOutcomeLabel(summary: {
-  final_attempt_1_result: AttemptResult;
-  final_attempt_2_result: AttemptResult;
-  final_attempt_3_result: AttemptResult;
-} | null): { label: string; className: string } {
+function getOutcomeLabel(
+  row: SubmittedInstanceRow,
+  summary: {
+    final_attempt_1_result: AttemptResult;
+    final_attempt_2_result: AttemptResult;
+    final_attempt_3_result: AttemptResult;
+  } | null,
+): { label: string; className: string } {
   const r1 = summary?.final_attempt_1_result ?? null;
   const r2 = summary?.final_attempt_2_result ?? null;
   const r3 = summary?.final_attempt_3_result ?? null;
-  const anyCompetent = r1 === 'competent' || r2 === 'competent' || r3 === 'competent';
+  const [d1, d2, d3] = maskCompetentWhileAwaitingTrainer(row, [r1, r2, r3]);
+  const anyCompetent = d1 === 'competent' || d2 === 'competent' || d3 === 'competent';
   if (anyCompetent) return { label: 'Completed', className: 'text-emerald-700' };
   const anyNYC = r1 === 'not_yet_competent' || r2 === 'not_yet_competent' || r3 === 'not_yet_competent';
   if (anyNYC) return { label: 'Not competent', className: 'text-red-700' };
@@ -224,7 +228,7 @@ export const TrainerUnitSubmissionsPage: React.FC = () => {
                 </thead>
                 <tbody>
                   {rows.map((row) => {
-                    const outcome = getOutcomeLabel(attemptSummaryByInstanceId[row.id] ?? null);
+                    const outcome = getOutcomeLabel(row, attemptSummaryByInstanceId[row.id] ?? null);
                     return (
                       <tr key={row.id} className="border-b border-gray-100 hover:bg-[var(--brand)]/10 transition-colors">
                         <td className="py-3 px-3 align-top">

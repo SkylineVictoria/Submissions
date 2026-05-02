@@ -25,6 +25,7 @@ import {
   getStudentAttemptDoneText,
   getTrainerAttemptFailedText,
   getMissedAttemptWindowText,
+  maskCompetentWhileAwaitingTrainer,
   type AttemptResult,
 } from '../utils/assessmentRowUi';
 import { FormDocumentsPanel } from '../components/documents/FormDocumentsPanel';
@@ -358,17 +359,26 @@ export const DashboardPage: React.FC = () => {
                 <tbody>
                   {rows.map((row) => {
                     const sum = attemptSummaryByInstanceId[row.id] ?? null;
-                    const attemptResults: AttemptResult[] = [
+                    const rawAttemptResults: AttemptResult[] = [
                       sum?.final_attempt_1_result ?? null,
                       sum?.final_attempt_2_result ?? null,
                       sum?.final_attempt_3_result ?? null,
                     ];
+                    const attemptResults = maskCompetentWhileAwaitingTrainer(row, rawAttemptResults);
+                    const displaySum = sum
+                      ? {
+                          ...sum,
+                          final_attempt_1_result: attemptResults[0] ?? null,
+                          final_attempt_2_result: attemptResults[1] ?? null,
+                          final_attempt_3_result: attemptResults[2] ?? null,
+                        }
+                      : null;
                     const attemptDoneText = getStudentAttemptDoneText({
                       submissionCount: Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0),
                       submittedAt: row.submitted_at ?? null,
-                      attemptResults,
+                      attemptResults: rawAttemptResults,
                     });
-                    const trainerAttemptFailedText = getTrainerAttemptFailedText(attemptResults);
+                    const trainerAttemptFailedText = getTrainerAttemptFailedText(rawAttemptResults);
                     const missedAttemptText = getMissedAttemptWindowText({
                       noAttemptRollovers: row.no_attempt_rollovers ?? null,
                       didNotAttempt: row.did_not_attempt ?? null,
@@ -379,7 +389,7 @@ export const DashboardPage: React.FC = () => {
                     });
                     const disabled = ui.disabled;
                     const win = withinWindowMelbourne(row);
-                    const outcome = getOutcomeLabel(sum);
+                    const outcome = getOutcomeLabel(displaySum);
                     const trainerHighlightExtra = rowMatchesTrainerHighlightCourse(row, trainerHighlightCourseId)
                       ? TRAINER_HIGHLIGHT_ROW_EXTRA_CLASS
                       : '';

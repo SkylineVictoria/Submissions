@@ -21,6 +21,7 @@ import {
   getMissedAttemptWindowText,
   computeAttemptTones,
   hasCompetentAttempt,
+  maskCompetentWhileAwaitingTrainer,
   type AttemptResult,
   type AttemptDotTone,
 } from '../utils/assessmentRowUi';
@@ -855,17 +856,26 @@ export const AdminStudentDetailsPage: React.FC = () => {
                       <tbody>
                         {displayedAssessments.map((row) => {
                           const sum = attemptSummaryByInstanceId[row.id] ?? null;
-                          const results: AttemptResult[] = [
+                          const rawAttemptResults: AttemptResult[] = [
                             sum?.final_attempt_1_result ?? null,
                             sum?.final_attempt_2_result ?? null,
                             sum?.final_attempt_3_result ?? null,
                           ];
+                          const results = maskCompetentWhileAwaitingTrainer(row, rawAttemptResults);
+                          const displaySum = sum
+                            ? {
+                                ...sum,
+                                final_attempt_1_result: results[0] ?? null,
+                                final_attempt_2_result: results[1] ?? null,
+                                final_attempt_3_result: results[2] ?? null,
+                              }
+                            : null;
                           const attemptDoneText = getStudentAttemptDoneText({
                             submissionCount: Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0),
                             submittedAt: row.submitted_at ?? null,
-                            attemptResults: results,
+                            attemptResults: rawAttemptResults,
                           });
-                          const trainerAttemptFailedText = getTrainerAttemptFailedText(results);
+                          const trainerAttemptFailedText = getTrainerAttemptFailedText(rawAttemptResults);
                           const missedAttemptText = getMissedAttemptWindowText({
                             noAttemptRollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
                             didNotAttempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
@@ -996,13 +1006,13 @@ export const AdminStudentDetailsPage: React.FC = () => {
                                     ? ui.outcomeClassName
                                     : ui.kind === 'past_competent'
                                       ? ui.outcomeClassName
-                                      : getOutcomeLabel(sum).className;
+                                      : getOutcomeLabel(displaySum).className;
                                 const outcomeLabel =
                                   ui.kind === 'past_not_competent'
                                     ? ui.outcomeLabel
                                     : ui.kind === 'past_competent'
                                       ? ui.outcomeLabel
-                                      : getOutcomeLabel(sum).label;
+                                      : getOutcomeLabel(displaySum).label;
                                 const comments: Array<{ text: string; className: string }> = [];
                                 const missedAll = missedAttemptText === "Didn't attempt any";
                                 if (missedAll) {
