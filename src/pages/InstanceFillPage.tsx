@@ -134,14 +134,16 @@ function maxIsoDate(...vals: (string | null | undefined)[]): string | undefined 
  * Student1 → Trainer1 → Student2 → Trainer2 → Student3 → Trainer3.
  *
  * Results sheet attempt dates are trainer-recorded outcomes. So:
- * - Attempt 1 results date must be ≥ assessment summary Student1 date.
+ * - Attempt 1 results date must be ≥ the student declaration date on the submission and ≥ assessment summary Student1 when present.
  * - Attempt 2 results date must be ≥ assessment summary Trainer1 date (and ≥ Attempt 1 results date).
  * - Attempt 3 results date must be ≥ assessment summary Trainer2 date (and ≥ Attempt 2 results date).
  */
 function getResultsMinFirstAttemptDate(
   sum: import('../lib/formEngine').AssessmentSummaryDataEntry | null | undefined,
+  /** yyyy-MM-dd from `student.declarationSignature` (normalized); enforced even before the summary is filled. */
+  studentDeclarationIso?: string | undefined,
 ): string | undefined {
-  return maxIsoDate(sum?.student_date_1 ?? undefined);
+  return maxIsoDate(sum?.student_date_1 ?? undefined, studentDeclarationIso);
 }
 
 function getResultsMinSecondAttemptDate(
@@ -488,6 +490,7 @@ export const InstanceFillPage: React.FC = () => {
     [role]
   );
 
+  /** Derived unit outcome for an attempt: any task NS → NYC; all tasks S → Competent; otherwise incomplete (null). */
   const getTrainerAttemptOutcome = useCallback(
     (attempt: 1 | 2 | 3): AttemptOutcome => {
       if (!template) return null;
@@ -495,22 +498,41 @@ export const InstanceFillPage: React.FC = () => {
         .flatMap((st) => st.sections)
         .filter((s) => s.pdf_render_mode === 'task_results');
       if (taskResultSections.length === 0) return null;
-      let anyAnswered = false;
       let anyNs = false;
+      let allSatisfactory = true;
       for (const sec of taskResultSections) {
         const rd = resultsData[sec.id];
         const sat =
           attempt === 1 ? rd?.first_attempt_satisfactory
           : attempt === 2 ? rd?.second_attempt_satisfactory
           : rd?.third_attempt_satisfactory;
-        if (sat === 's' || sat === 'ns') anyAnswered = true;
         if (sat === 'ns') anyNs = true;
+        if (sat !== 's') allSatisfactory = false;
       }
-      if (!anyAnswered) return null;
-      return anyNs ? 'not_yet_competent' : 'competent';
+      if (anyNs) return 'not_yet_competent';
+      if (allSatisfactory) return 'competent';
+      return null;
     },
     [template, resultsData]
   );
+
+  /** Min calendar date for first-attempt results: student declaration (form) vs summary student_date_1 — whichever is later. */
+  const studentDeclarationDateMinIso = useMemo(() => {
+    if (!template) return undefined;
+    const studentDeclQ = template.steps
+      ?.flatMap((st) => st.sections)
+      .flatMap((s) => s.questions)
+      .find((q) => q.code === 'student.declarationSignature');
+    if (!studentDeclQ) return undefined;
+    const studentDeclVal = answers[getAnswerKey(studentDeclQ.id, null)];
+    const studentDeclSigObj =
+      studentDeclVal && typeof studentDeclVal === 'object' && !Array.isArray(studentDeclVal)
+        ? (studentDeclVal as Record<string, unknown>)
+        : null;
+    const raw = studentDeclSigObj ? String(studentDeclSigObj.date ?? studentDeclSigObj.signedAtDate ?? '').trim() : '';
+    return normalizeCalendarDateToIso(raw) ?? undefined;
+  }, [template, answers]);
+
   const [confirmConfig, setConfirmConfig] = useState<{
     title: string;
     message: string;
@@ -624,16 +646,32 @@ export const InstanceFillPage: React.FC = () => {
   const handleResultsDataChange = useCallback(
     async (sectionId: number, field: keyof import('../lib/formEngine').ResultsDataEntry, value: string | null) => {
       const isSig = field === 'student_signature' || field === 'trainer_signature';
-      const normalized = isSig ? normalizeSignatureValue(value) : (value != null ? String(value).trim() || null : null);
+      const isFeedback =
+        field === 'first_attempt_feedback' ||
+        field === 'second_attempt_feedback' ||
+        field === 'third_attempt_feedback';
+      const normalized = isSig
+        ? normalizeSignatureValue(value)
+        : isFeedback
+          ? value == null
+            ? null
+            : (() => {
+                const s = String(value);
+                return s.length === 0 ? null : s;
+              })()
+          : value != null
+            ? String(value).trim() || null
+            : null;
       let rejectReason: string | null = null;
       let alsoSetTrainerFooterDate: string | null = null;
       setResultsData((prev) => {
         const rd = prev[sectionId];
         const base = rd ?? ({ section_id: sectionId } as import('../lib/formEngine').ResultsDataEntry);
         if (field === 'first_attempt_date' && normalized) {
-          const minFirst = getResultsMinFirstAttemptDate(assessmentSummary);
+          const minFirst = getResultsMinFirstAttemptDate(assessmentSummary, studentDeclarationDateMinIso);
           if (minFirst && isCalendarBefore(normalized, minFirst)) {
-            rejectReason = 'First attempt date must be on or after the student date (attempt 1) on the assessment summary.';
+            rejectReason =
+              'First attempt date must be on or after the student declaration date (and on or after attempt 1 student date on the assessment summary when set).';
             return prev;
           }
         }
@@ -676,7 +714,7 @@ export const InstanceFillPage: React.FC = () => {
       await saveResultsData(id, sectionId, { [field]: normalized, ...(alsoSetTrainerFooterDate ? { trainer_date: alsoSetTrainerFooterDate } : null) });
       setPdfRefresh((r) => r + 1);
     },
-    [id, normalizeSignatureValue, assessmentSummary]
+    [id, normalizeSignatureValue, assessmentSummary, studentDeclarationDateMinIso]
   );
 
   useEffect(() => {
@@ -993,22 +1031,6 @@ export const InstanceFillPage: React.FC = () => {
     const sumSecondEditable = sumFirstComplete && !sumThirdHasData && submissionCount >= 2;
     const sumThirdEditable = sumSecondComplete && submissionCount >= 3;
 
-    const attemptOutcome = (attempt: 1 | 2 | 3): 'competent' | 'not_yet_competent' | null => {
-      let anyAnswered = false;
-      let anyNs = false;
-      for (const sec of taskResultSections) {
-        const rd = resultsData[sec.id];
-        const sat =
-          attempt === 1 ? rd?.first_attempt_satisfactory
-          : attempt === 2 ? rd?.second_attempt_satisfactory
-          : rd?.third_attempt_satisfactory;
-        if (sat === 's' || sat === 'ns') anyAnswered = true;
-        if (sat === 'ns') anyNs = true;
-      }
-      if (!anyAnswered) return null;
-      return anyNs ? 'not_yet_competent' : 'competent';
-    };
-
     const sum = assessmentSummary;
     const patch: Partial<import('../lib/formEngine').AssessmentSummaryDataEntry> = {};
     const setIfEmpty = (field: keyof import('../lib/formEngine').AssessmentSummaryDataEntry, value: string | null) => {
@@ -1017,9 +1039,21 @@ export const InstanceFillPage: React.FC = () => {
       if (!curStr && value) (patch as unknown as Record<string, unknown>)[field] = value;
     };
 
+    const syncFinalResult = (
+      field: 'final_attempt_1_result' | 'final_attempt_2_result' | 'final_attempt_3_result',
+      derived: AttemptOutcome
+    ) => {
+      const cur = (sum as unknown as Record<string, unknown>)[field];
+      const curVal = cur == null ? null : String(cur).trim();
+      if (derived !== null) {
+        if (curVal !== derived) (patch as unknown as Record<string, unknown>)[field] = derived;
+      } else if (curVal === 'competent') {
+        (patch as unknown as Record<string, unknown>)[field] = null;
+      }
+    };
+
     if (sumFirstEditable) {
-      const o1 = attemptOutcome(1);
-      if (o1) setIfEmpty('final_attempt_1_result', o1);
+      syncFinalResult('final_attempt_1_result', getTrainerAttemptOutcome(1));
       // Auto-fill attempt 1 signatures/dates from known sources (do not overwrite).
       const todayIso = new Date().toISOString().split('T')[0];
       const raTrainerQ = template.steps?.flatMap((st) => st.sections).flatMap((s) => s.questions).find((q) => q.code === 'trainer.reasonableAdjustmentSignature');
@@ -1045,19 +1079,17 @@ export const InstanceFillPage: React.FC = () => {
       setIfEmpty('student_date_1', studentRefDate || null);
     }
     if (sumSecondEditable) {
-      const o2 = attemptOutcome(2);
-      if (o2) setIfEmpty('final_attempt_2_result', o2);
+      syncFinalResult('final_attempt_2_result', getTrainerAttemptOutcome(2));
     }
     if (sumThirdEditable) {
-      const o3 = attemptOutcome(3);
-      if (o3) setIfEmpty('final_attempt_3_result', o3);
+      syncFinalResult('final_attempt_3_result', getTrainerAttemptOutcome(3));
     }
 
     if (Object.keys(patch).length === 0) return;
     setAssessmentSummary((prev) => (prev ? { ...prev, ...patch } : ({ ...patch } as import('../lib/formEngine').AssessmentSummaryDataEntry)));
     saveAssessmentSummaryData(id, patch);
     setPdfRefresh((r) => r + 1);
-  }, [template, id, role, resultsData, assessmentSummary, answers, submissionCount]);
+  }, [template, id, role, resultsData, assessmentSummary, answers, submissionCount, getTrainerAttemptOutcome]);
 
   const valueToSavePayload = (value: string | number | boolean | Record<string, unknown> | string[]) => {
     let text: string | undefined;
@@ -1147,6 +1179,16 @@ export const InstanceFillPage: React.FC = () => {
 
   const handleAssessmentSummaryChange = useCallback(
     (field: keyof import('../lib/formEngine').AssessmentSummaryDataEntry, value: string | null) => {
+      if (value === 'competent') {
+        const attempt: 1 | 2 | 3 | null =
+          field === 'final_attempt_1_result' ? 1 : field === 'final_attempt_2_result' ? 2 : field === 'final_attempt_3_result' ? 3 : null;
+        if (attempt != null && getTrainerAttemptOutcome(attempt) !== 'competent') {
+          toast.error(
+            'One or more assessment task results are not satisfactory, so the unit cannot be marked Competent until every task is Satisfactory.'
+          );
+          return;
+        }
+      }
       setAssessmentSummary((prev) => {
         const next: import('../lib/formEngine').AssessmentSummaryDataEntry = prev ? { ...prev, [field]: value } : ({ [field]: value } as unknown as import('../lib/formEngine').AssessmentSummaryDataEntry);
         saveAssessmentSummaryData(id, { [field]: value });
@@ -1154,7 +1196,7 @@ export const InstanceFillPage: React.FC = () => {
         return next;
       });
     },
-    [id]
+    [id, getTrainerAttemptOutcome]
   );
 
   const canRoleEditCurrentWorkflow = useMemo(() => {
@@ -3280,7 +3322,7 @@ export const InstanceFillPage: React.FC = () => {
                           const studentDeclVal = studentDeclQ ? answers[getAnswerKey(studentDeclQ.id, null)] : undefined;
                           const studentDeclSigObj = studentDeclVal && typeof studentDeclVal === 'object' && !Array.isArray(studentDeclVal) ? (studentDeclVal as Record<string, unknown>) : null;
                           const studentDeclSig = studentDeclSigObj ? (String(studentDeclSigObj.signature ?? studentDeclSigObj.imageDataUrl ?? '') || null) : (typeof studentDeclVal === 'string' ? studentDeclVal : null);
-                          const minFirstAttempt = getResultsMinFirstAttemptDate(assessmentSummary);
+                          const minFirstAttempt = getResultsMinFirstAttemptDate(assessmentSummary, studentDeclarationDateMinIso);
                           const minSecondAttempt = getResultsMinSecondAttemptDate(rd, assessmentSummary);
                           const minThirdAttempt = getResultsMinThirdAttemptDate(rd, assessmentSummary);
                           const minTrainerDate = maxIsoDate(rd?.first_attempt_date);
