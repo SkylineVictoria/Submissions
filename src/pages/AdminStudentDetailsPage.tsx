@@ -16,6 +16,7 @@ import { SelectAsync } from '../components/ui/SelectAsync';
 import { Select } from '../components/ui/Select';
 import {
   computeRowUi,
+  melDateString,
   getStudentAttemptDoneText,
   getTrainerAttemptFailedText,
   getMissedAttemptWindowText,
@@ -591,6 +592,19 @@ export const AdminStudentDetailsPage: React.FC = () => {
 
   const handleOpen = async (row: SubmittedInstanceRow) => {
     const role = row.role_context === 'trainer' ? 'trainer' : row.role_context === 'office' ? 'office' : 'student';
+    if (role === 'student') {
+      const todayMel = melDateString();
+      const start = String((getEffectiveStart(row) || row.start_date) ?? '').trim();
+      const end = String((getEffectiveEnd(row) || row.end_date) ?? '').trim();
+      if (start && todayMel < start) {
+        toast.error(`Available from ${formatDDMMYYYY(start)}`);
+        return;
+      }
+      if (end && todayMel > end) {
+        toast.error(`Expired on ${formatDDMMYYYY(end)} (23:59 AEDT)`);
+        return;
+      }
+    }
     const url = await getOrIssueInstanceAccessLink(row.id, role);
     if (!url) {
       toast.error('Failed to open secure link');
@@ -606,6 +620,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
   );
   const canDeleteStudent =
     !!student && (viewerIsSuperadmin || (hasAssessmentsLoaded && !hasSubmittedAssessment));
+  const viewerCanLoginAsStudent = viewerIsSuperadmin || Boolean(user?.can_login_as_student);
 
   const loginAsStudent = async () => {
     if (!viewerIsSuperadmin || !student || !Number.isFinite(sid) || sid <= 0) return;
@@ -745,7 +760,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
                         <Trash2 className="w-4 h-4 mr-2 inline" />
                         Delete student
                       </Button>
-                      {viewerIsSuperadmin ? (
+                      {viewerCanLoginAsStudent ? (
                         <Button
                           variant="outline"
                           size="sm"
@@ -881,6 +896,18 @@ export const AdminStudentDetailsPage: React.FC = () => {
                             didNotAttempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
                           });
                           const ui = computeRowUi({ row: { ...row, did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null }, attemptResults: results });
+                          const todayMel = melDateString();
+                          const winStart = String((getEffectiveStart(row) || row.start_date) ?? '').trim();
+                          const winEnd = String((getEffectiveEnd(row) || row.end_date) ?? '').trim();
+                          const win =
+                            winStart && todayMel < winStart
+                              ? ({ ok: false as const, reason: `Available from ${formatDDMMYYYY(winStart)}` })
+                              : winEnd && todayMel > winEnd
+                                ? ({ ok: false as const, reason: `Expired on ${formatDDMMYYYY(winEnd)} (23:59 AEDT)` })
+                                : ({ ok: true as const });
+                          const accessRole =
+                            row.role_context === 'trainer' ? 'trainer' : row.role_context === 'office' ? 'office' : 'student';
+                          const studentOpenDisabled = accessRole === 'student' && (!win.ok || ui.disabled);
                           const trainerHighlightExtra = rowMatchesTrainerHighlightCourse(row, trainerHighlightCourseId)
                             ? TRAINER_HIGHLIGHT_ROW_EXTRA_CLASS
                             : '';
@@ -1027,8 +1054,10 @@ export const AdminStudentDetailsPage: React.FC = () => {
                                     comments.push({ text: missedAttemptText, className: 'text-[11px] font-medium text-amber-700' });
                                   }
                                 }
-                                if (ui.kind === 'future' || ui.kind === 'expired') {
+                                if (studentOpenDisabled && (ui.kind === 'future' || ui.kind === 'expired')) {
                                   comments.push({ text: ui.reason, className: 'text-xs text-amber-700' });
+                                } else if (!win.ok) {
+                                  comments.push({ text: win.reason || '', className: 'text-xs text-amber-700' });
                                 }
                                 return (
                                   <div className="flex flex-col gap-1">
@@ -1120,9 +1149,14 @@ export const AdminStudentDetailsPage: React.FC = () => {
                                   />
                                   <button
                                     type="button"
-                                    className="rounded-lg border border-[var(--border)] bg-white p-4 text-left hover:bg-[var(--brand)]/10 focus-visible:bg-[var(--brand)]/10 transition-colors"
+                                    className="rounded-lg border border-[var(--border)] bg-white p-4 text-left hover:bg-[var(--brand)]/10 focus-visible:bg-[var(--brand)]/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white"
                                     onClick={() => void handleOpen(row)}
-                                    title="Open assessment"
+                                    disabled={studentOpenDisabled}
+                                    title={
+                                      studentOpenDisabled
+                                        ? win.reason || 'Outside the student access window'
+                                        : 'Open assessment'
+                                    }
                                   >
                                     <div className="text-sm font-semibold text-[var(--text)]">Assessment</div>
                                     <div className="mt-1 text-xs text-gray-600 break-words">{row.form_name || '—'}</div>

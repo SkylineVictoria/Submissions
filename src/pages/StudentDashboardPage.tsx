@@ -482,8 +482,8 @@ export const StudentDashboardPage: React.FC = () => {
                             didNotAttempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
                           });
                           const ui = computeRowUi({ row: { ...row, did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null }, attemptResults });
-                          const disabled = ui.disabled;
                           const win = withinWindowMelbourne(row);
+                          const disabled = ui.disabled || !win.ok;
                           const trainerHighlightExtra = rowMatchesTrainerHighlightCourse(row, trainerHighlightCourseId)
                             ? TRAINER_HIGHLIGHT_ROW_EXTRA_CLASS
                             : '';

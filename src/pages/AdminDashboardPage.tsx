@@ -9,7 +9,7 @@ import { DatePicker } from '../components/ui/DatePicker';
 import { Loader } from '../components/ui/Loader';
 import { toast } from '../utils/toast';
 import { AdminListPagination } from '../components/admin/AdminListPagination';
-import { getAdminDashboardStatsV2, listAdminDashboardInstancesPaged, type AdminDashboardStatsV2, type SubmittedInstanceRow } from '../lib/formEngine';
+import { getAdminDashboardStatsV2, listAdminDashboardInstancesPaged, listBatches, type AdminDashboardStatsV2, type SubmittedInstanceRow, type Batch } from '../lib/formEngine';
 
 const ZONE = 'Australia/Melbourne';
 
@@ -110,6 +110,8 @@ export const AdminDashboardPage: React.FC = () => {
   const [status, setStatus] = useState<StatusFilter>('awaiting_student');
   const [customFrom, setCustomFrom] = useState<string>('');
   const [customTo, setCustomTo] = useState<string>('');
+  const [batchId, setBatchId] = useState<string>('');
+  const [batches, setBatches] = useState<Batch[]>([]);
 
   const range = useMemo(() => melbourneDateRangeForPreset(timePreset, customFrom, customTo), [timePreset, customFrom, customTo]);
 
@@ -128,7 +130,8 @@ export const AdminDashboardPage: React.FC = () => {
 
   const loadRows = async (opts?: { silent?: boolean }) => {
     if (!opts?.silent) setRowsLoading(true);
-    const res = await listAdminDashboardInstancesPaged(page, PAGE_SIZE, status, range.fromDate, range.toDate);
+    const bid = batchId ? Number(batchId) : null;
+    const res = await listAdminDashboardInstancesPaged(page, PAGE_SIZE, status, range.fromDate, range.toDate, bid);
     setRows(res.data);
     setRowsTotal(res.total);
     setRowsLoading(false);
@@ -144,11 +147,22 @@ export const AdminDashboardPage: React.FC = () => {
     const t = window.setTimeout(() => void loadRows(), 150);
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [range.fromDate, range.toDate, status, page]);
+  }, [range.fromDate, range.toDate, status, page, batchId]);
 
   useEffect(() => {
     setPage(1);
-  }, [range.fromDate, range.toDate, status]);
+  }, [range.fromDate, range.toDate, status, batchId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const b = await listBatches();
+      if (!cancelled) setBatches(b);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const totalInRange = useMemo(() => {
     if (!stats) return 0;
@@ -214,12 +228,27 @@ export const AdminDashboardPage: React.FC = () => {
                 ]}
               />
             </div>
+            <div className="w-full sm:w-64">
+              <Select
+                label="Batch"
+                value={batchId}
+                onChange={(v) => setBatchId(v)}
+                options={[
+                  { value: '', label: 'All batches' },
+                  ...(batches || []).map((b) => ({
+                    value: String(b.id),
+                    label: `${b.name}${b.trainer_name ? ` — ${b.trainer_name}` : ''}`,
+                  })),
+                ]}
+              />
+            </div>
             <Button
               type="button"
               variant="outline"
               onClick={async () => {
                 setRefreshing(true);
                 await load({ silent: true });
+                await loadRows({ silent: true });
                 setRefreshing(false);
                 toast.success('Dashboard refreshed');
               }}
@@ -381,6 +410,7 @@ export const AdminDashboardPage: React.FC = () => {
                 <thead>
                   <tr className="bg-gray-50 border-b border-gray-200 text-left">
                     <th className="py-2.5 px-3 font-semibold text-gray-800 min-w-[14rem]">Student</th>
+                    <th className="py-2.5 px-3 font-semibold text-gray-800 min-w-[12rem]">Trainer</th>
                     <th className="py-2.5 px-3 font-semibold text-gray-800 min-w-[14rem]">Unit</th>
                     <th className="py-2.5 px-3 font-semibold text-gray-800 whitespace-nowrap w-[9rem]">Start date</th>
                     <th className="py-2.5 px-3 font-semibold text-gray-800 whitespace-nowrap w-[9rem]">End date</th>
@@ -390,13 +420,13 @@ export const AdminDashboardPage: React.FC = () => {
                 <tbody>
                   {rowsLoading ? (
                     <tr>
-                      <td className="py-10 px-3 text-center text-gray-500 text-sm" colSpan={5}>
+                      <td className="py-10 px-3 text-center text-gray-500 text-sm" colSpan={6}>
                         Loading…
                       </td>
                     </tr>
                   ) : rows.length === 0 ? (
                     <tr>
-                      <td className="py-10 px-3 text-center text-gray-500 text-sm" colSpan={5}>
+                      <td className="py-10 px-3 text-center text-gray-500 text-sm" colSpan={6}>
                         No assessments for this filter.
                       </td>
                     </tr>
@@ -419,6 +449,10 @@ export const AdminDashboardPage: React.FC = () => {
                         <td className="py-2.5 px-3">
                           <div className="font-semibold text-gray-900 break-words">{r.student_name || '—'}</div>
                           <div className="text-xs text-gray-600 break-all">{r.student_email || '—'}</div>
+                        </td>
+                        <td className="py-2.5 px-3 text-gray-900 break-words">
+                          <div className="font-medium">{r.trainer_name || '—'}</div>
+                          <div className="text-xs text-gray-600">{r.batch_name || '—'}</div>
                         </td>
                         <td className="py-2.5 px-3 text-gray-900 break-words">{r.form_name || '—'}</td>
                         <td className="py-2.5 px-3 text-gray-700 whitespace-nowrap">{formatDate(r.start_date)}</td>

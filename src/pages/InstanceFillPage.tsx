@@ -105,9 +105,16 @@ function getAnswerKey(questionId: number, rowId: number | null): string {
 function normalizeCalendarDateToIso(s: string | null | undefined): string | null {
   const t = String(s ?? '').trim();
   if (!t) return null;
+  // Accept full ISO timestamps by taking the date portion.
+  if (/^\d{4}-\d{2}-\d{2}T/.test(t)) return t.slice(0, 10);
   if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
   if (/^\d{2}-\d{2}-\d{4}$/.test(t)) {
     const [dd, mm, yyyy] = t.split('-');
+    if (dd && mm && yyyy && dd.length === 2 && mm.length === 2 && yyyy.length === 4) return `${yyyy}-${mm}-${dd}`;
+  }
+  // Also accept common slash formats that appear in some exports/pastes.
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(t)) {
+    const [dd, mm, yyyy] = t.split('/');
     if (dd && mm && yyyy && dd.length === 2 && mm.length === 2 && yyyy.length === 4) return `${yyyy}-${mm}-${dd}`;
   }
   return null;
@@ -143,7 +150,12 @@ function getResultsMinFirstAttemptDate(
   /** yyyy-MM-dd from `student.declarationSignature` (normalized); enforced even before the summary is filled. */
   studentDeclarationIso?: string | undefined,
 ): string | undefined {
-  return maxIsoDate(sum?.student_date_1 ?? undefined, studentDeclarationIso);
+  // IMPORTANT: Use the declaration field (current UI value) as the baseline min date.
+  // The assessment summary may contain an older student_date_1 that can be later than the declaration
+  // (e.g. after edits/backdating), which would incorrectly prevent selecting earlier dates on the results sheet.
+  // The summary date chain is validated separately.
+  void sum;
+  return studentDeclarationIso;
 }
 
 function getResultsMinSecondAttemptDate(
@@ -632,6 +644,24 @@ export const InstanceFillPage: React.FC = () => {
     loadData();
   }, [loadData]);
 
+  /** Resubmission wave for UI + validation: DB count increments on each student hand-in; student draft also bumps when summary shows prior NYC so attempt 2/3 columns unlock without admin Resubmit. */
+  const markingRound = useMemo(() => {
+    const capped = Math.min(Math.max(submissionCount || 1, 1), 3);
+    if (role === 'student' && workflowStatus === 'draft') {
+      const nyc1 = assessmentSummary?.final_attempt_1_result === 'not_yet_competent';
+      const nyc2 = assessmentSummary?.final_attempt_2_result === 'not_yet_competent';
+      if (nyc2 && capped < 3) return 3;
+      if (nyc1 && capped < 2) return 2;
+    }
+    return capped;
+  }, [
+    submissionCount,
+    assessmentSummary?.final_attempt_1_result,
+    assessmentSummary?.final_attempt_2_result,
+    role,
+    workflowStatus,
+  ]);
+
   /** Normalize signature values: accept string or object with signature/imageDataUrl/typedText. DB stores TEXT. */
   const normalizeSignatureValue = useCallback((v: string | null | { signature?: string; imageDataUrl?: string; typedText?: string } | undefined): string | null => {
     if (v == null) return null;
@@ -857,7 +887,7 @@ export const InstanceFillPage: React.FC = () => {
       if (
         !rd?.first_attempt_date &&
         firstAttemptVal &&
-        submissionCount < 2 &&
+        markingRound < 2 &&
         !secondStartedOnFirstTask
       ) {
         updates.push({ sectionId, field: 'first_attempt_date', value: firstAttemptVal });
@@ -877,7 +907,7 @@ export const InstanceFillPage: React.FC = () => {
       setPdfRefresh((r) => r + 1);
       return next;
     });
-  }, [template, answers, resultsData, id, submissionCount]);
+  }, [template, answers, resultsData, id, markingRound]);
 
   useEffect(() => {
     if (!template || !id) return;
@@ -896,8 +926,8 @@ export const InstanceFillPage: React.FC = () => {
 
       const firstComplete = rowAnswerHasContent(rd.first_attempt_satisfactory ?? undefined) && rowAnswerHasContent(rd.first_attempt_date ?? undefined);
       const secondComplete = rowAnswerHasContent(rd.second_attempt_satisfactory ?? undefined) && rowAnswerHasContent(rd.second_attempt_date ?? undefined);
-      const secondUnlockedByResubmission = submissionCount >= 2;
-      const thirdUnlockedByResubmission = submissionCount >= 3;
+      const secondUnlockedByResubmission = markingRound >= 2;
+      const thirdUnlockedByResubmission = markingRound >= 3;
 
       const hasSecondAny =
         rowAnswerHasContent(rd.second_attempt_satisfactory ?? undefined) ||
@@ -934,7 +964,7 @@ export const InstanceFillPage: React.FC = () => {
       setPdfRefresh((r) => r + 1);
       return next;
     });
-  }, [template, id, resultsData, submissionCount]);
+  }, [template, id, resultsData, markingRound]);
 
   // NOTE: We intentionally do not auto-bump the stored student declaration date on resubmissions.
   // The declaration is treated as historical evidence of when the student originally signed,
@@ -983,7 +1013,7 @@ export const InstanceFillPage: React.FC = () => {
       if (c && isCalendarBefore(c, min)) (patch as unknown as Record<string, unknown>)[k as string] = min;
     };
     // Attempt 1 is historical after resubmission — do not bump from changing declaration / attempt 2 mins.
-    if (submissionCount < 2) {
+    if (markingRound < 2) {
       bump('student_date_1', mins.minStudentDate1);
       bump('trainer_date_1', mins.minTrainerDate1);
     }
@@ -997,7 +1027,7 @@ export const InstanceFillPage: React.FC = () => {
     );
     saveAssessmentSummaryData(id, patch);
     setPdfRefresh((r) => r + 1);
-  }, [template, id, assessmentSummary, submissionCount]);
+  }, [template, id, assessmentSummary, markingRound]);
 
   useEffect(() => {
     if (!template || !id) return;
@@ -1026,10 +1056,10 @@ export const InstanceFillPage: React.FC = () => {
       rowAnswerHasContent(firstTaskRd?.second_attempt_satisfactory ?? undefined) &&
       rowAnswerHasContent(firstTaskRd?.second_attempt_date ?? undefined);
 
-    // Which summary column is active follows submission cycle; attempt 1 locks once resubmission starts (count ≥ 2).
-    const sumFirstEditable = !sumSecondOrThirdHasData && submissionCount < 2;
-    const sumSecondEditable = sumFirstComplete && !sumThirdHasData && submissionCount >= 2;
-    const sumThirdEditable = sumSecondComplete && submissionCount >= 3;
+    // Which summary column is active follows submission / marking round (count + NYC unlock for students).
+    const sumFirstEditable = !sumSecondOrThirdHasData && markingRound < 2;
+    const sumSecondEditable = sumFirstComplete && !sumThirdHasData && markingRound >= 2;
+    const sumThirdEditable = sumSecondComplete && markingRound >= 3;
 
     const sum = assessmentSummary;
     const patch: Partial<import('../lib/formEngine').AssessmentSummaryDataEntry> = {};
@@ -1089,7 +1119,7 @@ export const InstanceFillPage: React.FC = () => {
     setAssessmentSummary((prev) => (prev ? { ...prev, ...patch } : ({ ...patch } as import('../lib/formEngine').AssessmentSummaryDataEntry)));
     saveAssessmentSummaryData(id, patch);
     setPdfRefresh((r) => r + 1);
-  }, [template, id, role, resultsData, assessmentSummary, answers, submissionCount, getTrainerAttemptOutcome]);
+  }, [template, id, role, resultsData, assessmentSummary, answers, markingRound, getTrainerAttemptOutcome]);
 
   const valueToSavePayload = (value: string | number | boolean | Record<string, unknown> | string[]) => {
     let text: string | undefined;
@@ -1266,7 +1296,7 @@ export const InstanceFillPage: React.FC = () => {
       const strictReviewCycle =
         (workflowStatus === 'waiting_trainer' && role === 'trainer') ||
         (workflowStatus === 'waiting_office' && role === 'office');
-      const resubmissionCycle = Math.min(Math.max(submissionCount || 1, 1), 3);
+      const resubmissionCycle = markingRound;
       const taskResultIdsAppendixVal = (template.steps ?? [])
         .flatMap((st) => st.sections)
         .filter((s) => s.pdf_render_mode === 'task_results')
@@ -1346,9 +1376,9 @@ export const InstanceFillPage: React.FC = () => {
                 }
               }
             } else {
-              const firstAttemptEditable = trainerCanEdit && submissionCount < 2 && !secondOrThirdHasData;
-              const secondAttemptUnlockedByResubmission = submissionCount >= 2;
-              const thirdAttemptUnlockedByResubmission = submissionCount >= 3;
+              const firstAttemptEditable = trainerCanEdit && markingRound < 2 && !secondOrThirdHasData;
+              const secondAttemptUnlockedByResubmission = markingRound >= 2;
+              const thirdAttemptUnlockedByResubmission = markingRound >= 3;
               const secondAttemptEditable =
                 trainerCanEdit &&
                 firstAttemptComplete &&
@@ -1439,9 +1469,9 @@ export const InstanceFillPage: React.FC = () => {
             rowAnswerHasContent(firstTaskRd?.second_attempt_satisfactory ?? undefined) &&
             rowAnswerHasContent(firstTaskRd?.second_attempt_date ?? undefined);
 
-          const sumFirstEditable = !sumSecondOrThirdHasData && submissionCount < 2;
-          const sumSecondEditable = sumFirstComplete && !sumThirdHasData && submissionCount >= 2;
-          const sumThirdEditable = sumSecondComplete && submissionCount >= 3;
+          const sumFirstEditable = !sumSecondOrThirdHasData && markingRound < 2;
+          const sumSecondEditable = sumFirstComplete && !sumThirdHasData && markingRound >= 2;
+          const sumThirdEditable = sumSecondComplete && markingRound >= 3;
 
           if (trainerCanEdit) {
             if (strictReviewCycle) {
@@ -1563,7 +1593,7 @@ export const InstanceFillPage: React.FC = () => {
         const appendixFirstCycleEditableForStep =
           !isAppendixAStepTitle || section.pdf_render_mode !== 'reasonable_adjustment'
             ? true
-            : submissionCount < 2 && !secondOrThirdHasDataAppendixVal;
+            : markingRound < 2 && !secondOrThirdHasDataAppendixVal;
 
         for (const q of section.questions) {
           if (q.type === 'instruction_block' || q.type === 'page_break') continue;
@@ -1583,14 +1613,22 @@ export const InstanceFillPage: React.FC = () => {
           const effectiveEditable = editable && appendixFirstCycleEditableForStep;
           if (!q.required || !effectiveEditable) continue;
 
+          // Trainer review: allow advancing even if the student's answer is blank,
+          // as long as the trainer explicitly marked the item Yes/No (checked).
+          // This prevents the wizard from blocking trainer navigation for missing student content.
+          const trainerHasChecked =
+            strictReviewCycle &&
+            role === 'trainer' &&
+            (trainerAssessments[q.id] === 'yes' || trainerAssessments[q.id] === 'no');
+
           if (q.type === 'grid_table' && q.rows?.length) {
-            if (!isGridTableFilled(q, answers)) {
+            if (!trainerHasChecked && !isGridTableFilled(q, answers)) {
               stepErrors[`q-${q.id}`] = `${q.label} is required`;
             }
             continue;
           }
           if (q.type === 'likert_5' && q.rows?.length) {
-            if (!isLikertFilled(q, answers)) {
+            if (!trainerHasChecked && !isLikertFilled(q, answers)) {
               stepErrors[`q-${q.id}`] = `${q.label} is required`;
             }
             continue;
@@ -1606,7 +1644,7 @@ export const InstanceFillPage: React.FC = () => {
                 break;
               }
             }
-            if (!allRowsAnswered) {
+            if (!trainerHasChecked && !allRowsAnswered) {
               stepErrors[`q-${q.id}`] = `${q.label} is required`;
             }
             continue;
@@ -1614,7 +1652,7 @@ export const InstanceFillPage: React.FC = () => {
 
           const byBlocks = isRequiredSatisfiedByContentBlocks(q, section, answers);
           if (byBlocks !== null) {
-            if (!byBlocks) {
+            if (!trainerHasChecked && !byBlocks) {
               stepErrors[`q-${q.id}`] = `${q.label} is required`;
             }
             continue;
@@ -1629,12 +1667,12 @@ export const InstanceFillPage: React.FC = () => {
             const sig = obj ? (obj.signature ?? obj.imageDataUrl ?? null) : (typeof val === 'string' ? val : null);
             const dateVal = obj ? String(obj.date ?? obj.signedAtDate ?? '') : '';
             const needsDate = ((q.pdf_meta as { showDateField?: boolean } | undefined)?.showDateField ?? false) === true;
-            if (!String(sig ?? '').trim()) {
+            if (!trainerHasChecked && !String(sig ?? '').trim()) {
               stepErrors[`q-${q.id}`] = `${q.label} is required`;
-            } else if (needsDate && !String(dateVal ?? '').trim()) {
+            } else if (!trainerHasChecked && needsDate && !String(dateVal ?? '').trim()) {
               stepErrors[`q-${q.id}`] = `${q.label}: date is required`;
             }
-          } else if (!rowAnswerHasContent(val as AnswersMap[string] | undefined)) {
+          } else if (!trainerHasChecked && !rowAnswerHasContent(val as AnswersMap[string] | undefined)) {
             stepErrors[`q-${q.id}`] = `${q.label} is required`;
           } else if (q.code === 'evaluation.evaluationDate' && rowAnswerHasContent(val as AnswersMap[string] | undefined)) {
             const trIds = (template?.steps ?? [])
@@ -1658,7 +1696,8 @@ export const InstanceFillPage: React.FC = () => {
       answers,
       resultsData,
       assessmentSummary,
-      submissionCount,
+      markingRound,
+      trainerAssessments,
       canRoleEditCurrentWorkflow,
       isQuestionReadOnlyByTrainer,
       isQuestionEditableForRole,
@@ -1725,7 +1764,7 @@ export const InstanceFillPage: React.FC = () => {
         setConfirmConfig(null);
         return;
       }
-      const latestAttempt = (Math.max(1, Math.min(3, submissionCount || 1)) as 1 | 2 | 3);
+      const latestAttempt = (Math.max(1, Math.min(3, markingRound)) as 1 | 2 | 3);
       const latestResult = getTrainerAttemptOutcome(latestAttempt);
       const hasTaskResultSections = (template?.steps ?? []).some((st) =>
         st.sections.some((s) => s.pdf_render_mode === 'task_results')
@@ -1834,7 +1873,7 @@ export const InstanceFillPage: React.FC = () => {
     id,
     role,
     workflowStatus,
-    submissionCount,
+    markingRound,
     getTrainerAttemptOutcome,
     assessmentSummary,
     validateAllStepsForTrainerSubmit,
@@ -2101,7 +2140,7 @@ export const InstanceFillPage: React.FC = () => {
                                 );
                                 /** Appendix A is first-cycle RA content; lock when resubmission (submission_count ≥ 2) or later attempts exist on task results. */
                                 const appendixFirstCycleEditable =
-                                  editable && submissionCount < 2 && !secondOrThirdHasDataAppendix;
+                                  editable && markingRound < 2 && !secondOrThirdHasDataAppendix;
                                 const key = getAnswerKey(q.id, null);
                                 const val = answers[key];
                                 if (isAppendixA) {
@@ -3333,9 +3372,9 @@ export const InstanceFillPage: React.FC = () => {
                           const secondAttemptComplete =
                             rowAnswerHasContent(rd?.second_attempt_satisfactory ?? undefined) && rowAnswerHasContent(rd?.second_attempt_date ?? undefined);
                           // Match assessment summary: cycle 1 edits attempt 1 only; cycle 2+ locks attempt 1 and edits attempt 2, etc.
-                          const firstAttemptEditable = trainerCanEdit && submissionCount < 2 && !secondOrThirdHasData;
-                          const secondAttemptUnlockedByResubmission = submissionCount >= 2;
-                          const thirdAttemptUnlockedByResubmission = submissionCount >= 3;
+                          const firstAttemptEditable = trainerCanEdit && markingRound < 2 && !secondOrThirdHasData;
+                          const secondAttemptUnlockedByResubmission = markingRound >= 2;
+                          const thirdAttemptUnlockedByResubmission = markingRound >= 3;
                           const secondAttemptEditable =
                             trainerCanEdit &&
                             firstAttemptComplete &&
@@ -3700,9 +3739,9 @@ export const InstanceFillPage: React.FC = () => {
                           const sumSecondComplete =
                             rowAnswerHasContent(firstTaskRd?.second_attempt_satisfactory ?? undefined) &&
                             rowAnswerHasContent(firstTaskRd?.second_attempt_date ?? undefined);
-                          const sumFirstEditable = !sumSecondOrThirdHasData && submissionCount < 2;
-                          const sumSecondEditable = sumFirstComplete && !sumThirdHasData && submissionCount >= 2;
-                          const sumThirdEditable = sumSecondComplete && submissionCount >= 3;
+                          const sumFirstEditable = !sumSecondOrThirdHasData && markingRound < 2;
+                          const sumSecondEditable = sumFirstComplete && !sumThirdHasData && markingRound >= 2;
+                          const sumThirdEditable = sumSecondComplete && markingRound >= 3;
                           const studentNameQ = template?.steps?.flatMap((st) => st.sections).flatMap((s) => s.questions).find((q) => q.code === 'student.fullName');
                           const studentIdQ = template?.steps?.flatMap((st) => st.sections).flatMap((s) => s.questions).find((q) => q.code === 'student.id');
                           const studentName = studentNameQ ? String(answers[getAnswerKey(studentNameQ.id, null)] ?? '') : '';
@@ -3909,10 +3948,10 @@ export const InstanceFillPage: React.FC = () => {
                                 const dateVal = sigObj ? String(sigObj.date ?? sigObj.signedAtDate ?? '') : '';
                                 const todayIsoDecl = new Date().toISOString().split('T')[0];
                                 const hasDateField = (q.pdf_meta as { showDateField?: boolean } | undefined)?.showDateField;
-                                const minDeclDate = getStudentResubDeclarationMinDate(firstTaskRdForDecl, submissionCount);
+                                const minDeclDate = getStudentResubDeclarationMinDate(firstTaskRdForDecl, markingRound);
                                 // Declaration must only ever be set on the first attempt cycle.
                                 // After attempt 1 is completed / resubmission begins, keep it read-only (historical).
-                                const declarationLockedToFirstAttempt = role === 'student' && q.code === 'student.declarationSignature' && submissionCount >= 2;
+                                const declarationLockedToFirstAttempt = role === 'student' && q.code === 'student.declarationSignature' && markingRound >= 2;
                                 const effectiveEditable = editable && !declarationLockedToFirstAttempt;
                                 return (
                                   <div key={q.id} className="space-y-2">
@@ -4097,10 +4136,10 @@ export const InstanceFillPage: React.FC = () => {
                             const dateVal = sigObj ? String(sigObj.date ?? sigObj.signedAtDate ?? '') : '';
                             const todayIsoDecl = new Date().toISOString().split('T')[0];
                             const hasDateField = (q.pdf_meta as { showDateField?: boolean } | undefined)?.showDateField;
-                            const minDeclDate = getStudentResubDeclarationMinDate(firstTaskRdForDecl, submissionCount);
+                            const minDeclDate = getStudentResubDeclarationMinDate(firstTaskRdForDecl, markingRound);
                             // Declaration must only ever be set on the first attempt cycle.
                             // After attempt 1 is completed / resubmission begins, keep it read-only (historical).
-                            const declarationLockedToFirstAttempt = q.code === 'student.declarationSignature' && submissionCount >= 2;
+                            const declarationLockedToFirstAttempt = q.code === 'student.declarationSignature' && markingRound >= 2;
                             const effectiveEditable = editable && !declarationLockedToFirstAttempt;
                             return (
                               <div key={q.id} className="space-y-2">

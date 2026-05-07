@@ -5,6 +5,7 @@ import {
   getDashboardPendingCount,
   getTrainerBatchCount,
   listTrainerBatches,
+  listBatches,
   listStudentsInBatch,
   issueInstanceAccessLink,
   fetchAssessmentSummaries,
@@ -93,9 +94,11 @@ export const DashboardPage: React.FC = () => {
   const [batchCount, setBatchCount] = useState<number | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [trainerBatches, setTrainerBatches] = useState<Batch[]>([]);
+  const [allBatches, setAllBatches] = useState<Batch[]>([]);
   const [selectedBatchId, setSelectedBatchId] = useState<string>('');
   const [batchStudents, setBatchStudents] = useState<Student[]>([]);
   const [batchStudentsLoading, setBatchStudentsLoading] = useState(false);
+  const [queueFilter, setQueueFilter] = useState<'pending' | 'all'>('pending');
 
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const trainerHighlightCourseId = useTrainerHighlightCourseId();
@@ -107,20 +110,23 @@ export const DashboardPage: React.FC = () => {
     async (page: number, search: string, opts?: { silent?: boolean }) => {
       if (!user?.id) return;
       if (!opts?.silent) setLoading(true);
-      const [countRes, listRes, batchCountRes, trainerBatchesRes] = await Promise.all([
+      const batchId = selectedBatchId ? Number(selectedBatchId) : null;
+      const [countRes, listRes, batchCountRes, trainerBatchesRes, batchesRes] = await Promise.all([
         getDashboardPendingCount(role, user.id),
-        listDashboardInstances(role, user.id, page, PAGE_SIZE, search, true),
+        listDashboardInstances(role, user.id, page, PAGE_SIZE, search, queueFilter === 'pending', batchId),
         role === 'trainer' ? getTrainerBatchCount(user.id) : Promise.resolve(null),
         role === 'trainer' ? listTrainerBatches(user.id) : Promise.resolve([]),
+        role === 'office' ? listBatches() : Promise.resolve([]),
       ]);
       setPendingCount(countRes);
       setBatchCount(batchCountRes);
       setTrainerBatches(trainerBatchesRes ?? []);
+      setAllBatches(batchesRes ?? []);
       setRows(listRes.data);
       setTotalRows(listRes.total);
       setLoading(false);
     },
-    [user?.id, role]
+    [user?.id, role, selectedBatchId, queueFilter]
   );
 
   useEffect(() => {
@@ -209,6 +215,54 @@ export const DashboardPage: React.FC = () => {
                 : 'Pending assessments awaiting office processing'}
             </p>
           </div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-end sm:gap-3">
+            <div className="min-w-0 sm:w-[220px]">
+              <div className="text-xs text-gray-600 mb-1">Search</div>
+              <Input
+                value={searchTerm}
+                onChange={(e) => {
+                  setSearchTerm(e.target.value);
+                  setCurrentPage(1);
+                }}
+                placeholder="Search student, unit, status…"
+              />
+            </div>
+            <div className="sm:w-[170px]">
+              <div className="text-xs text-gray-600 mb-1">Queue</div>
+              <Select
+                value={queueFilter}
+                onChange={(v) => {
+                  setQueueFilter(v as 'pending' | 'all');
+                  setCurrentPage(1);
+                }}
+                options={[
+                  { value: 'pending', label: 'Pending only' },
+                  { value: 'all', label: 'All' },
+                ]}
+              />
+            </div>
+            <div className="sm:w-[220px]">
+              <div className="text-xs text-gray-600 mb-1">Batch</div>
+              <Select
+                value={selectedBatchId}
+                onChange={(v) => {
+                  setSelectedBatchId(v);
+                  setCurrentPage(1);
+                }}
+                options={[
+                  { value: '', label: 'All batches' },
+                  ...((role === 'trainer' ? trainerBatches : allBatches) || []).map((b) => ({
+                    value: String(b.id),
+                    label: `${b.name}${b.trainer_name ? ` — ${b.trainer_name}` : ''}`,
+                  })),
+                ]}
+              />
+            </div>
+            <Button type="button" variant="outline" onClick={handleRefresh} disabled={refreshing} className="sm:mb-[1px]">
+              <RefreshCw className={`w-4 h-4 mr-2 inline ${refreshing ? 'animate-spin' : ''}`} />
+              Refresh
+            </Button>
+          </div>
         </div>
 
         {/* Pending and role cards */}
@@ -293,27 +347,7 @@ export const DashboardPage: React.FC = () => {
               <h2 className="text-lg font-bold text-[var(--text)]">Pending assessments</h2>
               <p className="text-sm text-gray-600 mt-1">Open follows the same activity window as the student view (end date 23:59 AEDT).</p>
             </div>
-            <div className="flex items-center gap-2">
-              <Input
-                value={searchTerm}
-                onChange={(e) => {
-                  setSearchTerm(e.target.value);
-                  setCurrentPage(1);
-                }}
-                placeholder="Search student, form..."
-                className="w-[220px]"
-              />
-              <Button
-                type="button"
-                variant="outline"
-                onClick={handleRefresh}
-                disabled={refreshing}
-                className="inline-flex items-center gap-2"
-              >
-                <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
-                Refresh
-              </Button>
-            </div>
+            {/* Filters moved to header */}
           </div>
 
           {!loading && (
@@ -403,6 +437,16 @@ export const DashboardPage: React.FC = () => {
                           <td className="px-3 py-2 border-b border-[var(--border)] align-top">
                             <div className="font-medium text-[var(--text)] break-words">{row.student_name}</div>
                             <div className="text-xs text-gray-500 break-all">{row.student_email || '—'}</div>
+                            <div className="mt-1 text-[11px] text-gray-600">
+                              <span className="text-gray-500">Trainer</span>{' '}
+                              {row.trainer_name?.trim() ? row.trainer_name : '—'}
+                              {row.batch_name?.trim() ? (
+                                <>
+                                  <span className="mx-1.5 text-gray-300">•</span>
+                                  <span className="text-gray-500">Batch</span> {row.batch_name}
+                                </>
+                              ) : null}
+                            </div>
                             <div className="md:hidden mt-1 text-xs text-gray-600 tabular-nums flex flex-wrap gap-x-3 gap-y-0.5">
                               <span>
                                 <span className="text-gray-500">Start</span> {formatDDMMYYYY(row.start_date)}

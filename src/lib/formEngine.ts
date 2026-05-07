@@ -881,7 +881,16 @@ export async function updateFormInstanceDates(
 ): Promise<void> {
   const payload: Record<string, unknown> = {};
   if ('start_date' in updates) payload.start_date = updates.start_date ? updates.start_date.trim() : null;
-  if ('end_date' in updates) payload.end_date = updates.end_date ? updates.end_date.trim() : null;
+  if ('end_date' in updates) {
+    const nextEnd = updates.end_date ? updates.end_date.trim() : null;
+    payload.end_date = nextEnd;
+    // Admin extending a deadline should re-open the student view.
+    // If an instance was auto-closed via rollover tracking, clear those flags when end_date changes.
+    payload.did_not_attempt = false;
+    payload.no_attempt_rollovers = 0;
+    payload.status = 'draft';
+    payload.role_context = 'student';
+  }
   if (Object.keys(payload).length === 0) return;
   await supabase.from('skyline_form_instances').update(payload).eq('id', instanceId);
 }
@@ -984,6 +993,10 @@ export async function issueInstanceAccessLink(
   /** When provided, use this expiry to align with an instance-specific deadline (admin extend). */
   resubmissionExpiresAt?: string
 ): Promise<string | null> {
+  const iid = Number(instanceId);
+  if (roleContext === 'student' && Number.isFinite(iid) && iid > 0) {
+    await syncNoAttemptRollover([iid]);
+  }
   const token = generateAccessToken();
   let expiresAt: string;
   const { data: instDates } = await supabase
@@ -1224,9 +1237,13 @@ export async function validateInstanceAccessToken(
   }
 
   if (role === 'student') {
+    const rid = Number(instanceId);
+    const rolloverMap =
+      Number.isFinite(rid) && rid > 0 ? await syncNoAttemptRollover([rid]) : new Map();
+    const synced = rolloverMap.get(rid);
     const { data: inst } = await supabase
       .from('skyline_form_instances')
-      .select('form_id, student_id, start_date, end_date')
+      .select('form_id, student_id, start_date, end_date, did_not_attempt')
       .eq('id', instanceId)
       .single();
     if (inst) {
@@ -1244,8 +1261,20 @@ export async function validateInstanceAccessToken(
         }
       }
 
+      const didNotAttempt =
+        synced?.did_not_attempt ?? Boolean((inst as { did_not_attempt?: boolean | null }).did_not_attempt);
+      if (didNotAttempt) {
+        return {
+          valid: false,
+          role_context: null,
+          tokenId: Number(row.id ?? 0) || null,
+          reason: 'This assessment closed after missed attempt windows. Contact your administrator.',
+        };
+      }
+
       const startDate = (inst as { start_date?: string | null }).start_date ?? null;
-      const endDate = (inst as { end_date?: string | null }).end_date ?? null;
+      const endDateRaw = synced?.end_date ?? (inst as { end_date?: string | null }).end_date ?? null;
+      const endDate = endDateRaw != null ? String(endDateRaw).trim() : null;
       const todayMel = getMelbourneDateStr(new Date());
       const start = (startDate ?? '').trim();
       const end = (endDate ?? '').trim();
@@ -1347,16 +1376,9 @@ export async function extendInstanceAccessTokensToDate(
 /** Allow student resubmission: set instance back to draft, role to student, and re-enable student link. For 2nd/3rd attempts. */
 export async function allowStudentResubmission(instanceId: number): Promise<void> {
   const { updated_by } = getAuditFields();
-  const { data: instRow } = await supabase
-    .from('skyline_form_instances')
-    .select('submission_count')
-    .eq('id', instanceId)
-    .single();
-  const current = Number((instRow as { submission_count?: number | null } | null)?.submission_count ?? 0) || 0;
-  const nextCount = Math.min(Math.max(current, 1) + 1, 3);
   await supabase
     .from('skyline_form_instances')
-    .update({ status: 'draft', role_context: 'student', updated_by, submission_count: nextCount })
+    .update({ status: 'draft', role_context: 'student', updated_by })
     .eq('id', instanceId);
   await extendInstanceAccessTokens(instanceId, 'student', 30);
 }
@@ -1624,6 +1646,8 @@ export interface AppUser {
   phone: string | null;
   status: string | null;
   role: AppUserRole;
+  can_login_as_student?: boolean;
+  can_login_as_trainer?: boolean;
 }
 
 const AUTH_STORAGE_KEY = 'skyline_auth_user';
@@ -1786,6 +1810,8 @@ export async function loginWithOtp(email: string, otp: string): Promise<AppUser 
     phone: row.phone ? String(row.phone) : null,
     status: row.status ? String(row.status) : null,
     role: (row.role as AppUserRole) ?? 'trainer',
+    can_login_as_student: Boolean((row as { can_login_as_student?: unknown }).can_login_as_student),
+    can_login_as_trainer: Boolean((row as { can_login_as_trainer?: unknown }).can_login_as_trainer),
   };
 }
 
@@ -1808,6 +1834,8 @@ export async function loginWithEmailPassword(email: string, password: string): P
     phone: row.phone ? String(row.phone) : null,
     status: row.status ? String(row.status) : null,
     role: (row.role as AppUserRole) ?? 'trainer',
+    can_login_as_student: Boolean((row as { can_login_as_student?: unknown }).can_login_as_student),
+    can_login_as_trainer: Boolean((row as { can_login_as_trainer?: unknown }).can_login_as_trainer),
   };
   return user;
 }
@@ -2145,6 +2173,11 @@ export interface SubmittedInstanceRow {
   form_course_ids?: number[];
   /** True if the link for this role is revoked or past expiry (show Enable); false = active (show Expire) */
   link_expired: boolean;
+  /** Student batch (when available for dashboards). */
+  batch_id?: number | null;
+  batch_name?: string | null;
+  /** Trainer assigned to student's batch (when available). */
+  trainer_name?: string | null;
 }
 
 /** Batch-attach `form_course_ids` for assessment directory / dashboards. */
@@ -2217,14 +2250,17 @@ export async function listAdminDashboardInstancesPaged(
   pageSize = 20,
   status: 'all' | 'awaiting_student' | 'awaiting_trainer' | 'awaiting_office' | 'completed',
   fromDate?: string | null,
-  toDate?: string | null
+  toDate?: string | null,
+  batchId?: number | null
 ): Promise<PaginatedResult<SubmittedInstanceRow>> {
+  const bid = batchId != null && Number.isFinite(Number(batchId)) && Number(batchId) > 0 ? Number(batchId) : null;
   const { data, error } = await supabase.rpc('skyline_admin_dashboard_instances_paged', {
     p_page: page,
     p_page_size: pageSize,
     p_status: status,
     p_from_date: fromDate && /^\d{4}-\d{2}-\d{2}$/.test(String(fromDate)) ? String(fromDate) : null,
     p_to_date: toDate && /^\d{4}-\d{2}-\d{2}$/.test(String(toDate)) ? String(toDate) : null,
+    p_batch_id: bid,
   });
   if (error) {
     console.error('skyline_admin_dashboard_instances_paged rpc error', error);
@@ -2244,6 +2280,9 @@ export async function listAdminDashboardInstancesPaged(
       start_date: string | null;
       end_date: string | null;
       created_at: string | null;
+      batch_id?: number | null;
+      batch_name?: string | null;
+      trainer_name?: string | null;
       total_count: number | null;
     }> | null) || [];
   const total = rowsRaw.length > 0 ? Number(rowsRaw[0].total_count ?? rowsRaw.length) : 0;
@@ -2264,6 +2303,9 @@ export async function listAdminDashboardInstancesPaged(
       submission_count: 0,
       start_date: r.start_date ? String(r.start_date) : null,
       end_date: r.end_date ? String(r.end_date) : null,
+      batch_id: r.batch_id != null ? Number(r.batch_id) : null,
+      batch_name: r.batch_name != null ? String(r.batch_name) : null,
+      trainer_name: r.trainer_name != null ? String(r.trainer_name) : null,
       link_expired: false,
     })),
     total: Number.isFinite(total) ? total : 0,
@@ -2662,16 +2704,19 @@ export async function listDashboardInstances(
   page = 1,
   pageSize = 20,
   search?: string,
-  pendingOnly = false
+  pendingOnly = false,
+  batchId?: number | null
 ): Promise<PaginatedResult<SubmittedInstanceRow>> {
   /** Instances are scoped to these students only (active / unset status). Avoid filters on embedded `skyline_students.*` in OR — PostgREST often returns PGRST100. */
   let eligibleStudentIds: number[] = [];
+  const bid = batchId != null && Number.isFinite(Number(batchId)) && Number(batchId) > 0 ? Number(batchId) : null;
   if (role === 'trainer') {
     const { data: batches } = await supabase
       .from('skyline_batches')
       .select('id')
       .eq('trainer_id', userId);
-    const batchIds = ((batches as { id: number }[]) || []).map((b) => b.id);
+    const batchIdsAll = ((batches as { id: number }[]) || []).map((b) => b.id);
+    const batchIds = bid ? batchIdsAll.filter((id) => id === bid) : batchIdsAll;
     if (batchIds.length === 0) return { data: [], total: 0, page, pageSize };
     const { data: students } = await supabase
       .from('skyline_students')
@@ -2681,10 +2726,12 @@ export async function listDashboardInstances(
     eligibleStudentIds = ((students as { id: number }[]) || []).map((s) => s.id);
     if (eligibleStudentIds.length === 0) return { data: [], total: 0, page, pageSize };
   } else {
-    const { data: studs } = await supabase
+    let studsQuery = supabase
       .from('skyline_students')
       .select('id')
       .or('status.is.null,status.eq.active');
+    if (bid) studsQuery = studsQuery.eq('batch_id', bid);
+    const { data: studs } = await studsQuery;
     eligibleStudentIds = ((studs as { id: number }[]) || []).map((s) => s.id);
     if (eligibleStudentIds.length === 0) return { data: [], total: 0, page, pageSize };
   }
@@ -2777,17 +2824,38 @@ export async function listDashboardInstances(
       });
     }
   }
-  const studentMap = new Map<number, { name: string; email: string }>();
+  const studentMap = new Map<number, { name: string; email: string; batch_id: number | null }>();
   if (sIds.length > 0) {
     const { data: students } = await supabase
       .from('skyline_students')
-      .select('id, name, first_name, last_name, email')
+      .select('id, name, first_name, last_name, email, batch_id')
       .in('id', sIds);
     for (const s of (students as Array<Record<string, unknown>>) || []) {
       const first = String(s.first_name ?? '').trim();
       const last = String(s.last_name ?? '').trim();
       const name = [first, last].filter(Boolean).join(' ').trim() || String(s.name ?? '');
-      studentMap.set(Number(s.id), { name, email: String(s.email ?? '') });
+      const batch_id = s.batch_id != null && s.batch_id !== '' ? Number(s.batch_id) : null;
+      studentMap.set(Number(s.id), { name, email: String(s.email ?? ''), batch_id: Number.isFinite(batch_id as number) ? batch_id : null });
+    }
+  }
+
+  const batchIds = Array.from(new Set(Array.from(studentMap.values()).map((s) => s.batch_id).filter((x): x is number => x != null && Number.isFinite(x) && x > 0)));
+  const batchMap = new Map<number, { name: string | null; trainer_name: string | null }>();
+  if (batchIds.length > 0) {
+    const { data: batches } = await supabase.from('skyline_batches').select('id, name, trainer_id').in('id', batchIds);
+    const trainerIds = Array.from(new Set(((batches as Array<Record<string, unknown>>) || []).map((b) => Number(b.trainer_id)).filter((n) => Number.isFinite(n) && n > 0)));
+    const trainerMap = new Map<number, string>();
+    if (trainerIds.length > 0) {
+      const { data: trainers } = await supabase.from('skyline_users').select('id, full_name').in('id', trainerIds);
+      for (const t of (trainers as Array<Record<string, unknown>>) || []) {
+        trainerMap.set(Number(t.id), String(t.full_name ?? '').trim());
+      }
+    }
+    for (const b of (batches as Array<Record<string, unknown>>) || []) {
+      const id = Number(b.id);
+      if (!Number.isFinite(id) || id <= 0) continue;
+      const tid = Number(b.trainer_id);
+      batchMap.set(id, { name: b.name != null ? String(b.name) : null, trainer_name: trainerMap.get(tid) ?? null });
     }
   }
 
@@ -2797,6 +2865,7 @@ export async function listDashboardInstances(
       const studentId = r.student_id == null ? null : Number(r.student_id);
       const form = formMap.get(formId);
       const student = studentId != null ? studentMap.get(studentId) : undefined;
+      const batch = student?.batch_id != null ? batchMap.get(student.batch_id) : undefined;
       const roleCtx = String(r.role_context ?? 'student');
       const link_expired = tokenMap.get(`${Number(r.id)}:${targetRole}`) !== false;
       return {
@@ -2808,6 +2877,9 @@ export async function listDashboardInstances(
         student_id: studentId,
         student_name: student?.name || 'Unknown student',
         student_email: student?.email || '',
+        batch_id: student?.batch_id ?? null,
+        batch_name: batch?.name ?? null,
+        trainer_name: batch?.trainer_name ?? null,
         status: String(r.status ?? 'draft'),
         role_context: roleCtx,
         created_at: String(r.created_at ?? ''),
@@ -5011,7 +5083,13 @@ export async function updateInstanceWorkflowStatus(instanceId: number, workflowS
       payload.submitted_at = nowIso;
     }
     const current = Number((instRow as { submission_count?: number | null } | null)?.submission_count ?? 0) || 0;
-    payload.submission_count = Math.max(current, 1);
+    // Count completed student hand-ins to trainer (cap 3). Each resubmission after the first must bump
+    // so trainer validation requires attempt 2 / 3 S/NS (Math.max(current,1) alone never exceeded 1).
+    if (!existingSubmittedAt) {
+      payload.submission_count = Math.max(1, current);
+    } else {
+      payload.submission_count = Math.min(Math.max(current, 1) + 1, 3);
+    }
   }
   // Best-effort: also persist workflow_status when the column exists.
   const payloadWithWf: Record<string, unknown> = { ...payload, workflow_status: workflowStatus };

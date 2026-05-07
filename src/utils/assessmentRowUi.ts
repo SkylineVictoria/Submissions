@@ -6,7 +6,7 @@ export type AssessmentRowUiState =
   | { kind: 'future'; disabled: true; reason: string; rowClassName: string; outcomeLabel?: never; outcomeClassName?: never }
   | { kind: 'in_progress'; disabled: false; rowClassName: string; outcomeLabel?: never; outcomeClassName?: never }
   | { kind: 'past_competent'; disabled: false; rowClassName: string; outcomeLabel: string; outcomeClassName: string }
-  | { kind: 'past_not_competent'; disabled: false; rowClassName: string; outcomeLabel: string; outcomeClassName: string }
+  | { kind: 'past_not_competent'; disabled: boolean; rowClassName: string; outcomeLabel: string; outcomeClassName: string }
   | { kind: 'did_not_attempt'; disabled: true; reason: string; rowClassName: string; outcomeLabel: string; outcomeClassName: string }
   | { kind: 'expired'; disabled: true; reason: string; rowClassName: string; outcomeLabel?: never; outcomeClassName?: never }
   | { kind: 'unknown'; disabled: false; rowClassName: string; outcomeLabel?: never; outcomeClassName?: never };
@@ -52,8 +52,17 @@ export function computeRowUi(input: {
     };
   }
   if (anyNYC) {
+    if (end && today > end) {
+      return {
+        kind: 'past_not_competent',
+        disabled: true,
+        rowClassName: 'bg-red-50/70 text-red-900/90 opacity-90 cursor-not-allowed',
+        outcomeLabel: 'Competency Not Achieved',
+        outcomeClassName: 'text-red-800',
+      };
+    }
     return {
-      kind: today && end && today > end ? 'past_not_competent' : 'past_not_competent',
+      kind: 'past_not_competent',
       disabled: false,
       rowClassName: 'bg-red-50/70 hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors',
       outcomeLabel: 'Competency Not Achieved',
