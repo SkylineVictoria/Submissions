@@ -1522,11 +1522,29 @@ function buildHtml(data: {
           const customBlocks = Array.isArray((instr as { blocks?: unknown[] }).blocks)
             ? ((instr as { blocks?: Array<{ id?: string; type?: string; heading?: string; content?: string; columnHeaders?: string[]; rows?: Array<{ heading?: string; content?: string; cells?: string[] }> }> }).blocks || [])
             : [];
-          const renderInstructionImage = (block: Record<string, unknown>) => {
+          const wrapInstructionContentWithImage = (contentHtml: string, block: Record<string, unknown>) => {
             const imageUrl = String(block.imageUrl || '').trim();
-            if (!imageUrl) return '';
-            const img = `<img src="${imageUrl.replace(/"/g, '&quot;')}" alt="" style="max-width:100%;height:auto;object-fit:contain;border:1px solid #e5e7eb;border-radius:6px;" />`;
-            return `<div style="margin:10px 0 8px 0">${img}</div>`;
+            if (!imageUrl) return contentHtml;
+            const fullWidth = Boolean(block.imageFullWidth);
+            const layoutRaw = String(block.imageLayout || 'below');
+            const layout = layoutRaw === 'above' || layoutRaw === 'side_by_side' || layoutRaw === 'below' ? layoutRaw : 'below';
+            const side = String(block.imageSide || 'right') === 'left' ? 'left' : 'right';
+            const imgStyle = fullWidth
+              ? 'max-width:100%;width:100%;height:auto;max-height:520px;object-fit:contain;border:1px solid #e5e7eb;border-radius:6px;display:block;margin:0 auto;'
+              : 'max-width:100%;height:auto;max-height:280px;object-fit:contain;border:1px solid #e5e7eb;border-radius:6px;';
+            const img = `<img src="${imageUrl.replace(/"/g, '&quot;')}" alt="" style="${imgStyle}" />`;
+            if (fullWidth || layout === 'above') {
+              return `<div>${img}<div style="margin-top:10px">${contentHtml}</div></div>`;
+            }
+            if (layout === 'side_by_side') {
+              const imgCell = `<div style="width:40%;flex-shrink:0">${img}</div>`;
+              const textCell = `<div style="flex:1;min-width:0">${contentHtml}</div>`;
+              return side === 'left'
+                ? `<div style="display:flex;gap:14px;align-items:flex-start">${imgCell}${textCell}</div>`
+                : `<div style="display:flex;gap:14px;align-items:flex-start">${textCell}${imgCell}</div>`;
+            }
+            // below
+            return `<div>${contentHtml}<div style="margin-top:10px">${img}</div></div>`;
           };
 
           if (customBlocks.length > 0) {
@@ -1538,39 +1556,40 @@ function buildHtml(data: {
                 const rows = Array.isArray(b.rows) ? b.rows : [];
                 const columnHeaders = Array.isArray(b.columnHeaders) ? b.columnHeaders : [];
                 if (rows.length > 0) {
-                  const imgHtml = renderInstructionImage(bRec);
-                  html += '<table class="section-table task-instructions-table">';
+                  let tableHtml = '<table class="section-table task-instructions-table">';
                   if (columnHeaders.length > 0) {
-                    html += '<thead><tr>';
+                    tableHtml += '<thead><tr>';
                     for (const h of columnHeaders) {
-                      html += `<th class="label-cell" style="font-weight:700;border:1px solid #000;padding:6px 8px;text-align:left">${String(h).replace(/</g, '&lt;').replace(/>/g, '&gt;')}</th>`;
+                      tableHtml += `<th class="label-cell" style="font-weight:700;border:1px solid #000;padding:6px 8px;text-align:left">${String(h).replace(/</g, '&lt;').replace(/>/g, '&gt;')}</th>`;
                     }
-                    html += '</tr></thead>';
+                    tableHtml += '</tr></thead>';
                   }
-                  html += '<tbody>';
+                  tableHtml += '<tbody>';
                   for (const r of rows) {
                     const cells = r.cells;
                     if (Array.isArray(cells) && cells.length > 0) {
-                      html += '<tr>';
+                      tableHtml += '<tr>';
                       for (const c of cells) {
-                        html += `<td class="value-cell" style="border:1px solid #000;padding:6px 8px">${normalizeNbspProse(String(c ?? ''))}</td>`;
+                        tableHtml += `<td class="value-cell" style="border:1px solid #000;padding:6px 8px">${normalizeNbspProse(String(c ?? ''))}</td>`;
                       }
-                      html += '</tr>';
+                      tableHtml += '</tr>';
                     } else {
-                      html += '<tr>';
-                      html += `<td class="label-cell" style="width:35%;font-weight:700;border:1px solid #000;padding:6px 8px">${String(r.heading || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</td>`;
-                      html += `<td class="value-cell" style="border:1px solid #000;padding:6px 8px">${normalizeNbspProse(String(r.content || ''))}</td>`;
-                      html += '</tr>';
+                      tableHtml += '<tr>';
+                      tableHtml += `<td class="label-cell" style="width:35%;font-weight:700;border:1px solid #000;padding:6px 8px">${String(r.heading || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</td>`;
+                      tableHtml += `<td class="value-cell" style="border:1px solid #000;padding:6px 8px">${normalizeNbspProse(String(r.content || ''))}</td>`;
+                      tableHtml += '</tr>';
                     }
                   }
-                  html += '</tbody></table>';
-                  if (imgHtml) html += imgHtml;
+                  tableHtml += '</tbody></table>';
+                  html += wrapInstructionContentWithImage(tableHtml, bRec);
                 }
-              } else if (String(b.content || '').replace(/<[^>]*>/g, '').trim()) {
+              } else {
+                const hasText = !!String(b.content || '').replace(/<[^>]*>/g, '').trim();
+                const hasImg = !!String((bRec as { imageUrl?: unknown }).imageUrl || '').trim();
+                if (!hasText && !hasImg) continue;
                 if (heading) html += `<div class="task-instructions-block-title">${heading.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>`;
-                const imgHtml = renderInstructionImage(bRec);
-                html += `<div class="task-instructions-block-content">${normalizeNbspProse(String(b.content || ''))}</div>`;
-                if (imgHtml) html += imgHtml;
+                const contentHtml = hasText ? `<div class="task-instructions-block-content">${normalizeNbspProse(String(b.content || ''))}</div>` : `<div class="task-instructions-block-content"></div>`;
+                html += wrapInstructionContentWithImage(contentHtml, bRec);
               }
             }
           }
@@ -1589,11 +1608,28 @@ function buildHtml(data: {
           const customBlocks = Array.isArray((instr as { blocks?: unknown[] }).blocks)
             ? ((instr as { blocks?: Array<{ id?: string; type?: string; heading?: string; content?: string; columnHeaders?: string[]; rows?: Array<{ heading?: string; content?: string; cells?: string[] }> }> }).blocks || [])
             : [];
-          const renderInstructionImage = (block: Record<string, unknown>) => {
+          const wrapInstructionContentWithImage = (contentHtml: string, block: Record<string, unknown>) => {
             const imageUrl = String(block.imageUrl || '').trim();
-            if (!imageUrl) return '';
-            const img = `<img src="${imageUrl.replace(/"/g, '&quot;')}" alt="" style="max-width:100%;height:auto;object-fit:contain;border:1px solid #e5e7eb;border-radius:6px;" />`;
-            return `<div style="margin:10px 0 8px 0">${img}</div>`;
+            if (!imageUrl) return contentHtml;
+            const fullWidth = Boolean(block.imageFullWidth);
+            const layoutRaw = String(block.imageLayout || 'below');
+            const layout = layoutRaw === 'above' || layoutRaw === 'side_by_side' || layoutRaw === 'below' ? layoutRaw : 'below';
+            const side = String(block.imageSide || 'right') === 'left' ? 'left' : 'right';
+            const imgStyle = fullWidth
+              ? 'max-width:100%;width:100%;height:auto;max-height:520px;object-fit:contain;border:1px solid #e5e7eb;border-radius:6px;display:block;margin:0 auto;'
+              : 'max-width:100%;height:auto;max-height:280px;object-fit:contain;border:1px solid #e5e7eb;border-radius:6px;';
+            const img = `<img src="${imageUrl.replace(/"/g, '&quot;')}" alt="" style="${imgStyle}" />`;
+            if (fullWidth || layout === 'above') {
+              return `<div>${img}<div style="margin-top:10px">${contentHtml}</div></div>`;
+            }
+            if (layout === 'side_by_side') {
+              const imgCell = `<div style="width:40%;flex-shrink:0">${img}</div>`;
+              const textCell = `<div style="flex:1;min-width:0">${contentHtml}</div>`;
+              return side === 'left'
+                ? `<div style="display:flex;gap:14px;align-items:flex-start">${imgCell}${textCell}</div>`
+                : `<div style="display:flex;gap:14px;align-items:flex-start">${textCell}${imgCell}</div>`;
+            }
+            return `<div>${contentHtml}<div style="margin-top:10px">${img}</div></div>`;
           };
 
           if (customBlocks.length > 0) {
@@ -1605,38 +1641,39 @@ function buildHtml(data: {
                 const rows = Array.isArray(b.rows) ? b.rows : [];
                 const columnHeaders = Array.isArray(b.columnHeaders) ? b.columnHeaders : [];
                 if (rows.length > 0) {
-                  const imgHtml = renderInstructionImage(bRec);
-                  html += '<table class="section-table task-instructions-table">';
+                  let tableHtml = '<table class="section-table task-instructions-table">';
                   if (columnHeaders.length > 0) {
-                    html += '<thead><tr>';
+                    tableHtml += '<thead><tr>';
                     for (const h of columnHeaders) {
-                      html += `<th class="label-cell" style="font-weight:700;border:1px solid #000;padding:6px 8px;text-align:left">${String(h).replace(/</g, '&lt;').replace(/>/g, '&gt;')}</th>`;
+                      tableHtml += `<th class="label-cell" style="font-weight:700;border:1px solid #000;padding:6px 8px;text-align:left">${String(h).replace(/</g, '&lt;').replace(/>/g, '&gt;')}</th>`;
                     }
-                    html += '</tr></thead>';
+                    tableHtml += '</tr></thead>';
                   }
-                  html += '<tbody>';
+                  tableHtml += '<tbody>';
                   for (const r of rows) {
                     const cells = r.cells;
                     if (Array.isArray(cells) && cells.length > 0) {
-                      html += '<tr>';
+                      tableHtml += '<tr>';
                       for (const c of cells) {
-                        html += `<td class="value-cell" style="border:1px solid #000;padding:6px 8px">${normalizeNbspProse(String(c ?? ''))}</td>`;
+                        tableHtml += `<td class="value-cell" style="border:1px solid #000;padding:6px 8px">${normalizeNbspProse(String(c ?? ''))}</td>`;
                       }
-                      html += '</tr>';
+                      tableHtml += '</tr>';
                     } else {
-                      html += '<tr>';
-                      html += `<td class="label-cell" style="width:35%;font-weight:700;border:1px solid #000;padding:6px 8px">${String(r.heading || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</td>`;
-                      html += `<td class="value-cell" style="border:1px solid #000;padding:6px 8px">${normalizeNbspProse(String(r.content || ''))}</td>`;
-                      html += '</tr>';
+                      tableHtml += '<tr>';
+                      tableHtml += `<td class="label-cell" style="width:35%;font-weight:700;border:1px solid #000;padding:6px 8px">${String(r.heading || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</td>`;
+                      tableHtml += `<td class="value-cell" style="border:1px solid #000;padding:6px 8px">${normalizeNbspProse(String(r.content || ''))}</td>`;
+                      tableHtml += '</tr>';
                     }
                   }
-                  html += '</tbody></table>';
-                  if (imgHtml) html += imgHtml;
+                  tableHtml += '</tbody></table>';
+                  html += wrapInstructionContentWithImage(tableHtml, bRec);
                 }
-              } else if (String(b.content || '').replace(/<[^>]*>/g, '').trim()) {
-                const imgHtml = renderInstructionImage(bRec);
-                html += `<div class="task-instructions-block-content">${normalizeNbspProse(String(b.content || ''))}</div>`;
-                if (imgHtml) html += imgHtml;
+              } else {
+                const hasText = !!String(b.content || '').replace(/<[^>]*>/g, '').trim();
+                const hasImg = !!String((bRec as { imageUrl?: unknown }).imageUrl || '').trim();
+                if (!hasText && !hasImg) continue;
+                const contentHtml = hasText ? `<div class="task-instructions-block-content">${normalizeNbspProse(String(b.content || ''))}</div>` : `<div class="task-instructions-block-content"></div>`;
+                html += wrapInstructionContentWithImage(contentHtml, bRec);
               }
             }
           } else {

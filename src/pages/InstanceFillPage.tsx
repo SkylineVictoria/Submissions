@@ -2501,7 +2501,7 @@ export const InstanceFillPage: React.FC = () => {
                           const instr = (section as unknown as { instructions_meta?: Record<string, unknown> | null }).instructions_meta as Record<string, unknown> | null | undefined;
                           if (!instr) return <div className="text-gray-500 italic">No additional instructions configured.</div>;
                           const customBlocks = Array.isArray((instr as { blocks?: unknown[] }).blocks)
-                            ? ((instr as { blocks?: Array<{ id?: string; type?: string; heading?: string; content?: string; columnHeaders?: string[]; rows?: Array<{ heading?: string; content?: string; cells?: string[] }> }> }).blocks || [])
+                            ? ((instr as { blocks?: Array<{ id?: string; type?: string; heading?: string; content?: string; imageUrl?: string; imageFullWidth?: boolean; imageLayout?: 'above' | 'below' | 'side_by_side'; imageSide?: 'left' | 'right'; columnHeaders?: string[]; rows?: Array<{ heading?: string; content?: string; cells?: string[] }> }> }).blocks || [])
                             : [];
                           return (
                             <div className="border border-gray-200 rounded-lg overflow-hidden bg-white">
@@ -2513,10 +2513,34 @@ export const InstanceFillPage: React.FC = () => {
                                   customBlocks.map((b, idx) => {
                                     const heading = String(b.heading || '').trim();
                                     const imgUrl = String((b as { imageUrl?: string }).imageUrl || '').trim();
-                                    const imgEl = imgUrl ? <img src={imgUrl} alt="" className="max-w-full h-auto object-contain rounded border border-gray-200" style={{ maxHeight: 280 }} /> : null;
+                                    const imageFullWidth = Boolean((b as { imageFullWidth?: boolean }).imageFullWidth);
+                                    const imageLayout = String((b as { imageLayout?: string }).imageLayout || 'side_by_side') as 'above' | 'below' | 'side_by_side';
+                                    const imageSide = (String((b as { imageSide?: string }).imageSide || 'right') as 'left' | 'right');
+                                    const imgEl = imgUrl ? (
+                                      <img
+                                        src={imgUrl}
+                                        alt=""
+                                        className="max-w-full h-auto object-contain rounded border border-gray-200"
+                                        style={{ maxHeight: imageFullWidth ? 520 : 280, width: imageFullWidth ? '100%' : undefined }}
+                                      />
+                                    ) : null;
                                     const withImage = (content: React.ReactNode) => {
                                       if (!imgEl) return content;
-                                      return <div>{content}<div className="mt-2">{imgEl}</div></div>;
+                                      if (imageFullWidth || imageLayout === 'above') {
+                                        return <div><div className="mb-2">{imgEl}</div>{content}</div>;
+                                      }
+                                      if (imageLayout === 'below') {
+                                        return <div>{content}<div className="mt-2">{imgEl}</div></div>;
+                                      }
+                                      // side_by_side
+                                      const left = imageSide === 'left';
+                                      return (
+                                        <div className="flex flex-col sm:flex-row gap-3 items-start">
+                                          {left ? <div className="sm:w-[40%] w-full shrink-0">{imgEl}</div> : null}
+                                          <div className="flex-1 min-w-0">{content}</div>
+                                          {!left ? <div className="sm:w-[40%] w-full shrink-0">{imgEl}</div> : null}
+                                        </div>
+                                      );
                                     };
                                     if (b.type === 'table') {
                                       const rows = Array.isArray(b.rows) ? b.rows : [];
@@ -2573,19 +2597,25 @@ export const InstanceFillPage: React.FC = () => {
                                       );
                                     }
                                     const content = String(b.content || '');
-                                    if (!content.replace(/<[^>]*>/g, '').trim()) return null;
+                                    const hasText = !!content.replace(/<[^>]*>/g, '').trim();
+                                    const hasImg = !!imgUrl;
+                                    if (!hasText && !hasImg) return null;
                                     return (
                                       <div key={String(b.id || idx)} className="border border-gray-200 rounded overflow-hidden">
                                         {heading ? <div className="bg-gray-600 text-white font-semibold text-sm px-3 py-2">{heading}</div> : null}
                                         <div className="border-t border-gray-200 p-3 bg-gray-50">
                                           {withImage(
-                                            <div className="overflow-x-hidden">
-                                              <div
-                                                lang="en"
-                                                className="prose prose-sm max-w-none whitespace-normal break-normal [word-break:normal] [hyphens:none] [&_table]:w-full [&_table]:table-fixed [&_table]:border-collapse [&_th]:whitespace-normal [&_th]:break-normal [&_th]:align-top [&_td]:whitespace-normal [&_td]:break-normal [&_td]:align-top [&_td>div]:[overflow-wrap:break-word] [&_td>p]:[overflow-wrap:break-word] [&_td>span]:[overflow-wrap:break-word]"
-                                                dangerouslySetInnerHTML={{ __html: normalizeRichTextForPage(String(content || '')) }}
-                                              />
-                                            </div>
+                                            hasText ? (
+                                              <div className="overflow-x-hidden">
+                                                <div
+                                                  lang="en"
+                                                  className="prose prose-sm max-w-none whitespace-normal break-normal [word-break:normal] [hyphens:none] [&_table]:w-full [&_table]:table-fixed [&_table]:border-collapse [&_th]:whitespace-normal [&_th]:break-normal [&_th]:align-top [&_td]:whitespace-normal [&_td]:break-normal [&_td]:align-top [&_td>div]:[overflow-wrap:break-word] [&_td>p]:[overflow-wrap:break-word] [&_td>span]:[overflow-wrap:break-word]"
+                                                  dangerouslySetInnerHTML={{ __html: normalizeRichTextForPage(String(content || '')) }}
+                                                />
+                                              </div>
+                                            ) : (
+                                              <div />
+                                            )
                                           )}
                                         </div>
                                       </div>
@@ -2604,7 +2634,7 @@ export const InstanceFillPage: React.FC = () => {
                           const instr = taskRow?.row_meta?.instructions;
                           if (!instr) return <div className="text-gray-500 italic">No instructions configured for this task.</div>;
                           const customBlocks = Array.isArray((instr as { blocks?: unknown[] }).blocks)
-                            ? ((instr as { blocks?: Array<{ id?: string; type?: string; heading?: string; content?: string; columnHeaders?: string[]; rows?: Array<{ heading?: string; content?: string; cells?: string[] }> }> }).blocks || [])
+                            ? ((instr as { blocks?: Array<{ id?: string; type?: string; heading?: string; content?: string; imageUrl?: string; imageFullWidth?: boolean; imageLayout?: 'above' | 'below' | 'side_by_side'; imageSide?: 'left' | 'right'; columnHeaders?: string[]; rows?: Array<{ heading?: string; content?: string; cells?: string[] }> }> }).blocks || [])
                             : [];
                           const sanitizeInstructionHtml = (html: string) => {
                             // Normalize HTML that may contain hidden word-break hints (soft hyphens, zero-width spaces, <wbr>, etc.)
@@ -2685,8 +2715,19 @@ export const InstanceFillPage: React.FC = () => {
                                           </table>
                                           {(() => {
                                             const imgUrl = String((b as { imageUrl?: string }).imageUrl || '').trim();
-                                            const imgEl = imgUrl ? <img src={imgUrl} alt="" className="max-w-full h-auto object-contain rounded border border-gray-200" style={{ maxHeight: 280 }} /> : null;
-                                            if (!imgEl) return null;
+                                            if (!imgUrl) return null;
+                                            const imageFullWidth = Boolean((b as { imageFullWidth?: boolean }).imageFullWidth);
+                                            const imageLayout = String((b as { imageLayout?: string }).imageLayout || 'below') as 'above' | 'below' | 'side_by_side';
+                                            const imgEl = (
+                                              <img
+                                                src={imgUrl}
+                                                alt=""
+                                                className="max-w-full h-auto object-contain rounded border border-gray-200"
+                                                style={{ maxHeight: imageFullWidth ? 520 : 280, width: imageFullWidth ? '100%' : undefined }}
+                                              />
+                                            );
+                                            // For tables, always render image below to keep layout stable.
+                                            if (imageFullWidth || imageLayout === 'above' || imageLayout === 'side_by_side') return <div className="p-3 pt-2">{imgEl}</div>;
                                             return <div className="p-3 pt-2">{imgEl}</div>;
                                           })()}
                                         </div>
@@ -2699,9 +2740,28 @@ export const InstanceFillPage: React.FC = () => {
                                           />
                                           {(() => {
                                             const imgUrl = String((b as { imageUrl?: string }).imageUrl || '').trim();
-                                            const imgEl = imgUrl ? <img src={imgUrl} alt="" className="max-w-full h-auto object-contain rounded border border-gray-200" style={{ maxHeight: 280 }} /> : null;
-                                            if (!imgEl) return null;
-                                            return <div className="mt-2">{imgEl}</div>;
+                                            if (!imgUrl) return null;
+                                            const imageFullWidth = Boolean((b as { imageFullWidth?: boolean }).imageFullWidth);
+                                            const imageLayout = String((b as { imageLayout?: string }).imageLayout || 'below') as 'above' | 'below' | 'side_by_side';
+                                            const imageSide = (String((b as { imageSide?: string }).imageSide || 'right') as 'left' | 'right');
+                                            const imgEl = (
+                                              <img
+                                                src={imgUrl}
+                                                alt=""
+                                                className="max-w-full h-auto object-contain rounded border border-gray-200"
+                                                style={{ maxHeight: imageFullWidth ? 520 : 280, width: imageFullWidth ? '100%' : undefined }}
+                                              />
+                                            );
+                                            if (imageFullWidth || imageLayout === 'above') return <div className="mt-2">{imgEl}</div>;
+                                            if (imageLayout === 'below') return <div className="mt-2">{imgEl}</div>;
+                                            const left = imageSide === 'left';
+                                            return (
+                                              <div className="mt-2 flex flex-col sm:flex-row gap-3 items-start">
+                                                {left ? <div className="sm:w-[40%] w-full shrink-0">{imgEl}</div> : null}
+                                                <div className="flex-1 min-w-0" />
+                                                {!left ? <div className="sm:w-[40%] w-full shrink-0">{imgEl}</div> : null}
+                                              </div>
+                                            );
                                           })()}
                                         </div>
                                       )}

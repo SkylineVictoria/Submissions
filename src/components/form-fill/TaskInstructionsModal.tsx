@@ -13,6 +13,7 @@ import { uploadInstructionImage } from '../../lib/storage';
 
 export type InstructionBlockType = 'paragraph' | 'table';
 export type InstructionImageLayout = 'above' | 'below' | 'side_by_side';
+export type InstructionImageSide = 'left' | 'right';
 export interface InstructionTableRow {
   heading?: string;
   content?: string;
@@ -25,6 +26,10 @@ export interface InstructionBlock {
   heading?: string;
   content?: string;
   imageUrl?: string;
+  /** Matches question image rendering (full width or side-by-side). */
+  imageFullWidth?: boolean;
+  imageLayout?: InstructionImageLayout;
+  imageSide?: InstructionImageSide;
   rows?: InstructionTableRow[];
   /** Column headers for multi-column tables */
   columnHeaders?: string[];
@@ -359,6 +364,15 @@ export function TaskInstructionsModal({
         heading: String(b.heading || ''),
         content: String(b.content || ''),
         imageUrl: String((b as { imageUrl?: string }).imageUrl || '') || undefined,
+        imageFullWidth: Boolean((b as { imageFullWidth?: unknown }).imageFullWidth),
+        imageLayout: ((): InstructionImageLayout | undefined => {
+          const v = String((b as { imageLayout?: unknown }).imageLayout || '').trim();
+          return v === 'above' || v === 'below' || v === 'side_by_side' ? (v as InstructionImageLayout) : undefined;
+        })(),
+        imageSide: ((): InstructionImageSide | undefined => {
+          const v = String((b as { imageSide?: unknown }).imageSide || '').trim();
+          return v === 'left' || v === 'right' ? (v as InstructionImageSide) : undefined;
+        })(),
         columnHeaders: Array.isArray((b as { columnHeaders?: string[] }).columnHeaders)
           ? (b as { columnHeaders: string[] }).columnHeaders
           : undefined,
@@ -904,11 +918,52 @@ export function TaskInstructionsModal({
                     </div>
                     {block.imageUrl ? (
                       <div className="space-y-2">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          <Select
+                            value={block.imageFullWidth ? 'full_width' : (block.imageLayout || 'side_by_side')}
+                            onChange={(v) => {
+                              if (v === 'full_width') {
+                                updateBlock(index, { imageFullWidth: true, imageLayout: 'above' });
+                                return;
+                              }
+                              updateBlock(index, { imageFullWidth: false, imageLayout: v as InstructionImageLayout });
+                            }}
+                            options={[
+                              { value: 'full_width', label: 'Full width' },
+                              { value: 'side_by_side', label: 'Side' },
+                              { value: 'above', label: 'Above' },
+                              { value: 'below', label: 'Below' },
+                            ]}
+                            className="w-full"
+                          />
+                          <Select
+                            value={block.imageSide || 'right'}
+                            onChange={(v) => updateBlock(index, { imageSide: v as InstructionImageSide })}
+                            options={[
+                              { value: 'right', label: 'Image right' },
+                              { value: 'left', label: 'Image left' },
+                            ]}
+                            className="w-full"
+                            disabled={!!block.imageFullWidth || (block.imageLayout || 'side_by_side') !== 'side_by_side'}
+                          />
+                          <label className="flex items-center gap-2 text-sm text-gray-700">
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 rounded border-gray-300 text-[var(--brand)] focus:ring-[var(--brand)]"
+                              checked={!!block.imageFullWidth}
+                              onChange={(e) => {
+                                const on = e.target.checked;
+                                updateBlock(index, { imageFullWidth: on, imageLayout: on ? 'above' : (block.imageLayout || 'side_by_side') });
+                              }}
+                            />
+                            Force full width
+                          </label>
+                        </div>
                         <img
                           src={block.imageUrl}
                           alt=""
                           className="max-w-full h-auto object-contain rounded border border-gray-200"
-                          style={{ maxHeight: 240 }}
+                          style={{ maxHeight: block.imageFullWidth ? 420 : 240, width: block.imageFullWidth ? '100%' : undefined }}
                         />
                       </div>
                     ) : (
