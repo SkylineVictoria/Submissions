@@ -3,9 +3,11 @@ import type { AppUser } from '../lib/formEngine';
 import {
   clearStaffImpersonationSession,
   consumeStaffImpersonationPendingIfEligible,
+  fetchUserLoginRights,
   getEffectiveStoredUser,
   getStoredUser,
   isStaffImpersonationActive,
+  setStaffImpersonationSession,
   setStoredUser,
 } from '../lib/formEngine';
 
@@ -27,9 +29,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    consumeStaffImpersonationPendingIfEligible();
-    setUser(getEffectiveStoredUser());
-    setLoading(false);
+    let cancelled = false;
+    const run = async () => {
+      consumeStaffImpersonationPendingIfEligible();
+      const initial = getEffectiveStoredUser();
+      const impersonating = isStaffImpersonationActive();
+      const realUser = getStoredUser();
+      setUser(initial);
+      setLoading(false);
+      if (!initial?.id) return;
+      const rights = await fetchUserLoginRights(initial.id);
+      if (cancelled || !rights) return;
+      const merged: AppUser = { ...initial, ...rights };
+      setUser(merged);
+      if (impersonating && realUser?.id) {
+        setStaffImpersonationSession(merged, realUser.id);
+      } else {
+        setStoredUser(merged);
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const login = (u: AppUser) => {

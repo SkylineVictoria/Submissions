@@ -55,6 +55,8 @@ function userRowToAppUser(row: UserRow): AppUser {
     phone: row.phone,
     status: row.status,
     role: row.role as AppUserRole,
+    can_login_as_student: Boolean(row.can_login_as_student),
+    can_login_as_trainer: Boolean(row.can_login_as_trainer),
   };
 }
 
@@ -62,6 +64,8 @@ export const AdminUsersPage: React.FC = () => {
   const PAGE_SIZE = 20;
   const { user: authUser } = useAuth();
   const viewerIsSuperadmin = authUser?.role === 'superadmin';
+  const viewerCanStaffPreview =
+    viewerIsSuperadmin || Boolean(authUser?.can_login_as_student) || Boolean(authUser?.can_login_as_trainer);
   const assignableRoleOptions = React.useMemo(
     () =>
       viewerIsSuperadmin
@@ -258,7 +262,7 @@ export const AdminUsersPage: React.FC = () => {
   const canEditDirectoryUser = (row: UserRow) => !(row.role === 'superadmin' && !viewerIsSuperadmin);
 
   const handleOpenAsUser = (row: UserRow) => {
-    if (!viewerIsSuperadmin || !authUser?.id) return;
+    if (!viewerCanStaffPreview || !authUser?.id) return;
     if (row.id === authUser.id) {
       toast.error('Pick a different user than yourself.');
       return;
@@ -409,7 +413,7 @@ export const AdminUsersPage: React.FC = () => {
                             <Pencil className="mr-1 h-4 w-4" />
                             Edit
                           </Button>
-                          {viewerIsSuperadmin ? (
+                          {viewerCanStaffPreview ? (
                             <Button
                               variant="outline"
                               size="sm"
@@ -518,7 +522,7 @@ export const AdminUsersPage: React.FC = () => {
                             <Pencil className="w-4 h-4" />
                             Edit
                           </Button>
-                          {viewerIsSuperadmin ? (
+                          {viewerCanStaffPreview ? (
                             <Button
                               variant="outline"
                               size="sm"

@@ -1678,6 +1678,8 @@ export function parseStaffImpersonationSession(): StaffImpersonationPayload | nu
         phone: u.phone != null ? String(u.phone) : null,
         status: u.status != null ? String(u.status) : null,
         role: u.role as AppUserRole,
+        can_login_as_student: Boolean((u as { can_login_as_student?: unknown }).can_login_as_student),
+        can_login_as_trainer: Boolean((u as { can_login_as_trainer?: unknown }).can_login_as_trainer),
       },
       impersonatorUserId,
       at: Number(raw.at) || Date.now(),
@@ -1730,6 +1732,8 @@ export function consumeStaffImpersonationPendingIfEligible(): boolean {
       phone: u.phone != null ? String(u.phone) : null,
       status: u.status != null ? String(u.status) : null,
       role: u.role as AppUserRole,
+      can_login_as_student: Boolean((u as { can_login_as_student?: unknown }).can_login_as_student),
+      can_login_as_trainer: Boolean((u as { can_login_as_trainer?: unknown }).can_login_as_trainer),
     };
     if (!Number.isFinite(appUser.id) || appUser.id <= 0 || !appUser.email) return false;
     localStorage.removeItem(STAFF_IMPERSONATION_PENDING_KEY);
@@ -1776,6 +1780,28 @@ export function setStoredUser(user: AppUser | null): void {
   } else {
     localStorage.removeItem(AUTH_STORAGE_KEY);
   }
+}
+
+/** Load impersonation rights from DB (cached auth may predate these columns). */
+export async function fetchUserLoginRights(
+  userId: number
+): Promise<Pick<AppUser, 'can_login_as_student' | 'can_login_as_trainer'> | null> {
+  if (!Number.isFinite(userId) || userId <= 0) return null;
+  const { data, error } = await supabase
+    .from('skyline_users')
+    .select('can_login_as_student, can_login_as_trainer')
+    .eq('id', userId)
+    .maybeSingle();
+  if (error) {
+    console.error('fetchUserLoginRights error', error);
+    return null;
+  }
+  if (!data) return null;
+  const row = data as { can_login_as_student?: boolean | null; can_login_as_trainer?: boolean | null };
+  return {
+    can_login_as_student: Boolean(row.can_login_as_student),
+    can_login_as_trainer: Boolean(row.can_login_as_trainer),
+  };
 }
 
 /** Audit fields for created_by / updated_by (current user). Use for insert/update. */

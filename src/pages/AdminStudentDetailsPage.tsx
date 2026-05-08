@@ -37,7 +37,6 @@ import {
   listActiveFormsByQualificationCode,
   upsertStudentAssessmentsForForms,
   getFormsForCourse,
-  deleteStudentIfNoAssessments,
   deleteStudentSuperadmin,
 } from '../lib/formEngine';
 import type { Student, SubmittedInstanceRow } from '../lib/formEngine';
@@ -613,13 +612,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
     window.open(url, '_blank');
   };
 
-  const hasAssessmentsLoaded = !assessmentsLoading;
-  const hasSubmittedAssessment = assessments.some(
-    (a) =>
-      (a.submitted_at != null && String(a.submitted_at).trim() !== '') || (Number(a.submission_count ?? 0) > 0)
-  );
-  const canDeleteStudent =
-    !!student && (viewerIsSuperadmin || (hasAssessmentsLoaded && !hasSubmittedAssessment));
+  const canDeleteStudent = !!student && viewerIsSuperadmin;
   const viewerCanLoginAsStudent = viewerIsSuperadmin || Boolean(user?.can_login_as_student);
 
   const loginAsStudent = async () => {
@@ -634,14 +627,14 @@ export const AdminStudentDetailsPage: React.FC = () => {
 
   const confirmDeleteStudent = async () => {
     if (!student || !Number.isFinite(sid) || sid <= 0) return;
-    if (!viewerIsSuperadmin && hasSubmittedAssessment) {
-      toast.error('Cannot delete. This student has submitted assessments.');
+    if (!viewerIsSuperadmin) {
+      toast.error('Only a super admin can delete students.');
       setDeleteStudentOpen(false);
       return;
     }
     setDeletingStudent(true);
     try {
-      const res = viewerIsSuperadmin ? await deleteStudentSuperadmin(sid) : await deleteStudentIfNoAssessments(sid);
+      const res = await deleteStudentSuperadmin(sid);
       if (!res.ok) {
         toast.error(res.error);
         return;
@@ -743,32 +736,30 @@ export const AdminStudentDetailsPage: React.FC = () => {
                     </div>
                   </div>
 
-                  {canDeleteStudent ? (
-                    <div className="border-t border-gray-100 pt-3">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="w-full text-red-700 border-red-200 hover:bg-red-50"
-                        onClick={() => setDeleteStudentOpen(true)}
-                        disabled={deletingStudent}
-                        title={
-                          viewerIsSuperadmin
-                            ? 'Delete student (removes all assessments)'
-                            : 'Delete student (only when no submitted assessments)'
-                        }
-                      >
-                        <Trash2 className="w-4 h-4 mr-2 inline" />
-                        Delete student
-                      </Button>
+                  {viewerCanLoginAsStudent || canDeleteStudent ? (
+                    <div className="border-t border-gray-100 pt-3 space-y-2">
                       {viewerCanLoginAsStudent ? (
                         <Button
                           variant="outline"
                           size="sm"
-                          className="w-full mt-2 border-[var(--brand)]/30 text-[var(--brand)] hover:bg-[var(--brand)]/10"
+                          className="w-full border-[var(--brand)]/30 text-[var(--brand)] hover:bg-[var(--brand)]/10"
                           onClick={() => void loginAsStudent()}
                           title="Switch to student dashboard for this student"
                         >
                           Login as student
+                        </Button>
+                      ) : null}
+                      {canDeleteStudent ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="w-full text-red-700 border-red-200 hover:bg-red-50"
+                          onClick={() => setDeleteStudentOpen(true)}
+                          disabled={deletingStudent}
+                          title="Delete student (removes all assessments; super admin only)"
+                        >
+                          <Trash2 className="w-4 h-4 mr-2 inline" />
+                          Delete student
                         </Button>
                       ) : null}
                     </div>
@@ -1318,16 +1309,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
               Delete <strong>{[student.first_name, student.last_name].filter(Boolean).join(' ').trim() || student.email}</strong>?
             </p>
             <p className="text-xs text-gray-500">
-              {viewerIsSuperadmin ? (
-                <>
-                  This will permanently delete the student and <strong>all their assessments</strong>. This action cannot be undone.
-                </>
-              ) : (
-                <>
-                  This is only allowed when the student has <strong>no submitted assessments</strong> (allocated but
-                  unsubmitted work does not block delete). This action cannot be undone.
-                </>
-              )}
+              This will permanently delete the student and <strong>all their assessments</strong>. This action cannot be undone.
             </p>
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="outline" size="sm" onClick={() => setDeleteStudentOpen(false)} disabled={deletingStudent}>
