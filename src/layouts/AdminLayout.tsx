@@ -182,7 +182,8 @@ export const AdminLayout: React.FC = () => {
               </li>
             ))}
           </ul>
-          {user ? (
+          {/* Mobile footer menu (desktop already has top-right menu) */}
+          {user && !isMdUp ? (
             <div className="shrink-0 border-t border-[var(--border)] p-2 pb-[max(0.5rem,env(safe-area-inset-bottom,0px))]">
               <UserMenu
                 name={user.full_name}
