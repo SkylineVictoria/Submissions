@@ -13,8 +13,6 @@ import { Button } from '../ui/Button';
 import { Loader } from '../ui/Loader';
 import { deleteAnswerImageByPublicUrl, uploadAnswerImage } from '../../lib/storage';
 
-const countWords = (text: string): number =>
-  text.trim() ? text.trim().split(/\s+/).length : 0;
 const truncateToWordLimit = (text: string, maxWords: number): string => {
   if (!text.trim()) return text;
   const words = text.trim().split(/\s+/);
@@ -591,7 +589,6 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
           text: patch.text ?? norm.text,
           answerImageUrl: patch.answerImageUrl !== undefined ? patch.answerImageUrl : norm.answerImageUrl,
         } as Record<string, unknown>);
-      const wordHelp = wordLimit ? `${countWords(norm.text)} / ${wordLimit} words` : undefined;
       const textEl = (
         <Textarea
           label={imgUrl ? undefined : taskLabel(question.label)}
@@ -604,7 +601,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
           error={error}
           className={fillBgClass}
           required={false}
-          helperText={imgUrl ? wordHelp : [question.help_text, wordHelp].filter(Boolean).join(' • ') || undefined}
+          helperText={question.help_text || undefined}
           rows={wordLimit ? Math.max(2, Math.min(6, Math.ceil(wordLimit / 12))) : 3}
           maxWords={wordLimit ?? undefined}
         />
@@ -667,7 +664,6 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
                 error={error}
                 className={fillBgClass}
                 required={question.required && !disabled}
-                helperText={wordLimit ? `${countWords(String(value || ''))} / ${wordLimit} words` : undefined}
                 rows={wordLimit ? Math.max(2, Math.min(6, Math.ceil(wordLimit / 12))) : 3}
                 maxWords={wordLimit ?? undefined}
               />
@@ -688,7 +684,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
         error={error}
         className={fillBgClass}
         required={question.required && !disabled}
-        helperText={[question.help_text, wordLimit ? `${countWords(String(value || ''))} / ${wordLimit} words` : null].filter(Boolean).join(' • ') || undefined}
+        helperText={question.help_text || undefined}
         rows={wordLimit ? Math.max(2, Math.min(6, Math.ceil(wordLimit / 12))) : 3}
         maxWords={wordLimit ?? undefined}
       />
@@ -706,7 +702,6 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
           text: patch.text ?? norm.text,
           answerImageUrl: patch.answerImageUrl !== undefined ? patch.answerImageUrl : norm.answerImageUrl,
         } as Record<string, unknown>);
-      const wordHelp = wordLimit ? `${countWords(norm.text)} / ${wordLimit} words` : undefined;
       const textEl = (
         <Textarea
           label={imgUrl ? undefined : taskLabel(question.label)}
@@ -716,7 +711,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
           error={error}
           className={fillBgClass}
           required={false}
-          helperText={imgUrl ? wordHelp : [question.help_text, wordHelp].filter(Boolean).join(' • ') || undefined}
+          helperText={question.help_text || undefined}
           rows={wordLimit ? Math.max(2, Math.min(10, Math.ceil(wordLimit / 10))) : 8}
           maxWords={wordLimit ?? undefined}
           fixedHeightFromWordLimit={!!wordLimit}
@@ -777,7 +772,6 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
                 error={error}
                 className={fillBgClass}
                 required={question.required && !disabled}
-                helperText={wordLimit ? `${countWords(String(value || ''))} / ${wordLimit} words` : undefined}
                 rows={wordLimit ? Math.max(2, Math.min(10, Math.ceil(wordLimit / 10))) : 8}
                 maxWords={wordLimit ?? undefined}
                 fixedHeightFromWordLimit={!!wordLimit}
