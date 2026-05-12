@@ -98,6 +98,13 @@ function getAnswerKey(questionId: number, rowId: number | null): string {
   return `q-${questionId}-${rowId}`;
 }
 
+/** Undo `getAnswerKey` for keys used in debounced save map (`q-12` or `q-12-34`). */
+function parseDebouncedAnswerKey(key: string): { questionId: number; rowId: number | null } | null {
+  const m = /^q-(\d+)(?:-(\d+))?$/.exec(key);
+  if (!m) return null;
+  return { questionId: Number(m[1]), rowId: m[2] != null ? Number(m[2]) : null };
+}
+
 /**
  * Normalize calendar strings to yyyy-MM-dd for ordering. DB/UI may have ISO or dd-MM-yyyy;
  * raw string compare wrongly treats '01-03-2026' < '2026-03-02'.
@@ -551,6 +558,7 @@ export const InstanceFillPage: React.FC = () => {
     confirmLabel: string;
   } | null>(null);
   const [workflowSubmitting, setWorkflowSubmitting] = useState(false);
+  const [manualSaveBusy, setManualSaveBusy] = useState(false);
   const [currentStep, setCurrentStep] = useState(1);
   const [loading, setLoading] = useState(true);
   const [accessDenied, setAccessDenied] = useState<string | null>(null);
@@ -1237,6 +1245,42 @@ export const InstanceFillPage: React.FC = () => {
     if (role === 'office') return workflowStatus === 'waiting_office';
     return false;
   }, [role, workflowStatus]);
+
+  /** Flush debounced question saves so a refresh does not drop in-flight edits. */
+  const flushPendingDebouncedAnswerSaves = useCallback(async () => {
+    if (!id) return 0;
+    const keys = [...saveTimeoutsRef.current.keys()];
+    let flushed = 0;
+    for (const key of keys) {
+      clearPendingSave(key);
+      const parsed = parseDebouncedAnswerKey(key);
+      if (!parsed) continue;
+      const raw = answers[key];
+      if (raw === undefined) continue;
+      const payload = valueToSavePayload(raw);
+      await saveAnswer(id, parsed.questionId, parsed.rowId, payload);
+      flushed += 1;
+    }
+    if (flushed > 0) setPdfRefresh((r) => r + 1);
+    return flushed;
+  }, [id, answers, clearPendingSave]);
+
+  const handleManualSaveDraft = useCallback(async () => {
+    if (!canRoleEditCurrentWorkflow) return;
+    setManualSaveBusy(true);
+    try {
+      const flushed = await flushPendingDebouncedAnswerSaves();
+      if (flushed > 0) {
+        toast.success('Autosaved — pending answers are on the server.');
+      } else {
+        toast.success('All changes are already saved.');
+      }
+    } catch {
+      toast.error('Could not save. Check your connection and try again.');
+    } finally {
+      setManualSaveBusy(false);
+    }
+  }, [canRoleEditCurrentWorkflow, flushPendingDebouncedAnswerSaves]);
 
   // Student declaration signature/date is rendered in the Declarations section (not duplicated inside submission method).
 
@@ -2005,6 +2049,18 @@ export const InstanceFillPage: React.FC = () => {
             <h1 className="min-w-0 text-lg sm:text-xl font-bold text-[var(--text)] break-words">{template.form.name}</h1>
             <div className="flex items-center gap-2 flex-wrap justify-end">
               <span className="text-xs px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200">{workflowLabel}</span>
+              {canRoleEditCurrentWorkflow ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  title="Writes any answers still waiting to sync (about 300ms after you stop typing). Task result sheets already save immediately."
+                  onClick={() => void handleManualSaveDraft()}
+                  disabled={manualSaveBusy}
+                >
+                  {manualSaveBusy ? 'Saving…' : 'Autosave'}
+                </Button>
+              ) : null}
               <span className="text-sm font-semibold text-gray-700 capitalize">{role}</span>
             </div>
           </div>
