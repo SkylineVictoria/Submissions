@@ -30,6 +30,44 @@ function inductionSessionStorageKey(accessToken: string): string {
   return `signflow.induction.session.${accessToken}`;
 }
 
+function inductionDraftStorageKey(accessToken: string, email: string): string {
+  return `signflow.induction.draft.v1.${accessToken}.${email.trim().toLowerCase()}`;
+}
+
+interface InductionDraftEnvelope {
+  savedAt: number;
+  payload: InductionFormPayload;
+}
+
+function readInductionDraftEnvelope(accessToken: string, email: string): InductionDraftEnvelope | null {
+  try {
+    const raw = localStorage.getItem(inductionDraftStorageKey(accessToken, email));
+    if (!raw) return null;
+    const o = JSON.parse(raw) as { savedAt?: unknown; payload?: unknown };
+    const savedAt = typeof o.savedAt === 'number' ? o.savedAt : 0;
+    const p = parseInductionPayload(o.payload);
+    if (!p) return null;
+    return { savedAt, payload: p };
+  } catch {
+    return null;
+  }
+}
+
+function writeInductionDraft(accessToken: string, email: string, payload: InductionFormPayload): number {
+  const savedAt = Date.now();
+  const envelope: InductionDraftEnvelope = { savedAt, payload };
+  localStorage.setItem(inductionDraftStorageKey(accessToken, email), JSON.stringify(envelope));
+  return savedAt;
+}
+
+function clearInductionDraft(accessToken: string, email: string): void {
+  try {
+    localStorage.removeItem(inductionDraftStorageKey(accessToken, email));
+  } catch {
+    /* ignore */
+  }
+}
+
 /** Dev/staging only: set `VITE_INDUCTION_OTP_BYPASS=true` for non-DEV builds. */
 const INDUCTION_OTP_BYPASS_EMAIL = 'gourav.gupta@siyanainfo.com';
 const INDUCTION_OTP_BYPASS_CODE = '1111';
@@ -59,6 +97,8 @@ export const PublicInductionPage: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
   const [form, setForm] = useState<InductionFormPayload>(() => emptyInductionFormPayload());
   const [submitted, setSubmitted] = useState(false);
+  /** Last successful local draft save (this browser); shown next to Save draft. */
+  const [draftSavedAt, setDraftSavedAt] = useState<number | null>(null);
   /** Server says session is valid but DB `now()` is outside start_at/end_at (keeps session on refresh). */
   const [outsideWindowServer, setOutsideWindowServer] = useState(false);
   const [windowTick, setWindowTick] = useState(0);
@@ -78,6 +118,7 @@ export const PublicInductionPage: React.FC = () => {
     setSession(null);
     setSessionReady(false);
     setSubmitted(false);
+    setDraftSavedAt(null);
     setOutsideWindowServer(false);
     setForm(emptyInductionFormPayload());
     let cancelled = false;
@@ -128,11 +169,26 @@ export const PublicInductionPage: React.FC = () => {
         if (st.submitted) {
           setSubmitted(true);
           setOutsideWindowServer(false);
+          setDraftSavedAt(null);
+          const emailClear = (parsed.email || '').trim();
+          if (emailClear) clearInductionDraft(token, emailClear);
           const p = parseInductionPayload(st.payload);
           if (p) setForm(synchronizeInductionDerivedFields(p));
         } else {
           setSubmitted(false);
           setOutsideWindowServer(st.outsideWindow ?? false);
+          const emailForDraft = (parsed.email || '').trim();
+          if (emailForDraft) {
+            const draft = readInductionDraftEnvelope(token, emailForDraft);
+            if (draft) {
+              setForm(synchronizeInductionDerivedFields(draft.payload));
+              setDraftSavedAt(draft.savedAt > 0 ? draft.savedAt : null);
+            } else {
+              setDraftSavedAt(null);
+            }
+          } else {
+            setDraftSavedAt(null);
+          }
         }
       } catch {
         try {
@@ -154,6 +210,35 @@ export const PublicInductionPage: React.FC = () => {
     const id = window.setInterval(() => setWindowTick((n) => n + 1), 30000);
     return () => window.clearInterval(id);
   }, []);
+
+  /** Persist draft locally so refresh does not lose in-progress answers (same device / browser). */
+  useEffect(() => {
+    if (!token || !session || submitted) return;
+    const email = session.email.trim();
+    if (!email) return;
+    const id = window.setTimeout(() => {
+      try {
+        const at = writeInductionDraft(token, email, form);
+        setDraftSavedAt(at);
+      } catch {
+        /* ignore quota / private mode */
+      }
+    }, 650);
+    return () => window.clearTimeout(id);
+  }, [form, token, session, submitted]);
+
+  const saveDraftManually = useCallback(() => {
+    if (!token || !session || submitted) return;
+    const email = session.email.trim();
+    if (!email) return;
+    try {
+      const at = writeInductionDraft(token, email, form);
+      setDraftSavedAt(at);
+      toast.success('Draft saved on this device.');
+    } catch {
+      toast.error('Could not save draft (storage may be full or blocked).');
+    }
+  }, [token, session, submitted, form]);
 
   const emailValid = isValidInstitutionalEmail(email);
   const emailOkForInduction =
@@ -257,6 +342,8 @@ export const PublicInductionPage: React.FC = () => {
       toast.error(res.error || 'Submit failed.');
       return;
     }
+    clearInductionDraft(token, session.email);
+    setDraftSavedAt(null);
     setSubmitted(true);
     toast.success(submitted ? 'Induction updated. Thank you.' : 'Induction submitted. Thank you.');
   };
@@ -478,17 +565,42 @@ export const PublicInductionPage: React.FC = () => {
               <span className="hidden sm:block" aria-hidden />
             )}
             <div className="flex flex-col items-stretch gap-1 sm:items-end">
-              <Button
-                type="button"
-                onClick={handleSubmitForm}
-                disabled={submitting || submitBlocked}
-                className="w-full sm:w-auto sm:min-w-[200px]"
-              >
-                {submitting ? 'Submitting…' : 'Submit induction'}
-              </Button>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+                {!submitBlocked ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={saveDraftManually}
+                    disabled={submitting}
+                    className="w-full sm:w-auto"
+                  >
+                    Save draft
+                  </Button>
+                ) : null}
+                <Button
+                  type="button"
+                  onClick={handleSubmitForm}
+                  disabled={submitting || submitBlocked}
+                  className="w-full sm:w-auto sm:min-w-[200px]"
+                >
+                  {submitting ? 'Submitting…' : 'Submit induction'}
+                </Button>
+              </div>
               {!submitBlocked ? (
                 <p className="text-center text-[11px] text-gray-500 sm:text-right">
-                  Missing fields? You&apos;ll see an error after you tap submit.
+                  Draft autosaves while you edit (this device).{' '}
+                  {draftSavedAt ? (
+                    <>
+                      Last saved{' '}
+                      {new Date(draftSavedAt).toLocaleString(undefined, {
+                        dateStyle: 'short',
+                        timeStyle: 'short',
+                      })}
+                      .
+                    </>
+                  ) : (
+                    <>Use Save draft if you need to copy work across refreshes.</>
+                  )}
                 </p>
               ) : null}
             </div>
