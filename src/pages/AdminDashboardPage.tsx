@@ -117,7 +117,13 @@ export const AdminDashboardPage: React.FC = () => {
 
   const load = async (opts?: { silent?: boolean }) => {
     if (!opts?.silent) setLoading(true);
-    const res = await getAdminDashboardStatsV2({ fromDate: range.fromDate, toDate: range.toDate, status });
+    const bid = batchId ? Number(batchId) : null;
+    const res = await getAdminDashboardStatsV2({
+      fromDate: range.fromDate,
+      toDate: range.toDate,
+      status,
+      batchId: bid && Number.isFinite(bid) && bid > 0 ? bid : null,
+    });
     if (!res.ok) {
       toast.error(res.error);
       setStats(null);
@@ -141,7 +147,7 @@ export const AdminDashboardPage: React.FC = () => {
     const t = window.setTimeout(() => void load(), 150);
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [range.fromDate, range.toDate, status]);
+  }, [range.fromDate, range.toDate, status, batchId]);
 
   useEffect(() => {
     const t = window.setTimeout(() => void loadRows(), 150);
@@ -396,7 +402,14 @@ export const AdminDashboardPage: React.FC = () => {
               <h2 className="text-lg font-bold text-[var(--text)]">Assessments</h2>
               <p className="text-xs text-gray-500 mt-1">
                 Showing <strong className="text-gray-900">{workflowLabel({ status: status === 'completed' ? 'locked' : 'draft', role_context: status === 'awaiting_trainer' ? 'trainer' : status === 'awaiting_office' ? 'office' : 'student' })}</strong>{' '}
-                within the selected date range.
+                within the selected date range
+                {batchId ? (
+                  <>
+                    {' '}
+                    for batch <strong className="text-gray-900">{batches.find((b) => String(b.id) === batchId)?.name ?? `#${batchId}`}</strong>
+                  </>
+                ) : null}
+                .
               </p>
             </div>
             <Button type="button" variant="outline" onClick={() => navigate('/admin/assessments')} className="h-12" title="Open assessments directory">

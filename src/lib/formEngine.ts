@@ -2238,11 +2238,15 @@ export async function getAdminDashboardStatsV2(input: {
   fromDate?: string | null;
   toDate?: string | null;
   status: 'all' | 'awaiting_student' | 'awaiting_trainer' | 'awaiting_office' | 'completed';
+  batchId?: number | null;
 }): Promise<{ ok: true; stats: AdminDashboardStatsV2 } | { ok: false; error: string }> {
+  const bid =
+    input.batchId != null && Number.isFinite(Number(input.batchId)) && Number(input.batchId) > 0 ? Number(input.batchId) : null;
   const { data, error } = await supabase.rpc('skyline_admin_dashboard_stats_v2', {
     p_from_date: input.fromDate && /^\d{4}-\d{2}-\d{2}$/.test(String(input.fromDate)) ? String(input.fromDate) : null,
     p_to_date: input.toDate && /^\d{4}-\d{2}-\d{2}$/.test(String(input.toDate)) ? String(input.toDate) : null,
     p_status: input.status,
+    p_batch_id: bid,
   });
   if (error) {
     console.error('skyline_admin_dashboard_stats_v2 rpc error', error);
