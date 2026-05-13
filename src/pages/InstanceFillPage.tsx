@@ -45,6 +45,7 @@ import {
   saveResultsData,
   fetchAssessmentSummaryData,
   saveAssessmentSummaryData,
+  submitInstanceToTrainerViaRpc,
   updateInstanceRole,
   updateInstanceWorkflowStatus,
   validateInstanceAccessToken,
@@ -1781,28 +1782,31 @@ export const InstanceFillPage: React.FC = () => {
   const runFinalSubmitByRole = useCallback(async () => {
     if (!id) return;
     setWorkflowSubmitting(true);
-    if (role === 'student' && workflowStatus === 'draft') {
-      await updateInstanceWorkflowStatus(id, 'waiting_trainer');
-      await updateInstanceRole(id, 'trainer');
-      await revokeRoleAccessTokens(id, 'student');
-      setWorkflowStatus('waiting_trainer');
-      toast.success('Submitted successfully. Waiting for trainer checking.');
-      void (async () => {
-        const ctx = await getInstanceWorkflowNotificationContext(id);
-        if (!ctx?.trainerUserId) return;
-        await invokeWorkflowSendNotification({
-          userIds: [String(ctx.trainerUserId)],
-          title: `New submission: ${ctx.formName}`,
-          message: 'A student submitted an assessment for your review.',
-          url: '/admin/dashboard',
-          type: 'workflow_student_submit',
-        });
-      })();
-      setWorkflowSubmitting(false);
-      setConfirmConfig(null);
-      return;
-    }
-    if (role === 'trainer' && workflowStatus === 'waiting_trainer') {
+    try {
+      if (role === 'student' && workflowStatus === 'draft') {
+        const handoff = await submitInstanceToTrainerViaRpc(id);
+        if (!handoff.ok) {
+          toast.error(handoff.error ?? 'Could not submit. Check your connection and try again.');
+          return;
+        }
+        await revokeRoleAccessTokens(id, 'student');
+        setWorkflowStatus('waiting_trainer');
+        toast.success('Submitted successfully. Waiting for trainer checking.');
+        void (async () => {
+          const ctx = await getInstanceWorkflowNotificationContext(id);
+          if (!ctx?.trainerUserId) return;
+          await invokeWorkflowSendNotification({
+            userIds: [String(ctx.trainerUserId)],
+            title: `New submission: ${ctx.formName}`,
+            message: 'A student submitted an assessment for your review.',
+            url: '/admin/dashboard',
+            type: 'workflow_student_submit',
+          });
+        })();
+        setConfirmConfig(null);
+        return;
+      }
+      if (role === 'trainer' && workflowStatus === 'waiting_trainer') {
       if (!validateAllStepsForTrainerSubmit()) {
         setWorkflowSubmitting(false);
         setConfirmConfig(null);
@@ -1912,7 +1916,11 @@ export const InstanceFillPage: React.FC = () => {
       })();
       setConfirmConfig(null);
     }
-    setWorkflowSubmitting(false);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not save. Try again.');
+    } finally {
+      setWorkflowSubmitting(false);
+    }
   }, [
     id,
     role,

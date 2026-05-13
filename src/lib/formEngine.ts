@@ -5094,14 +5094,46 @@ export async function updateInstanceRole(instanceId: number, roleContext: string
 
 export type InstanceWorkflowStatus = 'draft' | 'waiting_trainer' | 'waiting_office' | 'completed' | 'failed';
 
+/**
+ * Atomically moves an instance to the trainer queue (student submit / same semantics as
+ * `updateInstanceWorkflowStatus(..., 'waiting_trainer')`) in a single DB round-trip.
+ * Prefer this for student final submit to avoid partial state if separate updates fail.
+ */
+export async function submitInstanceToTrainerViaRpc(instanceId: number): Promise<{ ok: boolean; error?: string }> {
+  const { data, error } = await supabase.rpc('skyline_submit_instance_to_trainer', {
+    p_instance_id: instanceId,
+  });
+  if (error) return { ok: false, error: error.message };
+  const row = data as { ok?: boolean; error?: string } | null;
+  if (row && typeof row === 'object' && row.ok === false) {
+    return { ok: false, error: typeof row.error === 'string' ? row.error : 'Submit failed' };
+  }
+  return { ok: true };
+}
+
 export async function updateInstanceWorkflowStatus(instanceId: number, workflowStatus: InstanceWorkflowStatus): Promise<void> {
   const nowIso = new Date().toISOString();
   const payload: Record<string, unknown> = { updated_by: getAuditFields().updated_by };
   // Use legacy status fields only, so this works even without workflow_status migration.
-  if (workflowStatus === 'draft') payload.status = 'draft';
+  if (workflowStatus === 'draft') {
+    payload.status = 'draft';
+    // Instance is back with the student (initial state or post–NYC resubmission).
+    payload.role_context = 'student';
+  }
   if (workflowStatus === 'waiting_trainer' || workflowStatus === 'waiting_office') payload.status = 'submitted';
   if (workflowStatus === 'completed' || workflowStatus === 'failed') payload.status = 'locked';
+  if (workflowStatus === 'waiting_office') {
+    // Handed to office for processing (trainer submit path).
+    payload.role_context = 'office';
+  }
+  if (workflowStatus === 'failed') {
+    payload.role_context = 'office';
+  }
   if (workflowStatus === 'waiting_trainer') {
+    // Student submitted (or admin sent to trainer): workflow must match trainer dashboard filters
+    // (`listDashboardInstances` pending queue requires role_context = trainer). Keep this in the same
+    // update as submission_count so a partial failure cannot leave submission_count set but role stuck on student.
+    payload.role_context = 'trainer';
     const { data: instRow } = await supabase
       .from('skyline_form_instances')
       .select('submission_count, submitted_at')
@@ -5124,15 +5156,18 @@ export async function updateInstanceWorkflowStatus(instanceId: number, workflowS
   // Best-effort: also persist workflow_status when the column exists.
   const payloadWithWf: Record<string, unknown> = { ...payload, workflow_status: workflowStatus };
   const { error } = await supabase.from('skyline_form_instances').update(payloadWithWf).eq('id', instanceId);
+  let finalError = error;
   if (error) {
     // If the DB doesn't have workflow_status yet, retry without it.
     const msg = String((error as { message?: string } | null)?.message ?? '');
     if (msg.toLowerCase().includes('workflow_status')) {
       const { error: retryErr } = await supabase.from('skyline_form_instances').update(payload).eq('id', instanceId);
-      if (retryErr) console.error('updateInstanceWorkflowStatus retry error', retryErr);
-      return;
+      finalError = retryErr ?? null;
     }
-    console.error('updateInstanceWorkflowStatus error', error);
+  }
+  if (finalError) {
+    console.error('updateInstanceWorkflowStatus error', finalError);
+    throw new Error(String((finalError as { message?: string }).message ?? finalError ?? 'updateInstanceWorkflowStatus failed'));
   }
 }
 

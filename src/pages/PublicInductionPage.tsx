@@ -331,6 +331,7 @@ export const PublicInductionPage: React.FC = () => {
       toast.error(err);
       return;
     }
+    const wasAlreadySubmitted = submitted;
     setSubmitting(true);
     const res = await submitSkylineInductionForm({
       accessToken: token,
@@ -345,7 +346,7 @@ export const PublicInductionPage: React.FC = () => {
     clearInductionDraft(token, session.email);
     setDraftSavedAt(null);
     setSubmitted(true);
-    toast.success(submitted ? 'Induction updated. Thank you.' : 'Induction submitted. Thank you.');
+    toast.success(wasAlreadySubmitted ? 'Induction updated. Thank you.' : 'Induction submitted. Thank you.');
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -501,6 +502,42 @@ export const PublicInductionPage: React.FC = () => {
     );
   }
 
+  /** Submitted: dedicated thank-you screen (same pattern as InstanceFillPage after final submit). */
+  if (session && submitted) {
+    return (
+      <div className="min-h-screen bg-[var(--bg)]">
+        <header className="bg-white border-b border-[var(--border)] shadow-sm sticky top-0 z-20">
+          <div className="w-full min-w-0 px-4 md:px-6 py-4">
+            <div className="mx-auto max-w-3xl rounded-lg border border-gray-200 bg-white px-4 pt-3 pb-2 shadow-sm mb-4">
+              <SlitDocumentHeader />
+            </div>
+            <div className="mx-auto max-w-3xl flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+              <h1 className="min-w-0 text-lg sm:text-xl font-bold text-[var(--text)] break-words">{row.title}</h1>
+              <span className="text-xs px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 shrink-0 self-start">
+                Submitted
+              </span>
+            </div>
+          </div>
+        </header>
+        <div className="w-full px-4 md:px-6 py-8">
+          <div className="max-w-3xl mx-auto">
+            <Card className="p-6 md:p-8">
+              <h2 className="text-xl font-bold text-[var(--text)] mb-2">Thank you</h2>
+              <p className="text-sm text-gray-600">
+                Your induction has been submitted successfully. Your responses are on file.
+              </p>
+              <p className="text-sm text-gray-600 mt-3">
+                You can open this link again later to review or change your answers and submit again — your latest submission
+                replaces the previous one.
+              </p>
+              <p className="text-xs text-gray-500 mt-6">Contact the office if you need help.</p>
+            </Card>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[var(--bg)] pb-28">
       <div className="mx-auto w-full max-w-full px-3 py-6 sm:max-w-[220mm] sm:px-4 sm:py-8">
@@ -523,12 +560,7 @@ export const PublicInductionPage: React.FC = () => {
             </p>
           </Card>
         ) : null}
-        {submitted ? (
-          <Card className="mb-4 border-green-200 bg-green-50/90 p-4 text-sm text-gray-800">
-            <p className="font-semibold text-green-900">Induction submitted</p>
-            <p className="mt-1">Your responses are on file. You can update and submit again to replace your previous submission.</p>
-          </Card>
-        ) : !submitBlocked ? (
+        {!submitBlocked ? (
           <Card className="mb-4 border-amber-100 bg-amber-50/80 p-4 text-sm text-gray-800">
             <p className="font-semibold text-amber-950">Before you submit</p>
             <p className="mt-1">
