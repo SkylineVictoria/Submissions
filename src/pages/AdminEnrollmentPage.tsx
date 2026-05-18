@@ -1,6 +1,6 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ClipboardList, GraduationCap, Lock } from 'lucide-react';
+import { ClipboardList, GraduationCap, FileText } from 'lucide-react';
 import { Card } from '../components/ui/Card';
 
 export const AdminEnrollmentPage: React.FC = () => {
@@ -37,24 +37,29 @@ export const AdminEnrollmentPage: React.FC = () => {
             </div>
           </button>
 
-          <div className="relative">
-            <div className="aspect-square rounded-2xl border border-[var(--border)] bg-white/70 shadow-sm p-5 flex flex-col">
+          <button
+            type="button"
+            onClick={() => navigate('/admin/enrollment/admissions')}
+            className="group text-left"
+          >
+            <div className="aspect-square rounded-2xl border border-[var(--border)] bg-white shadow-sm hover:shadow-md transition-shadow p-5 flex flex-col">
               <div className="flex items-center justify-between">
-                <div className="h-11 w-11 rounded-xl bg-gray-100 text-gray-500 flex items-center justify-center">
-                  <Lock className="w-6 h-6" />
+                <div className="h-11 w-11 rounded-xl bg-[#2563eb]/10 text-[#2563eb] flex items-center justify-center">
+                  <FileText className="w-6 h-6" />
                 </div>
-                <GraduationCap className="w-5 h-5 text-gray-300" />
+                <GraduationCap className="w-5 h-5 text-gray-300 group-hover:text-[#2563eb] transition-colors" />
               </div>
               <div className="mt-5">
                 <div className="text-base font-semibold text-[var(--text)]">Admissions</div>
-                <div className="text-sm text-gray-600 mt-1">Coming soon</div>
+                <div className="text-sm text-gray-600 mt-1">
+                  View international student applications, attachments, and PDFs.
+                </div>
               </div>
-              <div className="mt-auto pt-4 text-sm font-medium text-gray-400">Unavailable</div>
+              <div className="mt-auto pt-4 text-sm font-medium text-[#2563eb]">Open</div>
             </div>
-          </div>
+          </button>
         </div>
       </div>
     </div>
   );
 };
-

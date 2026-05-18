@@ -39,6 +39,9 @@ const MyProfilePage = lazy(() => import('./pages/MyProfilePage').then(m => ({ de
 const AdminEnrollmentPage = lazy(() => import('./pages/AdminEnrollmentPage').then(m => ({ default: m.AdminEnrollmentPage })));
 const NotificationsPage = lazy(() => import('./pages/NotificationsPage').then(m => ({ default: m.NotificationsPage })));
 const AdminInductionPage = lazy(() => import('./pages/AdminInductionPage'));
+const AdminAdmissionsEnrolmentPage = lazy(() =>
+  import('./pages/AdminAdmissionsEnrolmentPage').then((m) => ({ default: m.AdminAdmissionsEnrolmentPage }))
+);
 const FormStartPage = lazy(() => import('./pages/FormStartPage').then(m => ({ default: m.FormStartPage })));
 const StudentAccessPage = lazy(() => import('./pages/StudentAccessPage').then(m => ({ default: m.StudentAccessPage })));
 const StudentDashboardPage = lazy(() => import('./pages/StudentDashboardPage').then(m => ({ default: m.StudentDashboardPage })));
@@ -46,6 +49,7 @@ const InstanceFillPage = lazy(() => import('./pages/InstanceFillPage').then(m =>
 const FormWizardPage = lazy(() => import('./pages/FormWizardPage').then(m => ({ default: m.FormWizardPage })));
 const LoginPage = lazy(() => import('./pages/LoginPage').then(m => ({ default: m.LoginPage })));
 const PublicInductionPage = lazy(() => import('./pages/PublicInductionPage').then(m => ({ default: m.PublicInductionPage })));
+const EnrollNowPage = lazy(() => import('./pages/EnrollNowPage').then(m => ({ default: m.EnrollNowPage })));
 
 function DashboardOrFormsRedirect() {
   const { user } = useAuth();
@@ -76,6 +80,7 @@ function App() {
             <Route path="/student/dashboard" element={<StudentDashboardPage />} />
             <Route path="/instances/:instanceId" element={<InstanceFillPage />} />
             <Route path="/induction/:token" element={<PublicInductionPage />} />
+            <Route path="/enroll-now" element={<EnrollNowPage />} />
             <Route path="/admin" element={<ProtectedRoute><AdminLayout /></ProtectedRoute>}>
             <Route index element={<DashboardOrFormsRedirect />} />
             <Route path="dashboard" element={<DashboardPage />} />
@@ -86,6 +91,14 @@ function App() {
             <Route path="enrollment" element={<AdminOnlyRoute><AdminEnrollmentPage /></AdminOnlyRoute>} />
             <Route path="notifications" element={<NotificationsPage />} />
             <Route path="enrollment/induction" element={<AdminOnlyRoute><AdminInductionPage /></AdminOnlyRoute>} />
+            <Route
+              path="enrollment/admissions"
+              element={
+                <AdminOnlyRoute>
+                  <AdminAdmissionsEnrolmentPage />
+                </AdminOnlyRoute>
+              }
+            />
             <Route path="forms" element={<AdminOnlyRoute><AdminFormsListPage /></AdminOnlyRoute>} />
             <Route path="forms/:formId/builder" element={<AdminOnlyRoute><SuperAdminOnlyRoute><AdminFormBuilderPage /></SuperAdminOnlyRoute></AdminOnlyRoute>} />
             <Route path="forms/:formId/preview" element={<AdminOnlyRoute><AdminFormPreviewPage /></AdminOnlyRoute>} />
