@@ -1,6 +1,7 @@
 import React, { useId, useRef } from 'react';
 import { Paperclip } from 'lucide-react';
-import type { FieldError, UseFormRegister } from 'react-hook-form';
+import type { FieldError, UseFormRegister, UseFormSetValue } from 'react-hook-form';
+import { digitsOnlyPhone } from '../../lib/enrolmentValidation';
 import { DatePicker } from '../ui/DatePicker';
 import { MonthYearPicker } from '../ui/MonthYearPicker';
 import { YearPicker } from '../ui/YearPicker';
@@ -32,6 +33,8 @@ export function FieldErrorMsg({ error }: { error?: FieldError | string }) {
 }
 
 type Register = UseFormRegister<EnrolmentFormValues>;
+type SetValue = UseFormSetValue<EnrolmentFormValues>;
+type FieldName = Parameters<Register>[0];
 
 export function TextField({
   label,
@@ -59,6 +62,83 @@ export function TextField({
   );
 }
 
+/** Digits-only phone input (max 10). Validation rules applied in enrolmentValidation. */
+export function PhoneField({
+  label,
+  required,
+  register,
+  setValue,
+  name,
+  error,
+  placeholder,
+}: {
+  label: string;
+  required?: boolean;
+  register: Register;
+  setValue: SetValue;
+  name: FieldName;
+  error?: FieldError;
+  placeholder?: string;
+}) {
+  const { onChange: _regOnChange, ...reg } = register(name);
+  return (
+    <div className="enrol-field">
+      <FieldLabel required={required}>{label}</FieldLabel>
+      <input
+        type="tel"
+        inputMode="numeric"
+        autoComplete="tel"
+        maxLength={10}
+        placeholder={placeholder}
+        {...reg}
+        onChange={(e) => {
+          const digits = digitsOnlyPhone(e.target.value).slice(0, 10);
+          setValue(name, digits, { shouldValidate: true, shouldDirty: true });
+        }}
+      />
+      <FieldErrorMsg error={error} />
+    </div>
+  );
+}
+
+/** Postcode — 4 digits for Australian addresses. */
+export function PostcodeField({
+  label,
+  required,
+  register,
+  setValue,
+  name,
+  error,
+  australian,
+}: {
+  label: string;
+  required?: boolean;
+  register: Register;
+  setValue: SetValue;
+  name: FieldName;
+  error?: FieldError;
+  australian?: boolean;
+}) {
+  const { onChange: _regOnChange, ...reg } = register(name);
+  const maxLen = australian ? 4 : 12;
+  return (
+    <div className="enrol-field">
+      <FieldLabel required={required}>{label}</FieldLabel>
+      <input
+        type="text"
+        inputMode="numeric"
+        maxLength={maxLen}
+        {...reg}
+        onChange={(e) => {
+          const digits = digitsOnlyPhone(e.target.value).slice(0, maxLen);
+          setValue(name, digits, { shouldValidate: true, shouldDirty: true });
+        }}
+      />
+      <FieldErrorMsg error={error} />
+    </div>
+  );
+}
+
 export function SelectField({
   label,
   required,
@@ -70,7 +150,7 @@ export function SelectField({
   label: string;
   required?: boolean;
   register: Register;
-  name: Parameters<Register>[0];
+  name: FieldName;
   error?: FieldError;
   options: { value: string; label: string }[];
 }) {

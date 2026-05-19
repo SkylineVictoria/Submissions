@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { SlitDocumentHeader } from '../components/SlitDocumentHeader';
 import {
   AttachmentField,
@@ -9,6 +10,8 @@ import {
   MonthYearField,
   YearField,
   FieldErrorMsg,
+  PhoneField,
+  PostcodeField,
   RadioGroup,
   ScrollToTopButton,
   SectionHeading,
@@ -94,11 +97,20 @@ export const EnrollNowPage: React.FC = () => {
 
   const form = useForm<EnrolmentFormValues>({
     defaultValues: initialSession?.values ?? emptyEnrolmentFormValues(),
-    mode: 'onSubmit',
+    resolver: zodResolver(enrolmentSubmitSchema),
+    mode: 'onBlur',
   });
 
-  const { register, watch, setValue, reset, setError, handleSubmit, formState: { errors }, clearErrors } = form;
+  const { register, watch, setValue, reset, handleSubmit, formState: { errors }, trigger } = form;
   const values = watch();
+
+  useEffect(() => {
+    void trigger(['personal.mobile', 'personal.workPhone']);
+  }, [values.address.type, trigger]);
+
+  useEffect(() => {
+    void trigger(['emergency.contactNumber']);
+  }, [values.emergency.inAustralia, trigger]);
 
   useEffect(() => {
     void listCourses().then((list) => {
@@ -244,21 +256,9 @@ export const EnrollNowPage: React.FC = () => {
     }
   };
 
-  const onSubmit = handleSubmit(async (data) => {
-    clearErrors();
+  const onSubmit = handleSubmit(
+    async (data) => {
     setFileErrors({});
-    const parsed = enrolmentSubmitSchema.safeParse(data);
-    if (!parsed.success) {
-      for (const issue of parsed.error.issues) {
-        const path = issue.path.join('.');
-        if (path) {
-          setError(path as Parameters<typeof setError>[0], { type: 'manual', message: issue.message });
-        }
-      }
-      const first = parsed.error.issues[0];
-      toast.error(first?.message ?? 'Please complete required fields');
-      return;
-    }
 
     const fileChecks: { section: string; field: string; label: string }[] = [
       { section: 'vet', field: 'passport', label: 'Passport document' },
@@ -322,7 +322,11 @@ export const EnrollNowPage: React.FC = () => {
     } finally {
       setBusy(false);
     }
-  });
+  },
+    () => {
+      toast.error('Please fix the highlighted fields before submitting.');
+    }
+  );
 
   const toggleDeclAll = (checked: boolean) => {
     for (const item of DECLARATION_ITEMS) {
@@ -431,8 +435,23 @@ export const EnrollNowPage: React.FC = () => {
             placement="below"
           />
           <RadioGroup label="Gender" required name="gender" options={GENDER_OPTIONS} value={values.personal.gender} onChange={(v) => setValue('personal.gender', v)} error={errors.personal?.gender} />
-          <TextField label="Mobile" required register={register} name="personal.mobile" error={errors.personal?.mobile} />
-          <TextField label="Work / Overseas Phone Number" register={register} name="personal.workPhone" />
+          <PhoneField
+            label="Mobile"
+            required
+            register={register}
+            setValue={setValue}
+            name="personal.mobile"
+            error={errors.personal?.mobile}
+            placeholder={values.address.type === 'australian' ? '0412345678' : '10 digits'}
+          />
+          <PhoneField
+            label="Work / Overseas Phone Number"
+            register={register}
+            setValue={setValue}
+            name="personal.workPhone"
+            error={errors.personal?.workPhone}
+            placeholder={values.address.type === 'australian' ? 'Optional — 10 digits from 0' : 'Optional — 10 digits'}
+          />
           <div className="enrol-grid-2">
             <TextField label="Email" required register={register} name="personal.email" type="email" error={errors.personal?.email} />
             <TextField label="Confirm Email" required register={register} name="personal.confirmEmail" type="email" error={errors.personal?.confirmEmail} />
@@ -455,28 +474,93 @@ export const EnrollNowPage: React.FC = () => {
           />
           {values.address.type === 'australian' ? (
             <>
-              <TextField label="Street Address" register={register} name="address.australian.line1" />
+              <TextField
+                label="Street Address"
+                required
+                register={register}
+                name="address.australian.line1"
+                error={errors.address?.australian?.line1}
+              />
               <TextField label="Address Line 2" register={register} name="address.australian.line2" />
               <div className="enrol-grid-2">
-                <TextField label="Suburb" register={register} name="address.australian.suburb" />
-                <TextField label="State" register={register} name="address.australian.state" />
+                <TextField
+                  label="Suburb"
+                  required
+                  register={register}
+                  name="address.australian.suburb"
+                  error={errors.address?.australian?.suburb}
+                />
+                <TextField
+                  label="State"
+                  required
+                  register={register}
+                  name="address.australian.state"
+                  error={errors.address?.australian?.state}
+                />
               </div>
               <div className="enrol-grid-2">
-                <TextField label="ZIP / Postal Code" register={register} name="address.australian.postcode" />
-                <SelectField label="Country" register={register} name="address.australian.country" options={COUNTRY_OPTIONS} />
+                <PostcodeField
+                  label="ZIP / Postal Code"
+                  required
+                  register={register}
+                  setValue={setValue}
+                  name="address.australian.postcode"
+                  error={errors.address?.australian?.postcode}
+                  australian
+                />
+                <SelectField
+                  label="Country"
+                  required
+                  register={register}
+                  name="address.australian.country"
+                  options={COUNTRY_OPTIONS}
+                  error={errors.address?.australian?.country}
+                />
               </div>
             </>
           ) : (
             <>
-              <TextField label="Address" register={register} name="address.overseas.line1" />
+              <TextField
+                label="Address"
+                required
+                register={register}
+                name="address.overseas.line1"
+                error={errors.address?.overseas?.line1}
+              />
               <TextField label="Address Line 2" register={register} name="address.overseas.line2" />
               <div className="enrol-grid-2">
-                <TextField label="Suburb" register={register} name="address.overseas.suburb" />
-                <TextField label="State / Territory / Province / Region" register={register} name="address.overseas.state" />
+                <TextField
+                  label="Suburb"
+                  required
+                  register={register}
+                  name="address.overseas.suburb"
+                  error={errors.address?.overseas?.suburb}
+                />
+                <TextField
+                  label="State / Territory / Province / Region"
+                  required
+                  register={register}
+                  name="address.overseas.state"
+                  error={errors.address?.overseas?.state}
+                />
               </div>
               <div className="enrol-grid-2">
-                <TextField label="ZIP / Postal Code" register={register} name="address.overseas.postcode" />
-                <SelectField label="Country" register={register} name="address.overseas.country" options={COUNTRY_OPTIONS} />
+                <PostcodeField
+                  label="ZIP / Postal Code"
+                  required
+                  register={register}
+                  setValue={setValue}
+                  name="address.overseas.postcode"
+                  error={errors.address?.overseas?.postcode}
+                />
+                <SelectField
+                  label="Country"
+                  required
+                  register={register}
+                  name="address.overseas.country"
+                  options={COUNTRY_OPTIONS}
+                  error={errors.address?.overseas?.country}
+                />
               </div>
             </>
           )}
@@ -588,12 +672,14 @@ export const EnrollNowPage: React.FC = () => {
                 name="vet.agentName"
                 error={errors.vet?.agentName}
               />
-              <TextField
+              <PhoneField
                 label="Agent contact number"
                 required
                 register={register}
+                setValue={setValue}
                 name="vet.agentPhone"
                 error={errors.vet?.agentPhone}
+                placeholder="10 digits (AU from 0 or overseas)"
               />
               <TextField
                 label="Agent email"
@@ -705,8 +791,22 @@ export const EnrollNowPage: React.FC = () => {
         <div className="enrol-section">
           <TextField label="Full name" required register={register} name="emergency.fullName" error={errors.emergency?.fullName} />
           <TextField label="Relationship to you" register={register} name="emergency.relationship" />
-          <TextField label="Email" register={register} name="emergency.email" type="email" />
-          <TextField label="Contact number" required register={register} name="emergency.contactNumber" error={errors.emergency?.contactNumber} />
+          <TextField
+            label="Email"
+            register={register}
+            name="emergency.email"
+            type="email"
+            error={errors.emergency?.email}
+          />
+          <PhoneField
+            label="Contact number"
+            required
+            register={register}
+            setValue={setValue}
+            name="emergency.contactNumber"
+            error={errors.emergency?.contactNumber}
+            placeholder={values.emergency.inAustralia === 'Yes' ? '0412345678' : '10 digits'}
+          />
           <RadioGroup label="Is your emergency contact in Australia?" required name="ecAus" options={YES_NO_OPTIONS} value={values.emergency.inAustralia} onChange={(v) => setValue('emergency.inAustralia', v)} />
         </div>
 

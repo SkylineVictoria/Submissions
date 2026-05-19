@@ -1,9 +1,77 @@
 import { z } from 'zod';
 import { APPLICATION_CHECKLIST_ITEMS, DECLARATION_ITEMS } from '../constants/enrolmentOptions';
+import type { EnrolmentAddressFields, EnrolmentAddressType } from '../types/enrolment';
 
 const req = (msg: string) => z.string().trim().min(1, msg);
 
-const addressSchema = z.object({
+export const ENROLMENT_EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/i;
+
+export type PhoneLocale = 'australian' | 'overseas';
+
+/** Strip to digits only (for input sanitisation). */
+export function digitsOnlyPhone(value: string): string {
+  return value.replace(/\D/g, '');
+}
+
+export function isValidEnrolmentEmail(value: string): boolean {
+  const v = value.trim();
+  if (!v) return false;
+  return ENROLMENT_EMAIL_REGEX.test(v);
+}
+
+/** Australian: 10 digits, must start with 0. Overseas: exactly 10 digits. */
+export function validateEnrolmentPhone(
+  value: string,
+  locale: PhoneLocale,
+  { required = true }: { required?: boolean } = {}
+): { ok: true } | { ok: false; message: string } {
+  const digits = digitsOnlyPhone(value);
+  if (!digits) {
+    return required ? { ok: false, message: 'Phone number is required' } : { ok: true };
+  }
+  if (locale === 'australian') {
+    if (!digits.startsWith('0')) {
+      return { ok: false, message: 'Australian phone must start with 0' };
+    }
+    if (digits.length !== 10) {
+      return { ok: false, message: 'Australian phone must be 10 digits (e.g. 0412345678)' };
+    }
+    return { ok: true };
+  }
+  if (digits.length !== 10) {
+    return { ok: false, message: 'Overseas phone must be exactly 10 digits' };
+  }
+  return { ok: true };
+}
+
+/** Agent / work phone: digits only; Australian or overseas 10-digit format. */
+export function validateEnrolmentPhoneEither(
+  value: string,
+  { required = true }: { required?: boolean } = {}
+): { ok: true } | { ok: false; message: string } {
+  const digits = digitsOnlyPhone(value);
+  if (!digits) {
+    return required ? { ok: false, message: 'Phone number is required' } : { ok: true };
+  }
+  const au = validateEnrolmentPhone(digits, 'australian', { required: true });
+  if (au.ok) return au;
+  const os = validateEnrolmentPhone(digits, 'overseas', { required: true });
+  if (os.ok) return os;
+  return {
+    ok: false,
+    message: 'Enter 10 digits (Australian numbers start with 0, overseas numbers are 10 digits)',
+  };
+}
+
+const reqEmail = (label: string) =>
+  req(`${label} is required`).refine((v) => isValidEnrolmentEmail(v), 'Enter a valid email');
+
+const optionalEmail = z
+  .string()
+  .trim()
+  .refine((v) => !v || isValidEnrolmentEmail(v), 'Enter a valid email');
+
+const addressFieldsSchema = z.object({
   line1: z.string(),
   line2: z.string(),
   suburb: z.string(),
@@ -38,13 +106,13 @@ export const enrolmentSubmitSchema = z
       gender: req('Gender is required'),
       mobile: req('Mobile is required'),
       workPhone: z.string(),
-      email: req('Email is required').email('Enter a valid email'),
-      confirmEmail: req('Confirm email is required'),
+      email: reqEmail('Email'),
+      confirmEmail: reqEmail('Confirm email'),
     }),
     address: z.object({
       type: z.enum(['australian', 'overseas']),
-      australian: addressSchema,
-      overseas: addressSchema,
+      australian: addressFieldsSchema,
+      overseas: addressFieldsSchema,
     }),
     vet: z.object({
       holdsAustralianVisa: req('Please select if you hold a valid Australian visa'),
@@ -87,7 +155,7 @@ export const enrolmentSubmitSchema = z
     emergency: z.object({
       fullName: req('Emergency contact full name is required'),
       relationship: z.string(),
-      email: z.string(),
+      email: optionalEmail,
       contactNumber: req('Emergency contact number is required'),
       inAustralia: req('Please indicate if emergency contact is in Australia'),
     }),
@@ -116,7 +184,7 @@ export const enrolmentSubmitSchema = z
     }),
   })
   .superRefine((data, ctx) => {
-    if (data.personal.email !== data.personal.confirmEmail) {
+    if (data.personal.email.trim().toLowerCase() !== data.personal.confirmEmail.trim().toLowerCase()) {
       ctx.addIssue({
         code: 'custom',
         message: 'Email and confirm email must match',
@@ -124,9 +192,29 @@ export const enrolmentSubmitSchema = z
       });
     }
 
-    const addr = data.address.type === 'australian' ? data.address.australian : data.address.overseas;
-    if (!addr.line1.trim()) {
-      ctx.addIssue({ code: 'custom', message: 'Address is required', path: ['address', data.address.type, 'line1'] });
+    const phoneLocale: PhoneLocale = data.address.type === 'australian' ? 'australian' : 'overseas';
+
+    const mobileCheck = validateEnrolmentPhone(data.personal.mobile, phoneLocale);
+    if (!mobileCheck.ok) {
+      ctx.addIssue({ code: 'custom', message: mobileCheck.message, path: ['personal', 'mobile'] });
+    }
+
+    const workCheck = validateEnrolmentPhone(data.personal.workPhone, phoneLocale, { required: false });
+    if (!workCheck.ok) {
+      ctx.addIssue({ code: 'custom', message: workCheck.message, path: ['personal', 'workPhone'] });
+    }
+
+    validateAddressFields(
+      data.address.type === 'australian' ? data.address.australian : data.address.overseas,
+      data.address.type,
+      ctx,
+      ['address', data.address.type]
+    );
+
+    const emergencyLocale: PhoneLocale = data.emergency.inAustralia === 'Yes' ? 'australian' : 'overseas';
+    const ecCheck = validateEnrolmentPhone(data.emergency.contactNumber, emergencyLocale);
+    if (!ecCheck.ok) {
+      ctx.addIssue({ code: 'custom', message: ecCheck.message, path: ['emergency', 'contactNumber'] });
     }
 
     if (data.vet.passportExpiry) {
@@ -168,10 +256,6 @@ export const enrolmentSubmitSchema = z
       ctx.addIssue({ code: 'custom', message: 'USI signature name is required', path: ['usi', 'signatureName'] });
     }
 
-    if (data.courseCredit === 'Yes') {
-      /* file validated separately */
-    }
-
     if (data.oshc.requirement === 'Yes' && !data.oshc.coverType.trim()) {
       ctx.addIssue({ code: 'custom', message: 'OSHC cover type is required', path: ['oshc', 'coverType'] });
     }
@@ -195,16 +279,13 @@ export const enrolmentSubmitSchema = z
       if (!data.vet.agentName.trim()) {
         ctx.addIssue({ code: 'custom', message: 'Agent name is required', path: ['vet', 'agentName'] });
       }
-      if (!data.vet.agentPhone.trim()) {
-        ctx.addIssue({
-          code: 'custom',
-          message: 'Agent contact number is required',
-          path: ['vet', 'agentPhone'],
-        });
+      const agentPhoneCheck = validateEnrolmentPhoneEither(data.vet.agentPhone);
+      if (!agentPhoneCheck.ok) {
+        ctx.addIssue({ code: 'custom', message: agentPhoneCheck.message, path: ['vet', 'agentPhone'] });
       }
       if (!data.vet.agentEmail.trim()) {
         ctx.addIssue({ code: 'custom', message: 'Agent email is required', path: ['vet', 'agentEmail'] });
-      } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.vet.agentEmail.trim())) {
+      } else if (!isValidEnrolmentEmail(data.vet.agentEmail)) {
         ctx.addIssue({
           code: 'custom',
           message: 'Enter a valid agent email',
@@ -233,5 +314,55 @@ export const enrolmentSubmitSchema = z
       }
     }
   });
+
+function validateAddressFields(
+  addr: EnrolmentAddressFields,
+  type: EnrolmentAddressType,
+  ctx: z.RefinementCtx,
+  basePath: (string | number)[]
+): void {
+  if (!addr.line1.trim()) {
+    ctx.addIssue({
+      code: 'custom',
+      message: type === 'australian' ? 'Street address is required' : 'Address is required',
+      path: [...basePath, 'line1'],
+    });
+  }
+  if (!addr.suburb.trim()) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Suburb / city is required',
+      path: [...basePath, 'suburb'],
+    });
+  }
+  if (!addr.state.trim()) {
+    ctx.addIssue({
+      code: 'custom',
+      message: type === 'australian' ? 'State is required' : 'State / region is required',
+      path: [...basePath, 'state'],
+    });
+  }
+  const postcodeDigits = digitsOnlyPhone(addr.postcode);
+  if (!addr.postcode.trim()) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Postcode is required',
+      path: [...basePath, 'postcode'],
+    });
+  } else if (type === 'australian' && postcodeDigits.length !== 4) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Australian postcode must be 4 digits',
+      path: [...basePath, 'postcode'],
+    });
+  }
+  if (!addr.country.trim()) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Country is required',
+      path: [...basePath, 'country'],
+    });
+  }
+}
 
 export type EnrolmentSubmitValues = z.infer<typeof enrolmentSubmitSchema>;
