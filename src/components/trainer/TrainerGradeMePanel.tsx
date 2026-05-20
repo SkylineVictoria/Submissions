@@ -15,11 +15,10 @@ import {
 } from '../../lib/formEngine';
 import {
   computeRowUi,
-  formatDDMMYYYY,
   getStudentAttemptDoneText,
   getMissedAttemptWindowText,
-  melDateString,
   maskCompetentWhileAwaitingTrainer,
+  withinInstanceAccessWindow,
   type AttemptResult,
 } from '../../utils/assessmentRowUi';
 import {
@@ -27,15 +26,6 @@ import {
   TRAINER_HIGHLIGHT_ROW_EXTRA_CLASS,
   useTrainerHighlightCourseId,
 } from '../../utils/trainerCourseHighlight';
-
-const withinWindowMelbourne = (row: Pick<SubmittedInstanceRow, 'start_date' | 'end_date'>): { ok: boolean; reason?: string } => {
-  const today = melDateString(new Date());
-  const start = String(row.start_date ?? '').trim();
-  const end = String(row.end_date ?? '').trim();
-  if (start && today < start) return { ok: false, reason: `Available from ${formatDDMMYYYY(start)}` };
-  if (end && today > end) return { ok: false, reason: `Expired on ${formatDDMMYYYY(end)} (23:59 AEDT)` };
-  return { ok: true };
-};
 
 async function fetchSummariesChunked(instanceIds: number[]): Promise<
   Record<number, { final_attempt_1_result: AttemptResult; final_attempt_2_result: AttemptResult; final_attempt_3_result: AttemptResult }>
@@ -138,7 +128,7 @@ export const TrainerGradeMePanel: React.FC<Props> = ({ trainerUserId }) => {
   };
 
   const handleOpen = async (row: SubmittedInstanceRow) => {
-    const win = withinWindowMelbourne(row);
+    const win = withinInstanceAccessWindow(row, 'trainer');
     if (!win.ok) {
       toast.error(win.reason || 'This assessment is not available right now.');
       return;
@@ -218,6 +208,7 @@ export const TrainerGradeMePanel: React.FC<Props> = ({ trainerUserId }) => {
                         const ui = computeRowUi({
                           row: { ...row, did_not_attempt: row.did_not_attempt ?? null },
                           attemptResults,
+                          ignoreEndDateForAccess: true,
                         });
                         const attemptDoneText = getStudentAttemptDoneText({
                           submissionCount: Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0),
@@ -228,7 +219,7 @@ export const TrainerGradeMePanel: React.FC<Props> = ({ trainerUserId }) => {
                           noAttemptRollovers: row.no_attempt_rollovers ?? null,
                           didNotAttempt: row.did_not_attempt ?? null,
                         });
-                        const win = withinWindowMelbourne(row);
+                        const win = withinInstanceAccessWindow(row, 'trainer');
                         const highlightExtra = rowMatchesTrainerHighlightCourse(row, trainerHighlightCourseId)
                           ? TRAINER_HIGHLIGHT_ROW_EXTRA_CLASS
                           : '';

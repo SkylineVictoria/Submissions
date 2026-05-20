@@ -26,10 +26,32 @@ export function formatDDMMYYYY(value: string | null): string {
   return v;
 }
 
+export type InstanceAccessRole = 'student' | 'trainer' | 'office';
+
+/** Instance start/end window. End date applies to students only; trainers/office may grade after it. */
+export function withinInstanceAccessWindow(
+  row: RowWindowInput,
+  accessRole: InstanceAccessRole = 'student',
+  today?: string
+): { ok: boolean; reason?: string } {
+  const todayMel = (today ?? melDateString()).trim();
+  const start = String(row.start_date ?? '').trim();
+  const end = String(row.end_date ?? '').trim();
+  if (start && todayMel < start) {
+    return { ok: false, reason: `Available from ${formatDDMMYYYY(start)}` };
+  }
+  if (accessRole === 'student' && end && todayMel > end) {
+    return { ok: false, reason: `Expired on ${formatDDMMYYYY(end)} (23:59 AEDT)` };
+  }
+  return { ok: true };
+}
+
 export function computeRowUi(input: {
   row: RowWindowInput;
   today?: string;
   attemptResults?: AttemptResult[]; // attempt1..3
+  /** When true, passing end_date does not block access (trainer/office grading after student window). */
+  ignoreEndDateForAccess?: boolean;
 }): AssessmentRowUiState {
   const today = (input.today ?? melDateString()).trim();
   const start = String(input.row.start_date ?? '').trim();
@@ -52,7 +74,7 @@ export function computeRowUi(input: {
     };
   }
   if (anyNYC) {
-    if (end && today > end) {
+    if (end && today > end && !input.ignoreEndDateForAccess) {
       return {
         kind: 'past_not_competent',
         disabled: true,
@@ -90,7 +112,7 @@ export function computeRowUi(input: {
         'bg-gray-50 text-gray-500 opacity-70 cursor-not-allowed',
     };
   }
-  if (end && today > end) {
+  if (end && today > end && !input.ignoreEndDateForAccess) {
     return {
       kind: 'expired',
       disabled: true,

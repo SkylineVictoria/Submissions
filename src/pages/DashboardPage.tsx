@@ -21,12 +21,12 @@ import { toast } from '../utils/toast';
 import { AdminListPagination } from '../components/admin/AdminListPagination';
 import {
   computeRowUi,
-  melDateString,
   formatDDMMYYYY,
   getStudentAttemptDoneText,
   getTrainerAttemptFailedText,
   getMissedAttemptWindowText,
   maskCompetentWhileAwaitingTrainer,
+  withinInstanceAccessWindow,
   type AttemptResult,
 } from '../utils/assessmentRowUi';
 import { FormDocumentsPanel } from '../components/documents/FormDocumentsPanel';
@@ -37,15 +37,6 @@ import {
   useTrainerHighlightCourseId,
 } from '../utils/trainerCourseHighlight';
 import { TrainerGradeMePanel } from '../components/trainer/TrainerGradeMePanel';
-
-const withinWindowMelbourne = (row: Pick<SubmittedInstanceRow, 'start_date' | 'end_date'>): { ok: boolean; reason?: string } => {
-  const today = melDateString(new Date());
-  const start = String(row.start_date ?? '').trim();
-  const end = String(row.end_date ?? '').trim();
-  if (start && today < start) return { ok: false, reason: `Available from ${formatDDMMYYYY(start)}` };
-  if (end && today > end) return { ok: false, reason: `Expired on ${formatDDMMYYYY(end)} (23:59 AEDT)` };
-  return { ok: true };
-};
 
 const getWorkflowLabel = (row: SubmittedInstanceRow): string => {
   if (row.status === 'locked') return 'Completed';
@@ -175,11 +166,6 @@ export const DashboardPage: React.FC = () => {
   };
 
   const handleOpen = async (row: SubmittedInstanceRow) => {
-    const win = withinWindowMelbourne(row);
-    if (!win.ok) {
-      toast.error(win.reason || 'This assessment is not available right now.');
-      return;
-    }
     const targetRole =
       row.role_context === 'trainer'
         ? 'trainer'
@@ -190,6 +176,11 @@ export const DashboardPage: React.FC = () => {
               ? 'office'
               : 'trainer'
             : 'student';
+    const win = withinInstanceAccessWindow(row, targetRole);
+    if (!win.ok) {
+      toast.error(win.reason || 'This assessment is not available right now.');
+      return;
+    }
     const url = await issueInstanceAccessLink(row.id, targetRole);
     if (!url) {
       toast.error('Failed to open secure link');
@@ -420,9 +411,10 @@ export const DashboardPage: React.FC = () => {
                     const ui = computeRowUi({
                       row: { ...row, did_not_attempt: row.did_not_attempt ?? null },
                       attemptResults,
+                      ignoreEndDateForAccess: true,
                     });
                     const disabled = ui.disabled;
-                    const win = withinWindowMelbourne(row);
+                    const win = withinInstanceAccessWindow(row, role);
                     const outcome = getOutcomeLabel(displaySum);
                     const trainerHighlightExtra = rowMatchesTrainerHighlightCourse(row, trainerHighlightCourseId)
                       ? TRAINER_HIGHLIGHT_ROW_EXTRA_CLASS

@@ -23,6 +23,7 @@ import {
   computeAttemptTones,
   hasCompetentAttempt,
   maskCompetentWhileAwaitingTrainer,
+  withinInstanceAccessWindow,
   type AttemptResult,
   type AttemptDotTone,
 } from '../utils/assessmentRowUi';
@@ -915,18 +916,25 @@ export const AdminStudentDetailsPage: React.FC = () => {
                             noAttemptRollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
                             didNotAttempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
                           });
-                          const ui = computeRowUi({ row: { ...row, did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null }, attemptResults: results });
-                          const todayMel = melDateString();
-                          const winStart = String((getEffectiveStart(row) || row.start_date) ?? '').trim();
-                          const winEnd = String((getEffectiveEnd(row) || row.end_date) ?? '').trim();
-                          const win =
-                            winStart && todayMel < winStart
-                              ? ({ ok: false as const, reason: `Available from ${formatDDMMYYYY(winStart)}` })
-                              : winEnd && todayMel > winEnd
-                                ? ({ ok: false as const, reason: `Expired on ${formatDDMMYYYY(winEnd)} (23:59 AEDT)` })
-                                : ({ ok: true as const });
                           const accessRole =
                             row.role_context === 'trainer' ? 'trainer' : row.role_context === 'office' ? 'office' : 'student';
+                          const ui = computeRowUi({
+                            row: {
+                              ...row,
+                              start_date: getEffectiveStart(row) || row.start_date,
+                              end_date: getEffectiveEnd(row) || row.end_date,
+                              did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
+                            },
+                            attemptResults: results,
+                            ignoreEndDateForAccess: accessRole !== 'student',
+                          });
+                          const win = withinInstanceAccessWindow(
+                            {
+                              start_date: getEffectiveStart(row) || row.start_date,
+                              end_date: getEffectiveEnd(row) || row.end_date,
+                            },
+                            accessRole
+                          );
                           const studentOpenDisabled = accessRole === 'student' && (!win.ok || ui.disabled);
                           const trainerHighlightExtra = rowMatchesTrainerHighlightCourse(row, trainerHighlightCourseId)
                             ? TRAINER_HIGHLIGHT_ROW_EXTRA_CLASS

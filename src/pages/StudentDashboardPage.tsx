@@ -11,13 +11,13 @@ import { supabase } from '../lib/supabase';
 import { useNavigate } from 'react-router-dom';
 import {
   computeRowUi,
-  melDateString,
   getStudentAttemptDoneText,
   getTrainerAttemptFailedText,
   getMissedAttemptWindowText,
   computeAttemptTones,
   hasCompetentAttempt,
   maskCompetentWhileAwaitingTrainer,
+  withinInstanceAccessWindow,
   type AttemptResult,
   type AttemptDotTone,
 } from '../utils/assessmentRowUi';
@@ -91,15 +91,6 @@ function getOutcomeLabel(summary: { final_attempt_1_result: AttemptResult; final
   if (anyNYC) return { label: 'Not competent', className: 'text-red-700' };
   return { label: 'In progress', className: 'text-gray-700' };
 }
-
-const withinWindowMelbourne = (row: Pick<SubmittedInstanceRow, 'start_date' | 'end_date'>): { ok: boolean; reason?: string } => {
-  const today = melDateString(new Date());
-  const start = String(row.start_date ?? '').trim();
-  const end = String(row.end_date ?? '').trim();
-  if (start && today < start) return { ok: false, reason: `Available from ${formatDDMMYYYY(start)}` };
-  if (end && today > end) return { ok: false, reason: `Expired on ${formatDDMMYYYY(end)} (23:59 AEDT)` };
-  return { ok: true };
-};
 
 const STORAGE_KEY = STUDENT_DASHBOARD_AUTH_STORAGE_KEY;
 
@@ -264,7 +255,7 @@ export const StudentDashboardPage: React.FC = () => {
   };
 
   const handleOpen = async (row: SubmittedInstanceRow) => {
-    const win = withinWindowMelbourne(row);
+    const win = withinInstanceAccessWindow(row, 'student');
     if (!win.ok) {
       toast.error(win.reason || 'This assessment is not available right now.');
       return;
@@ -482,7 +473,7 @@ export const StudentDashboardPage: React.FC = () => {
                             didNotAttempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
                           });
                           const ui = computeRowUi({ row: { ...row, did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null }, attemptResults });
-                          const win = withinWindowMelbourne(row);
+                          const win = withinInstanceAccessWindow(row, 'student');
                           const disabled = ui.disabled || !win.ok;
                           const trainerHighlightExtra = rowMatchesTrainerHighlightCourse(row, trainerHighlightCourseId)
                             ? TRAINER_HIGHLIGHT_ROW_EXTRA_CLASS

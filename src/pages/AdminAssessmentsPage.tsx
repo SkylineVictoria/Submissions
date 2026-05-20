@@ -93,6 +93,7 @@ const getDirectoryRowClass = (row: SubmittedInstanceRow, trainerHighlightCourseI
         end_date: row.end_date,
         did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
       },
+      ignoreEndDateForAccess: row.role_context === 'trainer' || row.role_context === 'office',
     });
     base = ui.rowClassName || 'hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors';
   }
