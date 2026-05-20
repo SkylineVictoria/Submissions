@@ -33,6 +33,8 @@ import {
   listCoursesPaged,
   listSubmittedInstancesPaged,
   updateFormInstanceDates,
+  fetchInstanceAdminReferenceNotes,
+  updateInstanceAdminReferenceNote,
   fetchAssessmentSummaries,
   listActiveFormsByQualificationCode,
   upsertStudentAssessmentsForForms,
@@ -137,6 +139,9 @@ export const AdminStudentDetailsPage: React.FC = () => {
     Record<number, { final_attempt_1_result: AttemptResult; final_attempt_2_result: AttemptResult; final_attempt_3_result: AttemptResult }>
   >({});
   const [managingId, setManagingId] = useState<number | null>(null);
+  const [adminNotesByInstanceId, setAdminNotesByInstanceId] = useState<Record<number, string>>({});
+  const [adminNoteDrafts, setAdminNoteDrafts] = useState<Record<number, string>>({});
+  const [savingAdminNoteId, setSavingAdminNoteId] = useState<number | null>(null);
   const [addAssessmentOpen, setAddAssessmentOpen] = useState(false);
   const [addCourseId, setAddCourseId] = useState<string>('');
   const [addStart, setAddStart] = useState<string>(() => new Date().toISOString().slice(0, 10));
@@ -196,19 +201,39 @@ export const AdminStudentDetailsPage: React.FC = () => {
   useEffect(() => {
     if (assessments.length === 0) {
       setAttemptSummaryByInstanceId({});
+      setAdminNotesByInstanceId({});
+      setAdminNoteDrafts({});
       return;
     }
     const ids = assessments.map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0);
     let cancelled = false;
     void (async () => {
-      const m = await fetchAssessmentSummaries(ids);
+      const [m, notes] = await Promise.all([fetchAssessmentSummaries(ids), fetchInstanceAdminReferenceNotes(ids)]);
       if (cancelled) return;
       setAttemptSummaryByInstanceId(m as Record<number, { final_attempt_1_result: AttemptResult; final_attempt_2_result: AttemptResult; final_attempt_3_result: AttemptResult }>);
+      setAdminNotesByInstanceId(notes);
+      setAdminNoteDrafts(notes);
     })();
     return () => {
       cancelled = true;
     };
   }, [assessments]);
+
+  const saveAdminReferenceNote = useCallback(async (instanceId: number) => {
+    const draft = (adminNoteDrafts[instanceId] ?? '').trim();
+    const saved = (adminNotesByInstanceId[instanceId] ?? '').trim();
+    if (draft === saved) return;
+    setSavingAdminNoteId(instanceId);
+    const res = await updateInstanceAdminReferenceNote(instanceId, draft);
+    setSavingAdminNoteId(null);
+    if (!res.ok) {
+      toast.error(res.error ?? 'Could not save admin note');
+      return;
+    }
+    const next = draft;
+    setAdminNotesByInstanceId((prev) => ({ ...prev, [instanceId]: next }));
+    setAdminNoteDrafts((prev) => ({ ...prev, [instanceId]: next }));
+  }, [adminNoteDrafts, adminNotesByInstanceId]);
 
   const loadCoursesOptions = useCallback(async (page: number, search: string) => {
     const res = await listCoursesPaged(page, 20, search || undefined);
@@ -824,7 +849,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
                   <p className="text-gray-600">No assessments match the current search or unit filter.</p>
                 ) : (
                   <div className="overflow-x-auto">
-                    <table className="min-w-[940px] w-full text-sm border border-[var(--border)] rounded-lg overflow-hidden">
+                    <table className="min-w-[1120px] w-full text-sm border border-[var(--border)] rounded-lg overflow-hidden">
                       <thead className="bg-gray-50 text-gray-700">
                         <tr>
                           <SortableTh
@@ -855,6 +880,10 @@ export const AdminStudentDetailsPage: React.FC = () => {
                             direction={assessmentSort.dir}
                             onToggle={() => toggleAssessmentSort('completed')}
                           />
+                          <th className="text-left px-3 py-2 font-semibold border-b border-[var(--border)] min-w-[180px]">
+                            Admin note
+                            <span className="block text-[10px] font-normal text-gray-500 normal-case">Internal only</span>
+                          </th>
                           <th className="text-left px-3 py-2 font-semibold border-b border-[var(--border)] min-w-[220px]">Comments</th>
                           <th className="text-right px-3 py-2 font-semibold border-b border-[var(--border)]">Action</th>
                         </tr>
@@ -1017,6 +1046,29 @@ export const AdminStudentDetailsPage: React.FC = () => {
                                 })()}
                               </div>
                             </td>
+                            <td
+                              className="px-3 py-2 border-b border-[var(--border)] align-top min-w-[180px]"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <label className="sr-only" htmlFor={`admin-note-${row.id}`}>
+                                Admin reference note for {row.form_name}
+                              </label>
+                              <textarea
+                                id={`admin-note-${row.id}`}
+                                rows={3}
+                                className="w-full min-w-[160px] rounded-md border border-gray-300 bg-[#fffbeb] px-2 py-1.5 text-xs text-gray-800 placeholder:text-gray-400 focus:border-[#ea580c] focus:outline-none focus:ring-1 focus:ring-[#ea580c]/40 resize-y"
+                                placeholder="Admin reference (not visible to student)…"
+                                value={adminNoteDrafts[row.id] ?? ''}
+                                disabled={savingAdminNoteId === row.id}
+                                onChange={(e) =>
+                                  setAdminNoteDrafts((prev) => ({ ...prev, [row.id]: e.target.value }))
+                                }
+                                onBlur={() => void saveAdminReferenceNote(row.id)}
+                              />
+                              {savingAdminNoteId === row.id ? (
+                                <p className="mt-1 text-[10px] text-gray-500">Saving…</p>
+                              ) : null}
+                            </td>
                             <td className="px-3 py-2 border-b border-[var(--border)] align-top min-w-[220px]">
                               {(() => {
                                 const outcomeClass =
@@ -1130,7 +1182,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
                           </tr>
                           {expandedId === row.id ? (
                             <tr className={cn(ui.rowClassName, trainerHighlightExtra)}>
-                              <td className="px-3 py-3 border-b border-[var(--border)]" colSpan={7} onClick={(e) => e.stopPropagation()}>
+                              <td className="px-3 py-3 border-b border-[var(--border)]" colSpan={8} onClick={(e) => e.stopPropagation()}>
                                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                                   <FormDocumentsPanel
                                     formId={Number(row.form_id)}

@@ -355,7 +355,50 @@ export async function fetchInstance(instanceId: number): Promise<FormInstance | 
     console.error('fetchInstance error', error);
     return null;
   }
-  return data as FormInstance;
+  const row = { ...(data as Record<string, unknown>) };
+  delete row.admin_reference_note;
+  return row as FormInstance;
+}
+
+/** Admin student details only — internal notes not exposed to students. */
+export async function fetchInstanceAdminReferenceNotes(
+  instanceIds: number[]
+): Promise<Record<number, string>> {
+  const ids = [...new Set(instanceIds.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0))];
+  if (ids.length === 0) return {};
+  const { data, error } = await supabase
+    .from('skyline_form_instances')
+    .select('id, admin_reference_note')
+    .in('id', ids);
+  if (error) {
+    console.error('fetchInstanceAdminReferenceNotes error', error);
+    return {};
+  }
+  const out: Record<number, string> = {};
+  for (const row of (data as Array<{ id: number; admin_reference_note: string | null }> | null) || []) {
+    const id = Number(row.id);
+    if (!Number.isFinite(id) || id <= 0) continue;
+    out[id] = row.admin_reference_note != null ? String(row.admin_reference_note) : '';
+  }
+  return out;
+}
+
+export async function updateInstanceAdminReferenceNote(
+  instanceId: number,
+  note: string
+): Promise<{ ok: boolean; error?: string }> {
+  const iid = Number(instanceId);
+  if (!Number.isFinite(iid) || iid <= 0) return { ok: false, error: 'Invalid instance' };
+  const trimmed = note.trim();
+  const { error } = await supabase
+    .from('skyline_form_instances')
+    .update({ admin_reference_note: trimmed || null })
+    .eq('id', iid);
+  if (error) {
+    console.error('updateInstanceAdminReferenceNote error', error);
+    return { ok: false, error: error.message };
+  }
+  return { ok: true };
 }
 
 export async function fetchTemplateForInstance(instanceId: number): Promise<FormTemplate | null> {
