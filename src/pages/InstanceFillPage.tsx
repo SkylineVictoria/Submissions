@@ -51,6 +51,8 @@ import {
   validateInstanceAccessToken,
   revokeRoleAccessTokens,
   extendInstanceAccessTokensToDate,
+  recordTrainerNycAssessedOn,
+  studentResubmissionDeadlineFromAssessedOn,
   getInstanceWorkflowNotificationContext,
   invokeWorkflowSendNotification,
 } from '../lib/formEngine';
@@ -70,25 +72,6 @@ import { SignatureField } from '../components/form-fill/SignatureField';
 import { AppendixAMatrixForm } from '../components/form-fill/AppendixAMatrixForm';
 import { DatePicker } from '../components/ui/DatePicker';
 import { toast } from '../utils/toast';
-
-const isIsoDate = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || '').trim());
-const addDaysIso = (dateStr: string, days: number): string => {
-  if (!isIsoDate(dateStr)) return dateStr;
-  const base = new Date(`${dateStr}T00:00:00.000Z`);
-  const next = new Date(base.getTime() + days * 24 * 60 * 60 * 1000);
-  return next.toISOString().slice(0, 10);
-};
-
-const MELBOURNE_TZ = 'Australia/Melbourne';
-const getMelbourneDateStr = (d: Date): string => {
-  const fmt = new Intl.DateTimeFormat('en-CA', {
-    timeZone: MELBOURNE_TZ,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  });
-  return fmt.format(d);
-};
 
 const PDF_BASE = import.meta.env.VITE_PDF_API_URL ?? '';
 
@@ -1828,15 +1811,8 @@ export const InstanceFillPage: React.FC = () => {
       if (latestResult === 'not_yet_competent') {
         if (latestAttempt < 3) {
           try {
-            const todayMel = getMelbourneDateStr(new Date());
-            const attemptTrainerDate =
-              latestAttempt === 1
-                ? String(assessmentSummary?.trainer_date_1 ?? '').trim()
-                : latestAttempt === 2
-                  ? String(assessmentSummary?.trainer_date_2 ?? '').trim()
-                  : String(assessmentSummary?.trainer_date_3 ?? '').trim();
-            const baseEnd = isIsoDate(attemptTrainerDate) ? attemptTrainerDate : todayMel;
-            const newEnd = addDaysIso(baseEnd, 5);
+            const assessedOn = await recordTrainerNycAssessedOn(id, latestAttempt);
+            const newEnd = studentResubmissionDeadlineFromAssessedOn(assessedOn);
             await extendInstanceAccessTokensToDate(id, 'student', newEnd);
             await updateInstanceWorkflowStatus(id, 'draft');
             await updateInstanceRole(id, 'student');

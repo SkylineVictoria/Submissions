@@ -952,6 +952,54 @@ function getMelbourneDateStr(d: Date): string {
   return fmt.format(d);
 }
 
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+export function getMelbourneTodayIso(): string {
+  return getMelbourneDateStr(new Date());
+}
+
+export function addDaysToIsoDate(dateStr: string, days: number): string {
+  const trimmed = String(dateStr || '').trim();
+  if (!ISO_DATE_RE.test(trimmed)) return trimmed;
+  const base = new Date(`${trimmed}T00:00:00.000Z`);
+  const next = new Date(base.getTime() + days * 24 * 60 * 60 * 1000);
+  return next.toISOString().slice(0, 10);
+}
+
+export type TrainerAssessmentAttempt = 1 | 2 | 3;
+
+const TRAINER_NYC_ASSESSED_ON_COL: Record<TrainerAssessmentAttempt, string> = {
+  1: 'trainer_nyc_assessed_on_1',
+  2: 'trainer_nyc_assessed_on_2',
+  3: 'trainer_nyc_assessed_on_3',
+};
+
+/** Melbourne date when trainer submitted NYC for this attempt (workflow, not summary sheet). */
+export async function recordTrainerNycAssessedOn(
+  instanceId: number,
+  attempt: TrainerAssessmentAttempt,
+  assessedOnMel?: string
+): Promise<string> {
+  const assessedOn = (assessedOnMel ?? getMelbourneDateStr(new Date())).trim();
+  if (!ISO_DATE_RE.test(assessedOn)) {
+    throw new Error('Invalid Melbourne assessment date');
+  }
+  const col = TRAINER_NYC_ASSESSED_ON_COL[attempt];
+  const { error } = await supabase.from('skyline_form_instances').update({ [col]: assessedOn }).eq('id', instanceId);
+  if (error) {
+    console.error('recordTrainerNycAssessedOn error', error);
+    throw error;
+  }
+  return assessedOn;
+}
+
+export const STUDENT_RESUBMISSION_DAYS_AFTER_NYC = 5;
+
+/** Student resubmission end date (Melbourne calendar) = trainer NYC assessed-on + 5 days. */
+export function studentResubmissionDeadlineFromAssessedOn(assessedOnMel: string): string {
+  return addDaysToIsoDate(assessedOnMel, STUDENT_RESUBMISSION_DAYS_AFTER_NYC);
+}
+
 /** UTC timestamp for end_date 23:59:59.999 in Melbourne. */
 function getMelbourneEndOfDayUTC(dateStr: string): number {
   const d1 = new Date(dateStr + 'T12:59:59.999Z');
