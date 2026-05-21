@@ -162,9 +162,7 @@ export const APPLICATION_CHECKLIST_ITEMS: { key: string; label: string }[] = [
   { key: 'complete_sections', label: 'Complete all sections of the application form' },
   { key: 'credit_evidence', label: 'Attached evidence for credit or exemption' },
   { key: 'visa_oshc_details', label: 'Provide details if you already have student visa and/or OSHC' },
-  { key: 'passport_biodata', label: 'Passport biodata page' },
-  { key: 'academic_record', label: 'Academic record/qualifications' },
-  { key: 'english_results', label: 'English test results' },
+  // Prior education is captured in section 4 (AVETMISS). Transcript upload is only in section 9 when RPL/credit = Yes.
 ];
 
 export const DECLARATION_ITEMS: { key: string; label: string }[] = [

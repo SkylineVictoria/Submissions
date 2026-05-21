@@ -7,7 +7,7 @@ export type EnrolmentDraftLoadResult =
   | { ok: false; error?: string };
 
 const MIGRATION_HINT =
-  'Enrolment database functions are missing. Run supabase/scripts/apply_student_enrolment.sql in the Supabase SQL Editor, then retry.';
+  'Enrolment database functions are missing on this project. Run `supabase db push` (or apply supabase/migrations/20260514130000_student_enrolment_get_draft.sql and later enrolment migrations in the SQL Editor), then retry.';
 
 function rpcErrorMessage(error: { message?: string; code?: string }): string {
   const msg = error.message ?? 'Request failed';
@@ -21,12 +21,36 @@ function rpcErrorMessage(error: { message?: string; code?: string }): string {
   return msg;
 }
 
-export async function createEnrolmentDraft(): Promise<{ ok: boolean; id?: string; error?: string }> {
-  const { data, error } = await supabase.rpc('skyline_student_enrolment_create_draft', {});
+/** Returns existing draft id for this email, if any. */
+export async function findEnrolmentDraftByEmail(
+  email: string
+): Promise<{ ok: boolean; id?: string; error?: string }> {
+  const trimmed = email.trim();
+  if (!trimmed) return { ok: false, error: 'missing_email' };
+  const { data, error } = await supabase.rpc('skyline_student_enrolment_find_draft_by_email', {
+    p_email: trimmed,
+  });
   if (error) return { ok: false, error: rpcErrorMessage(error) };
   const row = data as { ok?: boolean; id?: string; error?: string };
-  if (!row?.ok || !row.id) return { ok: false, error: row?.error ?? 'Could not create draft' };
+  if (!row?.ok || !row.id) return { ok: false, error: row?.error ?? 'not_found' };
   return { ok: true, id: String(row.id) };
+}
+
+/** Upserts one draft per email, or updates the session draft when email is not entered yet. */
+export async function createEnrolmentDraft(
+  values: EnrolmentFormValues,
+  files: EnrolmentFileRef[] = [],
+  existingId?: string | null
+): Promise<{ ok: boolean; id?: string; updated?: boolean; error?: string }> {
+  const { data, error } = await supabase.rpc('skyline_student_enrolment_create_draft', {
+    ...rowFromForm(values),
+    p_files: files,
+    p_existing_id: existingId ?? null,
+  });
+  if (error) return { ok: false, error: rpcErrorMessage(error) };
+  const row = data as { ok?: boolean; id?: string; updated?: boolean; error?: string };
+  if (!row?.ok || !row.id) return { ok: false, error: row?.error ?? 'Could not create draft' };
+  return { ok: true, id: String(row.id), updated: Boolean(row.updated) };
 }
 
 function rowFromForm(values: EnrolmentFormValues) {
@@ -95,11 +119,58 @@ export async function submitEnrolmentApplication(
   return { ok: true, applicationNo: row.application_no };
 }
 
-/** Placeholder — wire to edge function / Resend when available. */
-export async function sendEnrolmentCopyToAgent(
-  applicationId: string,
-  agentEmail: string
-): Promise<{ ok: boolean; error?: string }> {
-  console.info('sendEnrolmentCopyToAgent placeholder', { applicationId, agentEmail });
-  return { ok: true };
+export type SendEnrolmentEmailsInput = {
+  applicationId: string;
+  applicationNo: string | null;
+  applicantEmail: string;
+  applicantName: string;
+  agentEmail?: string;
+  sendToAgent: boolean;
+  pdfBase64: string;
+  pdfFilename: string;
+  fileRefs: EnrolmentFileRef[];
+};
+
+export async function sendEnrolmentSubmissionEmails(
+  input: SendEnrolmentEmailsInput
+): Promise<{ ok: boolean; agentSent?: boolean; message?: string; error?: string }> {
+  try {
+    const { data, error } = await supabase.functions.invoke('skyline-send-enrolment-email', {
+      body: {
+        applicationId: input.applicationId,
+        applicationNo: input.applicationNo,
+        applicantEmail: input.applicantEmail.trim(),
+        applicantName: input.applicantName.trim(),
+        agentEmail: input.sendToAgent ? input.agentEmail?.trim() : undefined,
+        sendToAgent: input.sendToAgent,
+        pdfBase64: input.pdfBase64,
+        pdfFilename: input.pdfFilename,
+        fileRefs: input.fileRefs.map((f) => ({
+          path: f.path,
+          name: f.name,
+          mimeType: f.mimeType,
+          section: f.section,
+          field: f.field,
+        })),
+      },
+    });
+
+    if (error) {
+      return { ok: false, error: error.message || 'Could not send enrolment email.' };
+    }
+
+    const row = data as {
+      success?: boolean;
+      message?: string;
+      agentSent?: boolean;
+    } | null;
+
+    if (!row?.success) {
+      return { ok: false, error: row?.message ?? 'Could not send enrolment email.' };
+    }
+
+    return { ok: true, agentSent: row.agentSent, message: row.message };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Could not send enrolment email.' };
+  }
 }

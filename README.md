@@ -288,9 +288,9 @@ This error occurs when the Student OTP database functions have not been applied 
 
 **Prerequisites:** The `skyline_otps` and `skyline_students` tables must exist (if staff OTP login works, you have them). Ensure you've run the migrations in `supabase/migrations/` in date order, including `20260313000001_otp_and_master_admin.sql` and `20260313000003_student_otp.sql`.
 
-### Power Automate OTP for students
+### Postmark OTP email
 
-For students to receive OTP emails, you must configure the Power Automate flow and set the `POWER_AUTOMATE_OTP_URL` secret. See `docs/POWER_AUTOMATE_OTP_PAYLOAD.md`.
+OTP emails are sent server-side via Postmark from the `skyline-request-otp` edge function. Set `POSTMARK_SERVER_TOKEN` and `POSTMARK_FROM_EMAIL` on Supabase, then deploy the function. See `docs/POSTMARK_OTP.md`.
 
 ## Future Enhancements
 

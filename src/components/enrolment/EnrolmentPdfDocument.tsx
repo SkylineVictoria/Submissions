@@ -1,5 +1,5 @@
 import React from 'react';
-import { Document, Link, Page, Path, StyleSheet, Svg, Text, View } from '@react-pdf/renderer';
+import { Document, Image, Link, Page, Path, StyleSheet, Svg, Text, View } from '@react-pdf/renderer';
 import {
   APPLICATION_CHECKLIST_ITEMS,
   DECLARATION_ITEMS,
@@ -145,12 +145,30 @@ function BorderedRow({ label, children }: { label: string; children: React.React
   );
 }
 
+function isImageSignature(value: string): boolean {
+  return value.startsWith('data:image');
+}
+
 function TextRow({ label, value }: { label: string; value?: string | null }) {
   const v = value?.trim();
   if (!v) return null;
   return (
     <BorderedRow label={label}>
       <Text>{v}</Text>
+    </BorderedRow>
+  );
+}
+
+function SignatureRow({ label, value }: { label: string; value?: string | null }) {
+  const v = value?.trim();
+  if (!v) return null;
+  return (
+    <BorderedRow label={label}>
+      {isImageSignature(v) ? (
+        <Image src={v} style={{ height: 32, maxWidth: 180, objectFit: 'contain' }} />
+      ) : (
+        <Text style={{ color: '#dc2626', fontStyle: 'italic', fontFamily: 'Times-Roman' }}>{v}</Text>
+      )}
     </BorderedRow>
   );
 }
@@ -374,7 +392,7 @@ export const EnrolmentPdfDocument: React.FC<EnrolmentPdfDocumentProps> = ({
               checked={!!values.usi.consent}
             />
           </BorderedRow>
-          <TextRow label="Signature" value={values.usi.signatureName} />
+          <SignatureRow label="Signature" value={values.usi.signatureName} />
           <TextRow label="Date" value={values.usi.signatureDate} />
         </Section>
 
@@ -487,7 +505,7 @@ export const EnrolmentPdfDocument: React.FC<EnrolmentPdfDocumentProps> = ({
             </View>
           </BorderedRow>
           <TextRow label="Declarant name" value={values.declaration.declarantName} />
-          <TextRow label="Signature" value={values.declaration.signatureName} />
+          <SignatureRow label="Signature" value={values.declaration.signatureName} />
           <TextRow label="Date" value={values.declaration.signatureDate} />
         </Section>
       </Page>

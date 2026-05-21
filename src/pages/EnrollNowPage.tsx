@@ -16,10 +16,10 @@ import {
   ScrollToTopButton,
   SectionHeading,
   SelectField,
+  SignatureFieldRow,
   TextField,
 } from '../components/enrolment/EnrolmentFormUi';
 import {
-  APPLICATION_CHECKLIST_ITEMS,
   COUNTRY_OPTIONS,
   COURSE_CREDIT_OPTIONS,
   DECLARATION_ITEMS,
@@ -47,11 +47,16 @@ import {
   createEnrolmentDraft,
   loadEnrolmentDraft,
   saveEnrolmentDraft,
-  sendEnrolmentCopyToAgent,
+  sendEnrolmentSubmissionEmails,
   submitEnrolmentApplication,
 } from '../lib/enrolmentApi';
 import { emptyEnrolmentFormValues } from '../lib/enrolmentDefaults';
-import { downloadEnrolmentPdf } from '../lib/enrolmentPdf';
+import {
+  attachmentFilesOnly,
+  enrolmentPdfBlobToBase64,
+  enrolmentPdfFilename,
+  generateEnrolmentPdfBlob,
+} from '../lib/enrolmentPdf';
 import {
   clearEnrolmentSession,
   enrolmentSessionHasMeaningfulData,
@@ -62,8 +67,18 @@ import {
   writeEnrolmentSubmitted,
   type EnrolmentSubmittedCache,
 } from '../lib/enrolmentSessionCache';
-import { maxBytesForField, uploadEnrolmentDocument, validateEnrolmentFile } from '../lib/enrolmentStorage';
-import { enrolmentSubmitSchema } from '../lib/enrolmentValidation';
+import {
+  maxBytesForField,
+  removeEnrolmentStorageObject,
+  uploadEnrolmentDocument,
+  validateEnrolmentFile,
+} from '../lib/enrolmentStorage';
+import {
+  enrolmentSubmitSchema,
+  ENROLMENT_VALIDATION_TOAST_MS,
+  formatEnrolmentValidationToast,
+  requiredEnrolmentChecklistItems,
+} from '../lib/enrolmentValidation';
 import { listCourses } from '../lib/formEngine';
 import type { EnrolmentFileRef, EnrolmentFormValues } from '../types/enrolment';
 import { toast } from '../utils/toast';
@@ -80,7 +95,6 @@ export const EnrollNowPage: React.FC = () => {
   const sessionRestoredRef = useRef(
     Boolean(initialSession && enrolmentSessionHasMeaningfulData(initialSession.values))
   );
-  const draftCreatedRef = useRef(false);
 
   const [applicationId, setApplicationId] = useState<string | null>(initialApplicationId);
   const [fileRefs, setFileRefs] = useState<EnrolmentFileRef[]>(initialSession?.fileRefs ?? []);
@@ -90,7 +104,9 @@ export const EnrollNowPage: React.FC = () => {
   const [submitted, setSubmitted] = useState(Boolean(initialSubmitted));
   const [applicationNo, setApplicationNo] = useState<string | null>(initialSubmitted?.applicationNo ?? null);
   const [submittedSnapshot, setSubmittedSnapshot] = useState<EnrolmentSubmittedCache | null>(initialSubmitted);
-  const [pdfDownloading, setPdfDownloading] = useState(false);
+  const [emailDeliveryNote, setEmailDeliveryNote] = useState<string | null>(
+    initialSubmitted?.emailDeliveryNote ?? null
+  );
   const [courseOpts, setCourseOpts] = useState(
     FALLBACK_COURSE_OPTIONS.map((c) => ({ value: c.id, label: c.label }))
   );
@@ -145,7 +161,12 @@ export const EnrollNowPage: React.FC = () => {
     let cancelled = false;
     void (async () => {
       const loaded = await loadEnrolmentDraft(applicationId);
-      if (cancelled || !loaded.ok) return;
+      if (cancelled) return;
+      if (!loaded.ok || !enrolmentSessionHasMeaningfulData(loaded.values)) {
+        setApplicationId(null);
+        clearEnrolmentSession();
+        return;
+      }
       if (loaded.status === 'submitted') {
         clearEnrolmentSession();
         setApplicationNo(loaded.applicationNo);
@@ -155,39 +176,12 @@ export const EnrollNowPage: React.FC = () => {
       reset(loaded.values);
       setFileRefs(loaded.files);
       sessionRestoredRef.current = true;
-      if (enrolmentSessionHasMeaningfulData(loaded.values)) {
-        toast.success('Your saved application has been restored.');
-      }
+      toast.success('Your saved application has been restored.');
     })();
     return () => {
       cancelled = true;
     };
   }, [applicationId, reset]);
-
-  const ensureApplicationId = useCallback(async (): Promise<string | null> => {
-    if (applicationId) return applicationId;
-    const created = await createEnrolmentDraft();
-    if (!created.ok || !created.id) {
-      toast.error(created.error ?? 'Could not start application');
-      return null;
-    }
-    setApplicationId(created.id);
-    writeEnrolmentSession({
-      applicationId: created.id,
-      values,
-      fileRefs,
-      updatedAt: Date.now(),
-    });
-    return created.id;
-  }, [applicationId, values, fileRefs]);
-
-  // Create a server draft once the user starts filling the form (for Save and Exit / backup).
-  useEffect(() => {
-    if (submitted || applicationId || draftCreatedRef.current) return;
-    if (!enrolmentSessionHasMeaningfulData(values)) return;
-    draftCreatedRef.current = true;
-    void ensureApplicationId();
-  }, [values, applicationId, submitted, ensureApplicationId]);
 
   const onFilePick = useCallback((section: string, field: string, file: File | null) => {
     const key = `${section}.${field}`;
@@ -202,20 +196,103 @@ export const EnrollNowPage: React.FC = () => {
     });
   }, []);
 
-  const uploadPendingFiles = async (appId: string): Promise<EnrolmentFileRef[]> => {
-    let next = [...fileRefs];
-    for (const p of pendingFiles) {
-      const err = validateEnrolmentFile(p.file, maxBytesForField(p.field));
-      if (err) throw new Error(err);
-      const { ref, error } = await uploadEnrolmentDocument(appId, p.section, p.field, p.file);
-      if (error || !ref) throw new Error(error ?? 'Upload failed');
-      next = next.filter((f) => !(f.section === p.section && f.field === p.field));
-      next.push(ref);
+  /** Upload a snapshot of pending picks once (avoids double upload when state has not re-rendered yet). */
+  const uploadPendingFiles = useCallback(
+    async (appId: string, queue: PendingFile[]): Promise<EnrolmentFileRef[]> => {
+      if (queue.length === 0) return fileRefs;
+
+      let next = [...fileRefs];
+      for (const p of queue) {
+        const err = validateEnrolmentFile(p.file, maxBytesForField(p.field));
+        if (err) throw new Error(err);
+        const previous = next.find((f) => f.section === p.section && f.field === p.field);
+        const { ref, error } = await uploadEnrolmentDocument(appId, p.section, p.field, p.file);
+        if (error || !ref) throw new Error(error ?? 'Upload failed');
+        if (previous?.path) await removeEnrolmentStorageObject(previous.path);
+        next = next.filter((f) => !(f.section === p.section && f.field === p.field));
+        next.push(ref);
+      }
+
+      setFileRefs(next);
+      setPendingFiles((prev) =>
+        prev.filter((p) => !queue.some((q) => q.section === p.section && q.field === p.field))
+      );
+      return next;
+    },
+    [fileRefs]
+  );
+
+  const ensureApplicationId = useCallback(async (): Promise<{ id: string; files: EnrolmentFileRef[] } | null> => {
+    if (!enrolmentSessionHasMeaningfulData(values)) {
+      toast.error('Enter at least your name or email before saving.');
+      return null;
     }
-    setFileRefs(next);
-    setPendingFiles([]);
-    return next;
-  };
+
+    const email = values.personal.email.trim();
+    let files = fileRefs;
+    const pendingSnapshot = [...pendingFiles];
+    let id: string;
+    let restoredExistingDraft = false;
+
+    if (email) {
+      const upserted = await createEnrolmentDraft(values, files);
+      if (!upserted.ok || !upserted.id) {
+        toast.error(upserted.error ?? 'Could not start application');
+        return null;
+      }
+      id = upserted.id;
+      restoredExistingDraft = Boolean(upserted.updated);
+      if (applicationId && applicationId !== id) {
+        restoredExistingDraft = true;
+      }
+    } else if (applicationId) {
+      const saved = await saveEnrolmentDraft(applicationId, values, files);
+      if (!saved.ok) {
+        toast.error(saved.error ?? 'Could not save application');
+        return null;
+      }
+      id = applicationId;
+    } else {
+      const created = await createEnrolmentDraft(values, files);
+      if (!created.ok || !created.id) {
+        toast.error(created.error ?? 'Could not start application');
+        return null;
+      }
+      id = created.id;
+    }
+
+    if (pendingSnapshot.length > 0) {
+      files = await uploadPendingFiles(id, pendingSnapshot);
+      if (email) {
+        const upserted = await createEnrolmentDraft(values, files);
+        if (!upserted.ok) {
+          toast.error(upserted.error ?? 'Could not save application');
+          return null;
+        }
+        id = upserted.id;
+      } else {
+        const saved = await saveEnrolmentDraft(id, values, files);
+        if (!saved.ok) {
+          toast.error(saved.error ?? 'Could not save application');
+          return null;
+        }
+      }
+    }
+
+    if (restoredExistingDraft) {
+      toast.success('Your existing draft for this email has been updated.');
+    }
+
+    setApplicationId(id);
+    setFileRefs(files);
+    writeEnrolmentSession({
+      applicationId: id,
+      values,
+      fileRefs: files,
+      updatedAt: Date.now(),
+    });
+    return { id, files };
+  }, [applicationId, values, fileRefs, pendingFiles, uploadPendingFiles]);
 
   const hasFile = (section: string, field: string) =>
     fileRefs.some((f) => f.section === section && f.field === field) ||
@@ -230,6 +307,8 @@ export const EnrollNowPage: React.FC = () => {
   };
 
   const clearAttachment = (section: string, field: string) => {
+    const existing = fileRefs.find((f) => f.section === section && f.field === field);
+    if (existing?.path) void removeEnrolmentStorageObject(existing.path);
     setPendingFiles((prev) => prev.filter((p) => !(p.section === section && p.field === field)));
     setFileRefs((prev) => prev.filter((f) => !(f.section === section && f.field === field)));
     setFileErrors((prev) => {
@@ -240,13 +319,15 @@ export const EnrollNowPage: React.FC = () => {
   };
 
   const saveDraft = async () => {
+    if (!enrolmentSessionHasMeaningfulData(values)) {
+      toast.error('Enter at least your name or email before saving a draft.');
+      return;
+    }
     setBusy(true);
     try {
-      const id = await ensureApplicationId();
-      if (!id) return;
-      let files = fileRefs;
-      if (pendingFiles.length > 0) files = await uploadPendingFiles(id);
-      const res = await saveEnrolmentDraft(id, values, files);
+      const ensured = await ensureApplicationId();
+      if (!ensured) return;
+      const res = await saveEnrolmentDraft(ensured.id, values, ensured.files);
       if (res.ok) toast.success('Draft saved. You can return later to complete your application.');
       else toast.error(res.error ?? 'Could not save draft');
     } catch (e) {
@@ -272,21 +353,30 @@ export const EnrollNowPage: React.FC = () => {
     if (data.oshc.requirement === 'Already Have') {
       fileChecks.push({ section: 'oshc', field: 'document', label: 'OSHC document' });
     }
+    if (data.vet.englishAssessmentType.trim()) {
+      fileChecks.push({ section: 'vet', field: 'english', label: 'English test results document' });
+    }
 
     const missing = fileChecks.filter((f) => !hasFile(f.section, f.field));
     if (missing.length > 0) {
       const map: Record<string, string> = {};
       for (const m of missing) map[`${m.section}.${m.field}`] = `${m.label} is required`;
       setFileErrors(map);
-      toast.error(`Missing upload: ${missing[0].label}`);
+      const uploadLines = missing.map((m) => `• ${m.label}`).join('\n');
+      toast.error(
+        missing.length === 1
+          ? `Missing upload: ${missing[0].label}`
+          : `Missing uploads:\n${uploadLines}`,
+        ENROLMENT_VALIDATION_TOAST_MS
+      );
       return;
     }
 
     setBusy(true);
     try {
-      const id = await ensureApplicationId();
-      if (!id) return;
-      const files = await uploadPendingFiles(id);
+      const ensured = await ensureApplicationId();
+      if (!ensured) return;
+      const { id, files } = ensured;
       const res = await submitEnrolmentApplication(
         id,
         data,
@@ -297,34 +387,70 @@ export const EnrollNowPage: React.FC = () => {
         toast.error(res.error ?? 'Submit failed');
         return;
       }
-      if (data.vet.sendCopyToAgent && data.vet.agentEmail.trim()) {
-        await sendEnrolmentCopyToAgent(id, data.vet.agentEmail.trim());
-      }
-
       const courseLabels = data.course.courseIds.map(
         (cid) => courseOpts.find((c) => c.value === cid)?.label ?? cid
       );
+
+      let deliveryNote: string | null = null;
+      try {
+        const pdfBlob = await generateEnrolmentPdfBlob(data, res.applicationNo ?? null, files, courseLabels);
+        const pdfBase64 = await enrolmentPdfBlobToBase64(pdfBlob);
+        const sendToAgent = Boolean(data.vet.sendCopyToAgent && data.vet.agentEmail.trim());
+        const emailRes = await sendEnrolmentSubmissionEmails({
+          applicationId: id,
+          applicationNo: res.applicationNo ?? null,
+          applicantEmail: data.personal.email.trim(),
+          applicantName: [data.personal.firstName, data.personal.lastName].filter(Boolean).join(' ').trim(),
+          agentEmail: sendToAgent ? data.vet.agentEmail.trim() : undefined,
+          sendToAgent,
+          pdfBase64,
+          pdfFilename: enrolmentPdfFilename(res.applicationNo ?? null, data),
+          fileRefs: attachmentFilesOnly(files),
+        });
+        if (emailRes.ok) {
+          deliveryNote = emailRes.message ?? null;
+        } else {
+          deliveryNote = emailRes.error ?? 'Email could not be sent.';
+          toast.error(emailRes.error ?? 'Application saved but email could not be sent. Contact admissions.');
+        }
+      } catch (emailErr) {
+        deliveryNote = emailErr instanceof Error ? emailErr.message : 'Email could not be sent.';
+        toast.error('Application saved but email could not be sent. Contact admissions.');
+      }
+
       const snapshot: EnrolmentSubmittedCache = {
         applicationId: id,
         applicationNo: res.applicationNo ?? null,
         values: data,
         fileRefs: files,
         courseLabels,
+        emailDeliveryNote: deliveryNote,
       };
       writeEnrolmentSubmitted(snapshot);
       setSubmittedSnapshot(snapshot);
+      setEmailDeliveryNote(deliveryNote);
       clearEnrolmentSession();
       setApplicationNo(res.applicationNo ?? null);
       setSubmitted(true);
-      toast.success('Application submitted successfully.');
+      toast.success(
+        deliveryNote && !deliveryNote.toLowerCase().includes('could not')
+          ? 'Application submitted. Check your email for your PDF and documents.'
+          : 'Application submitted successfully.'
+      );
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Submit failed');
     } finally {
       setBusy(false);
     }
   },
-    () => {
-      toast.error('Please fix the highlighted fields before submitting.');
+    (invalid) => {
+      toast.error(formatEnrolmentValidationToast(invalid), ENROLMENT_VALIDATION_TOAST_MS);
+      requestAnimationFrame(() => {
+        const first =
+          document.querySelector('.field-error') ??
+          document.querySelector('[aria-invalid="true"]');
+        first?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
     }
   );
 
@@ -352,55 +478,35 @@ export const EnrollNowPage: React.FC = () => {
             ) : null}
           </p>
           <p className="intro">The admissions team will contact you using the email address you provided.</p>
-          <p className="intro">
-            Download a PDF copy of your application for your records. Use the links below to open each
-            uploaded attachment.
-          </p>
           {submittedSnapshot ? (
-            <div className="enrol-actions mt-6 flex-col items-stretch">
-              <button
-                type="button"
-                className="enrol-btn-primary"
-                disabled={pdfDownloading}
-                onClick={() => {
-                  setPdfDownloading(true);
-                  void downloadEnrolmentPdf(
-                    submittedSnapshot.values,
-                    submittedSnapshot.applicationNo,
-                    submittedSnapshot.fileRefs,
-                    submittedSnapshot.courseLabels
-                  )
-                    .then(() => toast.success('PDF downloaded.'))
-                    .catch((e) =>
-                      toast.error(e instanceof Error ? e.message : 'Could not generate PDF')
-                    )
-                    .finally(() => setPdfDownloading(false));
-                }}
-              >
-                {pdfDownloading ? 'Generating PDF…' : 'Download application PDF'}
-              </button>
-              {submittedSnapshot.fileRefs.filter(
-                (f) => f.field !== 'application_pdf' && f.section !== 'package'
-              ).length > 0 ? (
-                <ul className="mt-4 space-y-2 text-sm">
-                  {submittedSnapshot.fileRefs
-                    .filter((f) => f.field !== 'application_pdf' && f.section !== 'package')
-                    .map((f) => (
-                      <li key={`${f.section}-${f.field}-${f.path}`}>
-                        <a
-                          href={f.publicUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-[#2563eb] underline"
-                        >
-                          {f.name}
-                        </a>
-                      </li>
-                    ))}
-                </ul>
-              ) : null}
-            </div>
-          ) : null}
+            <p className="intro">
+              {emailDeliveryNote && !emailDeliveryNote.toLowerCase().includes('could not') ? (
+                <>
+                  We have emailed your <strong>application PDF</strong> and <strong>uploaded documents</strong> to{' '}
+                  <strong>{submittedSnapshot.values.personal.email}</strong>
+                  {submittedSnapshot.values.vet.sendCopyToAgent &&
+                  submittedSnapshot.values.vet.agentEmail.trim() ? (
+                    <>
+                      . A copy was also sent to <strong>{submittedSnapshot.values.vet.agentEmail}</strong>.
+                    </>
+                  ) : (
+                    '.'
+                  )}
+                </>
+              ) : (
+                <>
+                  We could not send the confirmation email automatically
+                  {emailDeliveryNote ? <> ({emailDeliveryNote})</> : null}. Please contact admissions if you do not
+                  receive your documents shortly.
+                </>
+              )}
+            </p>
+          ) : (
+            <p className="intro">
+              Your application PDF and uploaded documents will be sent to the email address you provided.
+            </p>
+          )}
+          <p className="intro text-sm text-slate-600 mt-4">Please do not reply to the confirmation email.</p>
         </div>
       </div>
     );
@@ -450,7 +556,7 @@ export const EnrollNowPage: React.FC = () => {
             setValue={setValue}
             name="personal.workPhone"
             error={errors.personal?.workPhone}
-            placeholder={values.address.type === 'australian' ? 'Optional — 10 digits from 0' : 'Optional — 10 digits'}
+            placeholder="Optional — 10 digits"
           />
           <div className="enrol-grid-2">
             <TextField label="Email" required register={register} name="personal.email" type="email" error={errors.personal?.email} />
@@ -776,7 +882,24 @@ export const EnrollNowPage: React.FC = () => {
             <input type="checkbox" {...register('usi.consent')} />
             I consent to SLIT using/providing my USI for enrolment, reporting and verification purposes where required.
           </CheckOption>
-          <TextField label="Digital signature (typed full name)" required register={register} name="usi.signatureName" error={errors.usi?.signatureName} />
+          <SignatureFieldRow
+            label="Digital signature"
+            required
+            value={values.usi.signatureName?.trim() || null}
+            onChange={(v) => setValue('usi.signatureName', v ?? '', { shouldValidate: true, shouldDirty: true })}
+            error={errors.usi?.signatureName}
+            suggestionFrom={
+              [values.personal.firstName, values.personal.lastName].filter(Boolean).join(' ').trim() || null
+            }
+            onSuggestionClick={
+              [values.personal.firstName, values.personal.lastName].filter(Boolean).join(' ').trim()
+                ? () => {
+                    const name = [values.personal.firstName, values.personal.lastName].filter(Boolean).join(' ').trim();
+                    setValue('usi.signatureName', name, { shouldValidate: true, shouldDirty: true });
+                  }
+                : undefined
+            }
+          />
           <DateField
             label="Date"
             value={values.usi.signatureDate}
@@ -919,13 +1042,25 @@ export const EnrollNowPage: React.FC = () => {
 
         <SectionHeading>12. Application Checklist</SectionHeading>
         <div className="enrol-section">
+          <p className="enrol-note">
+            Passport and English test documents are uploaded in section 3. Prior education is recorded in section 4.
+            Transcript upload is only required in section 9 if you apply for RPL / credit transfer. Tick each item below
+            that applies.
+          </p>
           <div className="enrol-check-group">
-            {APPLICATION_CHECKLIST_ITEMS.map((item) => (
-              <CheckOption key={item.key}>
-                <input type="checkbox" {...register(`checklist.${item.key}`)} />
-                {item.label}
-              </CheckOption>
-            ))}
+            {requiredEnrolmentChecklistItems(values).map((item) => {
+              const checklistErr = errors.checklist as Record<string, { message?: string }> | undefined;
+              const itemErr = checklistErr?.[item.key];
+              return (
+                <div key={item.key}>
+                  <CheckOption>
+                    <input type="checkbox" {...register(`checklist.${item.key}`)} />
+                    {item.label}
+                  </CheckOption>
+                  {itemErr?.message ? <p className="field-error">{itemErr.message}</p> : null}
+                </div>
+              );
+            })}
           </div>
         </div>
 
@@ -946,7 +1081,24 @@ export const EnrollNowPage: React.FC = () => {
           </div>
           <TextField label="Full name of the person who made the declaration" required register={register} name="declaration.declarantName" error={errors.declaration?.declarantName} />
           <p className="enrol-note">Name only</p>
-          <TextField label="Digital signature (typed name)" required register={register} name="declaration.signatureName" error={errors.declaration?.signatureName} />
+          <SignatureFieldRow
+            label="Digital signature"
+            required
+            value={values.declaration.signatureName?.trim() || null}
+            onChange={(v) => setValue('declaration.signatureName', v ?? '', { shouldValidate: true, shouldDirty: true })}
+            error={errors.declaration?.signatureName}
+            suggestionFrom={values.declaration.declarantName?.trim() || null}
+            onSuggestionClick={
+              values.declaration.declarantName?.trim()
+                ? () => {
+                    setValue('declaration.signatureName', values.declaration.declarantName.trim(), {
+                      shouldValidate: true,
+                      shouldDirty: true,
+                    });
+                  }
+                : undefined
+            }
+          />
           <DateField
             label="Declaration date"
             required

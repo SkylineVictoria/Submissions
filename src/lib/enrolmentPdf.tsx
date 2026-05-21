@@ -70,6 +70,24 @@ export async function generateEnrolmentPdfBlob(
   return pdf(doc).toBlob();
 }
 
+/** Base64 body only (no data: URL prefix) for edge function / Postmark. */
+export async function enrolmentPdfBlobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result !== 'string') {
+        reject(new Error('Could not read PDF'));
+        return;
+      }
+      const base64 = result.includes(',') ? result.split(',')[1]! : result;
+      resolve(base64);
+    };
+    reader.onerror = () => reject(reader.error ?? new Error('Could not read PDF'));
+    reader.readAsDataURL(blob);
+  });
+}
+
 export async function downloadEnrolmentPdf(
   values: EnrolmentFormValues,
   applicationNo: string | null,

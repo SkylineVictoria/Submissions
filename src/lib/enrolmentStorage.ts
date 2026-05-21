@@ -26,6 +26,22 @@ function safeName(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 80);
 }
 
+/** `fullPath` is stored as `bucket/object/path` (see uploadEnrolmentDocument). */
+export function parseEnrolmentStoragePath(fullPath: string): { bucket: string; objectPath: string } | null {
+  const trimmed = fullPath.trim();
+  const slash = trimmed.indexOf('/');
+  if (slash <= 0) return null;
+  return { bucket: trimmed.slice(0, slash), objectPath: trimmed.slice(slash + 1) };
+}
+
+/** Best-effort delete when replacing an attachment (avoids orphaned duplicates in storage). */
+export async function removeEnrolmentStorageObject(fullPath: string): Promise<void> {
+  const parsed = parseEnrolmentStoragePath(fullPath);
+  if (!parsed) return;
+  const { error } = await supabase.storage.from(parsed.bucket).remove([parsed.objectPath]);
+  if (error) console.warn('enrolment storage remove failed', fullPath, error.message);
+}
+
 async function uploadToBucket(
   bucket: string,
   path: string,
@@ -54,6 +70,8 @@ export async function uploadEnrolmentDocument(
   const primaryPath = `student-enrolments/${applicationId}/${section}/${fname}`;
   const fallbackPath = `${ADMISSIONS_PREFIX}/${applicationId}/${section}/${fname}`;
 
+  // Always use a unique object key per upload (timestamp prefix). Callers replace DB refs and
+  // should delete the previous object via removeEnrolmentStorageObject when re-uploading.
   let result = await uploadToBucket(BUCKET, primaryPath, file);
   let storagePath = primaryPath;
   let bucket = BUCKET;

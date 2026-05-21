@@ -5,13 +5,14 @@ import type { EnrolmentFileRef, EnrolmentFormValues } from '../types/enrolment';
 export const ENROLMENT_SESSION_CACHE_KEY = 'signflow.enrolment.session';
 export const ENROLMENT_SUBMITTED_CACHE_KEY = 'signflow.enrolment.submitted';
 
-/** Snapshot after submit — used to regenerate PDF on demand (not stored in DB). */
+/** Snapshot after submit — thank-you page messaging (not stored in DB). */
 export interface EnrolmentSubmittedCache {
   applicationId: string;
   applicationNo: string | null;
   values: EnrolmentFormValues;
   fileRefs: EnrolmentFileRef[];
   courseLabels: string[];
+  emailDeliveryNote?: string | null;
 }
 
 export interface EnrolmentSessionCache {
@@ -96,6 +97,8 @@ export function readEnrolmentSubmitted(): EnrolmentSubmittedCache | null {
       values: mergeEnrolmentPayload(parsed.values),
       fileRefs: Array.isArray(parsed.fileRefs) ? parsed.fileRefs : [],
       courseLabels: Array.isArray(parsed.courseLabels) ? parsed.courseLabels : [],
+      emailDeliveryNote:
+        typeof parsed.emailDeliveryNote === 'string' ? parsed.emailDeliveryNote : null,
     };
   } catch {
     return null;

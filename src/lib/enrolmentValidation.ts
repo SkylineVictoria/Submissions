@@ -179,7 +179,7 @@ export const enrolmentSubmitSchema = z
     declaration: z.object({
       items: z.record(z.string(), z.boolean()),
       declarantName: req('Declaration full name is required'),
-      signatureName: req('Digital signature (typed name) is required'),
+      signatureName: req('Digital signature is required'),
       signatureDate: req('Declaration date is required'),
     }),
   })
@@ -199,7 +199,8 @@ export const enrolmentSubmitSchema = z
       ctx.addIssue({ code: 'custom', message: mobileCheck.message, path: ['personal', 'mobile'] });
     }
 
-    const workCheck = validateEnrolmentPhone(data.personal.workPhone, phoneLocale, { required: false });
+    // Work / overseas phone: optional; always overseas format (10 digits, does not need to start with 0).
+    const workCheck = validateEnrolmentPhone(data.personal.workPhone, 'overseas', { required: false });
     if (!workCheck.ok) {
       ctx.addIssue({ code: 'custom', message: workCheck.message, path: ['personal', 'workPhone'] });
     }
@@ -253,7 +254,7 @@ export const enrolmentSubmitSchema = z
       ctx.addIssue({ code: 'custom', message: 'USI consent is required', path: ['usi', 'consent'] });
     }
     if (!data.usi.signatureName.trim()) {
-      ctx.addIssue({ code: 'custom', message: 'USI signature name is required', path: ['usi', 'signatureName'] });
+      ctx.addIssue({ code: 'custom', message: 'USI digital signature is required', path: ['usi', 'signatureName'] });
     }
 
     if (data.oshc.requirement === 'Yes' && !data.oshc.coverType.trim()) {
@@ -295,6 +296,7 @@ export const enrolmentSubmitSchema = z
     }
 
     for (const item of APPLICATION_CHECKLIST_ITEMS) {
+      if (!isEnrolmentChecklistItemRequired(data, item.key)) continue;
       if (!data.checklist[item.key]) {
         ctx.addIssue({
           code: 'custom',
@@ -366,3 +368,83 @@ function validateAddressFields(
 }
 
 export type EnrolmentSubmitValues = z.infer<typeof enrolmentSubmitSchema>;
+
+type EnrolmentChecklistContext = Pick<EnrolmentSubmitValues, 'courseCredit' | 'vet' | 'oshc'>;
+
+/** Whether a checklist acknowledgement applies for the current answers. */
+export function isEnrolmentChecklistItemRequired(data: EnrolmentChecklistContext, key: string): boolean {
+  switch (key) {
+    case 'credit_evidence':
+      return data.courseCredit === 'Yes';
+    case 'visa_oshc_details':
+      return data.vet.holdsAustralianVisa === 'Yes' || data.oshc.requirement === 'Already Have';
+    default:
+      return true;
+  }
+}
+
+export function requiredEnrolmentChecklistItems(data: EnrolmentChecklistContext) {
+  return APPLICATION_CHECKLIST_ITEMS.filter((item) => isEnrolmentChecklistItemRequired(data, item.key));
+}
+
+const RHF_ERROR_SKIP_KEYS = new Set(['ref', 'types', 'root', 'type']);
+
+/** Collect unique validation messages from react-hook-form errors (zod messages are field-specific). */
+export function collectEnrolmentValidationMessages(errors: unknown): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const visited = new WeakSet<object>();
+
+  const walk = (node: unknown): void => {
+    if (node == null || typeof node !== 'object') return;
+
+    if (visited.has(node)) return;
+    visited.add(node);
+
+    // FieldError leaf — do not recurse into ref (DOM nodes can be circular).
+    if ('message' in node) {
+      const raw = (node as { message?: unknown }).message;
+      if (typeof raw === 'string') {
+        const msg = raw.trim();
+        if (msg && !seen.has(msg)) {
+          seen.add(msg);
+          out.push(msg);
+        }
+      }
+      return;
+    }
+
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item);
+      return;
+    }
+
+    for (const [key, value] of Object.entries(node)) {
+      if (RHF_ERROR_SKIP_KEYS.has(key)) continue;
+      walk(value);
+    }
+  };
+
+  walk(errors);
+  return out;
+}
+
+/** User-facing toast when submit validation fails (multiline; shown top-right). */
+export function formatEnrolmentValidationToast(errors: unknown): string {
+  const messages = collectEnrolmentValidationMessages(errors);
+  if (messages.length === 0) {
+    return 'Please complete all required fields before submitting.';
+  }
+  if (messages.length === 1) {
+    return messages[0]!;
+  }
+  const max = 10;
+  const lines = messages.slice(0, max).map((m) => `• ${m}`);
+  if (messages.length > max) {
+    lines.push(`• …and ${messages.length - max} more`);
+  }
+  return `Please complete the following:\n${lines.join('\n')}`;
+}
+
+/** Longer display for validation lists in the toast (top-right). */
+export const ENROLMENT_VALIDATION_TOAST_MS = 12000;

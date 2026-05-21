@@ -1,6 +1,7 @@
 import React, { useId, useRef } from 'react';
 import { Paperclip } from 'lucide-react';
 import type { FieldError, UseFormRegister, UseFormSetValue } from 'react-hook-form';
+import { SignatureField } from '../form-fill/SignatureField';
 import { digitsOnlyPhone } from '../../lib/enrolmentValidation';
 import { DatePicker } from '../ui/DatePicker';
 import { MonthYearPicker } from '../ui/MonthYearPicker';
@@ -57,6 +58,39 @@ export function TextField({
     <div className="enrol-field">
       <FieldLabel required={required}>{label}</FieldLabel>
       <input type={type} placeholder={placeholder} {...register(name)} />
+      <FieldErrorMsg error={error} />
+    </div>
+  );
+}
+
+/** Draw or type signature (red pen / red italic text), same component as assessment forms. */
+export function SignatureFieldRow({
+  label,
+  required,
+  value,
+  onChange,
+  error,
+  suggestionFrom,
+  onSuggestionClick,
+}: {
+  label: string;
+  required?: boolean;
+  value: string | null;
+  onChange: (value: string | null) => void;
+  error?: FieldError;
+  suggestionFrom?: string | null;
+  onSuggestionClick?: () => void;
+}) {
+  return (
+    <div className="enrol-field">
+      <FieldLabel required={required}>{label}</FieldLabel>
+      <SignatureField
+        value={value}
+        onChange={onChange}
+        highlight
+        suggestionFrom={suggestionFrom}
+        onSuggestionClick={onSuggestionClick}
+      />
       <FieldErrorMsg error={error} />
     </div>
   );

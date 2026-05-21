@@ -1,4 +1,8 @@
-# Power Automate OTP Flow
+# Power Automate OTP Flow (deprecated)
+
+> **Replaced by Postmark.** See `docs/POSTMARK_OTP.md`. The edge functions no longer call Power Automate.
+
+# Power Automate OTP Flow (legacy)
 
 **Flow:** The app calls a Supabase Edge Function (`skyline-request-otp`). The Edge Function creates the OTP in the database and calls Power Automate server-side, so the OTP is **never sent to the client** and does not appear in the browser network tab.
 
