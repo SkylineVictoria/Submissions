@@ -265,7 +265,7 @@ export const EnrollNowPage: React.FC = () => {
       files = await uploadPendingFiles(id, pendingSnapshot);
       if (email) {
         const upserted = await createEnrolmentDraft(values, files);
-        if (!upserted.ok) {
+        if (!upserted.ok || !upserted.id) {
           toast.error(upserted.error ?? 'Could not save application');
           return null;
         }
