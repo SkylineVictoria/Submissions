@@ -51,6 +51,17 @@ function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
+/** Admissions inbox — always receives a record copy of each submission. */
+function getAdmissionsCopyEmail(): string {
+  return (
+    Deno.env.get('ENROLMENT_ADMISSIONS_EMAIL') ||
+    Deno.env.get('SKYLINE_ENROLMENT_ADMISSIONS_EMAIL') ||
+    'admissions@slit.edu.au'
+  )
+    .trim()
+    .toLowerCase();
+}
+
 function attachmentLabel(ref: FileRefInput): string {
   const key = `${ref.section ?? ''}.${ref.field ?? ''}`;
   return ATTACHMENT_LABELS[key] ?? ref.name ?? key;
@@ -169,11 +180,14 @@ Deno.serve(async (req) => {
     });
   }
 
+  const appNo = applicationNo ?? (appRow as { application_no?: string }).application_no ?? null;
+  const admissionsEmail = getAdmissionsCopyEmail();
+
   const studentResult = await sendEnrolmentEmailViaPostmark({
     to: applicantEmail,
     recipientName: applicantName,
-    applicationNo: applicationNo ?? (appRow as { application_no?: string }).application_no ?? null,
-    forAgent: false,
+    applicationNo: appNo,
+    audience: 'applicant',
     attachments,
   });
 
@@ -186,8 +200,8 @@ Deno.serve(async (req) => {
     const agentResult = await sendEnrolmentEmailViaPostmark({
       to: agentEmail,
       recipientName: applicantName || 'Applicant',
-      applicationNo: applicationNo ?? (appRow as { application_no?: string }).application_no ?? null,
-      forAgent: true,
+      applicationNo: appNo,
+      audience: 'agent',
       attachments,
     });
     if (!agentResult.ok) {
@@ -196,6 +210,7 @@ Deno.serve(async (req) => {
           success: true,
           applicantSent: true,
           agentSent: false,
+          admissionsSent: false,
           message: `Application emailed to ${applicantEmail}, but the agent copy failed: ${agentResult.message}`,
         },
         { status: 200, headers: corsHeaders }
@@ -204,14 +219,47 @@ Deno.serve(async (req) => {
     agentSent = true;
   }
 
+  let admissionsSent = false;
+  if (isValidEmail(admissionsEmail) && admissionsEmail !== applicantEmail && admissionsEmail !== agentEmail) {
+    const admissionsResult = await sendEnrolmentEmailViaPostmark({
+      to: admissionsEmail,
+      recipientName: applicantName || 'Applicant',
+      applicationNo: appNo,
+      audience: 'admissions',
+      applicantEmail,
+      attachments,
+    });
+    if (!admissionsResult.ok) {
+      const parts = [`Application emailed to ${applicantEmail}`];
+      if (agentSent) parts.push(agentEmail);
+      return Response.json(
+        {
+          success: true,
+          applicantSent: true,
+          agentSent,
+          admissionsSent: false,
+          message: `${parts.join(' and ')}. Admissions copy failed: ${admissionsResult.message}`,
+        },
+        { status: 200, headers: corsHeaders }
+      );
+    }
+    admissionsSent = true;
+  }
+
+  const messageParts = [`Application emailed to ${applicantEmail}`];
+  if (agentSent) messageParts.push(agentEmail);
+  if (admissionsSent) messageParts.push(admissionsEmail);
+
   return Response.json(
     {
       success: true,
       applicantSent: true,
       agentSent,
-      message: agentSent
-        ? `Application emailed to ${applicantEmail} and ${agentEmail}.`
-        : `Application emailed to ${applicantEmail}.`,
+      admissionsSent,
+      message:
+        messageParts.length > 1
+          ? `${messageParts.slice(0, -1).join(', ')} and ${messageParts[messageParts.length - 1]}.`
+          : `${messageParts[0]}.`,
     },
     { status: 200, headers: corsHeaders }
   );

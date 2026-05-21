@@ -67,7 +67,13 @@ If you change `postmarkOtp.ts`, update both copies (or redeploy both functions).
 
 ## Enrolment submission email
 
-Function: `skyline-send-enrolment-email` — sends application PDF + uploaded documents to the applicant; optional copy to agent when **Send a copy via email to the agent** is checked.
+Function: `skyline-send-enrolment-email` — sends application PDF + uploaded documents to:
+
+- the **applicant** (always)
+- **Admissions** (always, default `admissions@slit.edu.au` — internal record copy)
+- the **agent** (when **Send a copy via email to the agent** is checked)
+
+Optional secret: `ENROLMENT_ADMISSIONS_EMAIL` (or `SKYLINE_ENROLMENT_ADMISSIONS_EMAIL`) to override the admissions inbox.
 
 Uses the same Postmark secrets. Deploy:
 

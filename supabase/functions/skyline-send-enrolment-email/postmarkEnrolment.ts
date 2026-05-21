@@ -16,20 +16,31 @@ export function getPostmarkConfig(): { token: string; from: string; messageStrea
   return { token, from, messageStream: messageStream || undefined };
 }
 
+export type EnrolmentEmailAudience = 'applicant' | 'agent' | 'admissions';
+
 function buildEnrolmentEmailBodies(input: {
   recipientName: string;
   applicationNo: string | null;
-  forAgent: boolean;
+  audience: EnrolmentEmailAudience;
+  applicantEmail?: string;
 }): { subject: string; htmlBody: string; textBody: string } {
   const ref = input.applicationNo ? ` (reference ${input.applicationNo})` : '';
-  const subject = input.forAgent
-    ? `Student enrolment application copy${ref}`
-    : `Your Skyline enrolment application${ref}`;
+  const subject =
+    input.audience === 'admissions'
+      ? `New enrolment application submitted${ref}`
+      : input.audience === 'agent'
+        ? `Student enrolment application copy${ref}`
+        : `Your Skyline enrolment application${ref}`;
 
-  const intro = input.forAgent
-    ? `<p style="margin:0 0 16px 0;font-size:15px;line-height:1.5;color:#0f172a;">Hello,</p>
+  const intro =
+    input.audience === 'admissions'
+      ? `<p style="margin:0 0 16px 0;font-size:15px;line-height:1.5;color:#0f172a;">Hello Admissions,</p>
+<p style="margin:0 0 16px 0;font-size:15px;line-height:1.5;color:#0f172a;">A new international student enrolment application has been submitted online.</p>
+<p style="margin:0 0 16px 0;font-size:15px;line-height:1.5;color:#0f172a;"><strong>Applicant:</strong> ${escapeHtml(input.recipientName || '—')}${input.applicantEmail ? `<br/><strong>Email:</strong> ${escapeHtml(input.applicantEmail)}` : ''}</p>`
+      : input.audience === 'agent'
+        ? `<p style="margin:0 0 16px 0;font-size:15px;line-height:1.5;color:#0f172a;">Hello,</p>
 <p style="margin:0 0 16px 0;font-size:15px;line-height:1.5;color:#0f172a;">A copy of the international student enrolment application for <strong>${escapeHtml(input.recipientName)}</strong> is attached, as requested.</p>`
-    : `<p style="margin:0 0 16px 0;font-size:15px;line-height:1.5;color:#0f172a;">Hi${input.recipientName ? ` ${escapeHtml(input.recipientName)}` : ''},</p>
+        : `<p style="margin:0 0 16px 0;font-size:15px;line-height:1.5;color:#0f172a;">Hi${input.recipientName ? ` ${escapeHtml(input.recipientName)}` : ''},</p>
 <p style="margin:0 0 16px 0;font-size:15px;line-height:1.5;color:#0f172a;">Thank you for submitting your international student application to Skyline Institute of Technology.</p>`;
 
   const htmlBody = `<!DOCTYPE html>
@@ -52,9 +63,11 @@ ${intro}
 </body></html>`;
 
   const textBody = [
-    input.forAgent
-      ? `A copy of the enrolment application for ${input.recipientName} is attached.`
-      : `Thank you for submitting your international student application to Skyline Institute of Technology.`,
+    input.audience === 'admissions'
+      ? `New enrolment application submitted by ${input.recipientName || 'applicant'}${input.applicantEmail ? ` (${input.applicantEmail})` : ''}.`
+      : input.audience === 'agent'
+        ? `A copy of the enrolment application for ${input.recipientName} is attached.`
+        : `Thank you for submitting your international student application to Skyline Institute of Technology.`,
     '',
     'Attached: application form (PDF) and your uploaded documents.',
     input.applicationNo ? `Reference: ${input.applicationNo}` : '',
@@ -81,7 +94,8 @@ export async function sendEnrolmentEmailViaPostmark(input: {
   to: string;
   recipientName: string;
   applicationNo: string | null;
-  forAgent: boolean;
+  audience: EnrolmentEmailAudience;
+  applicantEmail?: string;
   attachments: PostmarkAttachment[];
 }): Promise<SendEnrolmentEmailResult> {
   const config = getPostmarkConfig();
@@ -92,7 +106,8 @@ export async function sendEnrolmentEmailViaPostmark(input: {
   const { subject, htmlBody, textBody } = buildEnrolmentEmailBodies({
     recipientName: input.recipientName,
     applicationNo: input.applicationNo,
-    forAgent: input.forAgent,
+    audience: input.audience,
+    applicantEmail: input.applicantEmail,
   });
 
   const payload: Record<string, unknown> = {
