@@ -7,11 +7,14 @@ import { registerPdfFonts } from '../utils/fontLoader';
 
 export const ENROLMENT_ATTACHMENT_LABELS: Record<string, string> = {
   'vet.passport': 'Passport',
-  'vet.visa': 'Visa',
+  'vet.visa': 'Visa copy',
+  'vet.visa_documents': 'Visa documents',
   'vet.english': 'English results',
+  'academic.documents': 'Academic documents',
   'disability.document': 'Disability support',
   'credit.evidence': 'RPL / credit evidence',
   'oshc.document': 'OSHC',
+  'oshc.health_insurance': 'Health insurance',
 };
 
 export function attachmentLabel(ref: EnrolmentFileRef): string {

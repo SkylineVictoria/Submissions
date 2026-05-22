@@ -161,7 +161,9 @@ export async function uploadInstructionImage(
 export async function uploadInductionDocument(
   submissionFolder: number | string,
   docKey: string,
-  file: File
+  file: File,
+  /** Unique suffix per file when a doc type allows multiple attachments (e.g. academic records). */
+  fileSlot?: string
 ): Promise<UploadResult> {
   const toUpload = await ensurePdfCompatibleImage(file);
   const folder =
@@ -173,13 +175,28 @@ export async function uploadInductionDocument(
   const safeFolder = folder.replace(/[^a-z0-9_-]/gi, '_').slice(0, 80);
   if (!safeFolder) return { url: null, error: 'Missing submission folder.' };
   const safeKey = String(docKey).replace(/[^a-z0-9_]/gi, '_').slice(0, 40);
-  /* Stable path (no timestamp) so re-upload replaces; no extension in key so PDF ↔ image swap does not leave two objects. */
-  const path = `${FOLDER}/induction/${safeFolder}/${safeKey}`;
+  const safeSlot = fileSlot
+    ? `_${String(fileSlot).replace(/[^a-z0-9_-]/gi, '_').slice(0, 80)}`
+    : '';
+  /* Single-file keys use a stable path (re-upload replaces). Multi-file keys pass a unique fileSlot. */
+  const path = `${FOLDER}/induction/${safeFolder}/${safeKey}${safeSlot}`;
 
-  const { error } = await supabase.storage.from(BUCKET).upload(path, toUpload, {
-    upsert: true,
+  let { error } = await supabase.storage.from(BUCKET).upload(path, toUpload, {
+    upsert: false,
     contentType: toUpload.type || 'application/octet-stream',
   });
+
+  if (error) {
+    const msg = (error.message || '').toLowerCase();
+    const duplicate =
+      msg.includes('already exists') || msg.includes('duplicate') || error.message === 'The resource already exists';
+    if (duplicate) {
+      ({ error } = await supabase.storage.from(BUCKET).upload(path, toUpload, {
+        upsert: true,
+        contentType: toUpload.type || 'application/octet-stream',
+      }));
+    }
+  }
 
   if (error) {
     console.error('uploadInductionDocument error', error);

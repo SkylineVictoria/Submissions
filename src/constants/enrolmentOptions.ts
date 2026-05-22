@@ -1,12 +1,17 @@
 export const ENROLMENT_DRAFT_STORAGE_KEY = 'signflow.enrolment.applicationId';
 
 export const TITLE_OPTIONS = [
-  { value: '', label: 'Select' },
+  { value: '', label: 'Select title' },
   { value: 'Mr', label: 'Mr' },
-  { value: 'Miss', label: 'Miss' },
-  { value: 'Ms', label: 'Ms' },
   { value: 'Mrs', label: 'Mrs' },
+  { value: 'Ms', label: 'Ms' },
+  { value: 'Miss', label: 'Miss' },
+  { value: 'Mx', label: 'Mx' },
   { value: 'Dr', label: 'Dr' },
+  { value: 'Prof', label: 'Prof' },
+  { value: 'Rev', label: 'Rev' },
+  { value: 'Hon', label: 'Hon' },
+  { value: 'Other', label: 'Other' },
 ];
 
 export const GENDER_OPTIONS = [

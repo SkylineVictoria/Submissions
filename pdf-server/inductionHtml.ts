@@ -141,10 +141,28 @@ function buildStep4DocumentListHtml(P: Record<string, unknown> | null): string {
   }
   return INDUCTION_INSTRUCTION_DOC_KEYS.map((key) => {
     const row = docs[key];
-    const url = row?.fileUrl ? String(row.fileUrl).trim() : '';
+    const urls: { url: string; name: string }[] = [];
+    const rawAttachments = row?.attachments;
+    if (Array.isArray(rawAttachments)) {
+      for (const a of rawAttachments) {
+        if (!a || typeof a !== 'object') continue;
+        const o = a as Record<string, unknown>;
+        const url = String(o.fileUrl ?? '').trim();
+        if (url) urls.push({ url, name: String(o.fileName ?? '').trim() });
+      }
+    }
+    if (!urls.length && row?.fileUrl) {
+      const url = String(row.fileUrl).trim();
+      if (url) urls.push({ url, name: String(row.fileName ?? '').trim() });
+    }
     const filePart =
-      row?.submitted === 'yes' && url
-        ? ` (<a href="${esc(url)}" style="color:#2563eb;text-decoration:underline;">Download</a>)`
+      row?.submitted === 'yes' && urls.length
+        ? ` (${urls
+            .map((f, i) => {
+              const label = f.name || (urls.length > 1 ? `File ${i + 1}` : 'Download');
+              return `<a href="${esc(f.url)}" style="color:#2563eb;text-decoration:underline;">${esc(label)}</a>`;
+            })
+            .join(', ')})`
         : '';
     return `<li style="font-size:10pt;margin:3px 0;line-height:1.45;"><strong>${esc(INDUCTION_INSTRUCTION_DOC_LABELS[key])}</strong> — Submitted: ${ynRadioPairPdf(row?.submitted)}${filePart}</li>`;
   }).join('');
@@ -177,7 +195,7 @@ function buildInductionInstructionWatermarkHtml(period: string, P: Record<string
     <ul class="induction-ul"><li>Complete the <strong>LLN quiz</strong></li></ul>
     <p style="margin:4px 0 0 4px;font-size:11pt;line-height:1.35;"><strong>Note:</strong> Link to the quiz is shared via email. If unable to find it, please contact the administrator.</p>
     <p class="step-title">Step 4: Submit documents</p>
-    <ul class="induction-ul"><li>Share the following documents to the email address <a href="mailto:studentsupport@slit.edu.au" style="color:#2563eb;">studentsupport@slit.edu.au</a>. Attachment is optional; you must record Yes or No for each item.</li></ul>
+    <ul class="induction-ul"><li>Share the following documents to the email address <a href="mailto:studentsupport@slit.edu.au" style="color:#2563eb;">studentsupport@slit.edu.au</a>. Select Yes or No for each item; an attachment is required when Yes is selected.</li></ul>
     <ul class="induction-nested" style="margin-left:12px;">
       ${buildStep4DocumentListHtml(P)}
     </ul>

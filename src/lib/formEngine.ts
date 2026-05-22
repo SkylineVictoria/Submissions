@@ -5372,7 +5372,13 @@ export async function getSkylineInductionSubmissionState(input: {
   accessToken: string;
   sessionToken: string;
 }): Promise<
-  | { ok: true; submitted: false; outsideWindow?: boolean }
+  | {
+      ok: true;
+      submitted: false;
+      outsideWindow?: boolean;
+      draftPayload?: Record<string, unknown>;
+      draftSavedAt?: string | null;
+    }
   | { ok: true; submitted: true; payload: Record<string, unknown> }
   | { ok: false; error: string }
 > {
@@ -5386,6 +5392,8 @@ export async function getSkylineInductionSubmissionState(input: {
     error?: string;
     submitted?: boolean;
     payload?: Record<string, unknown>;
+    draft_payload?: Record<string, unknown>;
+    draft_saved_at?: string | null;
     outside_window?: boolean;
   } | null;
   if (!j?.ok) return { ok: false, error: j?.error || 'Could not load submission state.' };
@@ -5394,7 +5402,25 @@ export async function getSkylineInductionSubmissionState(input: {
     ok: true,
     submitted: false,
     outsideWindow: j.outside_window === true,
+    draftPayload: j.draft_payload,
+    draftSavedAt: j.draft_saved_at ?? null,
   };
+}
+
+export async function saveSkylineInductionDraft(input: {
+  accessToken: string;
+  sessionToken: string;
+  payload: Record<string, unknown>;
+}): Promise<{ ok: true; savedAt?: string } | { ok: false; error: string }> {
+  const { data, error } = await supabase.rpc('skyline_induction_save_draft', {
+    p_access_token: input.accessToken,
+    p_session_token: input.sessionToken,
+    p_payload: input.payload,
+  });
+  if (error) return { ok: false, error: error.message };
+  const j = data as { ok?: boolean; error?: string; saved_at?: string } | null;
+  if (!j?.ok) return { ok: false, error: j?.error || 'Could not save draft.' };
+  return { ok: true, savedAt: j.saved_at };
 }
 
 export async function submitSkylineInductionForm(input: {

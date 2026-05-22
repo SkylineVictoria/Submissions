@@ -1,6 +1,7 @@
--- Run this in Supabase Dashboard > SQL Editor if cover image upload fails
--- Adds storage policies for photomedia bucket (skyline folder for form cover images)
--- SignFlow uses anon key for form builder; these policies allow upload/read.
+-- Run this in Supabase Dashboard > SQL Editor if uploads fail (induction Step 4, cover images, etc.)
+-- Adds storage policies for photomedia bucket (paths like skyline/induction/...).
+-- This fixes STORAGE only. Filenames on the induction form are shown by the frontend app — redeploy the web app after UI fixes.
+-- SignFlow uses anon key for public induction; these policies allow upload/read.
 
 -- INSERT: allow uploads to photomedia (anon + authenticated)
 DROP POLICY IF EXISTS "photomedia_allow_insert" ON storage.objects;

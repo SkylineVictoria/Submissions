@@ -6,10 +6,11 @@ import {
   AttachmentField,
   CheckboxGroup,
   CheckOption,
+  CourseMultiSelect,
   DateField,
   MonthYearField,
   YearField,
-  FieldErrorMsg,
+  MultiAttachmentField,
   PhoneField,
   PostcodeField,
   RadioGroup,
@@ -18,6 +19,7 @@ import {
   SelectField,
   SignatureFieldRow,
   TextField,
+  type EnrolmentAttachmentListItem,
 } from '../components/enrolment/EnrolmentFormUi';
 import {
   COUNTRY_OPTIONS,
@@ -35,7 +37,6 @@ import {
   LANGUAGE_OPTIONS,
   OSHC_COVER_OPTIONS,
   OSHC_OPTIONS,
-  PREFERENCE_CHOICE_OPTIONS,
   PRIOR_EDUCATION_OPTIONS,
   PRIOR_EDUCATION_TYPE_OPTIONS,
   SCHOOL_LEVEL_OPTIONS,
@@ -45,6 +46,7 @@ import {
 } from '../constants/enrolmentOptions';
 import {
   createEnrolmentDraft,
+  findEnrolmentDraftByEmail,
   loadEnrolmentDraft,
   saveEnrolmentDraft,
   sendEnrolmentSubmissionEmails,
@@ -61,6 +63,7 @@ import {
   clearEnrolmentSession,
   enrolmentSessionHasMeaningfulData,
   readEnrolmentSession,
+  readEnrolmentSessionByEmail,
   readEnrolmentSubmitted,
   readLegacyApplicationId,
   writeEnrolmentSession,
@@ -77,6 +80,7 @@ import {
   enrolmentSubmitSchema,
   ENROLMENT_VALIDATION_TOAST_MS,
   formatEnrolmentValidationToast,
+  isValidEnrolmentEmail,
   requiredEnrolmentChecklistItems,
 } from '../lib/enrolmentValidation';
 import { listCourses } from '../lib/formEngine';
@@ -84,7 +88,22 @@ import type { EnrolmentFileRef, EnrolmentFormValues } from '../types/enrolment';
 import { toast } from '../utils/toast';
 import '../styles/enrolmentForm.css';
 
-type PendingFile = { section: string; field: string; file: File };
+type PendingFile = { section: string; field: string; file: File; clientId: string };
+
+const ENROLMENT_MULTI_FILE_FIELDS = new Set(['visa_documents', 'documents', 'health_insurance']);
+
+function isMultiEnrolmentAttachmentField(section: string, field: string): boolean {
+  return ENROLMENT_MULTI_FILE_FIELDS.has(field) && (section === 'vet' || section === 'academic' || section === 'oshc');
+}
+
+function newPendingFile(section: string, field: string, file: File): PendingFile {
+  return {
+    section,
+    field,
+    file,
+    clientId: `p-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+  };
+}
 
 const initialSession = readEnrolmentSession();
 const initialSubmitted = readEnrolmentSubmitted();
@@ -132,14 +151,56 @@ export const EnrollNowPage: React.FC = () => {
     void listCourses().then((list) => {
       if (list.length > 0) {
         setCourseOpts(
-          list.map((c) => ({
-            value: String(c.id),
-            label: [c.qualification_code, c.name].filter(Boolean).join(' - ') || c.name,
-          }))
+          list.map((c) => {
+            const code = c.qualification_code?.trim() ?? '';
+            const name = c.name?.trim() ?? '';
+            const label =
+              code && name ? `${code} — ${name}` : code || name || `Course ${c.id}`;
+            return { value: String(c.id), label };
+          })
         );
       }
     });
   }, []);
+
+  /** Restore draft for this email from browser cache or server (same email after refresh). */
+  useEffect(() => {
+    if (submitted || sessionRestoredRef.current) return;
+    const email = values.personal.email.trim().toLowerCase();
+    if (!email || !isValidEnrolmentEmail(email)) return;
+
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        const cached = readEnrolmentSessionByEmail(email);
+        if (cached && enrolmentSessionHasMeaningfulData(cached.values)) {
+          reset(cached.values);
+          setFileRefs(cached.fileRefs);
+          setApplicationId(cached.applicationId);
+          sessionRestoredRef.current = true;
+          toast.success('Your saved application for this email has been restored.');
+          return;
+        }
+        const found = await findEnrolmentDraftByEmail(email);
+        if (!found.ok || !found.id) return;
+        const loaded = await loadEnrolmentDraft(found.id);
+        if (!loaded.ok || loaded.status === 'submitted') return;
+        if (!enrolmentSessionHasMeaningfulData(loaded.values)) return;
+        reset(loaded.values);
+        setFileRefs(loaded.files);
+        setApplicationId(found.id);
+        sessionRestoredRef.current = true;
+        writeEnrolmentSession({
+          applicationId: found.id,
+          values: loaded.values,
+          fileRefs: loaded.files,
+          updatedAt: Date.now(),
+        });
+        toast.success('Your saved application for this email has been restored.');
+      })();
+    }, 900);
+
+    return () => window.clearTimeout(timer);
+  }, [values.personal.email, submitted, reset]);
 
   // Persist form to sessionStorage while this browser tab is open (survives refresh).
   useEffect(() => {
@@ -190,10 +251,24 @@ export const EnrollNowPage: React.FC = () => {
       delete next[key];
       return next;
     });
+    const multi = isMultiEnrolmentAttachmentField(section, field);
     setPendingFiles((prev) => {
-      const rest = prev.filter((p) => !(p.section === section && p.field === field));
-      return file ? [...rest, { section, field, file }] : rest;
+      if (!file) {
+        return multi ? prev : prev.filter((p) => !(p.section === section && p.field === field));
+      }
+      const rest = multi ? prev : prev.filter((p) => !(p.section === section && p.field === field));
+      return [...rest, newPendingFile(section, field, file)];
     });
+  }, []);
+
+  const onMultiFileAdd = useCallback((section: string, field: string, file: File) => {
+    const key = `${section}.${field}`;
+    setFileErrors((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+    setPendingFiles((prev) => [...prev, newPendingFile(section, field, file)]);
   }, []);
 
   /** Upload a snapshot of pending picks once (avoids double upload when state has not re-rendered yet). */
@@ -205,17 +280,25 @@ export const EnrollNowPage: React.FC = () => {
       for (const p of queue) {
         const err = validateEnrolmentFile(p.file, maxBytesForField(p.field));
         if (err) throw new Error(err);
-        const previous = next.find((f) => f.section === p.section && f.field === p.field);
+        const multi = isMultiEnrolmentAttachmentField(p.section, p.field);
         const { ref, error } = await uploadEnrolmentDocument(appId, p.section, p.field, p.file);
         if (error || !ref) throw new Error(error ?? 'Upload failed');
-        if (previous?.path) await removeEnrolmentStorageObject(previous.path);
-        next = next.filter((f) => !(f.section === p.section && f.field === p.field));
+        if (!multi) {
+          const previous = next.find((f) => f.section === p.section && f.field === p.field);
+          if (previous?.path) await removeEnrolmentStorageObject(previous.path);
+          next = next.filter((f) => !(f.section === p.section && f.field === p.field));
+        }
         next.push(ref);
       }
 
       setFileRefs(next);
       setPendingFiles((prev) =>
-        prev.filter((p) => !queue.some((q) => q.section === p.section && q.field === p.field))
+        prev.filter(
+          (p) =>
+            !queue.some(
+              (q) => q.section === p.section && q.field === p.field && q.clientId === p.clientId
+            )
+        )
       );
       return next;
     },
@@ -298,6 +381,16 @@ export const EnrollNowPage: React.FC = () => {
     fileRefs.some((f) => f.section === section && f.field === field) ||
     pendingFiles.some((p) => p.section === section && p.field === field);
 
+  const listAttachments = (section: string, field: string): EnrolmentAttachmentListItem[] => {
+    const saved = fileRefs
+      .filter((f) => f.section === section && f.field === field)
+      .map((f) => ({ id: f.path, name: f.name, uploaded: true as const }));
+    const pending = pendingFiles
+      .filter((p) => p.section === section && p.field === field)
+      .map((p) => ({ id: p.clientId, name: p.file.name, uploaded: false as const }));
+    return [...saved, ...pending];
+  };
+
   const attachmentInfo = (section: string, field: string) => {
     const pending = pendingFiles.find((p) => p.section === section && p.field === field);
     if (pending) return { name: pending.file.name, uploaded: false as const };
@@ -306,11 +399,28 @@ export const EnrollNowPage: React.FC = () => {
     return { name: null, uploaded: false as const };
   };
 
-  const clearAttachment = (section: string, field: string) => {
-    const existing = fileRefs.find((f) => f.section === section && f.field === field);
-    if (existing?.path) void removeEnrolmentStorageObject(existing.path);
-    setPendingFiles((prev) => prev.filter((p) => !(p.section === section && p.field === field)));
-    setFileRefs((prev) => prev.filter((f) => !(f.section === section && f.field === field)));
+  const clearAttachment = (section: string, field: string, itemId?: string) => {
+    if (itemId) {
+      const existing = fileRefs.find(
+        (f) => f.section === section && f.field === field && f.path === itemId
+      );
+      if (existing?.path) void removeEnrolmentStorageObject(existing.path);
+      setFileRefs((prev) =>
+        prev.filter((f) => !(f.section === section && f.field === field && f.path === itemId))
+      );
+      setPendingFiles((prev) =>
+        prev.filter(
+          (p) => !(p.section === section && p.field === field && p.clientId === itemId)
+        )
+      );
+    } else {
+      const existing = fileRefs.filter((f) => f.section === section && f.field === field);
+      for (const f of existing) {
+        if (f.path) void removeEnrolmentStorageObject(f.path);
+      }
+      setPendingFiles((prev) => prev.filter((p) => !(p.section === section && p.field === field)));
+      setFileRefs((prev) => prev.filter((f) => !(f.section === section && f.field === field)));
+    }
     setFileErrors((prev) => {
       const next = { ...prev };
       delete next[`${section}.${field}`];
@@ -514,21 +624,25 @@ export const EnrollNowPage: React.FC = () => {
 
   return (
     <div className="enrol-form min-h-screen">
-      <SlitDocumentHeader className="mb-6" />
+      <div className="enrol-form-brand">
+        <SlitDocumentHeader />
+      </div>
       <h1 className="page-title">International Student&apos;s Application Form</h1>
       <p className="intro">
         Complete all sections below, attach required documents, and use an email address you check regularly. Your
-        progress is saved automatically in this browser tab while it stays open (including after refresh). Use Save and
-        Exit to also store a copy on our server.
+        progress is saved automatically in this browser (including after refresh) for the same email. Use Save and Exit
+        to also store a copy on our server.
       </p>
 
       <form onSubmit={onSubmit} noValidate>
         <SectionHeading>1. Personal Details</SectionHeading>
         <div className="enrol-section">
           <SelectField label="Title" required register={register} name="personal.title" error={errors.personal?.title} options={TITLE_OPTIONS} />
-          <TextField label="First Name" required register={register} name="personal.firstName" error={errors.personal?.firstName} />
-          <TextField label="Middle Name (if applicable)" register={register} name="personal.middleName" />
-          <TextField label="Last Name" required register={register} name="personal.lastName" error={errors.personal?.lastName} />
+          <div className="enrol-grid-2">
+            <TextField label="Given name" required register={register} name="personal.firstName" error={errors.personal?.firstName} />
+            <TextField label="Middle name (if applicable)" register={register} name="personal.middleName" />
+          </div>
+          <TextField label="Surname" required register={register} name="personal.lastName" error={errors.personal?.lastName} />
           <DateField
             label="Date of Birth"
             required
@@ -678,9 +792,17 @@ export const EnrollNowPage: React.FC = () => {
         <SectionHeading>3. Passport and Visa Details</SectionHeading>
         <div className="enrol-section">
           <RadioGroup label="Do you currently hold a valid Australian visa?" required name="visa" options={YES_NO_OPTIONS} value={values.vet.holdsAustralianVisa} onChange={(v) => setValue('vet.holdsAustralianVisa', v)} />
+          <MultiAttachmentField
+            label="Visa documents"
+            files={listAttachments('vet', 'visa_documents')}
+            onAdd={(file) => onMultiFileAdd('vet', 'visa_documents', file)}
+            onRemove={(id) => clearAttachment('vet', 'visa_documents', id)}
+            error={fileErrors['vet.visa_documents']}
+            hint="Optional. Attach visa grant letters, VEVO screenshots, or other visa-related documents. Multiple files allowed."
+          />
           {values.vet.holdsAustralianVisa === 'Yes' && (
             <AttachmentField
-              label="Upload visa copy"
+              label="Current visa copy (required when you hold a valid Australian visa)"
               required
               onPick={(file) => onFilePick('vet', 'visa', file)}
               onClear={() => clearAttachment('vet', 'visa')}
@@ -850,6 +972,18 @@ export const EnrollNowPage: React.FC = () => {
           )}
         </div>
 
+        <SectionHeading>4a. Academic documents</SectionHeading>
+        <div className="enrol-section">
+          <MultiAttachmentField
+            label="Academic records and qualifications"
+            files={listAttachments('academic', 'documents')}
+            onAdd={(file) => onMultiFileAdd('academic', 'documents', file)}
+            onRemove={(id) => clearAttachment('academic', 'documents', id)}
+            error={fileErrors['academic.documents']}
+            hint="Optional. Upload certificates, transcripts, or other academic documents (from year 10 onwards). You may attach multiple files."
+          />
+        </div>
+
         <SectionHeading>5. Unique Student Identifier (USI)</SectionHeading>
         <div className="enrol-section">
           <p className="enrol-note">
@@ -933,18 +1067,16 @@ export const EnrollNowPage: React.FC = () => {
           <RadioGroup label="Is your emergency contact in Australia?" required name="ecAus" options={YES_NO_OPTIONS} value={values.emergency.inAustralia} onChange={(v) => setValue('emergency.inAustralia', v)} />
         </div>
 
-        <SectionHeading>7. Course Information</SectionHeading>
+        <SectionHeading>7. Course information</SectionHeading>
         <div className="enrol-section">
-          <CheckboxGroup
-            label="Which courses would you like to study?"
+          <CourseMultiSelect
+            label="Course name (course code and title)"
+            required
             options={courseOpts}
             values={values.course.courseIds}
-            onToggle={(val, on) => {
-              const cur = values.course.courseIds;
-              setValue('course.courseIds', on ? [...cur, val] : cur.filter((x) => x !== val));
-            }}
+            onChange={(ids) => setValue('course.courseIds', ids, { shouldValidate: true })}
+            error={errors.course?.courseIds?.message}
           />
-          <FieldErrorMsg error={errors.course?.courseIds?.message} />
           <MonthYearField
             label="Preferred intake (MM/YYYY)"
             value={values.course.preferredIntake}
@@ -954,24 +1086,6 @@ export const EnrollNowPage: React.FC = () => {
           <p className="enrol-note">
             Please contact admissions for intake dates and fees. SLIT cannot guarantee availability of your selected schedule.
           </p>
-          <CheckboxGroup
-            label="Course Preference Priority"
-            options={PREFERENCE_CHOICE_OPTIONS}
-            values={values.course.coursePreferencePriority}
-            onToggle={(val, on) => {
-              const cur = values.course.coursePreferencePriority;
-              setValue('course.coursePreferencePriority', on ? [...cur, val] : cur.filter((x) => x !== val));
-            }}
-          />
-          <CheckboxGroup
-            label="Additional Preference Priority"
-            options={PREFERENCE_CHOICE_OPTIONS}
-            values={values.course.additionalPreferencePriority}
-            onToggle={(val, on) => {
-              const cur = values.course.additionalPreferencePriority;
-              setValue('course.additionalPreferencePriority', on ? [...cur, val] : cur.filter((x) => x !== val));
-            }}
-          />
         </div>
 
         <SectionHeading>8. Study Reason</SectionHeading>
@@ -999,8 +1113,16 @@ export const EnrollNowPage: React.FC = () => {
           )}
         </div>
 
-        <SectionHeading>10. OSHC / Health Insurance</SectionHeading>
+        <SectionHeading>10. OSHC / Health insurance</SectionHeading>
         <div className="enrol-section">
+          <MultiAttachmentField
+            label="Health insurance documents"
+            files={listAttachments('oshc', 'health_insurance')}
+            onAdd={(file) => onMultiFileAdd('oshc', 'health_insurance', file)}
+            onRemove={(id) => clearAttachment('oshc', 'health_insurance', id)}
+            error={fileErrors['oshc.health_insurance']}
+            hint="Optional. Attach OSHC or other health insurance certificates (multiple files allowed). Not required to submit."
+          />
           <SelectField label="Require SLIT to obtain OSHC on your behalf?" required register={register} name="oshc.requirement" options={[{ value: '', label: 'Select' }, ...OSHC_OPTIONS]} error={errors.oshc?.requirement} />
           {values.oshc.requirement === 'Yes' && (
             <SelectField label="Cover type" required register={register} name="oshc.coverType" options={[{ value: '', label: 'Select' }, ...OSHC_COVER_OPTIONS]} />

@@ -7,7 +7,6 @@ import {
   INDIGENOUS_OPTIONS,
   PRIOR_EDUCATION_OPTIONS,
   PRIOR_EDUCATION_TYPE_OPTIONS,
-  PREFERENCE_CHOICE_OPTIONS,
   STUDY_REASON_OPTIONS,
   YES_NO_OPTIONS,
 } from '../../constants/enrolmentOptions';
@@ -247,6 +246,31 @@ function AttachmentRow({
   );
 }
 
+function AttachmentListRow({ label, files }: { label: string; files: EnrolmentFileRef[] }) {
+  return (
+    <BorderedRow label={label}>
+      {files.length === 0 ? (
+        <Text>Not provided</Text>
+      ) : (
+        <View>
+          {files.map((file) => (
+            <View key={file.path} style={{ marginBottom: 6 }}>
+              <Text style={styles.fileName}>{file.name}</Text>
+              <Link src={file.publicUrl} style={styles.linkButton}>
+                <Text style={styles.linkButtonText}>Open attachment</Text>
+              </Link>
+            </View>
+          ))}
+        </View>
+      )}
+    </BorderedRow>
+  );
+}
+
+function filesAt(fileRefs: EnrolmentFileRef[], section: string, field: string): EnrolmentFileRef[] {
+  return fileRefs.filter((f) => f.section === section && f.field === field);
+}
+
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <View style={styles.section}>
@@ -282,14 +306,25 @@ export const EnrolmentPdfDocument: React.FC<EnrolmentPdfDocumentProps> = ({
 
   const passportFile = fileAt(fileRefs, 'vet', 'passport');
   const visaFile = fileAt(fileRefs, 'vet', 'visa');
+  const visaDocuments = filesAt(fileRefs, 'vet', 'visa_documents');
+  const academicDocuments = filesAt(fileRefs, 'academic', 'documents');
   const englishFile = fileAt(fileRefs, 'vet', 'english');
   const disabilityFile = fileAt(fileRefs, 'disability', 'document');
   const creditFile = fileAt(fileRefs, 'credit', 'evidence');
   const oshcFile = fileAt(fileRefs, 'oshc', 'document');
+  const healthInsuranceFiles = filesAt(fileRefs, 'oshc', 'health_insurance');
+
+  const logoSrc =
+    typeof window !== 'undefined' && window.location?.origin
+      ? `${window.location.origin}/logo-text.png`
+      : '/logo-text.png';
 
   return (
     <Document title="International Student Application">
       <Page size="A4" style={styles.page} wrap>
+        <View style={{ alignItems: 'center', marginBottom: 10 }}>
+          <Image src={logoSrc} style={{ height: 44, maxWidth: 200, objectFit: 'contain' }} />
+        </View>
         <Text style={styles.title}>International Student&apos;s Application Form</Text>
         <Text style={styles.subtitle}>
           Skyline Institute of Technology
@@ -300,6 +335,10 @@ export const EnrolmentPdfDocument: React.FC<EnrolmentPdfDocumentProps> = ({
         </Text>
 
         <Section title="1. Personal Details">
+          <TextRow label="Title" value={values.personal.title} />
+          <TextRow label="Given name" value={values.personal.firstName} />
+          <TextRow label="Middle name" value={values.personal.middleName} />
+          <TextRow label="Surname" value={values.personal.lastName} />
           <TextRow label="Full name" value={name} />
           <TextRow label="Date of birth" value={values.personal.dateOfBirth} />
           <TextRow label="Gender" value={values.personal.gender} />
@@ -315,6 +354,7 @@ export const EnrolmentPdfDocument: React.FC<EnrolmentPdfDocumentProps> = ({
 
         <Section title="3. Passport and Visa">
           <YesNoRow label="Valid Australian visa" value={values.vet.holdsAustralianVisa} />
+          <AttachmentListRow label="Visa documents" files={visaDocuments} />
           {values.vet.holdsAustralianVisa === 'Yes' && (
             <AttachmentRow label="Visa copy" file={visaFile} />
           )}
@@ -383,6 +423,10 @@ export const EnrolmentPdfDocument: React.FC<EnrolmentPdfDocumentProps> = ({
           )}
         </Section>
 
+        <Section title="4a. Academic documents">
+          <AttachmentListRow label="Academic records" files={academicDocuments} />
+        </Section>
+
         <Section title="5. USI">
           <YesNoRow label="Has USI" value={values.usi.hasUsi} />
           <TextRow label="USI number" value={values.usi.usiNumber} />
@@ -417,28 +461,6 @@ export const EnrolmentPdfDocument: React.FC<EnrolmentPdfDocumentProps> = ({
             </View>
           </BorderedRow>
           <TextRow label="Preferred intake" value={values.course.preferredIntake} />
-          <BorderedRow label="Course preference priority">
-            <View>
-              {PREFERENCE_CHOICE_OPTIONS.map((opt) => (
-                <CheckboxItem
-                  key={opt.value}
-                  label={opt.label}
-                  checked={values.course.coursePreferencePriority.includes(opt.value)}
-                />
-              ))}
-            </View>
-          </BorderedRow>
-          <BorderedRow label="Additional preference priority">
-            <View>
-              {PREFERENCE_CHOICE_OPTIONS.map((opt) => (
-                <CheckboxItem
-                  key={opt.value}
-                  label={opt.label}
-                  checked={values.course.additionalPreferencePriority.includes(opt.value)}
-                />
-              ))}
-            </View>
-          </BorderedRow>
         </Section>
 
         <Section title="8. Study Reason">
@@ -456,7 +478,8 @@ export const EnrolmentPdfDocument: React.FC<EnrolmentPdfDocumentProps> = ({
           )}
         </Section>
 
-        <Section title="10. OSHC">
+        <Section title="10. OSHC / Health insurance">
+          <AttachmentListRow label="Health insurance documents" files={healthInsuranceFiles} />
           <TextRow label="OSHC requirement" value={values.oshc.requirement} />
           <TextRow label="Cover type" value={values.oshc.coverType} />
           <TextRow label="Provider" value={values.oshc.providerName} />

@@ -327,6 +327,139 @@ export function YearField({
   );
 }
 
+export type EnrolmentAttachmentListItem = {
+  id: string;
+  name: string;
+  uploaded: boolean;
+};
+
+export function MultiAttachmentField({
+  label,
+  required,
+  accept = '.jpg,.jpeg,.png,.gif,.pdf',
+  hint,
+  error,
+  files,
+  onAdd,
+  onRemove,
+}: {
+  label: string;
+  required?: boolean;
+  accept?: string;
+  hint?: string;
+  error?: FieldError | string;
+  files: EnrolmentAttachmentListItem[];
+  onAdd: (file: File) => void;
+  onRemove: (id: string) => void;
+}) {
+  const inputId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  return (
+    <div className="enrol-field enrol-attachment-field">
+      <FieldLabel required={required}>{label}</FieldLabel>
+      <div className="enrol-attachment-row">
+        <input
+          ref={inputRef}
+          id={inputId}
+          type="file"
+          accept={accept}
+          multiple
+          className="enrol-attachment-input"
+          onChange={(e) => {
+            const list = e.target.files;
+            if (list?.length) {
+              for (const f of Array.from(list)) onAdd(f);
+            }
+            e.target.value = '';
+          }}
+        />
+        <button
+          type="button"
+          className="enrol-btn-attachment"
+          onClick={() => inputRef.current?.click()}
+        >
+          <Paperclip className="enrol-attachment-icon" strokeWidth={2} aria-hidden />
+          {files.length > 0 ? 'Add more files' : 'Choose attachment(s)'}
+        </button>
+      </div>
+      {files.length > 0 ? (
+        <ul className="enrol-attachment-file-list">
+          {files.map((f) => (
+            <li key={f.id} className="enrol-attachment-file-item">
+              <span className="enrol-attachment-file-name" title={f.name}>
+                {f.name}
+              </span>
+              <span className="enrol-attachment-file-meta">{f.uploaded ? 'Saved' : 'Ready to upload'}</span>
+              <button type="button" className="enrol-btn-attachment-clear" onClick={() => onRemove(f.id)}>
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="enrol-attachment-hint">No files chosen — you can attach more than one document.</p>
+      )}
+      {hint ? <p className="enrol-note">{hint}</p> : null}
+      <FieldErrorMsg error={error} />
+    </div>
+  );
+}
+
+export function CourseMultiSelect({
+  label,
+  required,
+  options,
+  values,
+  onChange,
+  error,
+}: {
+  label: string;
+  required?: boolean;
+  options: { value: string; label: string }[];
+  values: string[];
+  onChange: (next: string[]) => void;
+  error?: FieldError | string;
+}) {
+  const selectId = useId();
+  const listSize = Math.min(Math.max(options.length, 4), 8);
+
+  return (
+    <div className="enrol-field enrol-course-multi">
+      <FieldLabel required={required}>{label}</FieldLabel>
+      <p className="enrol-note enrol-course-multi-hint">
+        Each option shows course code and name. On a phone, tap to select; on a computer, hold Ctrl (Windows) or Cmd
+        (Mac) to select more than one.
+      </p>
+      <select
+        id={selectId}
+        multiple
+        size={listSize}
+        className="enrol-course-multi-select"
+        value={values}
+        onChange={(e) => {
+          const selected = Array.from(e.target.selectedOptions).map((o) => o.value);
+          onChange(selected);
+        }}
+      >
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      {values.length > 0 ? (
+        <ul className="enrol-selected-courses" aria-label="Selected courses">
+          {values.map((id) => (
+            <li key={id}>{options.find((o) => o.value === id)?.label ?? id}</li>
+          ))}
+        </ul>
+      ) : null}
+      <FieldErrorMsg error={error} />
+    </div>
+  );
+}
+
 export function AttachmentField({
   label,
   required,

@@ -5,6 +5,10 @@ import type { EnrolmentFileRef, EnrolmentFormValues } from '../types/enrolment';
 export const ENROLMENT_SESSION_CACHE_KEY = 'signflow.enrolment.session';
 export const ENROLMENT_SUBMITTED_CACHE_KEY = 'signflow.enrolment.submitted';
 
+function enrolmentEmailCacheKey(email: string): string {
+  return `signflow.enrolment.byEmail.v1.${email.trim().toLowerCase()}`;
+}
+
 /** Snapshot after submit — thank-you page messaging (not stored in DB). */
 export interface EnrolmentSubmittedCache {
   applicationId: string;
@@ -55,8 +59,32 @@ export function writeEnrolmentSession(cache: EnrolmentSessionCache): void {
     if (cache.applicationId) {
       sessionStorage.setItem(ENROLMENT_DRAFT_STORAGE_KEY, cache.applicationId);
     }
+    const email = cache.values.personal.email.trim().toLowerCase();
+    if (email) {
+      localStorage.setItem(enrolmentEmailCacheKey(email), JSON.stringify(cache));
+    }
   } catch {
     /* quota / private mode */
+  }
+}
+
+/** Same-browser draft for an email (survives refresh and new tabs). */
+export function readEnrolmentSessionByEmail(email: string): EnrolmentSessionCache | null {
+  const key = email.trim().toLowerCase();
+  if (!key) return null;
+  try {
+    const raw = localStorage.getItem(enrolmentEmailCacheKey(key));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<EnrolmentSessionCache>;
+    if (!parsed || typeof parsed !== 'object') return null;
+    return {
+      applicationId: typeof parsed.applicationId === 'string' ? parsed.applicationId : null,
+      values: mergeEnrolmentPayload(parsed.values),
+      fileRefs: Array.isArray(parsed.fileRefs) ? parsed.fileRefs : [],
+      updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0,
+    };
+  } catch {
+    return null;
   }
 }
 

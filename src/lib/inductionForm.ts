@@ -1,6 +1,7 @@
 /** Induction web form payload (checklist, enrolment, media) — stored in skyline_induction_submissions.payload */
 
 import { format, isValid, parse } from 'date-fns';
+import { isValidEnrolmentEmail, validateEnrolmentPhoneEither } from './enrolmentValidation';
 
 const ISO_DATE = 'yyyy-MM-dd';
 
@@ -149,6 +150,85 @@ function mirrorSignatureGroup(
   });
 }
 
+/** When the user is actively editing one box, always copy that value to every mirrored field (no prefix match). */
+function mirrorSignatureGroupFromActiveEditor(
+  primary: string,
+  mutators: Array<{ read: () => string; write: (v: string) => void }>
+): void {
+  mutators.forEach(({ write }) => write(primary));
+}
+
+function mirrorNameGroupFromActiveEditor(
+  primary: string,
+  mutators: Array<{ read: () => string; write: (v: string) => void }>
+): void {
+  mutators.forEach(({ write }) => write(primary));
+}
+
+/** Which name field the user is editing — used as sync source so backspace is not overwritten by longer mirrored copies (Android). */
+export type InductionNameMirrorField = 'checklist_full_name' | 'enrolment_names' | 'media_student_name';
+
+export type InductionSignatureMirrorField = 'checklist_declaration' | 'enrolment_declaration' | 'media_ack';
+
+export type InductionDateMirrorField = 'checklist_declaration' | 'enrolment_declaration' | 'media_ack';
+
+export type InductionFormSyncOptions = {
+  activeNameField?: InductionNameMirrorField;
+  activeSignatureField?: InductionSignatureMirrorField;
+  activeDateField?: InductionDateMirrorField;
+};
+
+function readNameMirrorField(p: InductionFormPayload, field: InductionNameMirrorField): string {
+  switch (field) {
+    case 'checklist_full_name':
+      return String(p.checklistHeader.fullName ?? '');
+    case 'enrolment_names':
+      return joinEnrolmentNameRaw(p.enrolment);
+    case 'media_student_name':
+      return String(p.mediaAck.studentName ?? '');
+  }
+}
+
+function readSignatureMirrorField(p: InductionFormPayload, field: InductionSignatureMirrorField): string {
+  switch (field) {
+    case 'checklist_declaration':
+      return String(p.checklistDeclaration.signature ?? '');
+    case 'enrolment_declaration':
+      return String(p.enrolment.declarationSignature ?? '');
+    case 'media_ack':
+      return String(p.mediaAck.studentSignature ?? '');
+  }
+}
+
+function readDateMirrorField(p: InductionFormPayload, field: InductionDateMirrorField): string {
+  switch (field) {
+    case 'checklist_declaration':
+      return String(p.checklistDeclaration.date ?? '');
+    case 'enrolment_declaration':
+      return String(p.enrolment.declarationDate ?? '');
+    case 'media_ack':
+      return String(p.mediaAck.date ?? '');
+  }
+}
+
+function resolveNameMirrorPrimary(p: InductionFormPayload, opts?: InductionFormSyncOptions): string {
+  if (opts?.activeNameField) return readNameMirrorField(p, opts.activeNameField);
+  return pickSignatureMirrorSource([
+    p.checklistHeader.fullName,
+    joinEnrolmentNameRaw(p.enrolment),
+    p.mediaAck.studentName,
+  ]);
+}
+
+function resolveSignatureMirrorPrimary(p: InductionFormPayload, opts?: InductionFormSyncOptions): string {
+  if (opts?.activeSignatureField) return readSignatureMirrorField(p, opts.activeSignatureField);
+  return pickSignatureMirrorSource([
+    p.checklistDeclaration.signature,
+    p.enrolment.declarationSignature,
+    p.mediaAck.studentSignature,
+  ]);
+}
+
 /** Combined enrolment name for mirror read (same logical string as checklist full name / media student name). */
 function joinEnrolmentNameRaw(e: EnrolmentFormState): string {
   const g = String(e.givenNames ?? '');
@@ -183,13 +263,24 @@ function mirrorDeclDates(next: InductionFormPayload, primary: string): void {
   });
 }
 
+/** When the user picks a date on one page, copy it to every mirrored declaration date (no prefix match). */
+function mirrorDeclDatesFromActiveEditor(next: InductionFormPayload, primary: string): void {
+  const iso = normalizeInductionDateToIso(primary);
+  next.checklistDeclaration.date = iso;
+  next.enrolment.declarationDate = iso;
+  next.mediaAck.date = iso;
+}
+
 /**
  * Copy student full name (checklist header ↔ enrolment given+family ↔ CCTV student name), declaration signatures,
  * and declaration dates across the three places each. Uses the same raw-string mirror rules for names as for
  * signatures (backspace / spaces stay aligned). Enrolment stores the split last token as family name.
  * Optional consent block names and consent date are not mirrored.
  */
-export function synchronizeInductionDerivedFields(p: InductionFormPayload): InductionFormPayload {
+export function synchronizeInductionDerivedFields(
+  p: InductionFormPayload,
+  opts?: InductionFormSyncOptions
+): InductionFormPayload {
   const next: InductionFormPayload = {
     ...p,
     checklistHeader: { ...p.checklistHeader },
@@ -198,7 +289,7 @@ export function synchronizeInductionDerivedFields(p: InductionFormPayload): Indu
     mediaAck: { ...p.mediaAck },
     mediaConsent: { ...p.mediaConsent },
     loginSetup: { ...mergeLoginSetup(p.loginSetup) },
-    documents: mergeInductionDocuments(p.documents),
+    documents: preserveInductionDocumentsForEdit(p.documents),
   };
 
   /* Mirrored student names (checklist ↔ enrolment given+family ↔ CCTV ack): same raw-string rules as signatures. */
@@ -235,41 +326,47 @@ export function synchronizeInductionDerivedFields(p: InductionFormPayload): Indu
     }
   }
 
-  const namePrimary = pickSignatureMirrorSource([
-    next.checklistHeader.fullName,
-    joinEnrolmentNameRaw(next.enrolment),
-    next.mediaAck.studentName,
-  ]);
-  mirrorSignatureGroup(namePrimary, [
-    { read: () => next.checklistHeader.fullName, write: (v) => { next.checklistHeader.fullName = v; } },
+  const nameMutators = [
+    { read: () => next.checklistHeader.fullName, write: (v: string) => { next.checklistHeader.fullName = v; } },
     {
       read: () => joinEnrolmentNameRaw(next.enrolment),
-      write: (v) => {
+      write: (v: string) => {
         const s = splitFullNameToEnrolment(v);
         next.enrolment = { ...next.enrolment, givenNames: s.givenNames, familyName: s.familyName };
       },
     },
-    { read: () => next.mediaAck.studentName, write: (v) => { next.mediaAck.studentName = v; } },
-  ]);
+    { read: () => next.mediaAck.studentName, write: (v: string) => { next.mediaAck.studentName = v; } },
+  ];
+  if (opts?.activeNameField) {
+    mirrorNameGroupFromActiveEditor(readNameMirrorField(next, opts.activeNameField), nameMutators);
+  } else {
+    const namePrimary = resolveNameMirrorPrimary(next, opts);
+    mirrorSignatureGroup(namePrimary, nameMutators);
+  }
 
   /* Student signatures only — optional media consent signature may be a different person; do not mirror. */
-  const sigPrimary = pickSignatureMirrorSource([
-    next.checklistDeclaration.signature,
-    next.enrolment.declarationSignature,
-    next.mediaAck.studentSignature,
-  ]);
-  mirrorSignatureGroup(sigPrimary, [
-    { read: () => next.checklistDeclaration.signature, write: (v) => { next.checklistDeclaration.signature = v; } },
-    { read: () => next.enrolment.declarationSignature, write: (v) => { next.enrolment.declarationSignature = v; } },
-    { read: () => next.mediaAck.studentSignature, write: (v) => { next.mediaAck.studentSignature = v; } },
-  ]);
+  const sigMutators = [
+    { read: () => next.checklistDeclaration.signature, write: (v: string) => { next.checklistDeclaration.signature = v; } },
+    { read: () => next.enrolment.declarationSignature, write: (v: string) => { next.enrolment.declarationSignature = v; } },
+    { read: () => next.mediaAck.studentSignature, write: (v: string) => { next.mediaAck.studentSignature = v; } },
+  ];
+  if (opts?.activeSignatureField) {
+    mirrorSignatureGroupFromActiveEditor(readSignatureMirrorField(next, opts.activeSignatureField), sigMutators);
+  } else {
+    const sigPrimary = resolveSignatureMirrorPrimary(next, opts);
+    mirrorSignatureGroup(sigPrimary, sigMutators);
+  }
 
-  const declDatePrimary = pickPrimaryMirrorSource([
-    next.checklistDeclaration.date,
-    next.enrolment.declarationDate,
-    next.mediaAck.date,
-  ]);
-  mirrorDeclDates(next, declDatePrimary);
+  if (opts?.activeDateField) {
+    mirrorDeclDatesFromActiveEditor(next, readDateMirrorField(next, opts.activeDateField));
+  } else {
+    const declDatePrimary = pickPrimaryMirrorSource([
+      next.checklistDeclaration.date,
+      next.enrolment.declarationDate,
+      next.mediaAck.date,
+    ]);
+    mirrorDeclDates(next, declDatePrimary);
+  }
 
   return next;
 }
@@ -373,12 +470,60 @@ export const INDUCTION_DOCUMENT_LABELS: Record<InductionDocumentKey, string> = {
   pte_ielts: 'PTE or IELTS score (if given any)',
 };
 
-export interface InductionDocumentRowState {
-  /** Public URL after optional upload — stored in submission JSON. */
+export interface InductionDocumentAttachment {
   fileUrl: string;
   fileName: string;
-  /** Required: confirm whether this item was submitted (email and/or attachment). */
+}
+
+export interface InductionDocumentRowState {
+  /** Public URL after upload — required when `submitted` is `yes`. For multi-file rows, mirrors the first attachment. */
+  fileUrl: string;
+  fileName: string;
+  /** Extra files for document types that allow multiple uploads (e.g. academic records). */
+  attachments?: InductionDocumentAttachment[];
+  /** Required Yes/No per row; attachment required when `yes`. */
   submitted: InductionYesNo | '';
+}
+
+/** Step 4 document keys that accept more than one file. */
+export function inductionDocumentAllowsMultiple(key: InductionDocumentKey): boolean {
+  return key === 'academic_records';
+}
+
+export function getInductionDocumentAttachments(
+  row: InductionDocumentRowState,
+  key: InductionDocumentKey
+): InductionDocumentAttachment[] {
+  if (inductionDocumentAllowsMultiple(key)) {
+    if (row.attachments?.length) {
+      return row.attachments.filter((a) => nonEmpty(a.fileUrl));
+    }
+    return nonEmpty(row.fileUrl) ? [{ fileUrl: row.fileUrl.trim(), fileName: row.fileName }] : [];
+  }
+  return nonEmpty(row.fileUrl) ? [{ fileUrl: row.fileUrl.trim(), fileName: row.fileName }] : [];
+}
+
+export function syncInductionDocumentRowFiles(
+  files: InductionDocumentAttachment[],
+  key: InductionDocumentKey
+): Pick<InductionDocumentRowState, 'fileUrl' | 'fileName' | 'attachments'> {
+  const clean = files.filter((a) => nonEmpty(a.fileUrl));
+  if (inductionDocumentAllowsMultiple(key)) {
+    return {
+      attachments: clean.length ? clean : undefined,
+      fileUrl: clean[0]?.fileUrl ?? '',
+      fileName: clean[0]?.fileName ?? '',
+    };
+  }
+  const first = clean[0];
+  return { fileUrl: first?.fileUrl ?? '', fileName: first?.fileName ?? '', attachments: undefined };
+}
+
+export function inductionDocumentHasAttachment(
+  row: InductionDocumentRowState,
+  key: InductionDocumentKey
+): boolean {
+  return getInductionDocumentAttachments(row, key).length > 0;
 }
 
 export interface InductionLoginSetupState {
@@ -398,7 +543,7 @@ export interface InductionFormPayload {
   mediaConsent: MediaConsentState;
   /** Step 1 on instruction sheet — mandatory Yes/No for each app. */
   loginSetup: InductionLoginSetupState;
-  /** Step 4 document list — optional file URL; mandatory submitted Yes/No per row. */
+  /** Step 4 document list — file required when submitted Yes; No needs no attachment. */
   documents: Record<InductionDocumentKey, InductionDocumentRowState>;
 }
 
@@ -414,6 +559,42 @@ function emptyInductionDocuments(): Record<InductionDocumentKey, InductionDocume
   return o;
 }
 
+function parseInductionDocumentAttachments(raw: unknown): InductionDocumentAttachment[] {
+  if (!Array.isArray(raw)) return [];
+  const out: InductionDocumentAttachment[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const o = item as Record<string, unknown>;
+    const fileUrl = String(o.fileUrl ?? '').trim();
+    if (!fileUrl) continue;
+    out.push({ fileUrl, fileName: String(o.fileName ?? '') });
+  }
+  return out;
+}
+
+/** Shallow merge for in-progress edits — do not re-parse attachments (avoids dropping uploads during sync). */
+function preserveInductionDocumentsForEdit(
+  docs: Record<InductionDocumentKey, InductionDocumentRowState>
+): Record<InductionDocumentKey, InductionDocumentRowState> {
+  const base = emptyInductionDocuments();
+  const merged = { ...base, ...docs };
+  for (const k of INDUCTION_DOCUMENT_KEYS) {
+    const row = merged[k];
+    if (!row) {
+      merged[k] = base[k];
+      continue;
+    }
+    const submitted = row.submitted === 'yes' || row.submitted === 'no' ? row.submitted : '';
+    merged[k] = {
+      fileUrl: String(row.fileUrl ?? ''),
+      fileName: String(row.fileName ?? ''),
+      submitted,
+      ...(row.attachments?.length ? { attachments: row.attachments } : {}),
+    };
+  }
+  return merged;
+}
+
 function mergeInductionDocuments(raw: unknown): Record<InductionDocumentKey, InductionDocumentRowState> {
   const base = emptyInductionDocuments();
   if (!raw || typeof raw !== 'object') return base;
@@ -423,11 +604,21 @@ function mergeInductionDocuments(raw: unknown): Record<InductionDocumentKey, Ind
     if (!row || typeof row !== 'object') continue;
     const r = row as Record<string, unknown>;
     const sub = r.submitted;
-    base[k] = {
-      fileUrl: String(r.fileUrl ?? ''),
-      fileName: String(r.fileName ?? ''),
-      submitted: sub === 'yes' || sub === 'no' ? sub : '',
-    };
+    const submitted = sub === 'yes' || sub === 'no' ? sub : '';
+    const fileUrl = String(r.fileUrl ?? '');
+    const fileName = String(r.fileName ?? '');
+    if (inductionDocumentAllowsMultiple(k)) {
+      let attachments = parseInductionDocumentAttachments(r.attachments);
+      if (!attachments.length && fileUrl.trim()) {
+        attachments = [{ fileUrl: fileUrl.trim(), fileName }];
+      }
+      base[k] = {
+        ...syncInductionDocumentRowFiles(attachments, k),
+        submitted,
+      };
+    } else {
+      base[k] = { fileUrl, fileName, submitted };
+    }
   }
   return base;
 }
@@ -500,7 +691,12 @@ export function validateInductionFormPayload(p: InductionFormPayload): string | 
   if (!nonEmpty(h.fullName)) return 'Enter your full name on the checklist.';
   if (!nonEmpty(h.studentId)) return 'Enter your Student ID on the checklist.';
   if (!nonEmpty(h.email)) return 'Enter your email on the checklist.';
+  if (!isValidEnrolmentEmail(h.email)) return 'Enter a valid email on the checklist.';
   if (!nonEmpty(h.mobile)) return 'Enter your mobile on the checklist.';
+  {
+    const mobileCheck = validateEnrolmentPhoneEither(h.mobile);
+    if (!mobileCheck.ok) return `Checklist mobile: ${mobileCheck.message}`;
+  }
   if (!nonEmpty(h.course)) return 'Enter your course on the checklist.';
 
   for (const key of CHECKLIST_TOPIC_KEYS) {
@@ -528,12 +724,21 @@ export function validateInductionFormPayload(p: InductionFormPayload): string | 
     return 'Choose a valid visa expiry date, or clear it.';
   }
   if (!nonEmpty(e.residentialAddress)) return 'Enter residential address.';
-  if (!nonEmpty(e.phone)) return 'Enter phone on the enrolment form.';
-  if (!nonEmpty(e.email)) return 'Enter email on the enrolment form.';
+  if (!nonEmpty(e.phone)) return 'Enter phone on the enrolment form (Page 3).';
+  {
+    const phoneCheck = validateEnrolmentPhoneEither(e.phone);
+    if (!phoneCheck.ok) return `Enrolment phone (Page 3): ${phoneCheck.message}`;
+  }
+  if (!nonEmpty(e.email)) return 'Enter email on the enrolment form (Page 3).';
+  if (!isValidEnrolmentEmail(e.email)) return 'Enter a valid email on the enrolment form (Page 3).';
   if (!nonEmpty(e.usiNumber)) return 'Enter your USI number on the enrolment form.';
   if (!nonEmpty(e.emergencyName)) return 'Enter emergency contact name.';
   if (!nonEmpty(e.emergencyAddress)) return 'Enter emergency contact address.';
   if (!nonEmpty(e.emergencyPhone)) return 'Enter emergency contact telephone.';
+  {
+    const emergencyPhoneCheck = validateEnrolmentPhoneEither(e.emergencyPhone);
+    if (!emergencyPhoneCheck.ok) return `Emergency telephone (Page 3): ${emergencyPhoneCheck.message}`;
+  }
   if (!nonEmpty(e.emergencyRelationship)) return 'Enter relationship to emergency contact.';
   if (!nonEmpty(e.declarationSignature)) return 'Sign the enrolment declaration.';
   if (!nonEmptyIsoDate(e.declarationDate)) return 'Choose a valid date on the enrolment declaration.';
@@ -555,6 +760,9 @@ export function validateInductionFormPayload(p: InductionFormPayload): string | 
     const row = p.documents[k];
     if (!row || (row.submitted !== 'yes' && row.submitted !== 'no')) {
       return `Under Step 4 (Submit documents), select Yes or No for: ${INDUCTION_DOCUMENT_LABELS[k]}.`;
+    }
+    if (row.submitted === 'yes' && !inductionDocumentHasAttachment(row, k)) {
+      return `Under Step 4 (Submit documents), attach a file for: ${INDUCTION_DOCUMENT_LABELS[k]} (required when you select Yes).`;
     }
   }
 

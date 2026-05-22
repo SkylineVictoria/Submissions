@@ -353,6 +353,93 @@
   font-style: italic;
 }
 
+.enrol-form-brand {
+  margin-bottom: 1.25rem;
+}
+
+.enrol-course-multi-select {
+  width: 100%;
+  min-height: 8.5rem;
+  border: 1px solid var(--enrol-border);
+  padding: 6px;
+  font-size: 0.9rem;
+  line-height: 1.35;
+  box-sizing: border-box;
+}
+
+.enrol-course-multi-hint {
+  margin-bottom: 0.5rem;
+}
+
+.enrol-selected-courses {
+  margin: 0.65rem 0 0;
+  padding-left: 1.25rem;
+  font-size: 0.85rem;
+  color: var(--enrol-label);
+}
+
+.enrol-selected-courses li {
+  margin-bottom: 0.25rem;
+}
+
+.enrol-attachment-file-list {
+  list-style: none;
+  margin: 0.65rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.enrol-attachment-file-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.75rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid #d1d5db;
+  background: #f9fafb;
+}
+
+.enrol-attachment-file-name {
+  flex: 1 1 12rem;
+  min-width: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.enrol-attachment-file-meta {
+  font-size: 0.75rem;
+  color: var(--enrol-label);
+}
+
+@media (max-width: 640px) {
+  .enrol-form {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+
+  .enrol-grid-2 {
+    grid-template-columns: 1fr;
+  }
+
+  .enrol-course-multi-select {
+    min-height: 10rem;
+    font-size: 1rem;
+  }
+
+  .enrol-actions {
+    flex-direction: column;
+  }
+
+  .enrol-actions .enrol-btn-primary,
+  .enrol-actions .enrol-btn-outline {
+    width: 100%;
+    text-align: center;
+  }
+}
+
 .enrol-scroll-top {
   position: fixed;
   right: 20px;

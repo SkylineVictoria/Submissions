@@ -696,7 +696,11 @@ export const AdminInductionPage: React.FC = () => {
                         endAt={submissionsModal ? String(submissionsModal.end_at) : ''}
                         interactive={{
                           value: editPayload,
-                          onChange: (next) => setEditPayload(next),
+                          onChange: (next) =>
+                            setEditPayload((p) => {
+                              if (!p) return p;
+                              return typeof next === 'function' ? next(p) : next;
+                            }),
                           readOnly: false,
                           allowOfficeUseEdit: true,
                           inductionSubmissionFolder: editPayloadSub.id,

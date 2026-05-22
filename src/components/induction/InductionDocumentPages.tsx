@@ -3,15 +3,34 @@ import { SlitDocumentHeader } from '../SlitDocumentHeader';
 import { Checkbox } from '../ui/Checkbox';
 import { DatePicker } from '../ui/DatePicker';
 import { DateTime } from 'luxon';
-import type { ChecklistRowState, ChecklistTopicKey, InductionDocumentKey, InductionFormPayload } from '../../lib/inductionForm';
-import { CHECKLIST_TOPIC_KEYS, INDUCTION_DOCUMENT_KEYS, INDUCTION_DOCUMENT_LABELS } from '../../lib/inductionForm';
+import type {
+  ChecklistRowState,
+  ChecklistTopicKey,
+  InductionDocumentKey,
+  InductionFormPayload,
+  InductionFormSyncOptions,
+} from '../../lib/inductionForm';
+import {
+  CHECKLIST_TOPIC_KEYS,
+  INDUCTION_DOCUMENT_KEYS,
+  INDUCTION_DOCUMENT_LABELS,
+  getInductionDocumentAttachments,
+  inductionDocumentAllowsMultiple,
+  inductionDocumentHasAttachment,
+  syncInductionDocumentRowFiles,
+} from '../../lib/inductionForm';
+import { digitsOnlyPhone } from '../../lib/enrolmentValidation';
 import { uploadInductionDocument } from '../../lib/storage';
 import { toast } from '../../utils/toast';
 const ZONE = 'Australia/Melbourne';
 
+export type InductionFormChangeArg =
+  | InductionFormPayload
+  | ((prev: InductionFormPayload) => InductionFormPayload);
+
 export interface InductionInteractiveBindings {
   value: InductionFormPayload;
-  onChange: (next: InductionFormPayload) => void;
+  onChange: (next: InductionFormChangeArg, sync?: InductionFormSyncOptions) => void;
   readOnly?: boolean;
   /** When false (default), OFFICE USE ONLY is read-only (student induction). Set true for admin/trainer tools. */
   allowOfficeUseEdit?: boolean;
@@ -106,25 +125,64 @@ function InductionInlineDatePicker({
 const enrolInp =
   'w-full min-w-0 bg-transparent px-1 py-0.5 text-[10pt] outline-none focus:ring-1 focus:ring-blue-400 disabled:cursor-default disabled:opacity-80';
 
+const ENROLMENT_PHONE_FIELDS = new Set<keyof InductionFormPayload['enrolment']>(['phone', 'emergencyPhone']);
+const ENROLMENT_EMAIL_FIELDS = new Set<keyof InductionFormPayload['enrolment']>(['email']);
+
+function sanitizeInductionPhoneInput(raw: string): string {
+  return digitsOnlyPhone(raw).slice(0, 10);
+}
+
+/** Stacked label + full-width input on phones; inline on larger screens. */
+function ChecklistHeaderField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="induction-header-field flex flex-col gap-1 sm:flex-row sm:flex-wrap sm:items-baseline sm:gap-x-1">
+      <span className="shrink-0 text-[10pt] font-semibold sm:text-[10pt]">{label}</span>
+      <div className="min-w-0 w-full sm:w-auto">{children}</div>
+    </div>
+  );
+}
+
+const checklistHeaderInputClass =
+  'block w-full min-w-0 rounded-sm border border-gray-300 bg-white px-2 py-2.5 text-[11pt] outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-80 sm:inline-block sm:w-auto sm:min-w-[12rem] sm:border-0 sm:border-b sm:border-dotted sm:rounded-none sm:bg-transparent sm:px-1 sm:py-0.5';
+
 function EnrolmentFormTable({ interactive }: { interactive?: InductionInteractiveBindings }) {
   const empty = <span className="block min-h-[1.25rem]">&nbsp;</span>;
   const e = interactive?.value.enrolment;
   const ro = interactive?.readOnly;
   const officeLocked = ro || !interactive?.allowOfficeUseEdit;
-  const patch = (p: Partial<InductionFormPayload['enrolment']>) => {
+  const patch = (p: Partial<InductionFormPayload['enrolment']>, sync?: InductionFormSyncOptions) => {
     if (!interactive) return;
-    interactive.onChange({ ...interactive.value, enrolment: { ...interactive.value.enrolment, ...p } });
+    interactive.onChange(
+      (prev) => ({ ...prev, enrolment: { ...prev.enrolment, ...p } }),
+      sync
+    );
   };
 
   const textCell = (field: keyof InductionFormPayload['enrolment']) =>
     interactive && e ? (
       <input
-        type="text"
+        type={ENROLMENT_EMAIL_FIELDS.has(field) ? 'email' : ENROLMENT_PHONE_FIELDS.has(field) ? 'tel' : 'text'}
+        inputMode={
+          ENROLMENT_EMAIL_FIELDS.has(field) ? 'email' : ENROLMENT_PHONE_FIELDS.has(field) ? 'numeric' : undefined
+        }
+        maxLength={ENROLMENT_PHONE_FIELDS.has(field) ? 10 : undefined}
         className={enrolInp}
         value={e[field] as string}
-        onChange={(ev) => patch({ [field]: ev.target.value } as Partial<InductionFormPayload['enrolment']>)}
+        onChange={(ev) => {
+          const sync: InductionFormSyncOptions | undefined =
+            field === 'familyName' || field === 'givenNames'
+              ? { activeNameField: 'enrolment_names' }
+              : field === 'declarationSignature'
+                ? { activeSignatureField: 'enrolment_declaration' }
+                : undefined;
+          const raw = ev.target.value;
+          const value = ENROLMENT_PHONE_FIELDS.has(field) ? sanitizeInductionPhoneInput(raw) : raw;
+          patch({ [field]: value } as Partial<InductionFormPayload['enrolment']>, sync);
+        }}
         disabled={ro}
-        autoComplete="off"
+        autoComplete={
+          ENROLMENT_EMAIL_FIELDS.has(field) ? 'email' : ENROLMENT_PHONE_FIELDS.has(field) ? 'tel' : 'off'
+        }
       />
     ) : (
       empty
@@ -296,14 +354,16 @@ function EnrolmentFormTable({ interactive }: { interactive?: InductionInteractiv
                   type="text"
                   className={`${SIG_INPUT_BASE} min-w-[55%]`}
                   value={e.declarationSignature}
-                  onChange={(ev) => patch({ declarationSignature: ev.target.value })}
+                  onChange={(ev) =>
+                    patch({ declarationSignature: ev.target.value }, { activeSignatureField: 'enrolment_declaration' })
+                  }
                   disabled={ro}
                   autoComplete="off"
                 />
                 <span className="font-semibold">Date:</span>
                 <InductionInlineDatePicker
                   value={e.declarationDate}
-                  onChange={(iso) => patch({ declarationDate: iso })}
+                  onChange={(iso) => patch({ declarationDate: iso }, { activeDateField: 'enrolment_declaration' })}
                   disabled={ro}
                 />
               </span>
@@ -398,9 +458,9 @@ function MediaConsentContent({ interactive }: { interactive?: InductionInteracti
   const a = interactive?.value.mediaAck;
   const m = interactive?.value.mediaConsent;
   const ro = interactive?.readOnly;
-  const patchAck = (p: Partial<InductionFormPayload['mediaAck']>) => {
+  const patchAck = (p: Partial<InductionFormPayload['mediaAck']>, sync?: InductionFormSyncOptions) => {
     if (!interactive) return;
-    interactive.onChange({ ...interactive.value, mediaAck: { ...interactive.value.mediaAck, ...p } });
+    interactive.onChange((prev) => ({ ...prev, mediaAck: { ...prev.mediaAck, ...p } }), sync);
   };
   const patchConsent = (p: Partial<InductionFormPayload['mediaConsent']>) => {
     if (!interactive) return;
@@ -439,7 +499,7 @@ function MediaConsentContent({ interactive }: { interactive?: InductionInteracti
               type="text"
               className={`inline-block min-w-[200px] ${mediaInp} ${SIG_W_WIDE}`}
               value={a.studentName}
-              onChange={(ev) => patchAck({ studentName: ev.target.value })}
+              onChange={(ev) => patchAck({ studentName: ev.target.value }, { activeNameField: 'media_student_name' })}
               disabled={ro}
             />
           ) : (
@@ -453,7 +513,9 @@ function MediaConsentContent({ interactive }: { interactive?: InductionInteracti
               type="text"
               className={`inline-block min-w-[200px] ${SIG_INPUT_BASE} ${SIG_W_WIDE}`}
               value={a.studentSignature}
-              onChange={(ev) => patchAck({ studentSignature: ev.target.value })}
+              onChange={(ev) =>
+                patchAck({ studentSignature: ev.target.value }, { activeSignatureField: 'media_ack' })
+              }
               disabled={ro}
             />
           ) : (
@@ -463,7 +525,11 @@ function MediaConsentContent({ interactive }: { interactive?: InductionInteracti
         <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
           <span className="font-semibold">Date:</span>
           {interactive && a ? (
-            <InductionInlineDatePicker value={a.date} onChange={(iso) => patchAck({ date: iso })} disabled={ro} />
+            <InductionInlineDatePicker
+              value={a.date}
+              onChange={(iso) => patchAck({ date: iso }, { activeDateField: 'media_ack' })}
+              disabled={ro}
+            />
           ) : (
             <span className={`inline-block border-b border-black ${SIG_W}`}>&nbsp;</span>
           )}
@@ -627,6 +693,10 @@ export const InductionDocumentPages: React.FC<{
   const period = melbourneMonthYear(startAt);
   const totalPages = 4;
   const [uploadingDoc, setUploadingDoc] = useState<InductionDocumentKey | null>(null);
+  /** Immediate UI after file pick (before / during storage upload). */
+  const [pendingDocFiles, setPendingDocFiles] = useState<
+    Partial<Record<InductionDocumentKey, { fileName: string }[]>>
+  >({});
 
   const patchLogin = (p: Partial<InductionFormPayload['loginSetup']>) => {
     if (!interactive) return;
@@ -636,15 +706,19 @@ export const InductionDocumentPages: React.FC<{
     });
   };
 
-  const patchDoc = (key: InductionDocumentKey, p: Partial<InductionFormPayload['documents'][InductionDocumentKey]>) => {
+  const applyFormChange = (build: (prev: InductionFormPayload) => InductionFormPayload) => {
     if (!interactive) return;
-    interactive.onChange({
-      ...interactive.value,
+    interactive.onChange(build);
+  };
+
+  const patchDoc = (key: InductionDocumentKey, p: Partial<InductionFormPayload['documents'][InductionDocumentKey]>) => {
+    applyFormChange((prev) => ({
+      ...prev,
       documents: {
-        ...interactive.value.documents,
-        [key]: { ...interactive.value.documents[key], ...p },
+        ...prev.documents,
+        [key]: { ...prev.documents[key], ...p },
       },
-    });
+    }));
   };
 
   return (
@@ -664,6 +738,80 @@ export const InductionDocumentPages: React.FC<{
         .induction-doc-print .induction-checklist-table { font-size: 8pt; }
         .induction-doc-print .induction-checklist-table th,
         .induction-doc-print .induction-checklist-table td { padding: 3px 5px; }
+        .induction-checklist-yn-cell label { display: inline-flex; align-items: center; gap: 0.35rem; }
+        /* Screen-only: mobile-friendly induction form */
+        @media screen and (max-width: 640px) {
+          .induction-doc-print { font-size: 11pt; }
+          .induction-checklist-table { font-size: 9pt; }
+          .induction-checklist-table thead { display: none; }
+          .induction-checklist-table tbody tr {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 0.35rem 0.5rem;
+            margin-bottom: 0.65rem;
+            padding: 0.5rem;
+            border: 1px solid #000;
+            background: #fff;
+          }
+          .induction-checklist-table tbody tr td:first-child {
+            grid-column: 1 / -1;
+            border: none !important;
+            padding: 0 0 0.35rem 0 !important;
+            margin-bottom: 0.25rem;
+            border-bottom: 1px solid #e5e7eb !important;
+          }
+          .induction-checklist-table tbody tr td:not(:first-child) {
+            border: none !important;
+            padding: 0.25rem !important;
+            text-align: center;
+            vertical-align: middle;
+          }
+          .induction-checklist-yn-cell::before {
+            display: block;
+            font-size: 8pt;
+            font-weight: 700;
+            text-transform: uppercase;
+            margin-bottom: 0.2rem;
+          }
+          .induction-checklist-yn-cell--yes::before { content: 'Yes'; }
+          .induction-checklist-yn-cell--no::before { content: 'No'; }
+          .induction-checklist-initial-cell::before {
+            display: block;
+            font-size: 8pt;
+            font-weight: 700;
+            text-transform: uppercase;
+            margin-bottom: 0.2rem;
+            content: 'Initial';
+          }
+          .induction-checklist-table input[type="radio"] {
+            height: 1.125rem;
+            width: 1.125rem;
+            min-height: 2.75rem;
+            min-width: 2.75rem;
+          }
+          .induction-checklist-table input[type="text"] {
+            min-height: 2.5rem;
+            font-size: 10pt !important;
+            border: 1px solid #d1d5db !important;
+            border-radius: 0.25rem;
+            padding: 0.35rem !important;
+          }
+          .induction-declaration-sign-date {
+            flex-direction: column;
+            align-items: stretch !important;
+          }
+          .induction-declaration-sign-date > span {
+            display: flex;
+            flex-direction: column;
+            gap: 0.35rem;
+            width: 100%;
+          }
+          .induction-declaration-sign-date input {
+            width: 100% !important;
+            max-width: 100% !important;
+            min-width: 0 !important;
+          }
+        }
         /* Screen-only: stack enrolment-style tables on narrow viewports */
         @media screen and (max-width: 640px) {
           .induction-enrol-table { display: block; width: 100%; }
@@ -793,9 +941,9 @@ export const InductionDocumentPages: React.FC<{
           <p className="induction-step-title">Step 4: Submit documents</p>
           <ul className="induction-ul">
             <li>
-              Share the following documents to the email address {linkMail('studentsupport@slit.edu.au')}. Attachment below is
-              optional; you must select <strong>Yes</strong> or <strong>No</strong> for each line (whether you have submitted
-              or shared that item).
+              Share the following documents to the email address {linkMail('studentsupport@slit.edu.au')}. For each line,
+              select <strong>Yes</strong> or <strong>No</strong>. If you select <strong>Yes</strong>, you must attach the file
+              below; if <strong>No</strong>, no attachment is needed.
             </li>
           </ul>
           {interactive ? (
@@ -803,89 +951,271 @@ export const InductionDocumentPages: React.FC<{
               {INDUCTION_DOCUMENT_KEYS.map((key) => {
                 const label = INDUCTION_DOCUMENT_LABELS[key];
                 const row = interactive.value.documents[key];
+                const multi = inductionDocumentAllowsMultiple(key);
+                const savedAttached = getInductionDocumentAttachments(row, key);
+                const pending = pendingDocFiles[key] ?? [];
+                const pickedName = row.fileName?.trim() ?? '';
+                const attached =
+                  savedAttached.length > 0
+                    ? savedAttached
+                    : pending.length > 0
+                      ? pending.map((p) => ({ fileUrl: '', fileName: p.fileName }))
+                      : pickedName
+                        ? [{ fileUrl: '', fileName: pickedName }]
+                        : [];
+                const hasFile =
+                  inductionDocumentHasAttachment(row, key) || pending.length > 0 || attached.length > 0;
+                const isUploading = uploadingDoc === key;
                 const folder = interactive.inductionSubmissionFolder;
                 const canUpload =
                   !interactive.readOnly &&
                   ((typeof folder === 'number' && folder > 0) || (typeof folder === 'string' && folder.trim().length > 0));
+
+                const stageSelectedFiles = (files: File[]) => {
+                  const names = files.map((f) => ({ fileName: f.name }));
+                  setPendingDocFiles((prev) => ({
+                    ...prev,
+                    [key]: multi ? [...(prev[key] ?? []), ...names] : names,
+                  }));
+                  const label = multi ? files.map((f) => f.name).join(', ') : files[0]?.name ?? '';
+                  applyFormChange((prev) => ({
+                    ...prev,
+                    documents: {
+                      ...prev.documents,
+                      [key]: { ...prev.documents[key], fileName: label },
+                    },
+                  }));
+                };
+
+                const uploadFiles = async (files: File[]) => {
+                  if (!files.length) return;
+                  if (!canUpload || folder == null) {
+                    toast.error(
+                      'Sign in with your institutional email and unlock the induction before attaching files.'
+                    );
+                    return;
+                  }
+
+                  setUploadingDoc(key);
+                  const uploaded: { fileUrl: string; fileName: string }[] = [];
+                  for (const f of files) {
+                    const slot = multi
+                      ? `${Date.now()}_${f.name.replace(/[^a-z0-9._-]+/gi, '_').slice(0, 40)}`
+                      : undefined;
+                    const { url, error } = await uploadInductionDocument(folder, key, f, slot);
+                    if (error || !url) {
+                      toast.error(error || `Upload failed: ${f.name}`);
+                      continue;
+                    }
+                    uploaded.push({ fileUrl: url, fileName: f.name });
+                  }
+                  setUploadingDoc(null);
+
+                  if (!uploaded.length) {
+                    toast.error(
+                      'Upload failed. Your file is listed below — tap Attach to try again, or check storage policies in Supabase (photomedia bucket).'
+                    );
+                    return;
+                  }
+
+                  applyFormChange((prev) => {
+                    const existing = getInductionDocumentAttachments(prev.documents[key], key);
+                    const merged = multi ? [...existing, ...uploaded] : uploaded.slice(0, 1);
+                    return {
+                      ...prev,
+                      documents: {
+                        ...prev.documents,
+                        [key]: {
+                          ...prev.documents[key],
+                          ...syncInductionDocumentRowFiles(merged, key),
+                        },
+                      },
+                    };
+                  });
+
+                  setPendingDocFiles((prev) => {
+                    const next = { ...prev };
+                    delete next[key];
+                    return next;
+                  });
+
+                  toast.success(
+                    uploaded.length === 1
+                      ? `Attached: ${uploaded[0].fileName}`
+                      : `${uploaded.length} files attached.`
+                  );
+                };
                 return (
                   <li key={key} className="border-b border-gray-200 pb-3">
                     <div className="flex flex-col gap-2">
                       <strong>{label}</strong>
-                      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-4 sm:gap-y-2">
-                        <div className="flex min-w-0 flex-wrap items-center gap-2 text-[11pt]">
-                          <input
-                            id={`ind-doc-${key}`}
-                            type="file"
-                            className="hidden"
-                            accept="image/*,.pdf,.doc,.docx,application/pdf"
-                            disabled={!canUpload || uploadingDoc === key}
-                            onChange={async (ev) => {
-                              const f = ev.target.files?.[0];
-                              ev.target.value = '';
-                              if (!f || !canUpload || folder == null) return;
-                              setUploadingDoc(key);
-                              const { url, error } = await uploadInductionDocument(folder, key, f);
-                              setUploadingDoc(null);
-                              if (error || !url) {
-                                toast.error(error || 'Upload failed.');
-                                return;
-                              }
-                              patchDoc(key, { fileUrl: url, fileName: f.name });
-                              toast.success('File attached.');
-                            }}
-                          />
-                          <label
-                            htmlFor={`ind-doc-${key}`}
-                            className={`rounded border border-gray-400 bg-gray-50 px-2 py-0.5 text-[10pt] ${
-                              canUpload ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'
-                            }`}
-                          >
-                            {uploadingDoc === key ? 'Uploading…' : 'Attach'}
-                          </label>
-                          {row.fileUrl && canUpload ? (
-                            <button
-                              type="button"
-                              className="text-[10pt] text-red-600 underline"
-                              onClick={() => patchDoc(key, { fileUrl: '', fileName: '' })}
-                            >
-                              Remove file
-                            </button>
-                          ) : (
-                            <span className="text-[9pt] text-gray-500">Optional</span>
-                          )}
-                        </div>
-                        <div className="flex flex-shrink-0 flex-wrap items-center gap-2 text-[11pt]">
-                          <span className="text-[10pt] font-semibold">Submitted?</span>
-                          <label className="inline-flex items-center gap-1">
+                      {multi ? (
+                        <p className="text-[9pt] text-gray-600">
+                          You can attach multiple files (e.g. certificates from different years).
+                        </p>
+                      ) : null}
+                      <div className="flex flex-col gap-3 text-[11pt]">
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded border border-gray-200 bg-gray-50/90 px-2 py-1.5">
+                          <span className="w-full text-[10pt] font-semibold sm:w-auto">Submitted?</span>
+                          <label className="inline-flex items-center gap-1.5">
                             <input
                               type="radio"
                               name={`ind-doc-sub-${key}`}
                               checked={row.submitted === 'yes'}
                               onChange={() => patchDoc(key, { submitted: 'yes' })}
                               disabled={interactive.readOnly}
+                              className="h-4 w-4"
                             />
                             Yes
                           </label>
-                          <label className="inline-flex items-center gap-1">
+                          <label className="inline-flex items-center gap-1.5">
                             <input
                               type="radio"
                               name={`ind-doc-sub-${key}`}
                               checked={row.submitted === 'no'}
-                              onChange={() => patchDoc(key, { submitted: 'no' })}
+                              onChange={() => {
+                                setPendingDocFiles((prev) => {
+                                  const next = { ...prev };
+                                  delete next[key];
+                                  return next;
+                                });
+                                patchDoc(key, {
+                                  submitted: 'no',
+                                  fileUrl: '',
+                                  fileName: '',
+                                  attachments: undefined,
+                                });
+                              }}
                               disabled={interactive.readOnly}
+                              className="h-4 w-4"
                             />
                             No
                           </label>
-                          {row.submitted === 'yes' && row.fileUrl ? (
-                            <a
-                              href={row.fileUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              download={row.fileName || undefined}
-                              className="text-blue-600 underline"
+                        </div>
+                        <div className="flex min-w-0 flex-col gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <input
+                              id={`ind-doc-${key}`}
+                              type="file"
+                              className="hidden"
+                              multiple={multi}
+                              accept="image/*,.pdf,.doc,.docx,application/pdf"
+                              disabled={isUploading}
+                              onChange={(ev) => {
+                                const list = ev.target.files;
+                                if (!list?.length) return;
+                                const files = Array.from(list);
+                                ev.target.value = '';
+                                stageSelectedFiles(files);
+                                void uploadFiles(files);
+                              }}
+                            />
+                            <button
+                              type="button"
+                              disabled={isUploading}
+                              onClick={() => {
+                                if (!canUpload) {
+                                  toast.error(
+                                    'Sign in with your institutional email and unlock the induction before attaching files.'
+                                  );
+                                  return;
+                                }
+                                if (isUploading) return;
+                                document.getElementById(`ind-doc-${key}`)?.click();
+                              }}
+                              className={`rounded border border-gray-400 bg-gray-50 px-3 py-1.5 text-[10pt] font-medium ${
+                                !isUploading ? 'cursor-pointer hover:bg-gray-100' : 'cursor-not-allowed opacity-50'
+                              }`}
                             >
-                              Download
-                            </a>
+                              {isUploading ? 'Uploading…' : multi && hasFile ? 'Add more files' : 'Attach'}
+                            </button>
+                            {hasFile ? (
+                              <span className="text-[9pt] font-medium text-emerald-800">
+                                {isUploading && pending.length > 0
+                                  ? `Uploading ${pending.length} file${pending.length === 1 ? '' : 's'}…`
+                                  : `${savedAttached.length || attached.length} file${(savedAttached.length || attached.length) === 1 ? '' : 's'} attached`}
+                              </span>
+                            ) : row.submitted === 'yes' ? (
+                              <span className="text-[9pt] font-medium text-red-700">
+                                {pickedName ? 'Upload failed — try Attach again' : 'Attachment required'}
+                              </span>
+                            ) : (
+                              <span className="text-[9pt] text-gray-500">No attachment if No</span>
+                            )}
+                          </div>
+                          {attached.length > 0 ? (
+                            <ul className="list-none space-y-2 pl-0" aria-label={`Attached files for ${label}`}>
+                              {attached.map((f, idx) => {
+                                const saved = savedAttached[idx];
+                                const pendingOnly = !saved?.fileUrl;
+                                return (
+                                  <li
+                                    key={`${f.fileName}-${idx}`}
+                                    className={`flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border px-2.5 py-2 ${
+                                      pendingOnly
+                                        ? 'border-amber-200 bg-amber-50/90'
+                                        : 'border-emerald-200 bg-emerald-50/80'
+                                    }`}
+                                  >
+                                    <span
+                                      className="min-w-0 flex-1 break-all text-[10pt] font-medium text-gray-900"
+                                      title={f.fileName}
+                                    >
+                                      {f.fileName || `File ${idx + 1}`}
+                                      {pendingOnly ? (
+                                        <span className="ml-1 text-[9pt] font-normal text-amber-800">(uploading…)</span>
+                                      ) : null}
+                                    </span>
+                                    {saved?.fileUrl ? (
+                                      <a
+                                        href={saved.fileUrl}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        download={saved.fileName || undefined}
+                                        className="shrink-0 text-[10pt] font-medium text-blue-700 underline"
+                                      >
+                                        View
+                                      </a>
+                                    ) : null}
+                                    {canUpload && !isUploading ? (
+                                      <button
+                                        type="button"
+                                        className="shrink-0 text-[10pt] text-red-700 underline"
+                                        onClick={() => {
+                                          if (pendingOnly) {
+                                            setPendingDocFiles((prev) => {
+                                              const list = [...(prev[key] ?? [])];
+                                              list.splice(idx, 1);
+                                              const next = { ...prev };
+                                              if (list.length) next[key] = list;
+                                              else delete next[key];
+                                              return next;
+                                            });
+                                            return;
+                                          }
+                                          applyFormChange((prev) => {
+                                            const list = getInductionDocumentAttachments(prev.documents[key], key);
+                                            const nextList = list.filter((_, i) => i !== idx);
+                                            return {
+                                              ...prev,
+                                              documents: {
+                                                ...prev.documents,
+                                                [key]: {
+                                                  ...prev.documents[key],
+                                                  ...syncInductionDocumentRowFiles(nextList, key),
+                                                },
+                                              },
+                                            };
+                                          });
+                                        }}
+                                      >
+                                        Remove
+                                      </button>
+                                    ) : null}
+                                  </li>
+                                );
+                              })}
+                            </ul>
                           ) : null}
                         </div>
                       </div>
@@ -937,33 +1267,34 @@ export const InductionDocumentPages: React.FC<{
       <DocPage pageNum={2} totalPages={totalPages}>
         <SlitDocumentHeader />
         <h2 className="mt-2 text-center text-[14pt] font-bold uppercase text-gray-700">Student induction checklist</h2>
-        <div className="mt-2 text-[10pt] space-y-1">
-          <p>
-            <span className="font-semibold">Student full name:</span>{' '}
+        <div className="mt-2 space-y-3 text-[10pt] sm:space-y-1">
+          <ChecklistHeaderField label="Student full name:">
             {interactive ? (
               <input
                 type="text"
-                className="ml-1 inline-block min-w-[200px] border-b border-dotted border-gray-500 bg-transparent px-1 py-0.5 text-[10pt] outline-none focus:ring-1 focus:ring-blue-400 disabled:opacity-80"
+                className={checklistHeaderInputClass}
                 value={interactive.value.checklistHeader.fullName}
                 onChange={(ev) =>
-                  interactive.onChange({
-                    ...interactive.value,
-                    checklistHeader: { ...interactive.value.checklistHeader, fullName: ev.target.value },
-                  })
+                  interactive.onChange(
+                    (prev) => ({
+                      ...prev,
+                      checklistHeader: { ...prev.checklistHeader, fullName: ev.target.value },
+                    }),
+                    { activeNameField: 'checklist_full_name' }
+                  )
                 }
                 disabled={interactive.readOnly}
                 autoComplete="name"
               />
             ) : (
-              <span className="inline-block min-w-[200px] border-b border-dotted border-gray-400" />
+              <span className="block min-h-[1.25rem] border-b border-dotted border-gray-400 sm:inline-block sm:min-w-[200px]" />
             )}
-          </p>
-          <p>
-            <span className="font-semibold">Student ID:</span>{' '}
+          </ChecklistHeaderField>
+          <ChecklistHeaderField label="Student ID:">
             {interactive ? (
               <input
                 type="text"
-                className="ml-1 inline-block min-w-[200px] border-b border-dotted border-gray-500 bg-transparent px-1 py-0.5 text-[10pt] outline-none focus:ring-1 focus:ring-blue-400 disabled:opacity-80"
+                className={checklistHeaderInputClass}
                 value={interactive.value.checklistHeader.studentId}
                 onChange={(ev) =>
                   interactive.onChange({
@@ -975,15 +1306,15 @@ export const InductionDocumentPages: React.FC<{
                 required
               />
             ) : (
-              <span className="inline-block min-w-[200px] border-b border-dotted border-gray-400" />
+              <span className="block min-h-[1.25rem] border-b border-dotted border-gray-400 sm:inline-block sm:min-w-[200px]" />
             )}
-          </p>
-          <p>
-            <span className="font-semibold">Email:</span>{' '}
+          </ChecklistHeaderField>
+          <ChecklistHeaderField label="Email:">
             {interactive ? (
               <input
                 type="email"
-                className="ml-1 inline-block min-w-[160px] border-b border-dotted border-gray-500 bg-transparent px-1 py-0.5 text-[10pt] outline-none focus:ring-1 focus:ring-blue-400 disabled:opacity-80"
+                inputMode="email"
+                className={checklistHeaderInputClass}
                 value={interactive.value.checklistHeader.email}
                 onChange={(ev) =>
                   interactive.onChange({
@@ -995,33 +1326,38 @@ export const InductionDocumentPages: React.FC<{
                 autoComplete="email"
               />
             ) : (
-              <span className="inline-block min-w-[180px] border-b border-dotted border-gray-400" />
-            )}{' '}
-            <span className="font-semibold">Mobile:</span>{' '}
+              <span className="block min-h-[1.25rem] border-b border-dotted border-gray-400 sm:inline-block sm:min-w-[180px]" />
+            )}
+          </ChecklistHeaderField>
+          <ChecklistHeaderField label="Mobile:">
             {interactive ? (
               <input
-                type="text"
-                className="ml-1 inline-block min-w-[100px] border-b border-dotted border-gray-500 bg-transparent px-1 py-0.5 text-[10pt] outline-none focus:ring-1 focus:ring-blue-400 disabled:opacity-80"
+                type="tel"
+                inputMode="numeric"
+                maxLength={10}
+                className={checklistHeaderInputClass}
                 value={interactive.value.checklistHeader.mobile}
                 onChange={(ev) =>
                   interactive.onChange({
                     ...interactive.value,
-                    checklistHeader: { ...interactive.value.checklistHeader, mobile: ev.target.value },
+                    checklistHeader: {
+                      ...interactive.value.checklistHeader,
+                      mobile: sanitizeInductionPhoneInput(ev.target.value),
+                    },
                   })
                 }
                 disabled={interactive.readOnly}
                 autoComplete="tel"
               />
             ) : (
-              <span className="inline-block min-w-[120px] border-b border-dotted border-gray-400" />
+              <span className="block min-h-[1.25rem] border-b border-dotted border-gray-400 sm:inline-block sm:min-w-[120px]" />
             )}
-          </p>
-          <p>
-            <span className="font-semibold">Course:</span>{' '}
+          </ChecklistHeaderField>
+          <ChecklistHeaderField label="Course:">
             {interactive ? (
               <input
                 type="text"
-                className="ml-1 inline-block min-w-[220px] border-b border-dotted border-gray-500 bg-transparent px-1 py-0.5 text-[10pt] outline-none focus:ring-1 focus:ring-blue-400 disabled:opacity-80"
+                className={checklistHeaderInputClass}
                 value={interactive.value.checklistHeader.course}
                 onChange={(ev) =>
                   interactive.onChange({
@@ -1032,9 +1368,9 @@ export const InductionDocumentPages: React.FC<{
                 disabled={interactive.readOnly}
               />
             ) : (
-              <span className="inline-block min-w-[240px] border-b border-dotted border-gray-400" />
+              <span className="block min-h-[1.25rem] border-b border-dotted border-gray-400 sm:inline-block sm:min-w-[240px]" />
             )}
-          </p>
+          </ChecklistHeaderField>
         </div>
 
         {interactive && !interactive.readOnly ? (
@@ -1072,8 +1408,8 @@ export const InductionDocumentPages: React.FC<{
           </div>
         ) : null}
 
-        <div className="mt-3 overflow-x-auto">
-          <table className="induction-checklist-table w-full border-collapse border border-black">
+        <div className="mt-3 -mx-1 overflow-x-auto px-1 sm:mx-0 sm:px-0">
+          <table className="induction-checklist-table w-full min-w-[280px] border-collapse border border-black sm:min-w-0">
             <thead>
               <tr className="bg-[#F28E40] text-black">
                 <th className="border border-black px-1.5 py-1 text-left font-bold uppercase">Information topic</th>
@@ -1112,33 +1448,43 @@ export const InductionDocumentPages: React.FC<{
                   return (
                     <tr key={rowKey}>
                       <td className="border border-black px-1.5 py-1 align-top">{inductionChecklistTopicCell(rowKey)}</td>
-                      <td className={`border border-black text-center align-middle ${hi ? 'bg-blue-50/50' : ''}`}>
+                      <td
+                        className={`induction-checklist-yn-cell induction-checklist-yn-cell--yes border border-black text-center align-middle ${hi ? 'bg-blue-50/50' : ''}`}
+                      >
                         {interactive && row ? (
-                          <input
-                            type="radio"
-                            name={`chk-${rowKey}-yn`}
-                            aria-label={`Yes — ${rowKey}`}
-                            checked={row.answer === 'yes'}
-                            onChange={() => patchChecklistRow(rowKey, { answer: 'yes' })}
-                            disabled={ro}
-                            className="h-3.5 w-3.5"
-                          />
+                          <label className="justify-center py-1 sm:py-0">
+                            <input
+                              type="radio"
+                              name={`chk-${rowKey}-yn`}
+                              aria-label={`Yes — ${rowKey}`}
+                              checked={row.answer === 'yes'}
+                              onChange={() => patchChecklistRow(rowKey, { answer: 'yes' })}
+                              disabled={ro}
+                              className="h-4 w-4 shrink-0 sm:h-3.5 sm:w-3.5"
+                            />
+                          </label>
                         ) : null}
                       </td>
-                      <td className={`border border-black text-center align-middle ${hi ? 'bg-blue-50/50' : ''}`}>
+                      <td
+                        className={`induction-checklist-yn-cell induction-checklist-yn-cell--no border border-black text-center align-middle ${hi ? 'bg-blue-50/50' : ''}`}
+                      >
                         {interactive && row ? (
-                          <input
-                            type="radio"
-                            name={`chk-${rowKey}-yn`}
-                            aria-label={`No — ${rowKey}`}
-                            checked={row.answer === 'no'}
-                            onChange={() => patchChecklistRow(rowKey, { answer: 'no' })}
-                            disabled={ro}
-                            className="h-3.5 w-3.5"
-                          />
+                          <label className="justify-center py-1 sm:py-0">
+                            <input
+                              type="radio"
+                              name={`chk-${rowKey}-yn`}
+                              aria-label={`No — ${rowKey}`}
+                              checked={row.answer === 'no'}
+                              onChange={() => patchChecklistRow(rowKey, { answer: 'no' })}
+                              disabled={ro}
+                              className="h-4 w-4 shrink-0 sm:h-3.5 sm:w-3.5"
+                            />
+                          </label>
                         ) : null}
                       </td>
-                      <td className={`border border-black px-0.5 align-middle ${hi ? 'bg-blue-50/50' : ''}`}>
+                      <td
+                        className={`induction-checklist-initial-cell border border-black px-0.5 align-middle ${hi ? 'bg-blue-50/50' : ''}`}
+                      >
                         {interactive && row ? (
                           <input
                             type="text"
@@ -1165,19 +1511,22 @@ export const InductionDocumentPages: React.FC<{
             I have attended the induction program at Skyline Institute of Technology. I acknowledge that I have understood
             the information mentioned above.
           </p>
-          <p className="mt-3 flex flex-wrap items-end gap-x-4 gap-y-2">
-            <span>
+          <p className="induction-declaration-sign-date mt-3 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end sm:gap-x-4 sm:gap-y-2">
+            <span className="block w-full sm:inline sm:w-auto">
               <span className="font-semibold">Signature:</span>{' '}
               {interactive ? (
                 <input
                   type="text"
-                  className={`ml-1 inline-block min-w-[200px] ${SIG_INPUT_BASE}`}
+                  className={`mt-1 block w-full min-w-0 sm:mt-0 sm:ml-1 sm:inline-block sm:min-w-[200px] ${SIG_INPUT_BASE}`}
                   value={interactive.value.checklistDeclaration.signature}
                   onChange={(ev) =>
-                    interactive.onChange({
-                      ...interactive.value,
-                      checklistDeclaration: { ...interactive.value.checklistDeclaration, signature: ev.target.value },
-                    })
+                    interactive.onChange(
+                      (prev) => ({
+                        ...prev,
+                        checklistDeclaration: { ...prev.checklistDeclaration, signature: ev.target.value },
+                      }),
+                      { activeSignatureField: 'checklist_declaration' }
+                    )
                   }
                   disabled={interactive.readOnly}
                 />
@@ -1185,21 +1534,25 @@ export const InductionDocumentPages: React.FC<{
                 <span className="inline-block min-w-[220px] border-b border-gray-800" />
               )}
             </span>
-            <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="block w-full sm:inline-flex sm:w-auto sm:flex-wrap sm:items-center sm:gap-x-2 sm:gap-y-1">
               <span className="font-semibold">Date:</span>
               {interactive ? (
                 <InductionInlineDatePicker
                   value={interactive.value.checklistDeclaration.date}
                   onChange={(iso) =>
-                    interactive.onChange({
-                      ...interactive.value,
-                      checklistDeclaration: { ...interactive.value.checklistDeclaration, date: iso },
-                    })
+                    interactive.onChange(
+                      (prev) => ({
+                        ...prev,
+                        checklistDeclaration: { ...prev.checklistDeclaration, date: iso },
+                      }),
+                      { activeDateField: 'checklist_declaration' }
+                    )
                   }
                   disabled={interactive.readOnly}
+                  className="mt-1 w-full max-w-full sm:mt-0 sm:max-w-[148px]"
                 />
               ) : (
-                <span className="inline-block min-w-[100px] border-b border-gray-800" />
+                <span className="mt-1 inline-block min-h-[1.25rem] w-full border-b border-gray-800 sm:mt-0 sm:min-w-[100px] sm:w-auto" />
               )}
             </span>
           </p>

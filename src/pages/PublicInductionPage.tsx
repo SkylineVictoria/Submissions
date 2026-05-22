@@ -10,6 +10,7 @@ import {
   getSkylineInductionByToken,
   getSkylineInductionSubmissionState,
   requestInductionOtp,
+  saveSkylineInductionDraft,
   submitSkylineInductionForm,
   unlockSkylineInductionSession,
   type SkylineInductionRow,
@@ -18,6 +19,7 @@ import {
   emptyInductionFormPayload,
   parseInductionPayload,
   synchronizeInductionDerivedFields,
+  type InductionFormSyncOptions,
   validateInductionFormPayload,
   type InductionFormPayload,
 } from '../lib/inductionForm';
@@ -103,9 +105,82 @@ export const PublicInductionPage: React.FC = () => {
   const [outsideWindowServer, setOutsideWindowServer] = useState(false);
   const [windowTick, setWindowTick] = useState(0);
 
-  const mergeInductionForm = useCallback((next: InductionFormPayload) => {
-    setForm(synchronizeInductionDerivedFields(next));
-  }, []);
+  const mergeInductionForm = useCallback(
+    (next: InductionFormPayload | ((prev: InductionFormPayload) => InductionFormPayload), sync?: InductionFormSyncOptions) => {
+      setForm((prev) => {
+        const resolved = typeof next === 'function' ? next(prev) : next;
+        return synchronizeInductionDerivedFields(resolved, sync);
+      });
+    },
+    []
+  );
+
+  /** Restore submitted pack or server/local draft after OTP or session refresh. */
+  const hydrateFormAfterAuth = useCallback(
+    async (sess: ClientInductionSession, options?: { toastOnDraft?: boolean }): Promise<boolean> => {
+      if (!token) return false;
+      const st = await getSkylineInductionSubmissionState({
+        accessToken: token,
+        sessionToken: sess.sessionToken,
+      });
+      if (!st.ok) return false;
+
+      if (st.submitted) {
+        setSubmitted(true);
+        setOutsideWindowServer(false);
+        setDraftSavedAt(null);
+        clearInductionDraft(token, sess.email);
+        const p = parseInductionPayload(st.payload);
+        if (p) setForm(synchronizeInductionDerivedFields(p));
+        return false;
+      }
+
+      setSubmitted(false);
+      setOutsideWindowServer(st.outsideWindow ?? false);
+
+      let restored = false;
+      let savedAtMs: number | null = null;
+      let restoredPayload: InductionFormPayload | null = null;
+
+      if (st.draftPayload) {
+        restoredPayload = parseInductionPayload(st.draftPayload);
+        if (restoredPayload) {
+          setForm(synchronizeInductionDerivedFields(restoredPayload));
+          restored = true;
+          if (st.draftSavedAt) {
+            const t = Date.parse(st.draftSavedAt);
+            if (!Number.isNaN(t)) savedAtMs = t;
+          }
+        }
+      }
+
+      if (!restored) {
+        const local = readInductionDraftEnvelope(token, sess.email);
+        if (local) {
+          restoredPayload = local.payload;
+          setForm(synchronizeInductionDerivedFields(local.payload));
+          restored = true;
+          savedAtMs = local.savedAt > 0 ? local.savedAt : null;
+        }
+      }
+
+      if (restoredPayload) {
+        try {
+          writeInductionDraft(token, sess.email, restoredPayload);
+        } catch {
+          /* local cache best-effort */
+        }
+      }
+
+      setDraftSavedAt(savedAtMs);
+
+      if (restored && options?.toastOnDraft) {
+        toast.success('Your saved draft has been restored. You can continue where you left off.');
+      }
+      return restored;
+    },
+    [token]
+  );
 
   useEffect(() => {
     if (!token) {
@@ -165,31 +240,12 @@ export const PublicInductionPage: React.FC = () => {
           setSessionReady(true);
           return;
         }
-        setSession({ sessionToken: parsed.sessionToken, email: parsed.email || '' });
-        if (st.submitted) {
-          setSubmitted(true);
-          setOutsideWindowServer(false);
-          setDraftSavedAt(null);
-          const emailClear = (parsed.email || '').trim();
-          if (emailClear) clearInductionDraft(token, emailClear);
-          const p = parseInductionPayload(st.payload);
-          if (p) setForm(synchronizeInductionDerivedFields(p));
-        } else {
-          setSubmitted(false);
-          setOutsideWindowServer(st.outsideWindow ?? false);
-          const emailForDraft = (parsed.email || '').trim();
-          if (emailForDraft) {
-            const draft = readInductionDraftEnvelope(token, emailForDraft);
-            if (draft) {
-              setForm(synchronizeInductionDerivedFields(draft.payload));
-              setDraftSavedAt(draft.savedAt > 0 ? draft.savedAt : null);
-            } else {
-              setDraftSavedAt(null);
-            }
-          } else {
-            setDraftSavedAt(null);
-          }
-        }
+        const sess: ClientInductionSession = {
+          sessionToken: parsed.sessionToken,
+          email: (parsed.email || '').trim(),
+        };
+        setSession(sess);
+        await hydrateFormAfterAuth(sess);
       } catch {
         try {
           sessionStorage.removeItem(inductionSessionStorageKey(token));
@@ -204,19 +260,20 @@ export const PublicInductionPage: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [token, row?.id]);
+  }, [token, row?.id, hydrateFormAfterAuth]);
 
   useEffect(() => {
     const id = window.setInterval(() => setWindowTick((n) => n + 1), 30000);
     return () => window.clearInterval(id);
   }, []);
 
-  /** Persist draft locally so refresh does not lose in-progress answers (same device / browser). */
+  /** Persist draft locally (fast) and on server (resume on any device after OTP). */
   useEffect(() => {
     if (!token || !session || submitted) return;
     const email = session.email.trim();
     if (!email) return;
-    const id = window.setTimeout(() => {
+    const payload = form as unknown as Record<string, unknown>;
+    const localId = window.setTimeout(() => {
       try {
         const at = writeInductionDraft(token, email, form);
         setDraftSavedAt(at);
@@ -224,20 +281,49 @@ export const PublicInductionPage: React.FC = () => {
         /* ignore quota / private mode */
       }
     }, 650);
-    return () => window.clearTimeout(id);
+    const serverId = window.setTimeout(() => {
+      void saveSkylineInductionDraft({
+        accessToken: token,
+        sessionToken: session.sessionToken,
+        payload,
+      }).then((res) => {
+        if (res.ok && res.savedAt) {
+          const t = Date.parse(res.savedAt);
+          if (!Number.isNaN(t)) setDraftSavedAt(t);
+        }
+      });
+    }, 2200);
+    return () => {
+      window.clearTimeout(localId);
+      window.clearTimeout(serverId);
+    };
   }, [form, token, session, submitted]);
 
-  const saveDraftManually = useCallback(() => {
+  const saveDraftManually = useCallback(async () => {
     if (!token || !session || submitted) return;
     const email = session.email.trim();
     if (!email) return;
-    try {
-      const at = writeInductionDraft(token, email, form);
-      setDraftSavedAt(at);
-      toast.success('Draft saved on this device.');
-    } catch {
-      toast.error('Could not save draft (storage may be full or blocked).');
+    const res = await saveSkylineInductionDraft({
+      accessToken: token,
+      sessionToken: session.sessionToken,
+      payload: form as unknown as Record<string, unknown>,
+    });
+    if (!res.ok) {
+      toast.error(res.error ?? 'Could not save draft.');
+      return;
     }
+    try {
+      writeInductionDraft(token, email, form);
+    } catch {
+      /* ignore */
+    }
+    if (res.savedAt) {
+      const t = Date.parse(res.savedAt);
+      setDraftSavedAt(Number.isNaN(t) ? Date.now() : t);
+    } else {
+      setDraftSavedAt(Date.now());
+    }
+    toast.success('Draft saved. Sign in again with the same email to continue.');
   }, [token, session, submitted, form]);
 
   const emailValid = isValidInstitutionalEmail(email);
@@ -309,7 +395,9 @@ export const PublicInductionPage: React.FC = () => {
       toast.error(result.error || 'Could not verify. Try again.');
       return;
     }
-    persistSession({ sessionToken: result.sessionToken, email: email.trim() });
+    const sess = { sessionToken: result.sessionToken, email: email.trim() };
+    persistSession(sess);
+    const draftRestored = await hydrateFormAfterAuth(sess, { toastOnDraft: true });
     // Ask for notification preference at authentication time (best-effort; does not affect induction flow).
     try {
       const key = 'signflow.notifications.induction_prompted_v1';
@@ -321,7 +409,9 @@ export const PublicInductionPage: React.FC = () => {
     } catch {
       void requestNotificationPreference();
     }
-    toast.success('Welcome — complete all sections below, then submit.');
+    if (!draftRestored) {
+      toast.success('Welcome — complete all sections below, then submit.');
+    }
   };
 
   const handleSubmitForm = async () => {
@@ -565,7 +655,7 @@ export const PublicInductionPage: React.FC = () => {
             <p className="font-semibold text-amber-950">Before you submit</p>
             <p className="mt-1">
               Complete all required student fields: Step 1 login (Yes/No for Outlook and Teams), Step 4 documents (Yes/No for
-              each line; file attach is optional), checklist (Yes + initials on every topic), full enrolment details, and the
+              each line — attach a file when you select Yes), checklist (Yes + initials on every topic), full enrolment details, and the
               CCTV acknowledgement on the last page. Visa number and expiry are optional; the promotional consent block at
               the bottom of the last page is optional. You only get one submission per induction link.
             </p>
@@ -579,7 +669,7 @@ export const PublicInductionPage: React.FC = () => {
             value: form,
             onChange: mergeInductionForm,
             readOnly: false,
-            inductionSubmissionFolder: session?.email?.trim().toLowerCase() || undefined,
+            inductionSubmissionFolder: session?.sessionToken || session?.email?.trim().toLowerCase() || undefined,
           }}
         />
       </div>
@@ -620,7 +710,7 @@ export const PublicInductionPage: React.FC = () => {
               </div>
               {!submitBlocked ? (
                 <p className="text-center text-[11px] text-gray-500 sm:text-right">
-                  Draft autosaves while you edit (this device).{' '}
+                  Draft autosaves while you edit.{' '}
                   {draftSavedAt ? (
                     <>
                       Last saved{' '}
@@ -628,10 +718,10 @@ export const PublicInductionPage: React.FC = () => {
                         dateStyle: 'short',
                         timeStyle: 'short',
                       })}
-                      .
+                      . Sign in again with the same email to continue on another device.
                     </>
                   ) : (
-                    <>Use Save draft if you need to copy work across refreshes.</>
+                    <>Use Save draft before closing the tab.</>
                   )}
                 </p>
               ) : null}
