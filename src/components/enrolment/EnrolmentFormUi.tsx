@@ -421,39 +421,36 @@ export function CourseMultiSelect({
   onChange: (next: string[]) => void;
   error?: FieldError | string;
 }) {
-  const selectId = useId();
-  const listSize = Math.min(Math.max(options.length, 4), 8);
+  const toggle = (courseId: string, checked: boolean) => {
+    if (checked) {
+      onChange([...values, courseId]);
+    } else {
+      onChange(values.filter((v) => v !== courseId));
+    }
+  };
 
   return (
     <div className="enrol-field enrol-course-multi">
       <FieldLabel required={required}>{label}</FieldLabel>
       <p className="enrol-note enrol-course-multi-hint">
-        Each option shows course code and name. On a phone, tap to select; on a computer, hold Ctrl (Windows) or Cmd
-        (Mac) to select more than one.
+        Tick one or more courses below. Each option shows course code and name.
       </p>
-      <select
-        id={selectId}
-        multiple
-        size={listSize}
-        className="enrol-course-multi-select"
-        value={values}
-        onChange={(e) => {
-          const selected = Array.from(e.target.selectedOptions).map((o) => o.value);
-          onChange(selected);
-        }}
-      >
+      <div className="enrol-course-checkbox-list">
         {options.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
+          <label key={o.value} className="enrol-course-checkbox-item">
+            <input
+              type="checkbox"
+              checked={values.includes(o.value)}
+              onChange={(e) => toggle(o.value, e.target.checked)}
+            />
+            <span>{o.label}</span>
+          </label>
         ))}
-      </select>
+      </div>
       {values.length > 0 ? (
-        <ul className="enrol-selected-courses" aria-label="Selected courses">
-          {values.map((id) => (
-            <li key={id}>{options.find((o) => o.value === id)?.label ?? id}</li>
-          ))}
-        </ul>
+        <p className="enrol-selected-summary">
+          <strong>{values.length}</strong> course{values.length > 1 ? 's' : ''} selected
+        </p>
       ) : null}
       <FieldErrorMsg error={error} />
     </div>

@@ -436,8 +436,7 @@ export const EnrolmentPdfDocument: React.FC<EnrolmentPdfDocumentProps> = ({
               checked={!!values.usi.consent}
             />
           </BorderedRow>
-          <SignatureRow label="Signature" value={values.usi.signatureName} />
-          <TextRow label="Date" value={values.usi.signatureDate} />
+          {/* Signature captured in declaration section only */}
         </Section>
 
         <Section title="6. Emergency Contact">

@@ -1016,32 +1016,6 @@ export const EnrollNowPage: React.FC = () => {
             <input type="checkbox" {...register('usi.consent')} />
             I consent to SLIT using/providing my USI for enrolment, reporting and verification purposes where required.
           </CheckOption>
-          <SignatureFieldRow
-            label="Digital signature"
-            required
-            value={values.usi.signatureName?.trim() || null}
-            onChange={(v) => setValue('usi.signatureName', v ?? '', { shouldValidate: true, shouldDirty: true })}
-            error={errors.usi?.signatureName}
-            suggestionFrom={
-              [values.personal.firstName, values.personal.lastName].filter(Boolean).join(' ').trim() || null
-            }
-            onSuggestionClick={
-              [values.personal.firstName, values.personal.lastName].filter(Boolean).join(' ').trim()
-                ? () => {
-                    const name = [values.personal.firstName, values.personal.lastName].filter(Boolean).join(' ').trim();
-                    setValue('usi.signatureName', name, { shouldValidate: true, shouldDirty: true });
-                  }
-                : undefined
-            }
-          />
-          <DateField
-            label="Date"
-            value={values.usi.signatureDate}
-            onChange={(v) => setValue('usi.signatureDate', v)}
-            fromYear={new Date().getFullYear() - 1}
-            toYear={new Date().getFullYear() + 1}
-            placement="below"
-          />
         </div>
 
         <SectionHeading>6. Emergency Contact</SectionHeading>

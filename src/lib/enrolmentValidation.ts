@@ -253,9 +253,7 @@ export const enrolmentSubmitSchema = z
     if (!data.usi.consent) {
       ctx.addIssue({ code: 'custom', message: 'USI consent is required', path: ['usi', 'consent'] });
     }
-    if (!data.usi.signatureName.trim()) {
-      ctx.addIssue({ code: 'custom', message: 'USI digital signature is required', path: ['usi', 'signatureName'] });
-    }
+    // USI signature pad removed — signature is captured once in the declaration section only.
 
     if (data.oshc.requirement === 'Yes' && !data.oshc.coverType.trim()) {
       ctx.addIssue({ code: 'custom', message: 'OSHC cover type is required', path: ['oshc', 'coverType'] });
