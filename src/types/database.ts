@@ -18,6 +18,7 @@ export interface Database {
           cover_asset_url: string | null;
           start_date: string | null;
           end_date: string | null;
+          learning_material_urls: string[];
           created_at: string;
         };
         Insert: {
@@ -34,6 +35,7 @@ export interface Database {
           cover_asset_url?: string | null;
           start_date?: string | null;
           end_date?: string | null;
+          learning_material_urls?: string[];
           created_at?: string;
         };
         Update: Partial<Database['public']['Tables']['forms']['Insert']>;

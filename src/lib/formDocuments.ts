@@ -1,5 +1,6 @@
 import JSZip from 'jszip';
 import { supabase } from './supabase';
+import { fetchForm, updateForm, getEffectiveStoredUser } from './formEngine';
 
 // Project uses a single media bucket (photomedia/skyline/...). Learning materials live under:
 // photomedia/Learning/<formname-id>/<filename>  — student-facing (also legacy uploads)
@@ -99,13 +100,29 @@ export async function uploadLearningDoc(input: {
     contentType: input.file.type || undefined,
   });
   if (error) throw error;
+
+  const publicUrl = getLearningDocPublicUrl(path);
+  if (audience === 'student') {
+    await appendLearningMaterialUrl(input.formId, publicUrl);
+  }
+  void logDocActivity(input.formId, 'upload', { filePath: path, fileName: safeName, publicUrl, audience });
 }
 
-export async function deleteLearningDoc(path: string): Promise<void> {
+export async function deleteLearningDoc(path: string, formId?: number): Promise<void> {
   const p = String(path ?? '').trim();
   if (!p) return;
+  const fileName = p.split('/').pop() ?? p;
+  const isTrainer = p.includes(`/${TRAINER_LEARNING_SEGMENT}/`);
   const { error } = await supabase.storage.from(LEARNING_BUCKET).remove([p]);
   if (error) throw error;
+
+  const publicUrl = getLearningDocPublicUrl(p);
+  if (formId != null && !isTrainer) {
+    await removeLearningMaterialUrl(formId, publicUrl);
+  }
+  if (formId != null) {
+    void logDocActivity(formId, 'delete', { filePath: p, fileName, publicUrl, audience: isTrainer ? 'trainer' : 'student' });
+  }
 }
 
 export function getLearningDocPublicUrl(path: string): string {
@@ -172,5 +189,52 @@ export async function zipAndDownloadLearningDocs(docs: LearningDoc[], zipBaseNam
     document.body.removeChild(a);
   } finally {
     URL.revokeObjectURL(url);
+  }
+}
+
+async function appendLearningMaterialUrl(formId: number, url: string): Promise<void> {
+  try {
+    const form = await fetchForm(formId, { allowInactiveForAdmin: true });
+    if (!form) return;
+    const existing = form.learning_material_urls ?? [];
+    if (existing.includes(url)) return;
+    await updateForm(formId, { learning_material_urls: [...existing, url] });
+  } catch {
+    // Best-effort; upload already succeeded so don't throw
+  }
+}
+
+async function removeLearningMaterialUrl(formId: number, url: string): Promise<void> {
+  try {
+    const form = await fetchForm(formId, { allowInactiveForAdmin: true });
+    if (!form) return;
+    const existing = form.learning_material_urls ?? [];
+    const next = existing.filter((u) => u !== url);
+    if (next.length === existing.length) return;
+    await updateForm(formId, { learning_material_urls: next });
+  } catch {
+    // Best-effort; delete already succeeded so don't throw
+  }
+}
+
+export async function logDocActivity(
+  formId: number,
+  action: 'upload' | 'delete' | 'add_url' | 'remove_url',
+  details: { filePath?: string; fileName?: string; publicUrl?: string; audience?: LearningAudience }
+): Promise<void> {
+  try {
+    const user = getEffectiveStoredUser();
+    await supabase.from('skyline_learning_doc_activity').insert({
+      form_id: formId,
+      action,
+      file_path: details.filePath ?? null,
+      file_name: details.fileName ?? null,
+      public_url: details.publicUrl ?? null,
+      audience: details.audience ?? null,
+      performed_by: user?.id ?? null,
+      performed_by_name: user?.full_name ?? user?.email ?? null,
+    });
+  } catch {
+    // Best-effort logging; don't break the main operation
   }
 }

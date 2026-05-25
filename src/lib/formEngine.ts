@@ -52,7 +52,7 @@ export async function fetchForm(
   return data as Form;
 }
 
-export async function updateForm(formId: number, updates: Partial<Pick<Form, 'name' | 'version' | 'unit_code' | 'unit_name' | 'qualification_code' | 'qualification_name' | 'header_asset_url' | 'cover_asset_url' | 'start_date' | 'end_date' | 'active'>>): Promise<{ error: Error | null }> {
+export async function updateForm(formId: number, updates: Partial<Pick<Form, 'name' | 'version' | 'unit_code' | 'unit_name' | 'qualification_code' | 'qualification_name' | 'header_asset_url' | 'cover_asset_url' | 'start_date' | 'end_date' | 'active' | 'learning_material_urls'>>): Promise<{ error: Error | null }> {
   const { updated_by } = getAuditFields();
   const payload = { ...updates, updated_by };
   const { error } = await supabase.from('skyline_forms').update(payload).eq('id', formId);
