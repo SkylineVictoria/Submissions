@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Copy, ExternalLink, Send, RefreshCw, Ban, CheckCircle, User, Download } from 'lucide-react';
+import * as XLSX from 'xlsx';
+import { Copy, ExternalLink, Send, RefreshCw, Ban, CheckCircle, User, Download, FileDown } from 'lucide-react';
 import {
   listSubmittedInstancesPaged,
   updateInstanceRole,
@@ -129,6 +130,8 @@ export const AdminAssessmentsPage: React.FC = () => {
   const [dateDrafts, setDateDrafts] = useState<Record<number, { start?: string | null; end?: string | null }>>({});
   const [massApplying, setMassApplying] = useState(false);
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState(0);
 
   type DirectorySortKey = 'student' | 'form' | 'start' | 'end' | 'created' | 'workflow';
   const [directorySort, setDirectorySort] = useState<{ key: DirectorySortKey; dir: SortDirection }>({
@@ -377,6 +380,79 @@ export const AdminAssessmentsPage: React.FC = () => {
       setMassApplying(false);
     }
   }, [rows, currentPage, getEffectiveEnd, getEffectiveStart, hasRowDateChanges, loadRows, searchTerm]);
+
+  const handleExport = useCallback(async () => {
+    if (exporting) return;
+    setExporting(true);
+    setExportProgress(0);
+
+    const beforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = 'Export is in progress. If you leave, the export will be lost.';
+    };
+    window.addEventListener('beforeunload', beforeUnload);
+
+    const toastId = toast.persistent('Preparing export… 0%', 'info');
+
+    try {
+      const BATCH = 500;
+      const allRows: SubmittedInstanceRow[] = [];
+      const courseId = courseFilter ? Number(courseFilter) : undefined;
+      const fId = formFilter ? Number(formFilter) : undefined;
+      const first = await listSubmittedInstancesPaged(1, BATCH, searchTerm || undefined, courseId, fId, undefined, { key: directorySort.key, dir: directorySort.dir }, null, workflowFilter);
+      allRows.push(...first.data);
+      const total = first.total;
+      const pct = (n: number) => (total > 0 ? Math.round((n / total) * 100) : 100);
+      setExportProgress(pct(allRows.length));
+      toast.update(toastId, `Exporting… ${pct(allRows.length)}% (${allRows.length} / ${total})`);
+
+      const totalPages = Math.ceil(total / BATCH);
+      for (let p = 2; p <= totalPages; p++) {
+        const batch = await listSubmittedInstancesPaged(p, BATCH, searchTerm || undefined, courseId, fId, undefined, { key: directorySort.key, dir: directorySort.dir }, null, workflowFilter);
+        allRows.push(...batch.data);
+        const progress = pct(allRows.length);
+        setExportProgress(progress);
+        toast.update(toastId, `Exporting… ${progress}% (${allRows.length} / ${total})`);
+      }
+      setExportProgress(100);
+      toast.update(toastId, 'Generating file…');
+
+      const sheetData = allRows.map((r) => ({
+        'Name': r.student_name,
+        'Student ID': r.student_email || '-',
+        'Form Name': r.form_name,
+        'Start Date': formatDDMMYYYY(r.start_date),
+        'End Date': formatDDMMYYYY(r.end_date),
+        'Status': getWorkflowLabel(r),
+      }));
+
+      const ws = XLSX.utils.json_to_sheet(sheetData);
+      ws['!cols'] = [
+        { wch: 40 },
+        { wch: 42 },
+        { wch: 60 },
+        { wch: 20 },
+        { wch: 20 },
+        { wch: 28 },
+      ];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Assessments');
+      const today = new Date();
+      const exportDateStr = `${pad2(today.getDate())}-${pad2(today.getMonth() + 1)}-${today.getFullYear()}`;
+      XLSX.writeFile(wb, `Assessments_Export_${exportDateStr}.xlsx`);
+
+      toast.remove(toastId);
+      toast.success(`Exported ${allRows.length} assessments`);
+    } catch (err) {
+      console.error('Export error', err);
+      toast.remove(toastId);
+      toast.error(err instanceof Error ? err.message : 'Export failed');
+    } finally {
+      window.removeEventListener('beforeunload', beforeUnload);
+      setExporting(false);
+      setExportProgress(0);
+    }
+  }, [exporting, courseFilter, formFilter, searchTerm, directorySort, workflowFilter]);
 
   const handleSendToTrainerConfirm = async () => {
     if (!sendToTrainerRow || !selectedTrainerId) return;
@@ -654,7 +730,26 @@ export const AdminAssessmentsPage: React.FC = () => {
                   />
                 </div>
               </div>
-              <div className="flex w-full shrink-0 justify-end xl:w-auto xl:pl-2">
+              <div className="flex w-full shrink-0 justify-end gap-2 xl:w-auto xl:pl-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void handleExport()}
+                  disabled={exporting || loading}
+                  className="inline-flex h-10 min-h-[40px] w-full items-center justify-center gap-2 whitespace-nowrap sm:w-auto"
+                >
+                  {exporting ? (
+                    <>
+                      <Loader variant="dots" size="sm" inline className="mr-0.5" />
+                      <span>Exporting {exportProgress}%</span>
+                    </>
+                  ) : (
+                    <>
+                      <FileDown className="h-4 w-4" />
+                      <span>Export</span>
+                    </>
+                  )}
+                </Button>
                 <Button
                   type="button"
                   variant="outline"

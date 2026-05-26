@@ -7,6 +7,7 @@ export interface Toast {
   message: string;
   type?: 'success' | 'error' | 'info';
   duration?: number;
+  persistent?: boolean;
 }
 
 interface ToastProps {
@@ -19,10 +20,9 @@ export const ToastItem: React.FC<ToastProps> = ({ toast, onRemove }) => {
   const [isRemoving, setIsRemoving] = useState(false);
 
   useEffect(() => {
-    // Trigger slide-in animation
     setTimeout(() => setIsVisible(true), 10);
 
-    // Auto-remove after duration
+    if (toast.persistent) return;
     const timer = setTimeout(() => {
       handleRemove();
     }, toast.duration || 4000);
@@ -104,15 +104,16 @@ export const ToastItem: React.FC<ToastProps> = ({ toast, onRemove }) => {
         </button>
       </div>
 
-      {/* Progress bar */}
-      <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-white/20">
-        <div
-          className="h-full bg-white/60 animate-shrink"
-          style={{
-            animation: `shrink ${toast.duration || 4000}ms linear forwards`,
-          }}
-        />
-      </div>
+      {!toast.persistent && (
+        <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-white/20">
+          <div
+            className="h-full bg-white/60 animate-shrink"
+            style={{
+              animation: `shrink ${toast.duration || 4000}ms linear forwards`,
+            }}
+          />
+        </div>
+      )}
 
       <style>{`
         @keyframes shimmer {
