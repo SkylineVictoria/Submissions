@@ -15,6 +15,7 @@ import {
   updateFormInstanceDates,
   listCoursesPaged,
   listFormsPaged,
+  fetchAssessmentSummaries,
 } from '../lib/formEngine';
 import type { AssessmentDirectoryWorkflowFilter, SubmittedInstanceRow, Trainer } from '../lib/formEngine';
 import { Card } from '../components/ui/Card';
@@ -30,7 +31,15 @@ import { AdminListPagination } from '../components/admin/AdminListPagination';
 import type { SortDirection } from '../components/admin/SortableTh';
 import { SortableTh } from '../components/admin/SortableTh';
 import { supabase } from '../lib/supabase';
-import { computeRowUi, getMissedAttemptWindowText } from '../utils/assessmentRowUi';
+import {
+  computeRowUi,
+  getMissedAttemptWindowText,
+  getStudentAttemptDoneText,
+  getTrainerAttemptFailedText,
+  maskCompetentWhileAwaitingTrainer,
+  withinInstanceAccessWindow,
+  type AttemptResult,
+} from '../utils/assessmentRowUi';
 import { FormDocumentsPanel } from '../components/documents/FormDocumentsPanel';
 import { useAuth } from '../contexts/AuthContext';
 import {
@@ -59,6 +68,84 @@ const getWorkflowLabel = (row: SubmittedInstanceRow): string => {
   if (row.role_context === 'office') return 'Waiting Office';
   if (row.status === 'draft') return 'Awaiting Student';
   return 'Submitted (Not Sent)';
+};
+
+const getAttemptOutcomeLabel = (attemptResults: AttemptResult[]): string => {
+  const r = (attemptResults ?? []).slice(0, 3);
+  if (r.some((x) => x === 'competent')) return 'Completed';
+  if (r.some((x) => x === 'not_yet_competent')) return 'Competency Not Achieved';
+  return 'In progress';
+};
+
+const getExportStatusText = (row: SubmittedInstanceRow, rawAttemptResults: AttemptResult[]): string => {
+  const submittedCount = Math.min(
+    3,
+    Math.max(0, Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0))
+  );
+
+  const missedAttemptTextRaw = getMissedAttemptWindowText({
+    noAttemptRollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
+    didNotAttempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
+  });
+  const missedAll = missedAttemptTextRaw === "Didn't attempt any";
+  if (missedAll) return "Didn't attempt any";
+
+  // If the student has already submitted attempt 1/2/3, do not show "Missed 1st/2nd/3rd attempt" for those.
+  const normalizeMissedAttemptText = (text: string | null): string | null => {
+    const t = String(text ?? '').trim();
+    if (!t) return null;
+    if (!t.startsWith('Missed ')) return t;
+    const parts = t
+      .slice('Missed '.length)
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const kept = parts.filter((p) => {
+      if (submittedCount >= 1 && p.startsWith('1st attempt')) return false;
+      if (submittedCount >= 2 && p.startsWith('2nd attempt')) return false;
+      if (submittedCount >= 3 && p.startsWith('3rd attempt')) return false;
+      return true;
+    });
+    if (kept.length === 0) return null;
+    return `Missed ${kept.join(', ')}`;
+  };
+
+  const masked = maskCompetentWhileAwaitingTrainer(row, rawAttemptResults);
+  const outcomeLabel = getAttemptOutcomeLabel(masked);
+
+  const attemptDoneText = getStudentAttemptDoneText({
+    submissionCount: submittedCount,
+    submittedAt: row.submitted_at ?? null,
+    attemptResults: rawAttemptResults,
+  });
+  const trainerAttemptFailedText = getTrainerAttemptFailedText(rawAttemptResults);
+  const missedAttemptText = normalizeMissedAttemptText(missedAttemptTextRaw);
+
+  const accessRole = row.role_context === 'trainer' ? 'trainer' : row.role_context === 'office' ? 'office' : 'student';
+  const ui = computeRowUi({
+    row: {
+      start_date: row.start_date,
+      end_date: row.end_date,
+      did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
+    },
+    attemptResults: masked,
+    ignoreEndDateForAccess: accessRole !== 'student',
+  });
+  const win = withinInstanceAccessWindow(
+    { start_date: row.start_date, end_date: row.end_date },
+    accessRole
+  );
+  const studentOpenDisabled = accessRole === 'student' && (!win.ok || ui.disabled);
+
+  const parts: string[] = [outcomeLabel];
+  if (trainerAttemptFailedText) parts.push(trainerAttemptFailedText);
+  if (attemptDoneText) parts.push(attemptDoneText);
+  // Only show missed attempt messaging when it doesn't contradict submitted attempts.
+  if (ui.kind === 'in_progress' && missedAttemptText) parts.push(missedAttemptText);
+  if (studentOpenDisabled && (ui.kind === 'future' || ui.kind === 'expired') && ui.reason) parts.push(ui.reason);
+  else if (!win.ok && win.reason) parts.push(win.reason);
+
+  return parts.filter((p) => String(p || '').trim().length > 0).join(' | ');
 };
 
 const WORKFLOW_FILTER_OPTIONS: { value: AssessmentDirectoryWorkflowFilter; label: string }[] = [
@@ -120,6 +207,8 @@ export const AdminAssessmentsPage: React.FC = () => {
   const [courseFilter, setCourseFilter] = useState('');
   const [formFilter, setFormFilter] = useState('');
   const [workflowFilter, setWorkflowFilter] = useState<AssessmentDirectoryWorkflowFilter>('all');
+  const [startFromFilter, setStartFromFilter] = useState<string>('');
+  const [startToFilter, setStartToFilter] = useState<string>('');
   const [sendToTrainerRow, setSendToTrainerRow] = useState<SubmittedInstanceRow | null>(null);
   const [trainers, setTrainers] = useState<Trainer[]>([]);
   const [trainersLoading, setTrainersLoading] = useState(false);
@@ -143,6 +232,8 @@ export const AdminAssessmentsPage: React.FC = () => {
     if (!opts?.silent) setLoading(true);
     const courseId = courseFilter ? Number(courseFilter) : undefined;
     const formId = formFilter ? Number(formFilter) : undefined;
+    const startFrom = startFromFilter.trim() || null;
+    const startTo = startToFilter.trim() || null;
     const res = await listSubmittedInstancesPaged(
       page,
       PAGE_SIZE,
@@ -155,12 +246,14 @@ export const AdminAssessmentsPage: React.FC = () => {
         dir: directorySort.dir,
       },
       null,
-      workflowFilter
+      workflowFilter,
+      startFrom,
+      startTo
     );
     setRows(res.data);
     setTotalRows(res.total);
     setLoading(false);
-  }, [courseFilter, formFilter, directorySort, workflowFilter]);
+  }, [courseFilter, formFilter, directorySort, workflowFilter, startFromFilter, startToFilter]);
 
   const loadCoursesOptions = useCallback(async (page: number, search: string) => {
     const res = await listCoursesPaged(page, 20, search ? search.trim() : undefined);
@@ -186,7 +279,7 @@ export const AdminAssessmentsPage: React.FC = () => {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, courseFilter, formFilter, workflowFilter]);
+  }, [searchTerm, courseFilter, formFilter, workflowFilter, startFromFilter, startToFilter]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -399,7 +492,9 @@ export const AdminAssessmentsPage: React.FC = () => {
       const allRows: SubmittedInstanceRow[] = [];
       const courseId = courseFilter ? Number(courseFilter) : undefined;
       const fId = formFilter ? Number(formFilter) : undefined;
-      const first = await listSubmittedInstancesPaged(1, BATCH, searchTerm || undefined, courseId, fId, undefined, { key: directorySort.key, dir: directorySort.dir }, null, workflowFilter);
+      const startFrom = startFromFilter.trim() || null;
+      const startTo = startToFilter.trim() || null;
+      const first = await listSubmittedInstancesPaged(1, BATCH, searchTerm || undefined, courseId, fId, undefined, { key: directorySort.key, dir: directorySort.dir }, null, workflowFilter, startFrom, startTo);
       allRows.push(...first.data);
       const total = first.total;
       const pct = (n: number) => (total > 0 ? Math.round((n / total) * 100) : 100);
@@ -408,13 +503,23 @@ export const AdminAssessmentsPage: React.FC = () => {
 
       const totalPages = Math.ceil(total / BATCH);
       for (let p = 2; p <= totalPages; p++) {
-        const batch = await listSubmittedInstancesPaged(p, BATCH, searchTerm || undefined, courseId, fId, undefined, { key: directorySort.key, dir: directorySort.dir }, null, workflowFilter);
+        const batch = await listSubmittedInstancesPaged(p, BATCH, searchTerm || undefined, courseId, fId, undefined, { key: directorySort.key, dir: directorySort.dir }, null, workflowFilter, startFrom, startTo);
         allRows.push(...batch.data);
         const progress = pct(allRows.length);
         setExportProgress(progress);
         toast.update(toastId, `Exporting… ${progress}% (${allRows.length} / ${total})`);
       }
       setExportProgress(100);
+      toast.update(toastId, 'Loading assessment attempt status…');
+
+      const summaryById: Record<number, { final_attempt_1_result: AttemptResult; final_attempt_2_result: AttemptResult; final_attempt_3_result: AttemptResult }> = {};
+      const ids = allRows.map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0);
+      const CHUNK = 500;
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        const part = await fetchAssessmentSummaries(ids.slice(i, i + CHUNK));
+        Object.assign(summaryById, part as typeof summaryById);
+      }
+
       toast.update(toastId, 'Generating file…');
 
       const sheetData = allRows.map((r) => ({
@@ -423,7 +528,15 @@ export const AdminAssessmentsPage: React.FC = () => {
         'Form Name': r.form_name,
         'Start Date': formatDDMMYYYY(r.start_date),
         'End Date': formatDDMMYYYY(r.end_date),
-        'Status': getWorkflowLabel(r),
+        'Status': (() => {
+          const sum = summaryById[r.id] ?? null;
+          const rawAttemptResults: AttemptResult[] = [
+            sum?.final_attempt_1_result ?? null,
+            sum?.final_attempt_2_result ?? null,
+            sum?.final_attempt_3_result ?? null,
+          ];
+          return getExportStatusText(r, rawAttemptResults);
+        })(),
       }));
 
       const ws = XLSX.utils.json_to_sheet(sheetData);
@@ -433,13 +546,29 @@ export const AdminAssessmentsPage: React.FC = () => {
         { wch: 60 },
         { wch: 20 },
         { wch: 20 },
-        { wch: 28 },
+        { wch: 70 }, // Status (wraps)
       ];
+
+      // Wrap Status column text so long statuses are readable.
+      try {
+        const range = XLSX.utils.decode_range(ws['!ref'] || 'A1:A1');
+        const statusCol = 5; // 0-based (A=0 ... F=5)
+        for (let r = range.s.r; r <= range.e.r; r++) {
+          const addr = XLSX.utils.encode_cell({ r, c: statusCol });
+          const cell = ws[addr] as { s?: unknown } | undefined;
+          if (!cell) continue;
+          (cell as unknown as { s: { alignment: { wrapText: boolean; vertical?: string } } }).s = {
+            alignment: { wrapText: true, vertical: 'top' },
+          };
+        }
+      } catch {
+        // styling is best-effort (xlsx style support varies by environment)
+      }
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Assessments');
       const today = new Date();
       const exportDateStr = `${pad2(today.getDate())}-${pad2(today.getMonth() + 1)}-${today.getFullYear()}`;
-      XLSX.writeFile(wb, `Assessments_Export_${exportDateStr}.xlsx`);
+      XLSX.writeFile(wb, `Assessments_Export_${exportDateStr}.xlsx`, { cellStyles: true });
 
       toast.remove(toastId);
       toast.success(`Exported ${allRows.length} assessments`);
@@ -452,7 +581,7 @@ export const AdminAssessmentsPage: React.FC = () => {
       setExporting(false);
       setExportProgress(0);
     }
-  }, [exporting, courseFilter, formFilter, searchTerm, directorySort, workflowFilter]);
+  }, [exporting, courseFilter, formFilter, searchTerm, directorySort, workflowFilter, startFromFilter, startToFilter]);
 
   const handleSendToTrainerConfirm = async () => {
     if (!sendToTrainerRow || !selectedTrainerId) return;
@@ -729,8 +858,51 @@ export const AdminAssessmentsPage: React.FC = () => {
                     className="w-full min-w-0"
                   />
                 </div>
+                <div className="w-full min-w-0 sm:w-[13rem] sm:flex-shrink-0">
+                  <div className="text-xs font-medium text-gray-600 mb-1">Start from</div>
+                  <DatePicker
+                    value={startFromFilter}
+                    onChange={(v) => {
+                      setStartFromFilter(v || '');
+                      setCurrentPage(1);
+                    }}
+                    compact
+                    placement="below"
+                    maxDate={startToFilter || undefined}
+                  />
+                </div>
+                <div className="w-full min-w-0 sm:w-[13rem] sm:flex-shrink-0">
+                  <div className="text-xs font-medium text-gray-600 mb-1">Start to</div>
+                  <DatePicker
+                    value={startToFilter}
+                    onChange={(v) => {
+                      setStartToFilter(v || '');
+                      setCurrentPage(1);
+                    }}
+                    compact
+                    placement="below"
+                    minDate={startFromFilter || undefined}
+                  />
+                </div>
               </div>
               <div className="flex w-full shrink-0 justify-end gap-2 xl:w-auto xl:pl-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    setSearchTerm('');
+                    setCourseFilter('');
+                    setFormFilter('');
+                    setWorkflowFilter('all');
+                    setStartFromFilter('');
+                    setStartToFilter('');
+                    setCurrentPage(1);
+                  }}
+                  disabled={loading || exporting || refreshing}
+                  className="inline-flex h-10 min-h-[40px] w-full items-center justify-center gap-2 whitespace-nowrap sm:w-auto"
+                >
+                  Clear
+                </Button>
                 <Button
                   type="button"
                   variant="outline"

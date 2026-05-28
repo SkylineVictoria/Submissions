@@ -2722,10 +2722,16 @@ export async function listSubmittedInstancesPaged(
   studentId?: number,
   sort?: { key: 'created' | 'student' | 'form' | 'start' | 'end' | 'workflow'; dir: 'asc' | 'desc' },
   activeOnIso?: string | null,
-  workflowStatus?: AssessmentDirectoryWorkflowFilter | null
+  workflowStatus?: AssessmentDirectoryWorkflowFilter | null,
+  startFromIso?: string | null,
+  startToIso?: string | null
 ): Promise<PaginatedResult<SubmittedInstanceRow>> {
   const active =
     activeOnIso && /^\d{4}-\d{2}-\d{2}$/.test(String(activeOnIso).trim()) ? String(activeOnIso).trim() : null;
+  const startFrom =
+    startFromIso && /^\d{4}-\d{2}-\d{2}$/.test(String(startFromIso).trim()) ? String(startFromIso).trim() : null;
+  const startTo =
+    startToIso && /^\d{4}-\d{2}-\d{2}$/.test(String(startToIso).trim()) ? String(startToIso).trim() : null;
   const wf = workflowStatus && workflowStatus !== 'all' ? workflowStatus : null;
   const { data, error } = await supabase.rpc('skyline_list_submitted_instances_paged', {
     p_page: page,
@@ -2736,6 +2742,8 @@ export async function listSubmittedInstancesPaged(
     p_student_id: Number.isFinite(Number(studentId)) && Number(studentId) > 0 ? Number(studentId) : null,
     p_active_on: active,
     p_workflow_status: wf,
+    p_start_from: startFrom,
+    p_start_to: startTo,
     p_sort_key: sort?.key ?? 'created',
     p_sort_dir: sort?.dir ?? 'desc',
   });
