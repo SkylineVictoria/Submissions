@@ -13,6 +13,7 @@ import {
   GraduationCap,
   Menu,
   BookOpen,
+  DollarSign,
 } from 'lucide-react';
 import { cn } from '../components/utils/cn';
 import { useAuth } from '../contexts/AuthContext';
@@ -21,6 +22,7 @@ import { toast } from '../utils/toast';
 import { NotificationBell } from '../components/NotificationBell';
 import { UserMenu } from '../components/UserMenu';
 import { ensureFcmToken } from '../services/pushNotificationService';
+import { canViewFinanceReports } from '../lib/formEngine';
 
 const SIDEBAR_WIDTH_EXPANDED = 220;
 const SIDEBAR_WIDTH_COLLAPSED = 64;
@@ -63,6 +65,9 @@ export const AdminLayout: React.FC = () => {
         { to: '/admin/courses', label: 'Courses', icon: <GraduationCap className="w-5 h-5 shrink-0" />, end: true },
         { to: '/admin/users', label: 'Users', icon: <UserRoundCheck className="w-5 h-5 shrink-0" />, end: true },
         { to: '/admin/assessments', label: 'Assessments', icon: <ClipboardCheck className="w-5 h-5 shrink-0" />, end: true },
+        ...(canViewFinanceReports(user)
+          ? [{ to: '/admin/reports/finance', label: 'Finance Reports', icon: <DollarSign className="w-5 h-5 shrink-0" />, end: true as const }]
+          : []),
       ];
   const navItems = [
     ...baseNavItems,

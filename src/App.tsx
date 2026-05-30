@@ -8,6 +8,7 @@ import { AuthProvider } from './contexts/AuthContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { AdminOnlyRoute } from './components/AdminOnlyRoute';
 import { SuperAdminOnlyRoute } from './components/SuperAdminOnlyRoute';
+import { FinanceReportsRoute } from './components/FinanceReportsRoute';
 import type { Toast } from './components/ui/Toast';
 
 // Layouts
@@ -20,6 +21,9 @@ const AdminFormPreviewPage = lazy(() => import('./pages/AdminFormPreviewPage').t
 const AdminStudentsPage = lazy(() => import('./pages/AdminStudentsPage').then(m => ({ default: m.AdminStudentsPage })));
 const AdminStudentDetailsPage = lazy(() => import('./pages/AdminStudentDetailsPage').then(m => ({ default: m.AdminStudentDetailsPage })));
 const AdminAssessmentsPage = lazy(() => import('./pages/AdminAssessmentsPage').then(m => ({ default: m.AdminAssessmentsPage })));
+const AdminFinanceReportsPage = lazy(() =>
+  import('./pages/AdminFinanceReportsPage').then((m) => ({ default: m.AdminFinanceReportsPage }))
+);
 const AdminUsersPage = lazy(() => import('./pages/AdminUsersPage').then(m => ({ default: m.AdminUsersPage })));
 const AdminBatchesPage = lazy(() => import('./pages/AdminBatchesPage').then(m => ({ default: m.AdminBatchesPage })));
 const AdminBatchUnitDatesPage = lazy(() =>
@@ -114,6 +118,16 @@ function App() {
             <Route path="users" element={<AdminOnlyRoute><AdminUsersPage /></AdminOnlyRoute>} />
             <Route path="trainers" element={<Navigate to="/admin/users" replace />} />
             <Route path="assessments" element={<AdminOnlyRoute><AdminAssessmentsPage /></AdminOnlyRoute>} />
+            <Route
+              path="reports/finance"
+              element={
+                <AdminOnlyRoute>
+                  <FinanceReportsRoute>
+                    <AdminFinanceReportsPage />
+                  </FinanceReportsRoute>
+                </AdminOnlyRoute>
+              }
+            />
           </Route>
           <Route path="/legacy" element={<FormWizardPage />} />
           </Routes>

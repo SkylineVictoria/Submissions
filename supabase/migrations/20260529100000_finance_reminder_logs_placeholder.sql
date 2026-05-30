@@ -1,0 +1,14 @@
+-- Placeholder for future finance reminder logging (not used by live report yet).
+-- When "Send Reminder" is implemented, create and use:
+--
+-- CREATE TABLE IF NOT EXISTS skyline_finance_reminder_logs (
+--   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+--   invoice_id TEXT NOT NULL,
+--   invoice_no TEXT,
+--   student_email TEXT,
+--   sent_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+--   sent_by BIGINT REFERENCES skyline_users(id),
+--   channel TEXT DEFAULT 'email',
+--   metadata JSONB DEFAULT '{}'::jsonb
+-- );
+-- CREATE INDEX idx_finance_reminder_logs_invoice ON skyline_finance_reminder_logs(invoice_id);

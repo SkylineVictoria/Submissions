@@ -57,6 +57,7 @@ function userRowToAppUser(row: UserRow): AppUser {
     role: row.role as AppUserRole,
     can_login_as_student: Boolean(row.can_login_as_student),
     can_login_as_trainer: Boolean(row.can_login_as_trainer),
+    can_view_finance_reports: Boolean(row.can_view_finance_reports),
   };
 }
 
@@ -108,6 +109,7 @@ export const AdminUsersPage: React.FC = () => {
     status: string;
     role: string;
     can_login_as_student: boolean;
+    can_view_finance_reports: boolean;
   } | null>(null);
 
   const userFullName = `${draft.first_name} ${draft.last_name}`.trim();
@@ -216,6 +218,7 @@ export const AdminUsersPage: React.FC = () => {
       role: editingUser.role ?? 'trainer',
       // Single toggle controls both student+trainer login rights.
       can_login_as_student: Boolean(editingUser.can_login_as_student || editingUser.can_login_as_trainer),
+      can_view_finance_reports: Boolean(editingUser.can_view_finance_reports),
     });
   }, [editingUser]);
 
@@ -229,7 +232,7 @@ export const AdminUsersPage: React.FC = () => {
     setSavingEdit(true);
     const fullName = `${editDraft.first_name.trim()} ${editDraft.last_name.trim()}`.trim();
     const email = buildEmailFromLocalAndDomain(editDraft.email_local?.trim() || '', editDraft.email_domain);
-    const updated = await updateUser(editingId, {
+    const updatePayload: Parameters<typeof updateUser>[1] = {
       full_name: fullName,
       email,
       phone: editDraft.phone,
@@ -237,7 +240,12 @@ export const AdminUsersPage: React.FC = () => {
       role: editDraft.role as CreateUserInput['role'],
       can_login_as_student: editDraft.can_login_as_student,
       can_login_as_trainer: editDraft.can_login_as_student,
-    });
+    };
+    if (viewerIsSuperadmin) {
+      updatePayload.can_view_finance_reports =
+        editDraft.role === 'admin' ? editDraft.can_view_finance_reports : false;
+    }
+    const updated = await updateUser(editingId, updatePayload);
     setSavingEdit(false);
     if (!updated) {
       toast.error('Failed to update user');
@@ -702,9 +710,21 @@ export const AdminUsersPage: React.FC = () => {
                     />
                     Allow login as student or trainer
                   </label>
+                  <label className="flex items-center gap-2 text-sm text-gray-700">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 rounded border-gray-300 text-[var(--brand)] focus:ring-[var(--brand)]"
+                      checked={editDraft.can_view_finance_reports}
+                      onChange={(e) =>
+                        setEditDraft((p) => (p ? { ...p, can_view_finance_reports: e.target.checked } : p))
+                      }
+                      disabled={editDraft.role !== 'admin'}
+                    />
+                    Allow Finance Reports access
+                  </label>
                 </div>
                 {editDraft.role !== 'admin' ? (
-                  <p className="mt-2 text-[11px] text-gray-500">These rights are configurable for admin users.</p>
+                  <p className="mt-2 text-[11px] text-gray-500">These rights are configurable for admin users only.</p>
                 ) : null}
               </div>
             ) : null}

@@ -1698,6 +1698,7 @@ export interface UserRow {
   role: string;
   can_login_as_student?: boolean;
   can_login_as_trainer?: boolean;
+  can_view_finance_reports?: boolean;
   created_at: string;
 }
 
@@ -1709,6 +1710,7 @@ export interface CreateUserInput {
   role: 'superadmin' | 'admin' | 'trainer' | 'office';
   can_login_as_student?: boolean;
   can_login_as_trainer?: boolean;
+  can_view_finance_reports?: boolean;
   password?: string;
 }
 
@@ -1739,6 +1741,17 @@ export interface AppUser {
   role: AppUserRole;
   can_login_as_student?: boolean;
   can_login_as_trainer?: boolean;
+  can_view_finance_reports?: boolean;
+}
+
+/** Finance Reports: superadmin always; admin when superadmin grants can_view_finance_reports. */
+export function canViewFinanceReports(
+  user: Pick<AppUser, 'role' | 'can_view_finance_reports'> | null | undefined
+): boolean {
+  if (!user) return false;
+  if (user.role === 'superadmin') return true;
+  if (user.role === 'admin' && Boolean(user.can_view_finance_reports)) return true;
+  return false;
 }
 
 const AUTH_STORAGE_KEY = 'skyline_auth_user';
@@ -1771,6 +1784,7 @@ export function parseStaffImpersonationSession(): StaffImpersonationPayload | nu
         role: u.role as AppUserRole,
         can_login_as_student: Boolean((u as { can_login_as_student?: unknown }).can_login_as_student),
         can_login_as_trainer: Boolean((u as { can_login_as_trainer?: unknown }).can_login_as_trainer),
+        can_view_finance_reports: Boolean((u as { can_view_finance_reports?: unknown }).can_view_finance_reports),
       },
       impersonatorUserId,
       at: Number(raw.at) || Date.now(),
@@ -1825,6 +1839,7 @@ export function consumeStaffImpersonationPendingIfEligible(): boolean {
       role: u.role as AppUserRole,
       can_login_as_student: Boolean((u as { can_login_as_student?: unknown }).can_login_as_student),
       can_login_as_trainer: Boolean((u as { can_login_as_trainer?: unknown }).can_login_as_trainer),
+      can_view_finance_reports: Boolean((u as { can_view_finance_reports?: unknown }).can_view_finance_reports),
     };
     if (!Number.isFinite(appUser.id) || appUser.id <= 0 || !appUser.email) return false;
     localStorage.removeItem(STAFF_IMPERSONATION_PENDING_KEY);
@@ -1929,6 +1944,7 @@ export async function loginWithOtp(email: string, otp: string): Promise<AppUser 
     role: (row.role as AppUserRole) ?? 'trainer',
     can_login_as_student: Boolean((row as { can_login_as_student?: unknown }).can_login_as_student),
     can_login_as_trainer: Boolean((row as { can_login_as_trainer?: unknown }).can_login_as_trainer),
+    can_view_finance_reports: Boolean((row as { can_view_finance_reports?: unknown }).can_view_finance_reports),
   };
 }
 
@@ -1953,6 +1969,7 @@ export async function loginWithEmailPassword(email: string, password: string): P
     role: (row.role as AppUserRole) ?? 'trainer',
     can_login_as_student: Boolean((row as { can_login_as_student?: unknown }).can_login_as_student),
     can_login_as_trainer: Boolean((row as { can_login_as_trainer?: unknown }).can_login_as_trainer),
+    can_view_finance_reports: Boolean((row as { can_view_finance_reports?: unknown }).can_view_finance_reports),
   };
   return user;
 }
@@ -1999,6 +2016,7 @@ function mapUserRow(row: Record<string, unknown>): UserRow {
     role: String(row.role ?? 'trainer'),
     can_login_as_student: Boolean(row.can_login_as_student),
     can_login_as_trainer: Boolean(row.can_login_as_trainer),
+    can_view_finance_reports: Boolean(row.can_view_finance_reports),
     created_at: String(row.created_at ?? ''),
   };
 }
@@ -2173,6 +2191,9 @@ export async function updateUser(id: number, input: UpdateUserInput): Promise<Us
   if (input.role !== undefined) payload.role = input.role;
   if (input.can_login_as_student !== undefined) payload.can_login_as_student = Boolean(input.can_login_as_student);
   if (input.can_login_as_trainer !== undefined) payload.can_login_as_trainer = Boolean(input.can_login_as_trainer);
+  if (input.can_view_finance_reports !== undefined) {
+    payload.can_view_finance_reports = Boolean(input.can_view_finance_reports);
+  }
   payload.updated_by = getAuditFields().updated_by;
   const { data, error } = await supabase
     .from('skyline_users')
