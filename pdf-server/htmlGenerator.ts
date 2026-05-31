@@ -1370,11 +1370,25 @@ export function buildHtml(data: {
       } else if (section.pdf_render_mode === 'assessment_summary' || section.title === 'Assessment Summary Sheet') {
         const taskRowsOrdered: { id: number; row_label: string }[] = [];
         const taskRowToSectionId = new Map<number, number>();
-        for (const g of steps) {
+        const seenTaskRowIds = new Set<number>();
+        const summaryStepIdx = steps.findIndex(
+          (g) =>
+            /Assessment Summary/i.test(String(g.step?.title ?? '').trim()) ||
+            g.sections.some((s) => s.section.pdf_render_mode === 'assessment_summary')
+        );
+        for (let gi = 0; gi < steps.length; gi++) {
+          if (summaryStepIdx >= 0 && gi >= summaryStepIdx) continue;
+          const g = steps[gi];
           for (const { section: sec, questions } of g.sections) {
             if (sec.pdf_render_mode === 'assessment_tasks') {
               const taskQ = questions.find((q) => q.question.type === 'grid_table' && q.rows.length > 0);
-              if (taskQ) for (const r of taskQ.rows) taskRowsOrdered.push({ id: r.id, row_label: r.row_label });
+              if (taskQ) {
+                for (const r of taskQ.rows) {
+                  if (seenTaskRowIds.has(r.id)) continue;
+                  seenTaskRowIds.add(r.id);
+                  taskRowsOrdered.push({ id: r.id, row_label: r.row_label });
+                }
+              }
             }
             if (sec.pdf_render_mode === 'task_results' && (sec as { assessment_task_row_id?: number }).assessment_task_row_id) {
               taskRowToSectionId.set((sec as { assessment_task_row_id: number }).assessment_task_row_id, sec.id);

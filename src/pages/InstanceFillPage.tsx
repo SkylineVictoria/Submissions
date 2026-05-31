@@ -72,6 +72,20 @@ import { SignatureField } from '../components/form-fill/SignatureField';
 import { AppendixAMatrixForm } from '../components/form-fill/AppendixAMatrixForm';
 import { DatePicker } from '../components/ui/DatePicker';
 import { toast } from '../utils/toast';
+import {
+  buildTaskResultSections,
+  formatAttemptSatLabel,
+  formatCompetentBlockerMessage,
+  formatSummaryDisplayDate,
+  getEffectiveAttemptSat,
+  getFirstPreSummaryTaskResultSectionId,
+  getMergedResultsForTaskRow,
+  getTaskResultChecks,
+  getTrainerAttemptOutcomeFromChecks,
+  isPostSummaryAssessmentTaskStep,
+  isPreSummarySection,
+  maxTaskAttemptDate,
+} from '../utils/taskResultsOutcome';
 
 const PDF_BASE = import.meta.env.VITE_PDF_API_URL ?? '';
 
@@ -496,28 +510,13 @@ export const InstanceFillPage: React.FC = () => {
   /** Derived unit outcome for an attempt: any task NS → NYC; all tasks S → Competent; otherwise incomplete (null). */
   const getTrainerAttemptOutcome = useCallback(
     (attempt: 1 | 2 | 3): AttemptOutcome => {
-      if (!template) return null;
-      const taskResultSections = (template.steps ?? [])
-        .flatMap((st) => st.sections)
-        .filter((s) => s.pdf_render_mode === 'task_results');
-      if (taskResultSections.length === 0) return null;
-      let anyNs = false;
-      let allSatisfactory = true;
-      for (const sec of taskResultSections) {
-        const rd = resultsData[sec.id];
-        const sat =
-          attempt === 1 ? rd?.first_attempt_satisfactory
-          : attempt === 2 ? rd?.second_attempt_satisfactory
-          : rd?.third_attempt_satisfactory;
-        if (sat === 'ns') anyNs = true;
-        if (sat !== 's') allSatisfactory = false;
-      }
-      if (anyNs) return 'not_yet_competent';
-      if (allSatisfactory) return 'competent';
-      return null;
+      const checks = getTaskResultChecks(template, attempt, resultsData, answers, trainerAssessments);
+      return getTrainerAttemptOutcomeFromChecks(checks);
     },
-    [template, resultsData]
+    [template, resultsData, answers, trainerAssessments]
   );
+
+  const competentBlockerToastRef = useRef<string | null>(null);
 
   /** Min calendar date for first-attempt results: student declaration (form) vs summary student_date_1 — whichever is later. */
   const studentDeclarationDateMinIso = useMemo(() => {
@@ -745,7 +744,10 @@ export const InstanceFillPage: React.FC = () => {
     const trainerNameQ = template.steps?.flatMap((st) => st.sections).flatMap((s) => s.questions).find((q) => q.code === 'trainer.fullName');
     const studentName = studentNameQ ? String(answers[getAnswerKey(studentNameQ.id, null)] ?? '').trim() : '';
     const trainerName = trainerNameQ ? String(answers[getAnswerKey(trainerNameQ.id, null)] ?? '').trim() : '';
-    const taskResultSections = template.steps?.flatMap((st) => st.sections).filter((s) => s.pdf_render_mode === 'task_results') ?? [];
+    const taskResultSections =
+      template.steps?.flatMap((st) => st.sections).filter(
+        (s) => s.pdf_render_mode === 'task_results' && isPreSummarySection(template, s.id)
+      ) ?? [];
     const updates: { sectionId: number; field: 'student_name' | 'trainer_name'; value: string }[] = [];
     for (const sec of taskResultSections) {
       const rd = resultsData[sec.id];
@@ -829,8 +831,10 @@ export const InstanceFillPage: React.FC = () => {
 
   useEffect(() => {
     if (!template || !id) return;
-    const taskResultSectionIds = (template.steps ?? []).flatMap((st) => st.sections).filter((s) => s.pdf_render_mode === 'task_results').map((s) => s.id);
-    const firstTaskSectionId = taskResultSectionIds[0];
+    const taskResultSectionIds = buildTaskResultSections(template, resultsData)
+      .map((e) => e.sectionId)
+      .filter((id): id is number => id != null);
+    const firstTaskSectionId = taskResultSectionIds[0] ?? getFirstPreSummaryTaskResultSectionId(template, resultsData);
     const firstTaskRd = firstTaskSectionId ? resultsData[firstTaskSectionId] : null;
     const raDateSource = firstTaskRd?.trainer_date ?? assessmentSummary?.trainer_date_1;
     if (!raDateSource) return;
@@ -853,8 +857,10 @@ export const InstanceFillPage: React.FC = () => {
 
   useEffect(() => {
     if (!template || !id) return;
-    const taskResultSectionIds = (template.steps ?? []).flatMap((st) => st.sections).filter((s) => s.pdf_render_mode === 'task_results').map((s) => s.id);
-    const firstTaskSectionId = taskResultSectionIds[0];
+    const taskResultSectionIds = buildTaskResultSections(template, resultsData)
+      .map((e) => e.sectionId)
+      .filter((id): id is number => id != null);
+    const firstTaskSectionId = taskResultSectionIds[0] ?? getFirstPreSummaryTaskResultSectionId(template, resultsData);
     const firstTaskRd = firstTaskSectionId ? resultsData[firstTaskSectionId] : null;
     const raTrainerQ = template.steps?.flatMap((st) => st.sections).flatMap((s) => s.questions).find((q) => q.code === 'trainer.reasonableAdjustmentSignature');
     const raVal = raTrainerQ ? answers[getAnswerKey(raTrainerQ.id, null)] : undefined;
@@ -901,12 +907,53 @@ export const InstanceFillPage: React.FC = () => {
     });
   }, [template, answers, resultsData, id, markingRound]);
 
+  /** When all marking for a task is Yes but Results S/NS was never set, persist S on attempt 1. */
   useEffect(() => {
     if (!template || !id) return;
-    const taskResultSectionIds = (template.steps ?? [])
-      .flatMap((st) => st.sections)
-      .filter((s) => s.pdf_render_mode === 'task_results')
-      .map((s) => s.id);
+    if (role !== 'trainer' && role !== 'office') return;
+    if (markingRound >= 2) return;
+
+    const updates: { sectionId: number; value: 's' }[] = [];
+    for (const entry of buildTaskResultSections(template, resultsData)) {
+      if (entry.taskRowId == null) continue;
+      const merged = getMergedResultsForTaskRow(template, entry.taskRowId, resultsData);
+      if (merged?.first_attempt_satisfactory) continue;
+      const derived = getEffectiveAttemptSat(
+        template,
+        entry.sectionId,
+        entry.taskRowId,
+        1,
+        resultsData,
+        answers,
+        trainerAssessments
+      );
+      if (derived !== 's') continue;
+      if (entry.sectionId != null && !resultsData[entry.sectionId]?.first_attempt_satisfactory) {
+        updates.push({ sectionId: entry.sectionId, value: 's' });
+      }
+    }
+    if (updates.length === 0) return;
+
+    setResultsData((prev) => {
+      const next = { ...prev };
+      for (const u of updates) {
+        const existing = prev[u.sectionId];
+        next[u.sectionId] = {
+          ...(existing ?? ({ section_id: u.sectionId } as import('../lib/formEngine').ResultsDataEntry)),
+          first_attempt_satisfactory: u.value,
+        } as import('../lib/formEngine').ResultsDataEntry;
+        saveResultsData(id, u.sectionId, { first_attempt_satisfactory: u.value });
+      }
+      setPdfRefresh((r) => r + 1);
+      return next;
+    });
+  }, [template, id, role, markingRound, resultsData, answers, trainerAssessments]);
+
+  useEffect(() => {
+    if (!template || !id) return;
+    const taskResultSectionIds = buildTaskResultSections(template, resultsData)
+      .map((e) => e.sectionId)
+      .filter((id): id is number => id != null);
     if (taskResultSectionIds.length === 0) return;
 
     // If a later attempt was accidentally set before the prior attempt is truly complete,
@@ -964,8 +1011,10 @@ export const InstanceFillPage: React.FC = () => {
 
   useEffect(() => {
     if (!template || !id || !assessmentSummary) return;
-    const taskResultSectionIds = (template.steps ?? []).flatMap((st) => st.sections).filter((s) => s.pdf_render_mode === 'task_results').map((s) => s.id);
-    const firstTaskSectionId = taskResultSectionIds[0];
+    const taskResultSectionIds = buildTaskResultSections(template, resultsData)
+      .map((e) => e.sectionId)
+      .filter((id): id is number => id != null);
+    const firstTaskSectionId = taskResultSectionIds[0] ?? getFirstPreSummaryTaskResultSectionId(template, resultsData);
     const firstTaskRd = firstTaskSectionId ? resultsData[firstTaskSectionId] : null;
     const raTrainerQ = template.steps?.flatMap((st) => st.sections).flatMap((s) => s.questions).find((q) => q.code === 'trainer.reasonableAdjustmentSignature');
     const raVal = raTrainerQ ? answers[getAnswerKey(raTrainerQ.id, null)] : undefined;
@@ -1026,9 +1075,9 @@ export const InstanceFillPage: React.FC = () => {
     if (!(role === 'trainer' || role === 'office')) return;
     if (!assessmentSummary) return;
 
-    const taskResultSections = (template.steps ?? [])
-      .flatMap((st) => st.sections)
-      .filter((s) => s.pdf_render_mode === 'task_results');
+    const taskResultSections = buildTaskResultSections(template, resultsData)
+      .map((e) => (e.sectionId != null ? { id: e.sectionId } : null))
+      .filter((e): e is { id: number } => e != null);
     if (taskResultSections.length === 0) return;
 
     const firstTaskSectionId = taskResultSections[0].id;
@@ -1205,9 +1254,17 @@ export const InstanceFillPage: React.FC = () => {
         const attempt: 1 | 2 | 3 | null =
           field === 'final_attempt_1_result' ? 1 : field === 'final_attempt_2_result' ? 2 : field === 'final_attempt_3_result' ? 3 : null;
         if (attempt != null && getTrainerAttemptOutcome(attempt) !== 'competent') {
-          toast.error(
-            'One or more assessment task results are not satisfactory, so the unit cannot be marked Competent until every task is Satisfactory.'
+          const msg = formatCompetentBlockerMessage(
+            attempt,
+            getTaskResultChecks(template, attempt, resultsData, answers, trainerAssessments)
           );
+          if (competentBlockerToastRef.current !== msg) {
+            competentBlockerToastRef.current = msg;
+            toast.error(msg, 8000);
+            window.setTimeout(() => {
+              competentBlockerToastRef.current = null;
+            }, 800);
+          }
           return;
         }
       }
@@ -1218,7 +1275,7 @@ export const InstanceFillPage: React.FC = () => {
         return next;
       });
     },
-    [id, getTrainerAttemptOutcome]
+    [id, getTrainerAttemptOutcome, template, resultsData, answers, trainerAssessments]
   );
 
   const canRoleEditCurrentWorkflow = useMemo(() => {
@@ -1316,6 +1373,7 @@ export const InstanceFillPage: React.FC = () => {
       );
       const stepData = visibleStepsForValidation[stepNumber - 2];
       if (!stepData) return {};
+      if (isPostSummaryAssessmentTaskStep(template, stepData.id)) return {};
       const stepErrors: Record<string, string> = {};
       const assessmentSubmissionHasDeclSig = stepData.sections.some(
         (s) => s.pdf_render_mode === 'assessment_submission' && s.questions.some((q) => q.code === 'student.declarationSignature')
@@ -1325,11 +1383,10 @@ export const InstanceFillPage: React.FC = () => {
         (workflowStatus === 'waiting_trainer' && role === 'trainer') ||
         (workflowStatus === 'waiting_office' && role === 'office');
       const resubmissionCycle = markingRound;
-      const taskResultIdsAppendixVal = (template.steps ?? [])
-        .flatMap((st) => st.sections)
-        .filter((s) => s.pdf_render_mode === 'task_results')
-        .map((s) => s.id);
-      const firstTaskSecAppendixVal = taskResultIdsAppendixVal[0];
+      const taskResultIdsAppendixVal = buildTaskResultSections(template, resultsData)
+        .map((e) => e.sectionId)
+        .filter((id): id is number => id != null);
+      const firstTaskSecAppendixVal = taskResultIdsAppendixVal[0] ?? getFirstPreSummaryTaskResultSectionId(template, resultsData);
       const firstTaskRdAppendixVal = firstTaskSecAppendixVal ? resultsData[firstTaskSecAppendixVal] : null;
       const secondOrThirdHasDataAppendixVal = !!(
         firstTaskRdAppendixVal?.second_attempt_date ||
@@ -1343,6 +1400,7 @@ export const InstanceFillPage: React.FC = () => {
         // `task_results` and `assessment_summary` are rendered from `resultsData` / `assessmentSummary`
         // state (not from `answers` + `section.questions`). So validate them explicitly here.
         if (section.pdf_render_mode === 'task_results') {
+          if (!isPreSummarySection(template, section.id)) continue;
           const rd = resultsData[section.id];
           const trainerCanEdit = role === 'trainer' || role === 'office';
           const studentCanEdit =
@@ -1476,11 +1534,10 @@ export const InstanceFillPage: React.FC = () => {
             stepErrors['assessment-summary-date-chain'] = dateChainErr;
           }
 
-          const taskResultSectionIds = (template?.steps || [])
-            .flatMap((st) => st.sections)
-            .filter((s) => s.pdf_render_mode === 'task_results')
-            .map((s) => s.id);
-          const firstTaskSectionId = taskResultSectionIds[0];
+          const taskResultSectionIds = buildTaskResultSections(template, resultsData)
+            .map((e) => e.sectionId)
+            .filter((id): id is number => id != null);
+          const firstTaskSectionId = taskResultSectionIds[0] ?? getFirstPreSummaryTaskResultSectionId(template, resultsData);
           const firstTaskRd = firstTaskSectionId ? resultsData[firstTaskSectionId] : null;
 
           const sumFirstComplete =
@@ -3792,20 +3849,10 @@ export const InstanceFillPage: React.FC = () => {
                           const studentCanEdit =
                             role === 'student' || role === 'office' || (role === 'trainer' && canRoleEditCurrentWorkflow);
                           const officeCanEdit = role === 'office';
-                          const taskRowsOrdered: { id: number; row_label: string }[] = [];
-                          const taskRowToSectionId = new Map<number, number>();
-                          for (const step of template?.steps || []) {
-                            for (const sec of step.sections) {
-                              if (sec.pdf_render_mode === 'assessment_tasks') {
-                                const taskQ = sec.questions.find((q) => q.type === 'grid_table' && q.rows.length > 0);
-                                if (taskQ) for (const r of taskQ.rows) taskRowsOrdered.push({ id: r.id, row_label: r.row_label });
-                              }
-                              if (sec.pdf_render_mode === 'task_results' && (sec as { assessment_task_row_id?: number }).assessment_task_row_id) {
-                                taskRowToSectionId.set((sec as { assessment_task_row_id: number }).assessment_task_row_id, sec.id);
-                              }
-                            }
-                          }
-                          const taskResultSectionIds = (template?.steps || []).flatMap((st) => st.sections).filter((s) => s.pdf_render_mode === 'task_results').map((s) => s.id);
+                          const taskResultEntries = buildTaskResultSections(template, resultsData);
+                          const taskResultSectionIds = taskResultEntries
+                            .map((e) => e.sectionId)
+                            .filter((id): id is number => id != null);
                           const firstTaskSectionId = taskResultSectionIds[0];
                           const firstTaskRd = firstTaskSectionId ? resultsData[firstTaskSectionId] : null;
                           const todayIso = new Date().toISOString().split('T')[0];
@@ -3842,6 +3889,43 @@ export const InstanceFillPage: React.FC = () => {
                           const sumFirstEditable = !sumSecondOrThirdHasData && markingRound < 2;
                           const sumSecondEditable = sumFirstComplete && !sumThirdHasData && markingRound >= 2;
                           const sumThirdEditable = sumSecondComplete && markingRound >= 3;
+                          const sumFirstAttemptChecks = getTaskResultChecks(
+                            template,
+                            1,
+                            resultsData,
+                            answers,
+                            trainerAssessments
+                          );
+                          const sumSecondAttemptChecks = getTaskResultChecks(
+                            template,
+                            2,
+                            resultsData,
+                            answers,
+                            trainerAssessments
+                          );
+                          const sumThirdAttemptChecks = getTaskResultChecks(
+                            template,
+                            3,
+                            resultsData,
+                            answers,
+                            trainerAssessments
+                          );
+                          const activeAttemptChecks = sumThirdEditable
+                            ? sumThirdAttemptChecks
+                            : sumSecondEditable
+                              ? sumSecondAttemptChecks
+                              : sumFirstAttemptChecks;
+                          const activeAttemptNum: 1 | 2 | 3 = sumThirdEditable ? 3 : sumSecondEditable ? 2 : 1;
+                          const competentBlockers = activeAttemptChecks.filter((c) => c.status !== 'satisfactory');
+                          const finalDate1 =
+                            sum.trainer_date_1?.trim() ||
+                            maxTaskAttemptDate(template, taskResultEntries, resultsData, 1);
+                          const finalDate2 =
+                            sum.trainer_date_2?.trim() ||
+                            maxTaskAttemptDate(template, taskResultEntries, resultsData, 2);
+                          const finalDate3 =
+                            sum.trainer_date_3?.trim() ||
+                            maxTaskAttemptDate(template, taskResultEntries, resultsData, 3);
                           const studentNameQ = template?.steps?.flatMap((st) => st.sections).flatMap((s) => s.questions).find((q) => q.code === 'student.fullName');
                           const studentIdQ = template?.steps?.flatMap((st) => st.sections).flatMap((s) => s.questions).find((q) => q.code === 'student.id');
                           const studentName = studentNameQ ? String(answers[getAnswerKey(studentNameQ.id, null)] ?? '') : '';
@@ -3901,38 +3985,86 @@ export const InstanceFillPage: React.FC = () => {
                                     <tr><th className="border border-gray-400 bg-gray-200 p-1.5"></th><th className="border border-gray-400 bg-[#5E5E5E] text-white font-bold p-1.5 text-center text-xs">1st Attempt</th><th className="border border-gray-400 bg-[#5E5E5E] text-white font-bold p-1.5 text-center text-xs">2nd Attempt</th><th className="border border-gray-400 bg-[#5E5E5E] text-white font-bold p-1.5 text-center text-xs">3rd Attempt</th></tr>
                                   </thead>
                                   <tbody>
-                                    {taskRowsOrdered.length === 0 ? (
+                                    {taskResultEntries.length === 0 ? (
                                       <tr>
-                                        <td className="border border-gray-400 bg-gray-100 font-semibold p-1.5 text-xs">Assessment Task 1</td>
-                                        <td className="border border-gray-400 p-1.5 text-center">
-                                          <div className="flex flex-col gap-0.5 items-center"><span className="text-[10px]">—</span><span className="text-[10px]">Date: —</span></div>
-                                        </td>
-                                        <td className="border border-gray-400 p-1.5 text-center">
-                                          <div className="flex flex-col gap-0.5 items-center"><span className="text-[10px]">—</span><span className="text-[10px]">Date: —</span></div>
-                                        </td>
-                                        <td className="border border-gray-400 p-1.5 text-center">
-                                          <div className="flex flex-col gap-0.5 items-center"><span className="text-[10px]">—</span><span className="text-[10px]">Date: —</span></div>
+                                        <td className="border border-gray-400 bg-gray-100 font-semibold p-1.5 text-xs">Assessment tasks</td>
+                                        <td className="border border-gray-400 p-1.5 text-center text-[10px] text-amber-800" colSpan={3}>
+                                          No task Results sections found in this form.
                                         </td>
                                       </tr>
                                     ) : (
-                                      taskRowsOrdered.map((tr) => {
-                                        const secId = taskRowToSectionId.get(tr.id);
-                                        const rd = secId ? resultsData[secId] : null;
+                                      taskResultEntries.map((entry) => {
+                                        const rd =
+                                          entry.taskRowId != null
+                                            ? getMergedResultsForTaskRow(template, entry.taskRowId, resultsData)
+                                            : entry.sectionId != null
+                                              ? resultsData[entry.sectionId]
+                                              : null;
+                                        const sat1 = getEffectiveAttemptSat(
+                                          template,
+                                          entry.sectionId,
+                                          entry.taskRowId,
+                                          1,
+                                          resultsData,
+                                          answers,
+                                          trainerAssessments
+                                        );
+                                        const sat2 = getEffectiveAttemptSat(
+                                          template,
+                                          entry.sectionId,
+                                          entry.taskRowId,
+                                          2,
+                                          resultsData,
+                                          answers,
+                                          trainerAssessments
+                                        );
+                                        const sat3 = getEffectiveAttemptSat(
+                                          template,
+                                          entry.sectionId,
+                                          entry.taskRowId,
+                                          3,
+                                          resultsData,
+                                          answers,
+                                          trainerAssessments
+                                        );
+                                        const check1 = sumFirstAttemptChecks.find((c) => c.label === entry.label);
+                                        const check2 = sumSecondAttemptChecks.find((c) => c.label === entry.label);
+                                        const check3 = sumThirdAttemptChecks.find((c) => c.label === entry.label);
+                                        const cellClass = (status: typeof check1) =>
+                                          status?.status === 'unmarked'
+                                            ? 'text-amber-800 font-semibold'
+                                            : status?.status === 'not_satisfactory'
+                                              ? 'text-rose-800 font-semibold'
+                                              : '';
                                         return (
-                                          <tr key={tr.id}>
-                                            <td className="border border-gray-400 bg-gray-100 font-semibold p-1.5 text-xs">{tr.row_label}</td>
-                                            <td className="border border-gray-400 p-1.5 text-center">
-                                              <div className="flex flex-col gap-0.5 items-center"><span className="text-[10px]">{rd?.first_attempt_satisfactory === 's' ? '✓ Satisfactory' : rd?.first_attempt_satisfactory === 'ns' ? '✓ Not Satisfactory' : '—'}</span><span className="text-[10px]">Date: {rd?.first_attempt_date ?? '—'}</span></div>
+                                          <tr key={entry.taskRowId ?? entry.sectionId ?? entry.label}>
+                                            <td className="border border-gray-400 bg-gray-100 font-semibold p-1.5 text-xs">{entry.label}</td>
+                                            <td className={`border border-gray-400 p-1.5 text-center ${cellClass(check1)}`}>
+                                              <div className="flex flex-col gap-0.5 items-center"><span className="text-[10px]">{formatAttemptSatLabel(sat1)}</span><span className="text-[10px]">Date: {formatSummaryDisplayDate(rd?.first_attempt_date)}</span></div>
                                             </td>
-                                            <td className="border border-gray-400 p-1.5 text-center">
-                                              <div className="flex flex-col gap-0.5 items-center"><span className="text-[10px]">{rd?.second_attempt_satisfactory === 's' ? '✓ Satisfactory' : rd?.second_attempt_satisfactory === 'ns' ? '✓ Not Satisfactory' : '—'}</span><span className="text-[10px]">Date: {rd?.second_attempt_date ?? '—'}</span></div>
+                                            <td className={`border border-gray-400 p-1.5 text-center ${cellClass(check2)}`}>
+                                              <div className="flex flex-col gap-0.5 items-center"><span className="text-[10px]">{formatAttemptSatLabel(sat2)}</span><span className="text-[10px]">Date: {formatSummaryDisplayDate(rd?.second_attempt_date)}</span></div>
                                             </td>
-                                            <td className="border border-gray-400 p-1.5 text-center">
-                                              <div className="flex flex-col gap-0.5 items-center"><span className="text-[10px]">{rd?.third_attempt_satisfactory === 's' ? '✓ Satisfactory' : rd?.third_attempt_satisfactory === 'ns' ? '✓ Not Satisfactory' : '—'}</span><span className="text-[10px]">Date: {rd?.third_attempt_date ?? '—'}</span></div>
+                                            <td className={`border border-gray-400 p-1.5 text-center ${cellClass(check3)}`}>
+                                              <div className="flex flex-col gap-0.5 items-center"><span className="text-[10px]">{formatAttemptSatLabel(sat3)}</span><span className="text-[10px]">Date: {formatSummaryDisplayDate(rd?.third_attempt_date)}</span></div>
                                             </td>
                                           </tr>
                                         );
                                       })
+                                    )}
+                                    {competentBlockers.length > 0 && trainerCanEdit && (
+                                      <tr>
+                                        <td colSpan={4} className="border border-amber-300 bg-amber-50 p-2 text-[10px] text-amber-950">
+                                          <span className="font-semibold">Before marking Competent ({activeAttemptNum === 1 ? '1st' : activeAttemptNum === 2 ? '2nd' : '3rd'} attempt):</span>
+                                          <ul className="mt-1 list-disc pl-4 space-y-0.5">
+                                            {competentBlockers.map((b) => (
+                                              <li key={b.label}>
+                                                <span className="font-medium">{b.label}</span> — {b.detail}
+                                              </li>
+                                            ))}
+                                          </ul>
+                                        </td>
+                                      </tr>
                                     )}
                                     <tr className="border-t-2 border-gray-500">
                                       <td className="border border-gray-400 bg-gray-100 font-semibold p-1.5 text-xs">Final Assessment result for this unit</td>
@@ -3940,18 +4072,21 @@ export const InstanceFillPage: React.FC = () => {
                                         <div className="flex flex-col gap-0.5">
                                           <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-1" checked={sum.final_attempt_1_result === 'competent'} onChange={() => trainerCanEdit && sumFirstEditable && handleAssessmentSummaryChange('final_attempt_1_result', 'competent')} disabled={!trainerCanEdit || !sumFirstEditable} className="w-3.5 h-3.5" /> Competent</label>
                                           <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-1" checked={sum.final_attempt_1_result === 'not_yet_competent'} onChange={() => trainerCanEdit && sumFirstEditable && handleAssessmentSummaryChange('final_attempt_1_result', 'not_yet_competent')} disabled={!trainerCanEdit || !sumFirstEditable} className="w-3.5 h-3.5" /> Not Yet Competent</label>
+                                          <span className="text-[10px] text-gray-700">Date: {formatSummaryDisplayDate(finalDate1)}</span>
                                         </div>
                                       </td>
                                       <td className="border border-gray-400 p-1.5">
                                         <div className="flex flex-col gap-0.5">
                                           <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-2" checked={sum.final_attempt_2_result === 'competent'} onChange={() => trainerCanEdit && sumSecondEditable && handleAssessmentSummaryChange('final_attempt_2_result', 'competent')} disabled={!trainerCanEdit || !sumSecondEditable} className="w-3.5 h-3.5" /> Competent</label>
                                           <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-2" checked={sum.final_attempt_2_result === 'not_yet_competent'} onChange={() => trainerCanEdit && sumSecondEditable && handleAssessmentSummaryChange('final_attempt_2_result', 'not_yet_competent')} disabled={!trainerCanEdit || !sumSecondEditable} className="w-3.5 h-3.5" /> Not Yet Competent</label>
+                                          <span className="text-[10px] text-gray-700">Date: {formatSummaryDisplayDate(finalDate2)}</span>
                                         </div>
                                       </td>
                                       <td className="border border-gray-400 p-1.5">
                                         <div className="flex flex-col gap-0.5">
                                           <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-3" checked={sum.final_attempt_3_result === 'competent'} onChange={() => trainerCanEdit && sumThirdEditable && handleAssessmentSummaryChange('final_attempt_3_result', 'competent')} disabled={!trainerCanEdit || !sumThirdEditable} className="w-3.5 h-3.5" /> Competent</label>
                                           <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-3" checked={sum.final_attempt_3_result === 'not_yet_competent'} onChange={() => trainerCanEdit && sumThirdEditable && handleAssessmentSummaryChange('final_attempt_3_result', 'not_yet_competent')} disabled={!trainerCanEdit || !sumThirdEditable} className="w-3.5 h-3.5" /> Not Yet Competent</label>
+                                          <span className="text-[10px] text-gray-700">Date: {formatSummaryDisplayDate(finalDate3)}</span>
                                         </div>
                                       </td>
                                     </tr>
