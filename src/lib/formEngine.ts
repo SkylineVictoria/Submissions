@@ -955,6 +955,12 @@ export async function updateFormInstanceDates(
     payload.status = 'draft';
     payload.role_context = 'student';
     payload.workflow_status = 'draft';
+  } else if (changingStart || changingEnd) {
+    // Any admin date change on an open draft should clear a stale failed workflow flag.
+    const st = String((current as { status?: string | null } | null)?.status ?? '').trim();
+    if (st === 'draft') {
+      payload.workflow_status = 'draft';
+    }
   }
 
   if (Object.keys(payload).length === 0) return;

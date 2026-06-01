@@ -468,6 +468,8 @@ export const InstanceFillPage: React.FC = () => {
   const [role, setRole] = useState<FormRole>('student');
   const [workflowStatus, setWorkflowStatus] = useState<'draft' | 'waiting_trainer' | 'waiting_office' | 'completed' | 'failed'>('draft');
   const [submissionCount, setSubmissionCount] = useState<number>(0);
+  const [didNotAttempt, setDidNotAttempt] = useState(false);
+  const [instanceLegacyStatus, setInstanceLegacyStatus] = useState<string>('draft');
 
   /** Trainer (and office) may edit fields marked student-only in the template so they can correct student answers. */
   const isQuestionEditableForRole = useCallback(
@@ -594,23 +596,40 @@ export const InstanceFillPage: React.FC = () => {
     setTemplate(tpl || null);
     const roleCtx = (inst?.role_context as FormRole) || 'student';
     const rawWorkflow = (inst as unknown as { workflow_status?: string } | null)?.workflow_status;
-    const legacyStatus = (inst as unknown as { status?: string } | null)?.status;
-    const normalizedWorkflow = (
+    const legacyStatus = String((inst as unknown as { status?: string } | null)?.status ?? 'draft').trim() || 'draft';
+    setInstanceLegacyStatus(legacyStatus);
+    const instSubmittedAt = (inst as unknown as { submitted_at?: string } | null)?.submitted_at;
+    const instSubmissionCount = Number((inst as unknown as { submission_count?: number | null } | null)?.submission_count ?? 0) || 0;
+    const studentHasSubmitted =
+      instSubmissionCount > 0 || Boolean(String(instSubmittedAt ?? '').trim());
+    const instDidNotAttempt = Boolean((inst as unknown as { did_not_attempt?: boolean | null } | null)?.did_not_attempt);
+    setDidNotAttempt(instDidNotAttempt);
+    let normalizedWorkflow = (
       rawWorkflow
         ? rawWorkflow
         : legacyStatus === 'locked'
           ? 'completed'
           : legacyStatus === 'submitted'
-            ? (roleCtx === 'office' ? 'waiting_office' : 'waiting_trainer')
+            ? roleCtx === 'office'
+              ? 'waiting_office'
+              : 'waiting_trainer'
             : legacyStatus === 'draft' && roleCtx === 'trainer'
               ? 'waiting_trainer'
               : legacyStatus === 'draft' && roleCtx === 'office'
                 ? 'waiting_office'
                 : 'draft'
     ) as 'draft' | 'waiting_trainer' | 'waiting_office' | 'completed' | 'failed';
+    // Stale workflow_status=failed/completed while instance is still draft and student never submitted
+    // (e.g. admin reopened dates but workflow_status was not reset).
+    if (roleCtx === 'student' && legacyStatus === 'draft' && !studentHasSubmitted && !instDidNotAttempt) {
+      if (normalizedWorkflow === 'failed' || normalizedWorkflow === 'completed') {
+        normalizedWorkflow = 'draft';
+      }
+    }
+    if (instDidNotAttempt && !studentHasSubmitted) {
+      normalizedWorkflow = 'failed';
+    }
     setWorkflowStatus(normalizedWorkflow);
-    const instSubmittedAt = (inst as unknown as { submitted_at?: string } | null)?.submitted_at;
-    const instSubmissionCount = Number((inst as unknown as { submission_count?: number | null } | null)?.submission_count ?? 0) || 0;
     setSubmissionCount(instSubmissionCount || (instSubmittedAt ? 1 : 0));
     const ansMap: Record<string, string | number | boolean | Record<string, unknown> | string[]> = {};
     for (const a of ans) {
@@ -2015,8 +2034,15 @@ export const InstanceFillPage: React.FC = () => {
     );
   }
 
+  const studentHasSubmitted = submissionCount > 0;
+
+  const showStudentDidNotAttemptPage =
+    role === 'student' &&
+    !studentHasSubmitted &&
+    (didNotAttempt || (workflowStatus === 'failed' && instanceLegacyStatus === 'locked'));
+
   const showSubmittedPage =
-    (role === 'student' && workflowStatus !== 'draft') ||
+    (role === 'student' && studentHasSubmitted && workflowStatus !== 'draft') ||
     (role === 'trainer' && (workflowStatus === 'waiting_office' || workflowStatus === 'completed' || workflowStatus === 'failed'));
 
   const canViewPdfPreview = role === 'office';
@@ -2026,6 +2052,35 @@ export const InstanceFillPage: React.FC = () => {
     role === 'student'
       ? 'Your assessment has been submitted. Editing is now locked and downloading is disabled.'
       : 'Your trainer checking has been submitted. Editing is now locked and downloading is disabled.';
+
+  if (showStudentDidNotAttemptPage) {
+    return (
+      <div className="min-h-screen bg-[var(--bg)]">
+        <header className="bg-white border-b border-[var(--border)] shadow-sm sticky top-0 z-20">
+          <div className="w-full min-w-0 px-4 md:px-6 py-4">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <h1 className="min-w-0 text-lg sm:text-xl font-bold text-[var(--text)] break-words">{template.form.name}</h1>
+              <div className="flex items-center gap-2 flex-wrap justify-end">
+                <span className="text-xs px-2.5 py-1 rounded-full bg-red-50 text-red-700 border border-red-200">Closed</span>
+                <span className="text-sm font-semibold text-gray-700 capitalize">{role}</span>
+              </div>
+            </div>
+          </div>
+        </header>
+        <div className="w-full px-4 md:px-6 py-8">
+          <div className="max-w-3xl mx-auto">
+            <Card>
+              <h2 className="text-xl font-bold text-[var(--text)] mb-2">Assessment closed</h2>
+              <p className="text-sm text-gray-600">
+                You did not submit this assessment within the allowed attempt dates. If you believe this is an error,
+                contact your trainer or admin.
+              </p>
+            </Card>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (showSubmittedPage) {
     return (
