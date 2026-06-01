@@ -33,6 +33,8 @@ import { SortableTh } from '../components/admin/SortableTh';
 import { supabase } from '../lib/supabase';
 import {
   computeRowUi,
+  getInstanceWorkflowBadgeClass,
+  getInstanceWorkflowLabel,
   getMissedAttemptWindowText,
   getStudentAttemptDoneText,
   getTrainerAttemptFailedText,
@@ -50,6 +52,12 @@ import {
 
 const PDF_BASE = import.meta.env.VITE_PDF_API_URL ?? '';
 
+const getWorkflowRowInput = (row: SubmittedInstanceRow) => ({
+  status: row.status,
+  role_context: row.role_context,
+  did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
+});
+
 const pad2 = (n: number) => String(n).padStart(2, '0');
 
 const formatDDMMYYYY = (value: string | null): string => {
@@ -62,13 +70,6 @@ const formatDDMMYYYY = (value: string | null): string => {
   return `${pad2(dt.getDate())}/${pad2(dt.getMonth() + 1)}/${dt.getFullYear()}`;
 };
 
-const getWorkflowLabel = (row: SubmittedInstanceRow): string => {
-  if (row.status === 'locked') return 'Completed';
-  if (row.role_context === 'trainer') return 'Waiting Trainer';
-  if (row.role_context === 'office') return 'Waiting Office';
-  if (row.status === 'draft') return 'Awaiting Student';
-  return 'Submitted (Not Sent)';
-};
 
 const getAttemptOutcomeLabel = (attemptResults: AttemptResult[]): string => {
   const r = (attemptResults ?? []).slice(0, 3);
@@ -153,17 +154,10 @@ const WORKFLOW_FILTER_OPTIONS: { value: AssessmentDirectoryWorkflowFilter; label
   { value: 'awaiting_student', label: 'Awaiting student' },
   { value: 'awaiting_trainer', label: 'Waiting trainer' },
   { value: 'awaiting_office', label: 'Waiting office' },
+  { value: 'did_not_attempt', label: 'Did not attempt' },
   { value: 'completed', label: 'Completed' },
 ];
 
-const getWorkflowBadgeClass = (row: SubmittedInstanceRow): string => {
-  const base = 'border border-gray-200/80';
-  if (row.status === 'locked') return `${base} bg-emerald-50 text-emerald-800`;
-  if (row.role_context === 'trainer') return `${base} bg-amber-50 text-amber-800`;
-  if (row.role_context === 'office') return `${base} bg-sky-50 text-sky-800`;
-  if (row.status === 'draft') return `${base} bg-gray-50 text-gray-700`;
-  return `${base} bg-gray-50 text-gray-600`;
-};
 
 const getDirectoryRowClass = (row: SubmittedInstanceRow, trainerHighlightCourseId: number | null = null): string => {
   // Match dashboards:
@@ -172,7 +166,8 @@ const getDirectoryRowClass = (row: SubmittedInstanceRow, trainerHighlightCourseI
   // - Missed all (did_not_attempt) => red
   // - Otherwise keep neutral gray but hover with theme
   let base: string;
-  if (row.status === 'locked') {
+  const didNotAttempt = (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null;
+  if (row.status === 'locked' && !didNotAttempt) {
     base = 'bg-emerald-50/70 hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors';
   } else {
     const ui = computeRowUi({
@@ -1058,8 +1053,8 @@ export const AdminAssessmentsPage: React.FC = () => {
                           <dd>{formatDDMMYYYY(row.submitted_at)}</dd>
                         </dl>
                         <div className="mt-2">
-                          <span className={`inline-flex rounded-md px-2.5 py-1 text-xs font-medium ${getWorkflowBadgeClass(row)}`}>
-                            {getWorkflowLabel(row)}
+                          <span className={`inline-flex rounded-md px-2.5 py-1 text-xs font-medium ${getInstanceWorkflowBadgeClass(getWorkflowRowInput(row), { withBorder: true })}`}>
+                            {getInstanceWorkflowLabel(getWorkflowRowInput(row), { submittedFallback: 'Submitted (Not Sent)' })}
                           </span>
                         </div>
                         {missedAttemptText ? (
@@ -1210,8 +1205,8 @@ export const AdminAssessmentsPage: React.FC = () => {
                         </td>
                         <td className="py-3 pr-3 text-gray-700">{formatDDMMYYYY(row.created_at)}</td>
                         <td className="py-3 pr-3">
-                          <span className={`inline-flex rounded-md px-2.5 py-1 text-xs font-medium ${getWorkflowBadgeClass(row)}`}>
-                            {getWorkflowLabel(row)}
+                          <span className={`inline-flex rounded-md px-2.5 py-1 text-xs font-medium ${getInstanceWorkflowBadgeClass(getWorkflowRowInput(row), { withBorder: true })}`}>
+                            {getInstanceWorkflowLabel(getWorkflowRowInput(row), { submittedFallback: 'Submitted (Not Sent)' })}
                           </span>
                           {missedAttemptText ? (
                             <div className="mt-1 text-[11px] font-medium text-amber-700">{missedAttemptText}</div>

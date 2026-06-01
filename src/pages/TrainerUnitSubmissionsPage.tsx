@@ -15,26 +15,10 @@ import {
   updateFormInstanceDates,
   type SubmittedInstanceRow,
 } from '../lib/formEngine';
-import { formatDDMMYYYY, maskCompetentWhileAwaitingTrainer, type AttemptResult } from '../utils/assessmentRowUi';
+import { formatDDMMYYYY, getInstanceWorkflowBadgeClass, getInstanceWorkflowLabel, maskCompetentWhileAwaitingTrainer, type AttemptResult } from '../utils/assessmentRowUi';
 import { cn } from '../components/utils/cn';
 import { DatePicker } from '../components/ui/DatePicker';
 import { toast } from '../utils/toast';
-
-const getWorkflowLabel = (row: SubmittedInstanceRow): string => {
-  if (row.status === 'locked') return 'Completed';
-  if (row.status === 'draft') return 'Awaiting Student';
-  if (row.role_context === 'trainer') return 'Waiting Trainer';
-  if (row.role_context === 'office') return 'Waiting Office';
-  return 'Submitted';
-};
-
-const getWorkflowBadgeClass = (row: SubmittedInstanceRow): string => {
-  if (row.status === 'locked') return 'bg-emerald-100 text-emerald-800';
-  if (row.status === 'draft') return 'bg-slate-100 text-slate-700';
-  if (row.role_context === 'trainer') return 'bg-amber-100 text-amber-800';
-  if (row.role_context === 'office') return 'bg-blue-100 text-blue-800';
-  return 'bg-gray-100 text-gray-700';
-};
 
 function getOutcomeLabel(
   row: SubmittedInstanceRow,
@@ -276,8 +260,21 @@ export const TrainerUnitSubmissionsPage: React.FC = () => {
                         </td>
                         <td className="py-3 px-3 align-top">
                           <div className="flex flex-col gap-1">
-                            <span className={cn('inline-flex w-fit rounded-full px-2.5 py-1 text-xs font-medium', getWorkflowBadgeClass(row))}>
-                              {getWorkflowLabel(row)}
+                            <span
+                              className={cn(
+                                'inline-flex w-fit rounded-full px-2.5 py-1 text-xs font-medium',
+                                getInstanceWorkflowBadgeClass({
+                                  status: row.status,
+                                  role_context: row.role_context,
+                                  did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
+                                }),
+                              )}
+                            >
+                              {getInstanceWorkflowLabel({
+                                status: row.status,
+                                role_context: row.role_context,
+                                did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
+                              })}
                             </span>
                             <div className={cn('text-xs font-medium', outcome.className)}>{outcome.label}</div>
                           </div>

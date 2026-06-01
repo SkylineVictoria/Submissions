@@ -922,20 +922,57 @@ export async function updateFormInstanceDates(
   instanceId: number,
   updates: { start_date?: string | null; end_date?: string | null }
 ): Promise<void> {
+  const changingStart = 'start_date' in updates;
+  const changingEnd = 'end_date' in updates;
+  if (!changingStart && !changingEnd) return;
+
+  const { data: current, error: fetchError } = await supabase
+    .from('skyline_form_instances')
+    .select('did_not_attempt, no_attempt_rollovers, status, role_context')
+    .eq('id', instanceId)
+    .maybeSingle();
+  if (fetchError) {
+    console.error('updateFormInstanceDates fetch error', fetchError);
+    throw fetchError;
+  }
+
   const payload: Record<string, unknown> = {};
-  if ('start_date' in updates) payload.start_date = updates.start_date ? updates.start_date.trim() : null;
-  if ('end_date' in updates) {
-    const nextEnd = updates.end_date ? updates.end_date.trim() : null;
-    payload.end_date = nextEnd;
-    // Admin extending a deadline should re-open the student view.
-    // If an instance was auto-closed via rollover tracking, clear those flags when end_date changes.
+  if (changingStart) payload.start_date = updates.start_date ? updates.start_date.trim() : null;
+  if (changingEnd) payload.end_date = updates.end_date ? updates.end_date.trim() : null;
+
+  const hadTerminalRollover =
+    Boolean((current as { did_not_attempt?: boolean | null } | null)?.did_not_attempt) ||
+    Number((current as { no_attempt_rollovers?: number | null } | null)?.no_attempt_rollovers ?? 0) > 0;
+
+  if (changingStart || changingEnd) {
     payload.did_not_attempt = false;
     payload.no_attempt_rollovers = 0;
+  }
+
+  // Re-open student access when admin changes dates on a terminal missed-attempt row,
+  // or when the assessment end date is moved (existing behaviour).
+  if (changingEnd || (changingStart && hadTerminalRollover)) {
     payload.status = 'draft';
     payload.role_context = 'student';
+    payload.workflow_status = 'draft';
   }
+
   if (Object.keys(payload).length === 0) return;
-  await supabase.from('skyline_form_instances').update(payload).eq('id', instanceId);
+
+  const { error: updateError } = await supabase.from('skyline_form_instances').update(payload).eq('id', instanceId);
+  if (updateError) {
+    if (String(updateError.message ?? '').toLowerCase().includes('workflow_status')) {
+      const { workflow_status: _wf, ...withoutWf } = payload;
+      const { error: retryError } = await supabase.from('skyline_form_instances').update(withoutWf).eq('id', instanceId);
+      if (retryError) {
+        console.error('updateFormInstanceDates update error', retryError);
+        throw retryError;
+      }
+      return;
+    }
+    console.error('updateFormInstanceDates update error', updateError);
+    throw updateError;
+  }
 }
 
 export type InstanceAccessRole = 'student' | 'trainer' | 'office';
@@ -2732,6 +2769,7 @@ export type AssessmentDirectoryWorkflowFilter =
   | 'awaiting_student'
   | 'awaiting_trainer'
   | 'awaiting_office'
+  | 'did_not_attempt'
   | 'completed';
 
 export async function listSubmittedInstancesPaged(
@@ -3337,6 +3375,7 @@ export async function getDashboardPendingCount(role: 'trainer' | 'office', userI
     .select('id', { count: 'exact', head: true })
     .in('student_id', eligibleOfficeStudentIds)
     .eq('role_context', 'office')
+    .or('did_not_attempt.is.null,did_not_attempt.eq.false')
     .or('status.is.null,status.neq.locked');
   return Number(count ?? 0);
 }

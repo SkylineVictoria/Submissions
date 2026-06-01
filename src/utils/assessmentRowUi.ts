@@ -28,6 +28,50 @@ export function formatDDMMYYYY(value: string | null): string {
 
 export type InstanceAccessRole = 'student' | 'trainer' | 'office';
 
+export type InstanceWorkflowRow = {
+  status?: string | null;
+  role_context?: string | null;
+  did_not_attempt?: boolean | null;
+};
+
+/** Workflow badge label; `did_not_attempt` is terminal and must not show as "Waiting Office". */
+export function getInstanceWorkflowLabel(
+  row: InstanceWorkflowRow,
+  opts?: { submittedFallback?: string },
+): string {
+  if (Boolean(row.did_not_attempt)) return 'Did not attempt';
+  const status = String(row.status ?? '').trim();
+  const rc = String(row.role_context ?? '').trim();
+  if (status === 'locked') return 'Completed';
+  if (rc === 'trainer') return 'Waiting Trainer';
+  if (rc === 'office') return 'Waiting Office';
+  if (status === 'draft') return 'Awaiting Student';
+  return opts?.submittedFallback ?? 'Submitted';
+}
+
+export function getInstanceWorkflowBadgeClass(
+  row: InstanceWorkflowRow,
+  opts?: { withBorder?: boolean },
+): string {
+  const border = opts?.withBorder ? 'border border-gray-200/80 ' : '';
+  if (Boolean(row.did_not_attempt)) return `${border}bg-red-50 text-red-800`.trim();
+  const status = String(row.status ?? '').trim();
+  const rc = String(row.role_context ?? '').trim();
+  if (status === 'locked') {
+    return `${border}${opts?.withBorder ? 'bg-emerald-50 text-emerald-800' : 'bg-emerald-100 text-emerald-800'}`.trim();
+  }
+  if (rc === 'trainer') {
+    return `${border}${opts?.withBorder ? 'bg-amber-50 text-amber-800' : 'bg-amber-100 text-amber-800'}`.trim();
+  }
+  if (rc === 'office') {
+    return `${border}${opts?.withBorder ? 'bg-sky-50 text-sky-800' : 'bg-blue-100 text-blue-800'}`.trim();
+  }
+  if (status === 'draft') {
+    return `${border}${opts?.withBorder ? 'bg-gray-50 text-gray-700' : 'bg-slate-100 text-slate-700'}`.trim();
+  }
+  return `${border}${opts?.withBorder ? 'bg-gray-50 text-gray-600' : 'bg-gray-100 text-gray-700'}`.trim();
+}
+
 /** Instance start/end window. End date applies to students only; trainers/office may grade after it. */
 export function withinInstanceAccessWindow(
   row: RowWindowInput,

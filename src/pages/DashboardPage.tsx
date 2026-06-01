@@ -22,6 +22,8 @@ import { AdminListPagination } from '../components/admin/AdminListPagination';
 import {
   computeRowUi,
   formatDDMMYYYY,
+  getInstanceWorkflowBadgeClass,
+  getInstanceWorkflowLabel,
   getStudentAttemptDoneText,
   getTrainerAttemptFailedText,
   getMissedAttemptWindowText,
@@ -37,22 +39,6 @@ import {
   useTrainerHighlightCourseId,
 } from '../utils/trainerCourseHighlight';
 import { TrainerGradeMePanel } from '../components/trainer/TrainerGradeMePanel';
-
-const getWorkflowLabel = (row: SubmittedInstanceRow): string => {
-  if (row.status === 'locked') return 'Completed';
-  if (row.status === 'draft') return 'Awaiting Student';
-  if (row.role_context === 'trainer') return 'Waiting Trainer';
-  if (row.role_context === 'office') return 'Waiting Office';
-  return 'Submitted';
-};
-
-const getWorkflowBadgeClass = (row: SubmittedInstanceRow): string => {
-  if (row.status === 'locked') return 'bg-emerald-100 text-emerald-800';
-  if (row.status === 'draft') return 'bg-slate-100 text-slate-700';
-  if (row.role_context === 'trainer') return 'bg-amber-100 text-amber-800';
-  if (row.role_context === 'office') return 'bg-blue-100 text-blue-800';
-  return 'bg-gray-100 text-gray-700';
-};
 
 function getOutcomeLabel(summary: {
   final_attempt_1_result: AttemptResult;
@@ -461,9 +447,17 @@ export const DashboardPage: React.FC = () => {
                           <td className="px-3 py-2 border-b border-[var(--border)] align-top min-w-[12rem]">
                             <div className="flex flex-col gap-1">
                               <span
-                                className={`inline-flex w-fit rounded-full px-2.5 py-1 text-xs font-medium ${getWorkflowBadgeClass(row)}`}
+                                className={`inline-flex w-fit rounded-full px-2.5 py-1 text-xs font-medium ${getInstanceWorkflowBadgeClass({
+                                  status: row.status,
+                                  role_context: row.role_context,
+                                  did_not_attempt: row.did_not_attempt ?? null,
+                                })}`}
                               >
-                                {getWorkflowLabel(row)}
+                                {getInstanceWorkflowLabel({
+                                  status: row.status,
+                                  role_context: row.role_context,
+                                  did_not_attempt: row.did_not_attempt ?? null,
+                                })}
                               </span>
                               <div
                                 className={`text-xs font-medium ${
