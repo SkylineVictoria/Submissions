@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Plus, Mail, Phone, Pencil, Shield, UserRound, Building2, LogIn } from 'lucide-react';
-import { listUsersPaged, createUser, updateUser, listBatchesPaged, queueStaffImpersonationTabOpen } from '../lib/formEngine';
+import { listUsersPaged, createUser, updateUser, listBatchesPaged, queueStaffImpersonationTabOpen, batchIncludesTrainer, type Batch } from '../lib/formEngine';
 import {
   buildUserEmail,
   buildEmailFromLocalAndDomain,
@@ -114,7 +114,7 @@ export const AdminUsersPage: React.FC = () => {
 
   const userFullName = `${draft.first_name} ${draft.last_name}`.trim();
   const userEmailSuggested = buildUserEmail(userFullName);
-  const [batches, setBatches] = useState<{ id: number; name: string; trainer_id: number }[]>([]);
+  const [batches, setBatches] = useState<Batch[]>([]);
 
   useEffect(() => {
     listBatchesPaged(1, 500).then((res) => setBatches(res.data));
@@ -384,14 +384,14 @@ export const AdminUsersPage: React.FC = () => {
                         <div className="mt-2 flex flex-wrap gap-1">
                           {(user.role === 'trainer' || user.role === 'admin' || user.role === 'superadmin') &&
                             batches
-                              .filter((b) => b.trainer_id === user.id)
+                              .filter((b) => batchIncludesTrainer(b, user.id))
                               .map((b) => (
                                 <span key={b.id} className="inline-flex rounded bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
                                   {b.name}
                                 </span>
                               ))}
                           {((user.role !== 'trainer' && user.role !== 'admin' && user.role !== 'superadmin') ||
-                            batches.filter((b) => b.trainer_id === user.id).length === 0) && (
+                            batches.filter((b) => batchIncludesTrainer(b, user.id)).length === 0) && (
                             <span className="text-xs text-gray-400">—</span>
                           )}
                         </div>
@@ -488,7 +488,7 @@ export const AdminUsersPage: React.FC = () => {
                         <div className="flex flex-wrap gap-1">
                           {(user.role === 'trainer' || user.role === 'admin' || user.role === 'superadmin') &&
                             batches
-                              .filter((b) => b.trainer_id === user.id)
+                              .filter((b) => batchIncludesTrainer(b, user.id))
                               .map((b) => (
                                 <span
                                   key={b.id}
@@ -498,7 +498,7 @@ export const AdminUsersPage: React.FC = () => {
                                 </span>
                               ))}
                           {((user.role !== 'trainer' && user.role !== 'admin' && user.role !== 'superadmin') ||
-                            batches.filter((b) => b.trainer_id === user.id).length === 0) && (
+                            batches.filter((b) => batchIncludesTrainer(b, user.id)).length === 0) && (
                             <span className="text-gray-400 text-xs">—</span>
                           )}
                         </div>

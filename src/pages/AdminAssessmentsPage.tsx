@@ -618,6 +618,8 @@ export const AdminAssessmentsPage: React.FC = () => {
 
   const renderAssessmentActions = (row: SubmittedInstanceRow, mode: 'toolbar' | 'stack') => {
     const role = row.role_context === 'trainer' ? 'trainer' : row.role_context === 'office' ? 'office' : 'student';
+    const openRole: 'student' | 'trainer' | 'office' =
+      row.role_context === 'office' || row.status === 'locked' ? 'office' : role;
     const submissionCount = Number((row as unknown as { submission_count?: number }).submission_count ?? 0);
     const showResubmit =
       row.status !== 'locked' &&
@@ -640,7 +642,7 @@ export const AdminAssessmentsPage: React.FC = () => {
       }
       window.open(url, '_blank');
     };
-    const openLink = async () => openLinkAs(role);
+    const openLink = async () => openLinkAs(openRole);
 
     const pdfBase = PDF_BASE.replace(/\/$/, '');
     const downloadPdfHref = pdfBase ? `${pdfBase}/pdf/${row.id}?role=office&download=1` : '';

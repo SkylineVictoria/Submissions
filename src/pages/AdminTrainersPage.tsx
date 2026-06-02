@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Plus, Mail, Phone, Pencil } from 'lucide-react';
-import { listTrainersPaged, createTrainer, updateTrainer, listBatchesPaged } from '../lib/formEngine';
+import { listTrainersPaged, createTrainer, updateTrainer, listBatchesPaged, batchIncludesTrainer, type Batch } from '../lib/formEngine';
 import type { Trainer } from '../lib/formEngine';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -36,7 +36,7 @@ export const AdminTrainersPage: React.FC = () => {
     phone: string;
     status: string;
   } | null>(null);
-  const [batches, setBatches] = useState<{ id: number; name: string; trainer_id: number }[]>([]);
+  const [batches, setBatches] = useState<Batch[]>([]);
 
   useEffect(() => {
     listBatchesPaged(1, 500).then((res) => setBatches(res.data));
@@ -219,7 +219,7 @@ export const AdminTrainersPage: React.FC = () => {
                       <td className="px-4 py-3 border-b border-[var(--border)]">
                         <div className="flex flex-wrap gap-1">
                           {batches
-                            .filter((b) => b.trainer_id === trainer.id)
+                            .filter((b) => batchIncludesTrainer(b, trainer.id))
                             .map((b) => (
                               <span
                                 key={b.id}
@@ -228,7 +228,7 @@ export const AdminTrainersPage: React.FC = () => {
                                 {b.name}
                               </span>
                             ))}
-                          {batches.filter((b) => b.trainer_id === trainer.id).length === 0 && (
+                          {batches.filter((b) => batchIncludesTrainer(b, trainer.id)).length === 0 && (
                             <span className="text-gray-400 text-xs">—</span>
                           )}
                         </div>

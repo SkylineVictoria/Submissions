@@ -14,6 +14,8 @@ import {
   listCoursesPaged,
   deleteBatchIfAllStudentsInactive,
   deleteBatchSuperadmin,
+  fetchBatchTrainerIds,
+  formatBatchTrainersLabel,
 } from '../lib/formEngine';
 import type { Batch, Student } from '../lib/formEngine';
 import { Card } from '../components/ui/Card';
@@ -40,8 +42,8 @@ export const AdminBatchesPage: React.FC = () => {
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
-  const [draft, setDraft] = useState({ name: '', trainer_id: '', course_id: '' });
-  const [editDraft, setEditDraft] = useState<{ name: string; trainer_id: string; course_id: string; student_ids: number[] } | null>(null);
+  const [draft, setDraft] = useState({ name: '', trainer_ids: [] as number[], course_id: '' });
+  const [editDraft, setEditDraft] = useState<{ name: string; trainer_ids: number[]; course_id: string; student_ids: number[] } | null>(null);
   const [, setEditStudents] = useState<Student[]>([]);
   const [activeCountByBatchId, setActiveCountByBatchId] = useState<Record<number, number>>({});
   const [deletingBatchId, setDeletingBatchId] = useState<number | null>(null);
@@ -181,10 +183,10 @@ export const AdminBatchesPage: React.FC = () => {
     viewerIsSuperadmin,
   ]);
 
-  const loadTrainersOptions = useCallback(async (page: number, search: string) => {
+  const loadTrainersMultiOptions = useCallback(async (page: number, search: string) => {
     const res = await listUsersForBatchAssignmentPaged(page, 20, search || undefined);
     return {
-      options: res.data.map((t) => ({ value: String(t.id), label: `${t.full_name} (${t.email})` })),
+      options: res.data.map((t) => ({ value: t.id, label: `${t.full_name} (${t.email})` })),
       hasMore: page * 20 < res.total,
     };
   }, []);
@@ -215,9 +217,8 @@ export const AdminBatchesPage: React.FC = () => {
       toast.error('Batch name is required');
       return;
     }
-    const trainerId = Number(draft.trainer_id);
-    if (!trainerId || !Number.isFinite(trainerId)) {
-      toast.error('Select a trainer');
+    if (draft.trainer_ids.length === 0) {
+      toast.error('Select at least one trainer');
       return;
     }
     const courseId = Number(draft.course_id);
@@ -226,11 +227,16 @@ export const AdminBatchesPage: React.FC = () => {
       return;
     }
     setCreating(true);
-    const created = await createBatch({ name: draft.name.trim(), trainer_id: trainerId, course_id: courseId });
+    const created = await createBatch({
+      name: draft.name.trim(),
+      trainer_id: draft.trainer_ids[0],
+      trainer_ids: draft.trainer_ids,
+      course_id: courseId,
+    });
     setCreating(false);
     if (created) {
       await loadBatches(currentPage);
-      setDraft({ name: '', trainer_id: '', course_id: '' });
+      setDraft({ name: '', trainer_ids: [], course_id: '' });
       setIsCreateOpen(false);
       toast.success('Batch added');
     } else {
@@ -245,7 +251,15 @@ export const AdminBatchesPage: React.FC = () => {
       setEditStudents([]);
       return;
     }
-    setEditDraft({ name: editingBatch.name, trainer_id: String(editingBatch.trainer_id), course_id: editingBatch.course_id != null ? String(editingBatch.course_id) : '', student_ids: [] });
+    setEditDraft({
+      name: editingBatch.name,
+      trainer_ids: editingBatch.trainer_ids?.length ? [...editingBatch.trainer_ids] : [editingBatch.trainer_id],
+      course_id: editingBatch.course_id != null ? String(editingBatch.course_id) : '',
+      student_ids: [],
+    });
+    void fetchBatchTrainerIds(editingBatch.id).then((trainerIds) => {
+      setEditDraft((p) => (p ? { ...p, trainer_ids: trainerIds.length > 0 ? trainerIds : p.trainer_ids } : null));
+    });
     listStudentsInBatch(editingBatch.id).then((students) => {
       const studentIds = students.map((s) => s.id);
       setEditStudents(students);
@@ -259,9 +273,8 @@ export const AdminBatchesPage: React.FC = () => {
       toast.error('Batch name is required');
       return;
     }
-    const trainerId = Number(editDraft.trainer_id);
-    if (!trainerId || !Number.isFinite(trainerId)) {
-      toast.error('Select a trainer');
+    if (editDraft.trainer_ids.length === 0) {
+      toast.error('Select at least one trainer');
       return;
     }
     const courseId = Number(editDraft.course_id);
@@ -272,7 +285,8 @@ export const AdminBatchesPage: React.FC = () => {
     setSavingEdit(true);
     const batchUpdated = await updateBatch(editingId, {
       name: editDraft.name.trim(),
-      trainer_id: trainerId,
+      trainer_id: editDraft.trainer_ids[0],
+      trainer_ids: editDraft.trainer_ids,
       course_id: courseId,
     });
     const assignmentsOk = await updateBatchStudentAssignments(editingId, editDraft.student_ids);
@@ -294,7 +308,7 @@ export const AdminBatchesPage: React.FC = () => {
             <div>
               <h2 className="text-lg font-bold text-[var(--text)]">Batches</h2>
               <p className="text-sm text-gray-600 mt-1">
-                Create batches and assign them to trainers. Students must belong to a batch.
+                Create batches and assign one or more trainers. Students must belong to a batch.
               </p>
             </div>
             <Button onClick={() => setIsCreateOpen(true)} className="w-full md:w-auto md:min-w-[140px]">
@@ -344,8 +358,8 @@ export const AdminBatchesPage: React.FC = () => {
                           {batch.course_name ?? '—'}
                         </div>
                         <div className="mt-1 text-sm text-gray-600 break-words">
-                          <span className="font-medium text-gray-500">Trainer: </span>
-                          {batch.trainer_name ?? `ID: ${batch.trainer_id}`}
+                          <span className="font-medium text-gray-500">Trainer(s): </span>
+                          {formatBatchTrainersLabel(batch)}
                         </div>
                         <div className="mt-3">
                           <Button variant="outline" size="sm" className="w-full" onClick={() => setEditingId(batch.id)}>
@@ -381,7 +395,7 @@ export const AdminBatchesPage: React.FC = () => {
                   <tr>
                     <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Batch</th>
                     <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Course</th>
-                    <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Trainer</th>
+                    <th className="text-left px-4 py-3 font-semibold border-b border-[var(--border)]">Trainer(s)</th>
                     <th className="text-right px-4 py-3 font-semibold border-b border-[var(--border)]">Action</th>
                   </tr>
                 </thead>
@@ -403,7 +417,7 @@ export const AdminBatchesPage: React.FC = () => {
                         {batch.course_name ?? '—'}
                       </td>
                       <td className="px-4 py-3 border-b border-[var(--border)] text-gray-700">
-                        {batch.trainer_name ?? `ID: ${batch.trainer_id}`}
+                        {formatBatchTrainersLabel(batch)}
                       </td>
                       <td className="px-4 py-3 border-b border-[var(--border)] text-right">
                         <div className="inline-flex items-center justify-end gap-2 flex-wrap">
@@ -474,16 +488,17 @@ export const AdminBatchesPage: React.FC = () => {
               className="mt-1"
             />
           </label>
-          <label className="block">
-            <span className="text-sm font-medium text-gray-700">Trainer *</span>
-            <SelectAsync
-              value={draft.trainer_id}
-              onChange={(v) => setDraft((p) => ({ ...p, trainer_id: v }))}
-              loadOptions={loadTrainersOptions}
-              placeholder="Select trainer"
-              className="mt-1"
-            />
-          </label>
+          <MultiSelectAsync
+            label="Trainers *"
+            value={draft.trainer_ids}
+            onChange={(ids) => setDraft((p) => ({ ...p, trainer_ids: ids }))}
+            loadOptions={loadTrainersMultiOptions}
+            placeholder="Select trainer(s)"
+            countLabel="trainers"
+            searchPlaceholder="Search trainers..."
+            required
+          />
+          <p className="text-xs text-gray-500 -mt-2">The first selected trainer is the primary contact for notifications.</p>
           <label className="block">
             <span className="text-sm font-medium text-gray-700">Course *</span>
             <SelectAsync
@@ -502,7 +517,7 @@ export const AdminBatchesPage: React.FC = () => {
           <Button
             variant="primary"
             onClick={handleCreate}
-            disabled={creating || !draft.name.trim() || !draft.trainer_id || !draft.course_id}
+            disabled={creating || !draft.name.trim() || draft.trainer_ids.length === 0 || !draft.course_id}
           >
             {creating ? 'Adding...' : 'Add Batch'}
           </Button>
@@ -526,17 +541,17 @@ export const AdminBatchesPage: React.FC = () => {
                 className="mt-1"
               />
             </label>
-            <label className="block">
-              <span className="text-sm font-medium text-gray-700">Trainer *</span>
-              <SelectAsync
-                value={editDraft.trainer_id}
-                onChange={(v) => setEditDraft((p) => (p ? { ...p, trainer_id: v } : null))}
-                loadOptions={loadTrainersOptions}
-                placeholder="Select trainer"
-                selectedLabel={editingBatch ? `${editingBatch.trainer_name ?? ''}` : undefined}
-                className="mt-1"
-              />
-            </label>
+            <MultiSelectAsync
+              label="Trainers *"
+              value={editDraft.trainer_ids}
+              onChange={(ids) => setEditDraft((p) => (p ? { ...p, trainer_ids: ids } : null))}
+              loadOptions={loadTrainersMultiOptions}
+              placeholder="Select trainer(s)"
+              countLabel="trainers"
+              searchPlaceholder="Search trainers..."
+              required
+            />
+            <p className="text-xs text-gray-500">The first selected trainer is the primary contact for notifications.</p>
             <label className="block">
               <span className="text-sm font-medium text-gray-700">Course *</span>
               <SelectAsync
@@ -587,7 +602,7 @@ export const AdminBatchesPage: React.FC = () => {
             <Button
               variant="primary"
               onClick={handleSaveEdit}
-              disabled={savingEdit || !editDraft.name.trim() || !editDraft.trainer_id || !editDraft.course_id}
+              disabled={savingEdit || !editDraft.name.trim() || editDraft.trainer_ids.length === 0 || !editDraft.course_id}
             >
               {savingEdit ? 'Saving...' : 'Save'}
             </Button>

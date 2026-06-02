@@ -55,6 +55,7 @@ import {
   studentResubmissionDeadlineFromAssessedOn,
   getInstanceWorkflowNotificationContext,
   invokeWorkflowSendNotification,
+  type InstanceWorkflowNotificationContext,
 } from '../lib/formEngine';
 import type { FormTemplate, FormQuestionWithOptionsAndRows, FormSectionWithQuestions } from '../lib/formEngine';
 import { getTaskQuestionDisplayNumbers } from '../lib/taskQuestionsNumbering';
@@ -90,6 +91,17 @@ import {
 const PDF_BASE = import.meta.env.VITE_PDF_API_URL ?? '';
 
 type AttemptOutcome = 'competent' | 'not_yet_competent' | null;
+
+function batchTrainerNotifyUserIds(ctx: InstanceWorkflowNotificationContext | null): string[] {
+  if (!ctx) return [];
+  const raw =
+    ctx.trainerUserIds.length > 0
+      ? ctx.trainerUserIds
+      : ctx.trainerUserId != null
+        ? [ctx.trainerUserId]
+        : [];
+  return [...new Set(raw.map((id) => String(id)).filter(Boolean))];
+}
 
 function getAnswerKey(questionId: number, rowId: number | null): string {
   if (rowId === null) return `q-${questionId}`;
@@ -462,7 +474,9 @@ export const InstanceFillPage: React.FC = () => {
   const [answers, setAnswers] = useState<Record<string, string | number | boolean | Record<string, unknown> | string[]>>({});
   const [trainerAssessments, setTrainerAssessments] = useState<Record<number, string>>({});
   const [trainerRowAssessments, setTrainerRowAssessments] = useState<Record<string, string>>({});
-  const [resultsOffice, setResultsOffice] = useState<Record<number, { entered_date: string | null; entered_by: string | null }>>({});
+  const [resultsOffice, setResultsOffice] = useState<
+    Record<number, { entered_date: string | null; entered_by: string | null; initial_checked: boolean; updated_checked: boolean }>
+  >({});
   const [resultsData, setResultsData] = useState<Record<number, import('../lib/formEngine').ResultsDataEntry>>({});
   const [assessmentSummary, setAssessmentSummary] = useState<import('../lib/formEngine').AssessmentSummaryDataEntry | null>(null);
   const [role, setRole] = useState<FormRole>('student');
@@ -639,10 +653,18 @@ export const InstanceFillPage: React.FC = () => {
     setAnswers(ansMap);
     setTrainerAssessments(assessments || {});
     setTrainerRowAssessments(rowAssessments || {});
-    const officeMap: Record<number, { entered_date: string | null; entered_by: string | null }> = {};
+    const officeMap: Record<
+      number,
+      { entered_date: string | null; entered_by: string | null; initial_checked: boolean; updated_checked: boolean }
+    > = {};
     for (const [secId, entry] of Object.entries(officeData || {})) {
-      const e = entry as { entered_date: string | null; entered_by: string | null };
-      officeMap[Number(secId)] = { entered_date: e.entered_date, entered_by: e.entered_by };
+      const e = entry as import('../lib/formEngine').ResultsOfficeEntry;
+      officeMap[Number(secId)] = {
+        entered_date: e.entered_date,
+        entered_by: e.entered_by,
+        initial_checked: Boolean(e.initial_checked ?? false),
+        updated_checked: Boolean(e.updated_checked ?? false),
+      };
     }
     setResultsOffice(officeMap);
     setResultsData(resultsDataRes || {});
@@ -1253,22 +1275,68 @@ export const InstanceFillPage: React.FC = () => {
     [id]
   );
 
+  const checkAndAutoCompleteOffice = useCallback(
+    async (
+      nextOffice: Record<
+        number,
+        { entered_date: string | null; entered_by: string | null; initial_checked: boolean; updated_checked: boolean }
+      >,
+      nextSummary: import('../lib/formEngine').AssessmentSummaryDataEntry | null
+    ) => {
+      if (role !== 'office' || workflowStatus !== 'waiting_office' || !template) return;
+      if (!nextSummary?.admin_initial_checked || !nextSummary?.admin_updated_checked) return;
+      const taskSections = buildTaskResultSections(template, resultsData);
+      for (const entry of taskSections) {
+        if (entry.sectionId == null) continue;
+        const o = nextOffice[entry.sectionId];
+        if (!o?.initial_checked || !o?.updated_checked) return;
+      }
+      try {
+        await updateInstanceWorkflowStatus(id, 'completed');
+        setWorkflowStatus('completed');
+        toast.success('Office admin complete. Assessment finalised.');
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Could not finalise assessment.');
+      }
+    },
+    [id, role, workflowStatus, template, resultsData]
+  );
+
   const handleResultsOfficeChange = useCallback(
-    (sectionId: number, field: 'entered_date' | 'entered_by', value: string | null) => {
+    (
+      sectionId: number,
+      field: 'entered_date' | 'entered_by' | 'initial_checked' | 'updated_checked',
+      value: string | null | boolean
+    ) => {
       setResultsOffice((prev) => {
         const next = { ...prev };
-        if (!next[sectionId]) next[sectionId] = { entered_date: null, entered_by: null };
+        if (!next[sectionId]) {
+          next[sectionId] = { entered_date: null, entered_by: null, initial_checked: false, updated_checked: false };
+        }
         next[sectionId] = { ...next[sectionId], [field]: value };
-        saveResultsOffice(id, sectionId, next[sectionId].entered_date, next[sectionId].entered_by);
-        setPdfRefresh((r) => r + 1);
+        void saveResultsOffice(id, sectionId, {
+          entered_date: next[sectionId].entered_date,
+          entered_by: next[sectionId].entered_by,
+          initial_checked: next[sectionId].initial_checked,
+          updated_checked: next[sectionId].updated_checked,
+        })
+          .then(() => {
+            setPdfRefresh((r) => r + 1);
+            if (field === 'initial_checked' || field === 'updated_checked') {
+              void checkAndAutoCompleteOffice(next, assessmentSummary);
+            }
+          })
+          .catch((err: unknown) => {
+            toast.error(err instanceof Error ? err.message : 'Could not save office check. Try again.');
+          });
         return next;
       });
     },
-    [id]
+    [id, assessmentSummary, checkAndAutoCompleteOffice]
   );
 
   const handleAssessmentSummaryChange = useCallback(
-    (field: keyof import('../lib/formEngine').AssessmentSummaryDataEntry, value: string | null) => {
+    (field: keyof import('../lib/formEngine').AssessmentSummaryDataEntry, value: string | null | boolean) => {
       if (value === 'competent') {
         const attempt: 1 | 2 | 3 | null =
           field === 'final_attempt_1_result' ? 1 : field === 'final_attempt_2_result' ? 2 : field === 'final_attempt_3_result' ? 3 : null;
@@ -1288,13 +1356,23 @@ export const InstanceFillPage: React.FC = () => {
         }
       }
       setAssessmentSummary((prev) => {
-        const next: import('../lib/formEngine').AssessmentSummaryDataEntry = prev ? { ...prev, [field]: value } : ({ [field]: value } as unknown as import('../lib/formEngine').AssessmentSummaryDataEntry);
-        saveAssessmentSummaryData(id, { [field]: value });
-        setPdfRefresh((r) => r + 1);
+        const next: import('../lib/formEngine').AssessmentSummaryDataEntry = prev
+          ? { ...prev, [field]: value }
+          : ({ [field]: value } as unknown as import('../lib/formEngine').AssessmentSummaryDataEntry);
+        void saveAssessmentSummaryData(id, { [field]: value })
+          .then(() => {
+            setPdfRefresh((r) => r + 1);
+            if (field === 'admin_initial_checked' || field === 'admin_updated_checked') {
+              void checkAndAutoCompleteOffice(resultsOffice, next);
+            }
+          })
+          .catch((err: unknown) => {
+            toast.error(err instanceof Error ? err.message : 'Could not save summary. Try again.');
+          });
         return next;
       });
     },
-    [id, getTrainerAttemptOutcome, template, resultsData, answers, trainerAssessments]
+    [id, getTrainerAttemptOutcome, template, resultsData, answers, trainerAssessments, resultsOffice, checkAndAutoCompleteOffice]
   );
 
   const canRoleEditCurrentWorkflow = useMemo(() => {
@@ -1305,6 +1383,12 @@ export const InstanceFillPage: React.FC = () => {
     if (role === 'office') return workflowStatus === 'waiting_office';
     return false;
   }, [role, workflowStatus]);
+
+  /** Office may edit admin fields (summary dates, SMS checkboxes) while waiting or after finalisation for corrections. */
+  const canOfficeAdminEdit = useMemo(
+    () => role === 'office' && (workflowStatus === 'waiting_office' || workflowStatus === 'completed'),
+    [role, workflowStatus]
+  );
 
   /** Flush debounced question saves so a refresh does not drop in-flight edits. */
   const flushPendingDebouncedAnswerSaves = useCallback(async () => {
@@ -1853,9 +1937,11 @@ export const InstanceFillPage: React.FC = () => {
         toast.success('Submitted successfully. Waiting for trainer checking.');
         void (async () => {
           const ctx = await getInstanceWorkflowNotificationContext(id);
-          if (!ctx?.trainerUserId) return;
+          if (!ctx) return;
+          const trainerIds = batchTrainerNotifyUserIds(ctx);
+          if (trainerIds.length === 0) return;
           await invokeWorkflowSendNotification({
-            userIds: [String(ctx.trainerUserId)],
+            userIds: trainerIds,
             title: `New submission: ${ctx.formName}`,
             message: 'A student submitted an assessment for your review.',
             url: '/admin/dashboard',
@@ -2004,7 +2090,7 @@ export const InstanceFillPage: React.FC = () => {
     if (role === 'office' && workflowStatus === 'waiting_office') {
       setConfirmConfig({
         title: 'Office Check',
-        message: 'Finalize office checking? This will complete and lock the form.',
+        message: 'Finalize office checking? Tick Initial and Updated on all task results and the summary sheet, or confirm to complete now.',
         confirmLabel: 'Finalize',
       });
     }
@@ -2176,6 +2262,15 @@ export const InstanceFillPage: React.FC = () => {
             <Card>
               <Stepper steps={steps} currentStep={currentStep} />
             </Card>
+            {role === 'office' && workflowStatus === 'waiting_office' && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+                <p className="font-semibold">Office admin tasks</p>
+                <p className="mt-1">
+                  Tick <strong>Initial</strong> and <strong>Updated</strong> on each task Results sheet and on the Assessment Summary sheet.
+                  When all are checked, this assessment finalises automatically. You can also use <strong>Office Checked</strong> on the last step.
+                </p>
+              </div>
+            )}
 
             {isIntroductionStep ? (
               <Card>
@@ -3866,29 +3961,31 @@ export const InstanceFillPage: React.FC = () => {
                                 <tr>
                                   <td className="bg-[#f5f0e6] font-semibold italic text-gray-700 p-3 border border-gray-300">Office Use Only</td>
                                   <td className="bg-white p-3 border border-gray-300 text-sm min-w-0">
-                                    <span className="inline sm:inline">
-                                      The outcome of this assessment has been entered into the Student Management System on{' '}
-                                    </span>
-                                    <span className="inline-flex flex-wrap items-center gap-x-1 gap-y-2 align-middle">
-                                      <DatePicker
-                                        value={resultsOffice[section.id]?.entered_date ?? ''}
-                                        onChange={(v) => handleResultsOfficeChange(section.id, 'entered_date', v || null)}
-                                        disabled={role !== 'office'}
-                                        compact
-                                        placement="above"
-                                        className="inline-block min-w-[120px] max-w-full"
-                                      />
-                                      <span className="shrink-0"> (insert date) by </span>
-                                      <input
-                                        type="text"
-                                        value={resultsOffice[section.id]?.entered_by ?? ''}
-                                        onChange={(e) => handleResultsOfficeChange(section.id, 'entered_by', e.target.value || null)}
-                                        disabled={role !== 'office'}
-                                        placeholder="Name"
-                                        className="inline-block border-b border-gray-400 min-w-[120px] max-w-[min(100%,280px)] px-1 py-0.5 text-sm bg-transparent focus:outline-none focus:ring-1 focus:ring-gray-400 disabled:bg-gray-100 disabled:cursor-not-allowed"
-                                      />
-                                      <span className="shrink-0"> (insert Name)</span>
-                                    </span>
+                                    <p className="mb-2 text-gray-700">
+                                      The outcome of this assessment has been entered into the Student Management System.
+                                    </p>
+                                    <div className="flex flex-wrap items-center gap-4">
+                                      <label className="inline-flex items-center gap-2 cursor-pointer">
+                                        <input
+                                          type="checkbox"
+                                          checked={Boolean(resultsOffice[section.id]?.initial_checked)}
+                                          onChange={(e) => handleResultsOfficeChange(section.id, 'initial_checked', e.target.checked)}
+                                          disabled={!canOfficeAdminEdit}
+                                          className="w-4 h-4 rounded border-gray-400"
+                                        />
+                                        <span className="font-medium">Initial</span>
+                                      </label>
+                                      <label className="inline-flex items-center gap-2 cursor-pointer">
+                                        <input
+                                          type="checkbox"
+                                          checked={Boolean(resultsOffice[section.id]?.updated_checked)}
+                                          onChange={(e) => handleResultsOfficeChange(section.id, 'updated_checked', e.target.checked)}
+                                          disabled={!canOfficeAdminEdit}
+                                          className="w-4 h-4 rounded border-gray-400"
+                                        />
+                                        <span className="font-medium">Updated</span>
+                                      </label>
+                                    </div>
                                   </td>
                                 </tr>
                               </tbody>
@@ -3903,7 +4000,20 @@ export const InstanceFillPage: React.FC = () => {
                           const trainerCanEdit = role === 'trainer' || role === 'office';
                           const studentCanEdit =
                             role === 'student' || role === 'office' || (role === 'trainer' && canRoleEditCurrentWorkflow);
-                          const officeCanEdit = role === 'office';
+                          const officeCanEdit = canOfficeAdminEdit;
+                          const canEditSummaryCoverDates =
+                            canOfficeAdminEdit || (role === 'trainer' && canRoleEditCurrentWorkflow);
+                          const summaryCompetentAttempt: 1 | 2 | 3 | null =
+                            sum.final_attempt_3_result === 'competent'
+                              ? 3
+                              : sum.final_attempt_2_result === 'competent'
+                                ? 2
+                                : sum.final_attempt_1_result === 'competent'
+                                  ? 1
+                                  : null;
+                          const canEditStudentSummaryDate = (attempt: 1 | 2 | 3, slotEditable: boolean) =>
+                            (canOfficeAdminEdit && summaryCompetentAttempt === attempt) ||
+                            (studentCanEdit && slotEditable);
                           const taskResultEntries = buildTaskResultSections(template, resultsData);
                           const taskResultSectionIds = taskResultEntries
                             .map((e) => e.sectionId)
@@ -4006,7 +4116,7 @@ export const InstanceFillPage: React.FC = () => {
                                     <tr>
                                       <td className="border border-gray-400 bg-gray-100 font-semibold p-1.5 text-xs">Start date:</td>
                                       <td className="border border-gray-400 p-1.5">
-                                        <DatePicker value={sum.start_date ?? ''} onChange={(v) => handleAssessmentSummaryChange('start_date', v || null)} disabled={!trainerCanEdit} compact placement="above" className="max-w-[120px]" />
+                                        <DatePicker value={sum.start_date ?? ''} onChange={(v) => handleAssessmentSummaryChange('start_date', v || null)} disabled={!canEditSummaryCoverDates} compact placement="above" className="max-w-[120px]" />
                                       </td>
                                       <td className="border border-gray-400 bg-gray-100 font-semibold p-1.5 text-right text-xs">End Date:</td>
                                       <td className="border border-gray-400 p-1.5">
@@ -4022,7 +4132,7 @@ export const InstanceFillPage: React.FC = () => {
                                             }
                                             handleAssessmentSummaryChange('end_date', v || null);
                                           }}
-                                          disabled={!trainerCanEdit}
+                                          disabled={!canEditSummaryCoverDates}
                                           compact
                                           placement="above"
                                           className="max-w-[120px]"
@@ -4167,9 +4277,9 @@ export const InstanceFillPage: React.FC = () => {
                                           <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_1 ?? null} onChange={(v) => { handleAssessmentSummaryChange('student_sig_1', v); const cur = String(sum.student_date_1 ?? '').trim(); if (!cur || (minStudentDate1 && isCalendarBefore(cur, minStudentDate1))) handleAssessmentSummaryChange('student_date_1', minStudentDate1 ?? null); }} disabled={!studentCanEdit || !sumFirstEditable} className="mt-0.5" highlight={studentCanEdit && sumFirstEditable} suggestionFrom={studentRefSig} onSuggestionClick={studentRefSig ? () => { handleAssessmentSummaryChange('student_sig_1', studentRefSig); const next = maxIsoDate(studentRefDate, minStudentDate1) ?? minStudentDate1 ?? studentRefDate; handleAssessmentSummaryChange('student_date_1', next || null); } : undefined} /></div>
                                           <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_2 ?? null} onChange={(v) => { handleAssessmentSummaryChange('student_sig_2', v); const cur = String(sum.student_date_2 ?? '').trim(); if (!cur || (minStudentDate2 && isCalendarBefore(cur, minStudentDate2))) handleAssessmentSummaryChange('student_date_2', minStudentDate2 ?? null); }} disabled={!studentCanEdit || !sumSecondEditable} className="mt-0.5" highlight={studentCanEdit && sumSecondEditable} suggestionFrom={sumSecondEditable ? (sum.student_sig_1 ?? undefined) : undefined} onSuggestionClick={sumSecondEditable && sum.student_sig_1 ? () => { handleAssessmentSummaryChange('student_sig_2', sum.student_sig_1); const next = maxIsoDate(sum.student_date_1, minStudentDate2) ?? minStudentDate2 ?? sum.student_date_1; handleAssessmentSummaryChange('student_date_2', next || null); } : undefined} /></div>
                                           <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_3 ?? null} onChange={(v) => { handleAssessmentSummaryChange('student_sig_3', v); const cur = String(sum.student_date_3 ?? '').trim(); if (!cur || (minStudentDate3 && isCalendarBefore(cur, minStudentDate3))) handleAssessmentSummaryChange('student_date_3', minStudentDate3 ?? null); }} disabled={!studentCanEdit || !sumThirdEditable} className="mt-0.5" highlight={studentCanEdit && sumThirdEditable} suggestionFrom={sumThirdEditable ? (sum.student_sig_1 ?? undefined) : undefined} onSuggestionClick={sumThirdEditable && sum.student_sig_1 ? () => { handleAssessmentSummaryChange('student_sig_3', sum.student_sig_1); const next = maxIsoDate(sum.student_date_2, minStudentDate3) ?? minStudentDate3 ?? sum.student_date_2; handleAssessmentSummaryChange('student_date_3', next || null); } : undefined} /></div>
-                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_1 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_1', clampIsoToMin(v || null, minStudentDate1))} disabled={!studentCanEdit || !sumFirstEditable} highlight={studentCanEdit && sumFirstEditable} compact placement="above" className="w-full" minDate={minStudentDate1} /></div>
-                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_2 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_2', clampIsoToMin(v || null, minStudentDate2))} disabled={!studentCanEdit || !sumSecondEditable} highlight={studentCanEdit && sumSecondEditable} compact placement="above" className="w-full" minDate={minStudentDate2} /></div>
-                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_3 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_3', clampIsoToMin(v || null, minStudentDate3))} disabled={!studentCanEdit || !sumThirdEditable} highlight={studentCanEdit && sumThirdEditable} compact placement="above" className="w-full" minDate={minStudentDate3} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_1 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_1', clampIsoToMin(v || null, minStudentDate1))} disabled={!canEditStudentSummaryDate(1, sumFirstEditable)} highlight={canEditStudentSummaryDate(1, sumFirstEditable)} compact placement="above" className="w-full" minDate={minStudentDate1} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_2 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_2', clampIsoToMin(v || null, minStudentDate2))} disabled={!canEditStudentSummaryDate(2, sumSecondEditable)} highlight={canEditStudentSummaryDate(2, sumSecondEditable)} compact placement="above" className="w-full" minDate={minStudentDate2} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_3 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_3', clampIsoToMin(v || null, minStudentDate3))} disabled={!canEditStudentSummaryDate(3, sumThirdEditable)} highlight={canEditStudentSummaryDate(3, sumThirdEditable)} compact placement="above" className="w-full" minDate={minStudentDate3} /></div>
                                         </div>
                                       </td>
                                     </tr>
@@ -4188,9 +4298,29 @@ export const InstanceFillPage: React.FC = () => {
                                     </tr>
                                     <tr>
                                       <td colSpan={2} className="border border-gray-400 bg-[#f5f0e6] font-semibold italic p-1.5 text-xs">Administrative use only - Entered onto Student Management Database</td>
-                                      <td className="border border-gray-400 bg-[#f5f0e6] font-semibold italic p-1.5 text-xs">Initials</td>
-                                      <td className="border border-gray-400 bg-[#f5f0e6] p-1.5">
-                                        <input type="text" value={sum.admin_initials ?? ''} onChange={(e) => handleAssessmentSummaryChange('admin_initials', e.target.value || null)} disabled={!officeCanEdit} className="border-0 border-b border-gray-400 px-1 py-0.5 text-xs w-full max-w-[60px] bg-transparent disabled:bg-gray-100" />
+                                      <td colSpan={2} className="border border-gray-400 bg-[#f5f0e6] p-1.5">
+                                        <div className="flex flex-wrap items-center gap-4">
+                                          <label className="inline-flex items-center gap-2 cursor-pointer text-xs">
+                                            <input
+                                              type="checkbox"
+                                              checked={Boolean(sum.admin_initial_checked)}
+                                              onChange={(e) => handleAssessmentSummaryChange('admin_initial_checked', e.target.checked)}
+                                              disabled={!officeCanEdit}
+                                              className="w-4 h-4 rounded border-gray-400"
+                                            />
+                                            <span className="font-medium">Initial</span>
+                                          </label>
+                                          <label className="inline-flex items-center gap-2 cursor-pointer text-xs">
+                                            <input
+                                              type="checkbox"
+                                              checked={Boolean(sum.admin_updated_checked)}
+                                              onChange={(e) => handleAssessmentSummaryChange('admin_updated_checked', e.target.checked)}
+                                              disabled={!officeCanEdit}
+                                              className="w-4 h-4 rounded border-gray-400"
+                                            />
+                                            <span className="font-medium">Updated</span>
+                                          </label>
+                                        </div>
                                       </td>
                                     </tr>
                                   </tbody>

@@ -547,6 +547,8 @@ export interface ResultsOfficeEntry {
   section_id: number;
   entered_date: string | null;
   entered_by: string | null;
+  initial_checked?: boolean;
+  updated_checked?: boolean;
 }
 
 export interface ResultsDataEntry {
@@ -620,18 +622,26 @@ export async function saveResultsData(
 export async function fetchResultsOffice(instanceId: number): Promise<Record<number, ResultsOfficeEntry>> {
   const { data, error } = await supabase
     .from('skyline_form_results_office')
-    .select('section_id, entered_date, entered_by')
+    .select('section_id, entered_date, entered_by, initial_checked, updated_checked')
     .eq('instance_id', instanceId);
   if (error) {
     console.error('fetchResultsOffice error', error);
     return {};
   }
   const out: Record<number, ResultsOfficeEntry> = {};
-  for (const row of (data as { section_id: number; entered_date: string | null; entered_by: string | null }[]) || []) {
+  for (const row of (data as Array<{
+    section_id: number;
+    entered_date: string | null;
+    entered_by: string | null;
+    initial_checked?: boolean | null;
+    updated_checked?: boolean | null;
+  }>) || []) {
     out[row.section_id] = {
       section_id: row.section_id,
       entered_date: row.entered_date,
       entered_by: row.entered_by,
+      initial_checked: Boolean(row.initial_checked ?? false),
+      updated_checked: Boolean(row.updated_checked ?? false),
     };
   }
   return out;
@@ -640,20 +650,18 @@ export async function fetchResultsOffice(instanceId: number): Promise<Record<num
 export async function saveResultsOffice(
   instanceId: number,
   sectionId: number,
-  enteredDate: string | null,
-  enteredBy: string | null
+  data: Partial<Omit<ResultsOfficeEntry, 'section_id'>>
 ): Promise<void> {
   const { error } = await supabase.from('skyline_form_results_office').upsert(
     {
       instance_id: instanceId,
       section_id: sectionId,
-      entered_date: enteredDate,
-      entered_by: enteredBy,
+      ...data,
       updated_at: new Date().toISOString(),
     },
     { onConflict: 'instance_id,section_id' }
   );
-  if (error) console.error('saveResultsOffice error', error);
+  if (error) throw new Error(error.message || 'saveResultsOffice failed');
 }
 
 export interface AssessmentSummaryDataEntry {
@@ -676,6 +684,8 @@ export interface AssessmentSummaryDataEntry {
   student_date_3: string | null;
   student_overall_feedback: string | null;
   admin_initials: string | null;
+  admin_initial_checked?: boolean;
+  admin_updated_checked?: boolean;
 }
 
 export async function fetchAssessmentSummaryData(instanceId: number): Promise<AssessmentSummaryDataEntry | null> {
@@ -706,6 +716,8 @@ export async function fetchAssessmentSummaryData(instanceId: number): Promise<As
     student_date_3: (r.student_date_3 as string) ?? null,
     student_overall_feedback: (r.student_overall_feedback as string) ?? null,
     admin_initials: (r.admin_initials as string) ?? null,
+    admin_initial_checked: Boolean(r.admin_initial_checked ?? false),
+    admin_updated_checked: Boolean(r.admin_updated_checked ?? false),
   };
 }
 
@@ -745,7 +757,7 @@ export async function saveAssessmentSummaryData(
     },
     { onConflict: 'instance_id' }
   );
-  if (error) console.error('saveAssessmentSummaryData error', error);
+  if (error) throw new Error(error.message || 'saveAssessmentSummaryData failed');
 }
 
 export async function fetchTrainerAssessments(instanceId: number): Promise<Record<number, string>> {
@@ -2270,11 +2282,172 @@ export async function adminSetPassword(userId: number, newPassword: string): Pro
 export interface Batch {
   id: number;
   name: string;
+  /** Primary trainer (notifications default, legacy column). */
   trainer_id: number;
   trainer_name: string | null;
+  /** All assigned trainers (primary first). */
+  trainer_ids?: number[];
+  trainer_names?: string[];
   course_id: number | null;
   course_name: string | null;
   created_at: string;
+}
+
+/** Comma-separated trainer names for batch directory UI. */
+export function formatBatchTrainersLabel(batch: Pick<Batch, 'trainer_name' | 'trainer_names' | 'trainer_id'>): string {
+  const names = (batch.trainer_names ?? []).map((n) => String(n ?? '').trim()).filter(Boolean);
+  if (names.length > 0) return names.join(', ');
+  if (batch.trainer_name?.trim()) return batch.trainer_name.trim();
+  return `ID: ${batch.trainer_id}`;
+}
+
+export function batchIncludesTrainer(
+  batch: Pick<Batch, 'trainer_id' | 'trainer_ids'>,
+  trainerUserId: number
+): boolean {
+  const uid = Number(trainerUserId);
+  if (!Number.isFinite(uid) || uid <= 0) return false;
+  if (Number(batch.trainer_id) === uid) return true;
+  return (batch.trainer_ids ?? []).some((id) => Number(id) === uid);
+}
+
+/** Batch ids where user is primary or additional trainer. */
+export async function fetchBatchIdsForTrainer(userId: number): Promise<number[]> {
+  const uid = Number(userId);
+  if (!Number.isFinite(uid) || uid <= 0) return [];
+  const ids = new Set<number>();
+  const { data: primaryRows, error: primaryErr } = await supabase.from('skyline_batches').select('id').eq('trainer_id', uid);
+  if (primaryErr) console.error('fetchBatchIdsForTrainer primary error', primaryErr);
+  for (const r of (primaryRows as { id: number }[] | null) || []) {
+    const id = Number(r.id);
+    if (Number.isFinite(id) && id > 0) ids.add(id);
+  }
+  const { data: extraRows, error: extraErr } = await supabase
+    .from('skyline_batch_trainers')
+    .select('batch_id')
+    .eq('user_id', uid);
+  if (extraErr) {
+    // Table may not exist until migration is applied — primary-only fallback.
+    if (!String(extraErr.message ?? '').toLowerCase().includes('skyline_batch_trainers')) {
+      console.error('fetchBatchIdsForTrainer junction error', extraErr);
+    }
+    return [...ids];
+  }
+  for (const r of (extraRows as { batch_id: number }[] | null) || []) {
+    const id = Number(r.batch_id);
+    if (Number.isFinite(id) && id > 0) ids.add(id);
+  }
+  return [...ids];
+}
+
+export async function fetchBatchTrainerIds(batchId: number): Promise<number[]> {
+  const bid = Number(batchId);
+  if (!Number.isFinite(bid) || bid <= 0) return [];
+  const { data: links, error } = await supabase
+    .from('skyline_batch_trainers')
+    .select('user_id')
+    .eq('batch_id', bid);
+  if (error) {
+    if (!String(error.message ?? '').toLowerCase().includes('skyline_batch_trainers')) {
+      console.error('fetchBatchTrainerIds error', error);
+    }
+    const batch = await getBatchById(bid);
+    return batch ? [batch.trainer_id] : [];
+  }
+  const ids = ((links as { user_id: number }[] | null) || [])
+    .map((r) => Number(r.user_id))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  if (ids.length > 0) return [...new Set(ids)];
+  const batch = await getBatchById(bid);
+  return batch ? [batch.trainer_id] : [];
+}
+
+async function syncBatchTrainers(batchId: number, trainerIds: number[]): Promise<boolean> {
+  const bid = Number(batchId);
+  const ids = [...new Set(trainerIds.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0))];
+  if (!Number.isFinite(bid) || bid <= 0 || ids.length === 0) return false;
+  const { error: delErr } = await supabase.from('skyline_batch_trainers').delete().eq('batch_id', bid);
+  if (delErr) {
+    console.error('syncBatchTrainers delete error', delErr);
+    return false;
+  }
+  const rows = ids.map((user_id) => ({ batch_id: bid, user_id }));
+  const { error: insErr } = await supabase.from('skyline_batch_trainers').insert(rows);
+  if (insErr) {
+    console.error('syncBatchTrainers insert error', insErr);
+    return false;
+  }
+  return true;
+}
+
+async function hydrateBatchRows(rows: Record<string, unknown>[]): Promise<Batch[]> {
+  if (rows.length === 0) return [];
+  const batchIds = rows.map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0);
+  const trainerIdsFromRows = [...new Set(rows.map((r) => Number(r.trainer_id)).filter((n) => Number.isFinite(n) && n > 0))];
+  const junctionByBatch = new Map<number, number[]>();
+  if (batchIds.length > 0) {
+    const { data: links, error: linkErr } = await supabase
+      .from('skyline_batch_trainers')
+      .select('batch_id, user_id')
+      .in('batch_id', batchIds);
+    if (linkErr && !String(linkErr.message ?? '').toLowerCase().includes('skyline_batch_trainers')) {
+      console.error('hydrateBatchRows junction error', linkErr);
+    } else {
+      for (const link of (links as { batch_id: number; user_id: number }[] | null) || []) {
+        const bid = Number(link.batch_id);
+        const uid = Number(link.user_id);
+        if (!Number.isFinite(bid) || bid <= 0 || !Number.isFinite(uid) || uid <= 0) continue;
+        if (!junctionByBatch.has(bid)) junctionByBatch.set(bid, []);
+        junctionByBatch.get(bid)!.push(uid);
+      }
+    }
+  }
+  const allTrainerIds = new Set<number>(trainerIdsFromRows);
+  for (const ids of junctionByBatch.values()) ids.forEach((id) => allTrainerIds.add(id));
+  const trainerMap = new Map<number, string>();
+  if (allTrainerIds.size > 0) {
+    const { data: trainers } = await supabase
+      .from('skyline_users')
+      .select('id, full_name')
+      .in('id', [...allTrainerIds]);
+    for (const t of (trainers as { id: number; full_name: string }[] | null) || []) {
+      trainerMap.set(Number(t.id), t.full_name ?? '');
+    }
+  }
+  const courseIds = [
+    ...new Set(
+      rows
+        .map((r) => (r.course_id != null ? Number(r.course_id) : null))
+        .filter((x): x is number => x != null && Number.isFinite(x))
+    ),
+  ];
+  const courseMap = new Map<number, string>();
+  if (courseIds.length > 0) {
+    const { data: courses } = await supabase.from('skyline_courses').select('id, name').in('id', courseIds);
+    for (const c of (courses as { id: number; name: string }[] | null) || []) {
+      courseMap.set(Number(c.id), c.name ?? '');
+    }
+  }
+  return rows.map((r) => {
+    const bid = Number(r.id);
+    const primaryId = Number(r.trainer_id);
+    let trainerIds = junctionByBatch.get(bid) ?? [];
+    if (trainerIds.length === 0 && Number.isFinite(primaryId) && primaryId > 0) trainerIds = [primaryId];
+    else if (Number.isFinite(primaryId) && primaryId > 0 && !trainerIds.includes(primaryId)) {
+      trainerIds = [primaryId, ...trainerIds.filter((id) => id !== primaryId)];
+    }
+    const trainerNames = trainerIds.map((id) => trainerMap.get(id) ?? '').filter(Boolean);
+    const batch = mapBatchRow(
+      r,
+      trainerMap.get(primaryId) ?? null,
+      r.course_id != null ? (courseMap.get(Number(r.course_id)) ?? null) : null
+    );
+    return {
+      ...batch,
+      trainer_ids: trainerIds,
+      trainer_names: trainerNames,
+    };
+  });
 }
 
 export interface Student {
@@ -2905,11 +3078,7 @@ export async function listDashboardInstances(
   let eligibleStudentIds: number[] = [];
   const bid = batchId != null && Number.isFinite(Number(batchId)) && Number(batchId) > 0 ? Number(batchId) : null;
   if (role === 'trainer') {
-    const { data: batches } = await supabase
-      .from('skyline_batches')
-      .select('id')
-      .eq('trainer_id', userId);
-    const batchIdsAll = ((batches as { id: number }[]) || []).map((b) => b.id);
+    const batchIdsAll = await fetchBatchIdsForTrainer(userId);
     const batchIds = bid ? batchIdsAll.filter((id) => id === bid) : batchIdsAll;
     if (batchIds.length === 0) return { data: [], total: 0, page, pageSize };
     const { data: students } = await supabase
@@ -3132,8 +3301,7 @@ export async function listTrainerUnitInstancesPaged(
     return { data: [], total: 0, page, pageSize };
   }
 
-  const { data: batches } = await supabase.from('skyline_batches').select('id').eq('trainer_id', tid);
-  const batchIds = ((batches as { id: number }[]) || []).map((b) => Number(b.id)).filter((n) => Number.isFinite(n) && n > 0);
+  const batchIds = await fetchBatchIdsForTrainer(tid);
   if (batchIds.length === 0) return { data: [], total: 0, page, pageSize };
 
   const { data: students } = await supabase
@@ -3255,46 +3423,18 @@ export async function listTrainerUnitInstancesPaged(
 
 /** Batches assigned to the trainer (read-only list for dashboard). */
 export async function listTrainerBatches(userId: number): Promise<Batch[]> {
+  const batchIds = await fetchBatchIdsForTrainer(userId);
+  if (batchIds.length === 0) return [];
   const { data, error } = await supabase
     .from('skyline_batches')
     .select('id, name, trainer_id, course_id, created_at')
-    .eq('trainer_id', userId)
+    .in('id', batchIds)
     .order('name', { ascending: true });
   if (error) {
     console.error('listTrainerBatches error', error);
     return [];
   }
-  const rows = (data as Record<string, unknown>[]) || [];
-  if (rows.length === 0) return rows.map((r) => mapBatchRow(r, null, null));
-  const trainerIds = [...new Set(rows.map((r) => Number(r.trainer_id)).filter(Boolean))];
-  const trainerMap = new Map<number, string>();
-  if (trainerIds.length > 0) {
-    const { data: trainers } = await supabase
-      .from('skyline_users')
-      .select('id, full_name')
-      .in('id', trainerIds);
-    for (const t of (trainers as { id: number; full_name: string }[]) || []) {
-      trainerMap.set(t.id, t.full_name ?? '');
-    }
-  }
-  const courseIds = [...new Set(rows.map((r) => (r.course_id != null ? Number(r.course_id) : null)).filter((x): x is number => x != null && Number.isFinite(x)))];
-  const courseMap = new Map<number, string>();
-  if (courseIds.length > 0) {
-    const { data: courses } = await supabase
-      .from('skyline_courses')
-      .select('id, name')
-      .in('id', courseIds);
-    for (const c of (courses as { id: number; name: string }[]) || []) {
-      courseMap.set(c.id, c.name ?? '');
-    }
-  }
-  return rows.map((r) =>
-    mapBatchRow(
-      r,
-      trainerMap.get(Number(r.trainer_id)) ?? null,
-      r.course_id != null ? (courseMap.get(Number(r.course_id)) ?? null) : null
-    )
-  );
+  return hydrateBatchRows((data as Record<string, unknown>[]) || []);
 }
 
 /** One row per distinct course attached to batches where this user is the trainer (for units / materials UI). */
@@ -3337,22 +3477,14 @@ export async function listTrainerCourseOptionsForUnits(userId: number): Promise<
 
 /** Number of batches assigned to the trainer. */
 export async function getTrainerBatchCount(userId: number): Promise<number> {
-  const { count, error } = await supabase
-    .from('skyline_batches')
-    .select('id', { count: 'exact', head: true })
-    .eq('trainer_id', userId);
-  if (error) {
-    console.error('getTrainerBatchCount error', error);
-    return 0;
-  }
-  return Number(count ?? 0);
+  const ids = await fetchBatchIdsForTrainer(userId);
+  return ids.length;
 }
 
 /** Pending count for dashboard: trainer = waiting_trainer in their batches, office = waiting_office. */
 export async function getDashboardPendingCount(role: 'trainer' | 'office', userId: number): Promise<number> {
   if (role === 'trainer') {
-    const { data: batches } = await supabase.from('skyline_batches').select('id').eq('trainer_id', userId);
-    const batchIds = ((batches as { id: number }[]) || []).map((b) => b.id);
+    const batchIds = await fetchBatchIdsForTrainer(userId);
     if (batchIds.length === 0) return 0;
     // Match listDashboardInstances: only active students appear in the pending table.
     const { data: students } = await supabase
@@ -3389,6 +3521,8 @@ export async function getDashboardPendingCount(role: 'trainer' | 'office', userI
 export interface CreateBatchInput {
   name: string;
   trainer_id: number;
+  /** All trainers for the batch; first entry is stored as primary `trainer_id`. */
+  trainer_ids?: number[];
   course_id?: number | null;
 }
 
@@ -3401,37 +3535,7 @@ export async function listBatches(): Promise<Batch[]> {
     console.error('listBatches error', error);
     return [];
   }
-  const rows = (data as Record<string, unknown>[]) || [];
-  if (rows.length === 0) return rows.map((r) => mapBatchRow(r, null, null));
-  const trainerIds = [...new Set(rows.map((r) => Number(r.trainer_id)).filter(Boolean))];
-  const trainerMap = new Map<number, string>();
-  if (trainerIds.length > 0) {
-    const { data: trainers } = await supabase
-      .from('skyline_users')
-      .select('id, full_name')
-      .in('id', trainerIds);
-    for (const t of (trainers as { id: number; full_name: string }[]) || []) {
-      trainerMap.set(t.id, t.full_name ?? '');
-    }
-  }
-  const courseIds = [...new Set(rows.map((r) => (r.course_id != null ? Number(r.course_id) : null)).filter((x): x is number => x != null && Number.isFinite(x)))];
-  const courseMap = new Map<number, string>();
-  if (courseIds.length > 0) {
-    const { data: courses } = await supabase
-      .from('skyline_courses')
-      .select('id, name')
-      .in('id', courseIds);
-    for (const c of (courses as { id: number; name: string }[]) || []) {
-      courseMap.set(c.id, c.name ?? '');
-    }
-  }
-  return rows.map((r) =>
-    mapBatchRow(
-      r,
-      trainerMap.get(Number(r.trainer_id)) ?? null,
-      r.course_id != null ? (courseMap.get(Number(r.course_id)) ?? null) : null
-    )
-  );
+  return hydrateBatchRows((data as Record<string, unknown>[]) || []);
 }
 
 export async function listBatchesPaged(
@@ -3465,35 +3569,7 @@ export async function listBatchesPaged(
   }
   const rows = (data as Record<string, unknown>[]) || [];
   if (rows.length === 0) return { data: [], total: Number(count ?? 0), page, pageSize };
-  const trainerIds = [...new Set(rows.map((r) => Number(r.trainer_id)).filter(Boolean))];
-  const trainerMap = new Map<number, string>();
-  if (trainerIds.length > 0) {
-    const { data: trainers } = await supabase
-      .from('skyline_users')
-      .select('id, full_name')
-      .in('id', trainerIds);
-    for (const t of (trainers as { id: number; full_name: string }[]) || []) {
-      trainerMap.set(t.id, t.full_name ?? '');
-    }
-  }
-  const courseIds = [...new Set(rows.map((r) => (r.course_id != null ? Number(r.course_id) : null)).filter((x): x is number => x != null && Number.isFinite(x)))];
-  const courseMap = new Map<number, string>();
-  if (courseIds.length > 0) {
-    const { data: courses } = await supabase
-      .from('skyline_courses')
-      .select('id, name')
-      .in('id', courseIds);
-    for (const c of (courses as { id: number; name: string }[]) || []) {
-      courseMap.set(c.id, c.name ?? '');
-    }
-  }
-  const mapped = rows.map((r) =>
-    mapBatchRow(
-      r,
-      trainerMap.get(Number(r.trainer_id)) ?? null,
-      r.course_id != null ? (courseMap.get(Number(r.course_id)) ?? null) : null
-    )
-  );
+  const mapped = await hydrateBatchRows(rows);
   return {
     data: mapped,
     total: Number(count ?? 0),
@@ -3515,20 +3591,8 @@ export async function getBatchById(id: number): Promise<Batch | null> {
     return null;
   }
   if (!data) return null;
-  const row = data as Record<string, unknown>;
-  const trainerId = Number(row.trainer_id);
-  let trainerName: string | null = null;
-  if (trainerId) {
-    const { data: t } = await supabase.from('skyline_users').select('full_name').eq('id', trainerId).maybeSingle();
-    trainerName = (t as { full_name?: string } | null)?.full_name ?? null;
-  }
-  let courseName: string | null = null;
-  const courseId = row.course_id != null ? Number(row.course_id) : null;
-  if (courseId != null && Number.isFinite(courseId)) {
-    const { data: c } = await supabase.from('skyline_courses').select('name').eq('id', courseId).maybeSingle();
-    courseName = (c as { name?: string } | null)?.name ?? null;
-  }
-  return mapBatchRow(row, trainerName, courseName);
+  const [batch] = await hydrateBatchRows([data as Record<string, unknown>]);
+  return batch ?? null;
 }
 
 export interface BatchAssessmentOptionsPayload {
@@ -3643,19 +3707,7 @@ export async function listBatchesForCourse(courseId: number): Promise<Batch[]> {
   }
   const rows = (data as Record<string, unknown>[]) || [];
   if (rows.length === 0) return [];
-  const trainerIds = [...new Set(rows.map((r) => Number(r.trainer_id)).filter(Boolean))];
-  const trainerMap = new Map<number, string>();
-  if (trainerIds.length > 0) {
-    const { data: trainers } = await supabase
-      .from('skyline_users')
-      .select('id, full_name')
-      .in('id', trainerIds);
-    for (const t of (trainers as { id: number; full_name: string }[]) || []) {
-      trainerMap.set(t.id, t.full_name ?? '');
-    }
-  }
-  // course name is the same for all; omit extra query and keep null (UI can show just batch name).
-  return rows.map((r) => mapBatchRow(r, trainerMap.get(Number(r.trainer_id)) ?? null, null));
+  return hydrateBatchRows(rows);
 }
 
 /** Assign batches to a course (one-to-many). Replaces existing course→batch assignments. */
@@ -3714,12 +3766,15 @@ function mapBatchRow(row: Record<string, unknown>, trainerName: string | null, c
 }
 
 export async function createBatch(input: CreateBatchInput): Promise<Batch | null> {
+  const trainerIds = [...new Set((input.trainer_ids?.length ? input.trainer_ids : [input.trainer_id]).map(Number).filter((n) => Number.isFinite(n) && n > 0))];
+  const primaryTrainerId = trainerIds[0] ?? Number(input.trainer_id);
+  if (!Number.isFinite(primaryTrainerId) || primaryTrainerId <= 0) return null;
   const { created_by } = getAuditFields();
   const { data, error } = await supabase
     .from('skyline_batches')
     .insert({
       name: input.name.trim(),
-      trainer_id: input.trainer_id,
+      trainer_id: primaryTrainerId,
       course_id: input.course_id ?? null,
       created_by,
     })
@@ -3730,31 +3785,25 @@ export async function createBatch(input: CreateBatchInput): Promise<Batch | null
     return null;
   }
   const row = data as Record<string, unknown>;
-  let trainerName: string | null = null;
-  const { data: t } = await supabase
-    .from('skyline_users')
-    .select('full_name')
-    .eq('id', row.trainer_id)
-    .single();
-  if (t && typeof t === 'object' && 'full_name' in t) trainerName = String((t as { full_name: string }).full_name ?? '');
-  let courseName: string | null = null;
-  if (row.course_id != null) {
-    const { data: c } = await supabase
-      .from('skyline_courses')
-      .select('name')
-      .eq('id', row.course_id)
-      .single();
-    if (c && typeof c === 'object' && 'name' in c) courseName = String((c as { name: string }).name ?? '');
+  const batchId = Number(row.id);
+  if (Number.isFinite(batchId) && batchId > 0) {
+    await syncBatchTrainers(batchId, trainerIds);
   }
-  return mapBatchRow(row, trainerName, courseName);
+  const [batch] = await hydrateBatchRows([row]);
+  return batch ?? null;
 }
 
-export type UpdateBatchInput = Partial<Pick<CreateBatchInput, 'name' | 'trainer_id' | 'course_id'>>;
+export type UpdateBatchInput = Partial<Pick<CreateBatchInput, 'name' | 'trainer_id' | 'course_id' | 'trainer_ids'>>;
 
 export async function updateBatch(id: number, input: UpdateBatchInput): Promise<Batch | null> {
   const payload: Record<string, unknown> = {};
   if (input.name !== undefined) payload.name = input.name.trim();
-  if (input.trainer_id !== undefined) payload.trainer_id = input.trainer_id;
+  if (input.trainer_ids !== undefined) {
+    const trainerIds = [...new Set(input.trainer_ids.map(Number).filter((n) => Number.isFinite(n) && n > 0))];
+    if (trainerIds.length > 0) payload.trainer_id = trainerIds[0];
+  } else if (input.trainer_id !== undefined) {
+    payload.trainer_id = input.trainer_id;
+  }
   if (input.course_id !== undefined) payload.course_id = input.course_id;
   payload.updated_by = getAuditFields().updated_by;
   const { data, error } = await supabase
@@ -3768,23 +3817,16 @@ export async function updateBatch(id: number, input: UpdateBatchInput): Promise<
     return null;
   }
   const row = data as Record<string, unknown>;
-  let trainerName: string | null = null;
-  const { data: t } = await supabase
-    .from('skyline_users')
-    .select('full_name')
-    .eq('id', row.trainer_id)
-    .single();
-  if (t && typeof t === 'object' && 'full_name' in t) trainerName = String((t as { full_name: string }).full_name ?? '');
-  let courseName: string | null = null;
-  if (row.course_id != null) {
-    const { data: c } = await supabase
-      .from('skyline_courses')
-      .select('name')
-      .eq('id', row.course_id)
-      .single();
-    if (c && typeof c === 'object' && 'name' in c) courseName = String((c as { name: string }).name ?? '');
+  if (input.trainer_ids !== undefined) {
+    const trainerIds = [...new Set(input.trainer_ids.map(Number).filter((n) => Number.isFinite(n) && n > 0))];
+    if (trainerIds.length > 0) await syncBatchTrainers(id, trainerIds);
+  } else if (input.trainer_id !== undefined) {
+    const existing = await fetchBatchTrainerIds(id);
+    const merged = [...new Set([Number(input.trainer_id), ...existing.filter((x) => x !== Number(input.trainer_id))])];
+    await syncBatchTrainers(id, merged);
   }
-  return mapBatchRow(row, trainerName, courseName);
+  const [batch] = await hydrateBatchRows([row]);
+  return batch ?? null;
 }
 
 export async function updateBatchStudentAssignments(batchId: number, studentIds: number[]): Promise<boolean> {
@@ -5704,8 +5746,10 @@ export type InstanceWorkflowNotificationContext = {
   formName: string;
   /** `skyline_students.id` as string — used as `skyline_notifications.user_id` for student in-app rows + optional future student push. */
   studentNotificationUserId: string | null;
-  /** `skyline_users.id` for the trainer assigned to the student’s batch. */
+  /** Primary trainer (`skyline_batches.trainer_id`). */
   trainerUserId: number | null;
+  /** All trainers assigned to the student's batch (primary + additional). */
+  trainerUserIds: number[];
 };
 
 export async function getInstanceWorkflowNotificationContext(instanceId: number): Promise<InstanceWorkflowNotificationContext | null> {
@@ -5718,10 +5762,11 @@ export async function getInstanceWorkflowNotificationContext(instanceId: number)
   const rawSid = (inst as { student_id?: number | null }).student_id;
   const sid = rawSid != null ? Number(rawSid) : null;
   if (!sid || !Number.isFinite(sid) || sid <= 0) {
-    return { formName, studentNotificationUserId: null, trainerUserId: null };
+    return { formName, studentNotificationUserId: null, trainerUserId: null, trainerUserIds: [] };
   }
   const studentNotificationUserId = String(sid);
   let trainerUserId: number | null = null;
+  let trainerUserIds: number[] = [];
   const { data: st, error: stErr } = await supabase
     .from('skyline_students')
     .select('batch_id')
@@ -5730,6 +5775,7 @@ export async function getInstanceWorkflowNotificationContext(instanceId: number)
   if (stErr) console.error('getInstanceWorkflowNotificationContext student', stErr);
   const batchId = st?.batch_id != null ? Number((st as { batch_id?: unknown }).batch_id) : null;
   if (batchId && Number.isFinite(batchId) && batchId > 0) {
+    trainerUserIds = await fetchBatchTrainerIds(batchId);
     const { data: b, error: bErr } = await supabase
       .from('skyline_batches')
       .select('trainer_id')
@@ -5737,9 +5783,14 @@ export async function getInstanceWorkflowNotificationContext(instanceId: number)
       .maybeSingle();
     if (bErr) console.error('getInstanceWorkflowNotificationContext batch', bErr);
     const tid = b?.trainer_id != null ? Number((b as { trainer_id?: unknown }).trainer_id) : null;
-    if (tid && Number.isFinite(tid) && tid > 0) trainerUserId = tid;
+    if (tid && Number.isFinite(tid) && tid > 0) {
+      trainerUserId = tid;
+      if (!trainerUserIds.includes(tid)) trainerUserIds = [tid, ...trainerUserIds];
+    } else if (trainerUserIds.length > 0) {
+      trainerUserId = trainerUserIds[0];
+    }
   }
-  return { formName, studentNotificationUserId, trainerUserId };
+  return { formName, studentNotificationUserId, trainerUserId, trainerUserIds };
 }
 
 /** Fire-and-forget in-app + FCM via Edge Function (service role inside function). */

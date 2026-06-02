@@ -1361,10 +1361,12 @@ export function buildHtml(data: {
         html += '<tr><td class="result-label">Trainer/Assessor Signature</td><td class="result-value">' + renderSignatureHtml(rd?.trainer_signature ?? '') + '</td></tr>';
         html += '<tr><td class="result-label">Date</td><td class="result-value">' + (rd?.trainer_date ?? '') + '</td></tr>';
         const officeEntry = resultsOffice.get(section.id);
-        const officeDate = officeEntry?.entered_date ?? '';
-        const officeName = officeEntry?.entered_by ?? '';
+        const officeInitial = Boolean(officeEntry?.initial_checked);
+        const officeUpdated = Boolean(officeEntry?.updated_checked);
         html += '<tr><td class="result-label decl-office-label">Office Use Only</td><td class="result-value">';
-        html += 'The outcome of this assessment has been entered into the Student Management System on <span class="answer-line-inline">' + officeDate + '</span> (insert date) by <span class="answer-line-inline">' + officeName + '</span> (insert Name)';
+        html += 'The outcome of this assessment has been entered into the Student Management System. ';
+        html += 'Initial: <span class="summary-cb' + (officeInitial ? ' checked' : '') + '">' + (officeInitial ? '✓' : '') + '</span> ';
+        html += 'Updated: <span class="summary-cb' + (officeUpdated ? ' checked' : '') + '">' + (officeUpdated ? '✓' : '') + '</span>';
         html += '</td></tr>';
         html += '</tbody></table></div></div>';
       } else if (section.pdf_render_mode === 'assessment_summary' || section.title === 'Assessment Summary Sheet') {
@@ -1457,7 +1459,7 @@ export function buildHtml(data: {
         html += '<td style="width:33%;border:none;padding:4px 8px;vertical-align:top"><div><span style="font-weight:600">Signature:</span></div><div class="summary-date-line" style="min-width:100%;display:block">' + renderSignatureHtml(sum.student_sig_2 ?? '') + '</div><div style="margin-top:4px"><span style="font-weight:600">Date:</span> <span class="summary-date-line">' + (sum.student_date_2 ?? '') + '</span></div></td>';
         html += '<td style="width:33%;border:none;padding:4px 0 4px 8px;vertical-align:top"><div><span style="font-weight:600">Signature:</span></div><div class="summary-date-line" style="min-width:100%;display:block">' + renderSignatureHtml(sum.student_sig_3 ?? '') + '</div><div style="margin-top:4px"><span style="font-weight:600">Date:</span> <span class="summary-date-line">' + (sum.student_date_3 ?? '') + '</span></div></td></tr></table></td></tr>';
         html += '<tr><td class="summary-label">Student overall Feedback:</td><td colspan="3" class="summary-value"><div class="answer-box answer-box-large" style="min-height:50px;background:#fff">' + (sum.student_overall_feedback ?? '') + '</div></td></tr>';
-        html += '<tr><td class="summary-label summary-office" colspan="2">Administrative use only - Entered onto Student Management Database</td><td class="summary-label summary-office">Initials</td><td class="summary-value summary-office"><span class="summary-date-line" style="min-width:60px">' + (sum.admin_initials ?? '') + '</span></td></tr>';
+        html += '<tr><td class="summary-label summary-office" colspan="2">Administrative use only - Entered onto Student Management Database</td><td class="summary-value summary-office" colspan="2">Initial: <span class="summary-cb' + (sum.admin_initial_checked ? ' checked' : '') + '">' + (sum.admin_initial_checked ? '✓' : '') + '</span> &nbsp; Updated: <span class="summary-cb' + (sum.admin_updated_checked ? ' checked' : '') + '">' + (sum.admin_updated_checked ? '✓' : '') + '</span></td></tr>';
         html += '</tbody></table></div></div></div>';
       } else if (section.pdf_render_mode === 'reasonable_adjustment') {
         const stepTitle = (step?.title || '').trim();
@@ -1761,15 +1763,20 @@ export async function getPdfData(supabase: SupabaseClient, instanceId: number): 
     }
   } catch (_e) {}
 
-  let resultsOfficeMap = new Map<number, { entered_date: string | null; entered_by: string | null }>();
+  let resultsOfficeMap = new Map<number, { entered_date: string | null; entered_by: string | null; initial_checked?: boolean; updated_checked?: boolean }>();
   let resultsDataMap = new Map<number, Record<string, string | null>>();
   try {
     const { data: officeRows } = await supabase
       .from('skyline_form_results_office')
-      .select('section_id, entered_date, entered_by')
+      .select('section_id, entered_date, entered_by, initial_checked, updated_checked')
       .eq('instance_id', instanceId);
-    for (const r of (officeRows as { section_id: number; entered_date: string | null; entered_by: string | null }[]) || []) {
-      resultsOfficeMap.set(r.section_id, { entered_date: r.entered_date, entered_by: r.entered_by });
+    for (const r of (officeRows as { section_id: number; entered_date: string | null; entered_by: string | null; initial_checked?: boolean | null; updated_checked?: boolean | null }[]) || []) {
+      resultsOfficeMap.set(r.section_id, {
+        entered_date: r.entered_date,
+        entered_by: r.entered_by,
+        initial_checked: Boolean(r.initial_checked ?? false),
+        updated_checked: Boolean(r.updated_checked ?? false),
+      });
     }
   } catch (_e) {}
   try {
@@ -1827,6 +1834,8 @@ export async function getPdfData(supabase: SupabaseClient, instanceId: number): 
         student_date_3: (r.student_date_3 as string) ?? null,
         student_overall_feedback: (r.student_overall_feedback as string) ?? null,
         admin_initials: (r.admin_initials as string) ?? null,
+        admin_initial_checked: Boolean(r.admin_initial_checked ?? false),
+        admin_updated_checked: Boolean(r.admin_updated_checked ?? false),
         reasonable_adjustment_task: (r.reasonable_adjustment_task as string) ?? null,
         reasonable_adjustment_explanation: (r.reasonable_adjustment_explanation as string) ?? null,
         trainer_assessor_name: (r.trainer_assessor_name as string) ?? null,
