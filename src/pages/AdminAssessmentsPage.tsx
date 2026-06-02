@@ -618,8 +618,9 @@ export const AdminAssessmentsPage: React.FC = () => {
 
   const renderAssessmentActions = (row: SubmittedInstanceRow, mode: 'toolbar' | 'stack') => {
     const role = row.role_context === 'trainer' ? 'trainer' : row.role_context === 'office' ? 'office' : 'student';
-    const openRole: 'student' | 'trainer' | 'office' =
-      row.role_context === 'office' || row.status === 'locked' ? 'office' : role;
+    // Admin "Open" should always unlock all fields (admin edit mode),
+    // so we always open the office link (which supports admin override in the fill page).
+    const openRole: 'office' = 'office';
     const submissionCount = Number((row as unknown as { submission_count?: number }).submission_count ?? 0);
     const showResubmit =
       row.status !== 'locked' &&
@@ -640,7 +641,18 @@ export const AdminAssessmentsPage: React.FC = () => {
         toast.error('Failed to open secure link');
         return;
       }
-      window.open(url, '_blank');
+      // When opening from Admin, we want an "admin edit mode" that unlocks *all* fields.
+      // This is a UI-only flag; auth/role is still enforced by the signed token.
+      const nextUrl = (() => {
+        try {
+          const u = new URL(url, window.location.origin);
+          if (targetRole === 'office') u.searchParams.set('admin', '1');
+          return u.toString();
+        } catch {
+          return url;
+        }
+      })();
+      window.open(nextUrl, '_blank');
     };
     const openLink = async () => openLinkAs(openRole);
 

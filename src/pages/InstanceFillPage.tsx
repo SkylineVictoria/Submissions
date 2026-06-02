@@ -470,6 +470,7 @@ function parseAnswerValue(a: FormAnswer): string | number | boolean | Record<str
 export const InstanceFillPage: React.FC = () => {
   const { instanceId } = useParams<{ instanceId: string }>();
   const [searchParams] = useSearchParams();
+  const isAdminEditMode = searchParams.get('admin') === '1';
   const [template, setTemplate] = useState<FormTemplate | null>(null);
   const [answers, setAnswers] = useState<Record<string, string | number | boolean | Record<string, unknown> | string[]>>({});
   const [trainerAssessments, setTrainerAssessments] = useState<Record<number, string>>({});
@@ -489,6 +490,8 @@ export const InstanceFillPage: React.FC = () => {
   const isQuestionEditableForRole = useCallback(
     (re: Record<string, boolean> | null | undefined) => {
       const editability = re || {};
+      // Admin edit mode unlocks every field regardless of template role editability.
+      if (role === 'office' && isAdminEditMode) return true;
       if (role === 'office') {
         return (
           isRoleEditable(editability, 'office') ||
@@ -501,7 +504,7 @@ export const InstanceFillPage: React.FC = () => {
       }
       return isRoleEditable(editability, role);
     },
-    [role]
+    [role, isAdminEditMode]
   );
 
   /** Trainer/office may also VIEW fields marked student-visible so they can review/correct student work. */
@@ -1376,18 +1379,19 @@ export const InstanceFillPage: React.FC = () => {
   );
 
   const canRoleEditCurrentWorkflow = useMemo(() => {
+    if (role === 'office' && isAdminEditMode) return true;
     if (workflowStatus === 'completed' || workflowStatus === 'failed') return false;
     if (role === 'student') return workflowStatus === 'draft';
     // Trainer can review/edit student work whenever the instance is not terminal (completed/failed ruled out above).
     if (role === 'trainer') return true;
     if (role === 'office') return workflowStatus === 'waiting_office';
     return false;
-  }, [role, workflowStatus]);
+  }, [role, workflowStatus, isAdminEditMode]);
 
   /** Office may edit admin fields (summary dates, SMS checkboxes) while waiting or after finalisation for corrections. */
   const canOfficeAdminEdit = useMemo(
-    () => role === 'office' && (workflowStatus === 'waiting_office' || workflowStatus === 'completed'),
-    [role, workflowStatus]
+    () => role === 'office' && (isAdminEditMode || workflowStatus === 'waiting_office' || workflowStatus === 'completed' || workflowStatus === 'failed'),
+    [role, workflowStatus, isAdminEditMode]
   );
 
   /** Flush debounced question saves so a refresh does not drop in-flight edits. */
@@ -2128,8 +2132,9 @@ export const InstanceFillPage: React.FC = () => {
     (didNotAttempt || (workflowStatus === 'failed' && instanceLegacyStatus === 'locked'));
 
   const showSubmittedPage =
-    (role === 'student' && studentHasSubmitted && workflowStatus !== 'draft') ||
-    (role === 'trainer' && (workflowStatus === 'waiting_office' || workflowStatus === 'completed' || workflowStatus === 'failed'));
+    !isAdminEditMode &&
+    ((role === 'student' && studentHasSubmitted && workflowStatus !== 'draft') ||
+      (role === 'trainer' && (workflowStatus === 'waiting_office' || workflowStatus === 'completed' || workflowStatus === 'failed')));
 
   const canViewPdfPreview = role === 'office';
 
@@ -3651,6 +3656,7 @@ export const InstanceFillPage: React.FC = () => {
                         (() => {
                           const rd = resultsData[section.id];
                           const trainerCanEdit = role === 'trainer' || role === 'office';
+                          const adminOverride = canOfficeAdminEdit;
                           const studentCanEdit =
                             role === 'student' || role === 'office' || (role === 'trainer' && canRoleEditCurrentWorkflow);
                           const taskResultSectionIds = (template?.steps || []).flatMap((st) => st.sections).filter((s) => s.pdf_render_mode === 'task_results').map((s) => s.id);
@@ -3679,18 +3685,21 @@ export const InstanceFillPage: React.FC = () => {
                           const secondAttemptComplete =
                             rowAnswerHasContent(rd?.second_attempt_satisfactory ?? undefined) && rowAnswerHasContent(rd?.second_attempt_date ?? undefined);
                           // Match assessment summary: cycle 1 edits attempt 1 only; cycle 2+ locks attempt 1 and edits attempt 2, etc.
-                          const firstAttemptEditable = trainerCanEdit && markingRound < 2 && !secondOrThirdHasData;
+                          const firstAttemptEditable =
+                            adminOverride || (trainerCanEdit && markingRound < 2 && !secondOrThirdHasData);
                           const secondAttemptUnlockedByResubmission = markingRound >= 2;
                           const thirdAttemptUnlockedByResubmission = markingRound >= 3;
                           const secondAttemptEditable =
-                            trainerCanEdit &&
-                            firstAttemptComplete &&
-                            secondAttemptUnlockedByResubmission &&
-                            !thirdAttemptHasData;
+                            adminOverride ||
+                            (trainerCanEdit &&
+                              firstAttemptComplete &&
+                              secondAttemptUnlockedByResubmission &&
+                              !thirdAttemptHasData);
                           const thirdAttemptEditable =
-                            trainerCanEdit && secondAttemptComplete && thirdAttemptUnlockedByResubmission;
+                            adminOverride ||
+                            (trainerCanEdit && secondAttemptComplete && thirdAttemptUnlockedByResubmission);
                           /** Footer trainer sign-off belongs to the first assessment cycle; lock when attempt 1 column is locked. */
-                          const trainerFooterEditable = trainerCanEdit && firstAttemptEditable;
+                          const trainerFooterEditable = adminOverride || (trainerCanEdit && firstAttemptEditable);
                           const studentSuggestionSig = studentDeclSig ?? firstTaskData?.student_signature ?? null;
                           const studentNameQ = template?.steps?.flatMap((st) => st.sections).flatMap((s) => s.questions).find((q) => q.code === 'student.fullName');
                           const trainerNameQ = template?.steps?.flatMap((st) => st.sections).flatMap((s) => s.questions).find((q) => q.code === 'trainer.fullName');
@@ -3998,22 +4007,12 @@ export const InstanceFillPage: React.FC = () => {
                         (() => {
                           const sum = assessmentSummary || ({} as import('../lib/formEngine').AssessmentSummaryDataEntry);
                           const trainerCanEdit = role === 'trainer' || role === 'office';
+                          const adminOverride = canOfficeAdminEdit;
                           const studentCanEdit =
                             role === 'student' || role === 'office' || (role === 'trainer' && canRoleEditCurrentWorkflow);
                           const officeCanEdit = canOfficeAdminEdit;
                           const canEditSummaryCoverDates =
                             canOfficeAdminEdit || (role === 'trainer' && canRoleEditCurrentWorkflow);
-                          const summaryCompetentAttempt: 1 | 2 | 3 | null =
-                            sum.final_attempt_3_result === 'competent'
-                              ? 3
-                              : sum.final_attempt_2_result === 'competent'
-                                ? 2
-                                : sum.final_attempt_1_result === 'competent'
-                                  ? 1
-                                  : null;
-                          const canEditStudentSummaryDate = (attempt: 1 | 2 | 3, slotEditable: boolean) =>
-                            (canOfficeAdminEdit && summaryCompetentAttempt === attempt) ||
-                            (studentCanEdit && slotEditable);
                           const taskResultEntries = buildTaskResultSections(template, resultsData);
                           const taskResultSectionIds = taskResultEntries
                             .map((e) => e.sectionId)
@@ -4051,9 +4050,9 @@ export const InstanceFillPage: React.FC = () => {
                           const sumSecondComplete =
                             rowAnswerHasContent(firstTaskRd?.second_attempt_satisfactory ?? undefined) &&
                             rowAnswerHasContent(firstTaskRd?.second_attempt_date ?? undefined);
-                          const sumFirstEditable = !sumSecondOrThirdHasData && markingRound < 2;
-                          const sumSecondEditable = sumFirstComplete && !sumThirdHasData && markingRound >= 2;
-                          const sumThirdEditable = sumSecondComplete && markingRound >= 3;
+                          const sumFirstEditable = adminOverride || (!sumSecondOrThirdHasData && markingRound < 2);
+                          const sumSecondEditable = adminOverride || (sumFirstComplete && !sumThirdHasData && markingRound >= 2);
+                          const sumThirdEditable = adminOverride || (sumSecondComplete && markingRound >= 3);
                           const sumFirstAttemptChecks = getTaskResultChecks(
                             template,
                             1,
@@ -4260,12 +4259,12 @@ export const InstanceFillPage: React.FC = () => {
                                       <td colSpan={3} className="border border-gray-400 p-1.5">
                                         <p className="text-[10px] text-gray-600 mb-1.5">I declare that I have conducted a fair, valid, reliable, and flexible assessment with this student, and I have provided appropriate feedback</p>
                                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 min-w-0">
-                                          <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_1 ?? null} onChange={(v) => { handleAssessmentSummaryChange('trainer_sig_1', v); const cur = String(sum.trainer_date_1 ?? '').trim(); if (!cur || (minTrainerDate1 && isCalendarBefore(cur, minTrainerDate1))) handleAssessmentSummaryChange('trainer_date_1', minTrainerDate1 ?? null); }} disabled={!trainerCanEdit || !sumFirstEditable} className="mt-0.5" highlight={role === 'trainer' && sumFirstEditable} suggestionFrom={trainerRefSig} onSuggestionClick={trainerRefSig ? () => { handleAssessmentSummaryChange('trainer_sig_1', trainerRefSig); const next = maxIsoDate(trainerRefDate, minTrainerDate1) ?? minTrainerDate1 ?? trainerRefDate; handleAssessmentSummaryChange('trainer_date_1', next || null); } : undefined} /></div>
-                                          <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_2 ?? null} onChange={(v) => { handleAssessmentSummaryChange('trainer_sig_2', v); const cur = String(sum.trainer_date_2 ?? '').trim(); if (!cur || (minTrainerDate2 && isCalendarBefore(cur, minTrainerDate2))) handleAssessmentSummaryChange('trainer_date_2', minTrainerDate2 ?? null); }} disabled={!trainerCanEdit || !sumSecondEditable} className="mt-0.5" highlight={role === 'trainer' && sumSecondEditable} suggestionFrom={sumSecondEditable ? (sum.trainer_sig_1 ?? undefined) : undefined} onSuggestionClick={sumSecondEditable && sum.trainer_sig_1 ? () => { handleAssessmentSummaryChange('trainer_sig_2', sum.trainer_sig_1); const next = maxIsoDate(sum.trainer_date_1, sum.student_date_2, minTrainerDate2) ?? minTrainerDate2 ?? sum.trainer_date_1 ?? sum.student_date_2; handleAssessmentSummaryChange('trainer_date_2', next || null); } : undefined} /></div>
-                                          <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_3 ?? null} onChange={(v) => { handleAssessmentSummaryChange('trainer_sig_3', v); const cur = String(sum.trainer_date_3 ?? '').trim(); if (!cur || (minTrainerDate3 && isCalendarBefore(cur, minTrainerDate3))) handleAssessmentSummaryChange('trainer_date_3', minTrainerDate3 ?? null); }} disabled={!trainerCanEdit || !sumThirdEditable} className="mt-0.5" highlight={role === 'trainer' && sumThirdEditable} suggestionFrom={sumThirdEditable ? (sum.trainer_sig_1 ?? undefined) : undefined} onSuggestionClick={sumThirdEditable && sum.trainer_sig_1 ? () => { handleAssessmentSummaryChange('trainer_sig_3', sum.trainer_sig_1); const next = maxIsoDate(sum.trainer_date_2, sum.student_date_3, minTrainerDate3) ?? minTrainerDate3 ?? sum.trainer_date_2 ?? sum.student_date_3; handleAssessmentSummaryChange('trainer_date_3', next || null); } : undefined} /></div>
-                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_1 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_1', clampIsoToMin(v || null, minTrainerDate1))} disabled={!trainerCanEdit || !sumFirstEditable} highlight={role === 'trainer' && sumFirstEditable} compact placement="above" className="w-full" minDate={minTrainerDate1} /></div>
-                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_2 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_2', clampIsoToMin(v || null, minTrainerDate2))} disabled={!trainerCanEdit || !sumSecondEditable} highlight={role === 'trainer' && sumSecondEditable} compact placement="above" className="w-full" minDate={minTrainerDate2} /></div>
-                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_3 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_3', clampIsoToMin(v || null, minTrainerDate3))} disabled={!trainerCanEdit || !sumThirdEditable} highlight={role === 'trainer' && sumThirdEditable} compact placement="above" className="w-full" minDate={minTrainerDate3} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_1 ?? null} onChange={(v) => { handleAssessmentSummaryChange('trainer_sig_1', v); const cur = String(sum.trainer_date_1 ?? '').trim(); if (!cur || (minTrainerDate1 && isCalendarBefore(cur, minTrainerDate1))) handleAssessmentSummaryChange('trainer_date_1', minTrainerDate1 ?? null); }} disabled={!trainerCanEdit || !sumFirstEditable} className="mt-0.5" highlight={(role === 'trainer' && sumFirstEditable) || adminOverride} suggestionFrom={trainerRefSig} onSuggestionClick={trainerRefSig ? () => { handleAssessmentSummaryChange('trainer_sig_1', trainerRefSig); const next = maxIsoDate(trainerRefDate, minTrainerDate1) ?? minTrainerDate1 ?? trainerRefDate; handleAssessmentSummaryChange('trainer_date_1', next || null); } : undefined} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_2 ?? null} onChange={(v) => { handleAssessmentSummaryChange('trainer_sig_2', v); const cur = String(sum.trainer_date_2 ?? '').trim(); if (!cur || (minTrainerDate2 && isCalendarBefore(cur, minTrainerDate2))) handleAssessmentSummaryChange('trainer_date_2', minTrainerDate2 ?? null); }} disabled={!trainerCanEdit || !sumSecondEditable} className="mt-0.5" highlight={(role === 'trainer' && sumSecondEditable) || adminOverride} suggestionFrom={sumSecondEditable ? (sum.trainer_sig_1 ?? undefined) : undefined} onSuggestionClick={sumSecondEditable && sum.trainer_sig_1 ? () => { handleAssessmentSummaryChange('trainer_sig_2', sum.trainer_sig_1); const next = maxIsoDate(sum.trainer_date_1, sum.student_date_2, minTrainerDate2) ?? minTrainerDate2 ?? sum.trainer_date_1 ?? sum.student_date_2; handleAssessmentSummaryChange('trainer_date_2', next || null); } : undefined} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_3 ?? null} onChange={(v) => { handleAssessmentSummaryChange('trainer_sig_3', v); const cur = String(sum.trainer_date_3 ?? '').trim(); if (!cur || (minTrainerDate3 && isCalendarBefore(cur, minTrainerDate3))) handleAssessmentSummaryChange('trainer_date_3', minTrainerDate3 ?? null); }} disabled={!trainerCanEdit || !sumThirdEditable} className="mt-0.5" highlight={(role === 'trainer' && sumThirdEditable) || adminOverride} suggestionFrom={sumThirdEditable ? (sum.trainer_sig_1 ?? undefined) : undefined} onSuggestionClick={sumThirdEditable && sum.trainer_sig_1 ? () => { handleAssessmentSummaryChange('trainer_sig_3', sum.trainer_sig_1); const next = maxIsoDate(sum.trainer_date_2, sum.student_date_3, minTrainerDate3) ?? minTrainerDate3 ?? sum.trainer_date_2 ?? sum.student_date_3; handleAssessmentSummaryChange('trainer_date_3', next || null); } : undefined} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_1 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_1', clampIsoToMin(v || null, minTrainerDate1))} disabled={!trainerCanEdit || !sumFirstEditable} highlight={(role === 'trainer' && sumFirstEditable) || adminOverride} compact placement="above" className="w-full" minDate={minTrainerDate1} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_2 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_2', clampIsoToMin(v || null, minTrainerDate2))} disabled={!trainerCanEdit || !sumSecondEditable} highlight={(role === 'trainer' && sumSecondEditable) || adminOverride} compact placement="above" className="w-full" minDate={minTrainerDate2} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_3 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_3', clampIsoToMin(v || null, minTrainerDate3))} disabled={!trainerCanEdit || !sumThirdEditable} highlight={(role === 'trainer' && sumThirdEditable) || adminOverride} compact placement="above" className="w-full" minDate={minTrainerDate3} /></div>
                                         </div>
                                       </td>
                                     </tr>
@@ -4277,9 +4276,9 @@ export const InstanceFillPage: React.FC = () => {
                                           <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_1 ?? null} onChange={(v) => { handleAssessmentSummaryChange('student_sig_1', v); const cur = String(sum.student_date_1 ?? '').trim(); if (!cur || (minStudentDate1 && isCalendarBefore(cur, minStudentDate1))) handleAssessmentSummaryChange('student_date_1', minStudentDate1 ?? null); }} disabled={!studentCanEdit || !sumFirstEditable} className="mt-0.5" highlight={studentCanEdit && sumFirstEditable} suggestionFrom={studentRefSig} onSuggestionClick={studentRefSig ? () => { handleAssessmentSummaryChange('student_sig_1', studentRefSig); const next = maxIsoDate(studentRefDate, minStudentDate1) ?? minStudentDate1 ?? studentRefDate; handleAssessmentSummaryChange('student_date_1', next || null); } : undefined} /></div>
                                           <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_2 ?? null} onChange={(v) => { handleAssessmentSummaryChange('student_sig_2', v); const cur = String(sum.student_date_2 ?? '').trim(); if (!cur || (minStudentDate2 && isCalendarBefore(cur, minStudentDate2))) handleAssessmentSummaryChange('student_date_2', minStudentDate2 ?? null); }} disabled={!studentCanEdit || !sumSecondEditable} className="mt-0.5" highlight={studentCanEdit && sumSecondEditable} suggestionFrom={sumSecondEditable ? (sum.student_sig_1 ?? undefined) : undefined} onSuggestionClick={sumSecondEditable && sum.student_sig_1 ? () => { handleAssessmentSummaryChange('student_sig_2', sum.student_sig_1); const next = maxIsoDate(sum.student_date_1, minStudentDate2) ?? minStudentDate2 ?? sum.student_date_1; handleAssessmentSummaryChange('student_date_2', next || null); } : undefined} /></div>
                                           <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_3 ?? null} onChange={(v) => { handleAssessmentSummaryChange('student_sig_3', v); const cur = String(sum.student_date_3 ?? '').trim(); if (!cur || (minStudentDate3 && isCalendarBefore(cur, minStudentDate3))) handleAssessmentSummaryChange('student_date_3', minStudentDate3 ?? null); }} disabled={!studentCanEdit || !sumThirdEditable} className="mt-0.5" highlight={studentCanEdit && sumThirdEditable} suggestionFrom={sumThirdEditable ? (sum.student_sig_1 ?? undefined) : undefined} onSuggestionClick={sumThirdEditable && sum.student_sig_1 ? () => { handleAssessmentSummaryChange('student_sig_3', sum.student_sig_1); const next = maxIsoDate(sum.student_date_2, minStudentDate3) ?? minStudentDate3 ?? sum.student_date_2; handleAssessmentSummaryChange('student_date_3', next || null); } : undefined} /></div>
-                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_1 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_1', clampIsoToMin(v || null, minStudentDate1))} disabled={!canEditStudentSummaryDate(1, sumFirstEditable)} highlight={canEditStudentSummaryDate(1, sumFirstEditable)} compact placement="above" className="w-full" minDate={minStudentDate1} /></div>
-                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_2 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_2', clampIsoToMin(v || null, minStudentDate2))} disabled={!canEditStudentSummaryDate(2, sumSecondEditable)} highlight={canEditStudentSummaryDate(2, sumSecondEditable)} compact placement="above" className="w-full" minDate={minStudentDate2} /></div>
-                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_3 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_3', clampIsoToMin(v || null, minStudentDate3))} disabled={!canEditStudentSummaryDate(3, sumThirdEditable)} highlight={canEditStudentSummaryDate(3, sumThirdEditable)} compact placement="above" className="w-full" minDate={minStudentDate3} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_1 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_1', clampIsoToMin(v || null, minStudentDate1))} disabled={!studentCanEdit} highlight={studentCanEdit} compact placement="above" className="w-full" minDate={minStudentDate1} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_2 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_2', clampIsoToMin(v || null, minStudentDate2))} disabled={!studentCanEdit} highlight={studentCanEdit} compact placement="above" className="w-full" minDate={minStudentDate2} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_3 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_3', clampIsoToMin(v || null, minStudentDate3))} disabled={!studentCanEdit} highlight={studentCanEdit} compact placement="above" className="w-full" minDate={minStudentDate3} /></div>
                                         </div>
                                       </td>
                                     </tr>
