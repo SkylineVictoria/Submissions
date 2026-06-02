@@ -1459,7 +1459,9 @@ export function buildHtml(data: {
         html += '<td style="width:33%;border:none;padding:4px 8px;vertical-align:top"><div><span style="font-weight:600">Signature:</span></div><div class="summary-date-line" style="min-width:100%;display:block">' + renderSignatureHtml(sum.student_sig_2 ?? '') + '</div><div style="margin-top:4px"><span style="font-weight:600">Date:</span> <span class="summary-date-line">' + (sum.student_date_2 ?? '') + '</span></div></td>';
         html += '<td style="width:33%;border:none;padding:4px 0 4px 8px;vertical-align:top"><div><span style="font-weight:600">Signature:</span></div><div class="summary-date-line" style="min-width:100%;display:block">' + renderSignatureHtml(sum.student_sig_3 ?? '') + '</div><div style="margin-top:4px"><span style="font-weight:600">Date:</span> <span class="summary-date-line">' + (sum.student_date_3 ?? '') + '</span></div></td></tr></table></td></tr>';
         html += '<tr><td class="summary-label">Student overall Feedback:</td><td colspan="3" class="summary-value"><div class="answer-box answer-box-large" style="min-height:50px;background:#fff">' + (sum.student_overall_feedback ?? '') + '</div></td></tr>';
-        html += '<tr><td class="summary-label summary-office" colspan="2">Administrative use only - Entered onto Student Management Database</td><td class="summary-value summary-office" colspan="2">Initial: <span class="summary-cb' + (sum.admin_initial_checked ? ' checked' : '') + '">' + (sum.admin_initial_checked ? '✓' : '') + '</span> &nbsp; Updated: <span class="summary-cb' + (sum.admin_updated_checked ? ' checked' : '') + '">' + (sum.admin_updated_checked ? '✓' : '') + '</span></td></tr>';
+        const adminInitialChecked = Boolean(sum.admin_initial_checked);
+        const adminUpdatedChecked = Boolean(sum.admin_updated_checked);
+        html += '<tr><td class="summary-label summary-office" colspan="2">Administrative use only - Entered onto Student Management Database</td><td class="summary-value summary-office" colspan="2">Initial: <span class="summary-cb' + (adminInitialChecked ? ' checked' : '') + '">' + (adminInitialChecked ? '✓' : '') + '</span> &nbsp; Updated: <span class="summary-cb' + (adminUpdatedChecked ? ' checked' : '') + '">' + (adminUpdatedChecked ? '✓' : '') + '</span></td></tr>';
         html += '</tbody></table></div></div></div>';
       } else if (section.pdf_render_mode === 'reasonable_adjustment') {
         const stepTitle = (step?.title || '').trim();
@@ -1834,8 +1836,8 @@ export async function getPdfData(supabase: SupabaseClient, instanceId: number): 
         student_date_3: (r.student_date_3 as string) ?? null,
         student_overall_feedback: (r.student_overall_feedback as string) ?? null,
         admin_initials: (r.admin_initials as string) ?? null,
-        admin_initial_checked: Boolean(r.admin_initial_checked ?? false),
-        admin_updated_checked: Boolean(r.admin_updated_checked ?? false),
+        admin_initial_checked: r.admin_initial_checked ? '1' : null,
+        admin_updated_checked: r.admin_updated_checked ? '1' : null,
         reasonable_adjustment_task: (r.reasonable_adjustment_task as string) ?? null,
         reasonable_adjustment_explanation: (r.reasonable_adjustment_explanation as string) ?? null,
         trainer_assessor_name: (r.trainer_assessor_name as string) ?? null,
