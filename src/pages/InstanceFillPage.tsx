@@ -2041,7 +2041,7 @@ export const InstanceFillPage: React.FC = () => {
       setConfirmConfig(null);
       return;
     }
-    if (role === 'office' && workflowStatus === 'waiting_office') {
+    if (role === 'office' && (workflowStatus === 'waiting_office' || isAdminEditMode)) {
       await updateInstanceWorkflowStatus(id, 'completed');
       setWorkflowStatus('completed');
       toast.success('Office check complete. Form is now completed.');
@@ -2091,14 +2091,14 @@ export const InstanceFillPage: React.FC = () => {
       });
       return;
     }
-    if (role === 'office' && workflowStatus === 'waiting_office') {
+    if (role === 'office' && (workflowStatus === 'waiting_office' || isAdminEditMode)) {
       setConfirmConfig({
         title: 'Office Check',
         message: 'Finalize office checking? Tick Initial and Updated on all task results and the summary sheet, or confirm to complete now.',
         confirmLabel: 'Finalize',
       });
     }
-  }, [role, workflowStatus]);
+  }, [role, workflowStatus, isAdminEditMode]);
 
   if (loading) {
     return <Loader fullPage variant="dots" size="lg" message="Loading..." />;
@@ -4677,7 +4677,7 @@ export const InstanceFillPage: React.FC = () => {
                   Trainer Checked (Submit)
                 </Button>
               )}
-              {currentStep >= steps.length && role === 'office' && workflowStatus === 'waiting_office' && (
+              {currentStep >= steps.length && role === 'office' && (workflowStatus === 'waiting_office' || isAdminEditMode) && (
                 <Button variant="primary" className="w-full sm:w-auto shrink-0" onClick={handleFinalSubmitByRole} disabled={workflowSubmitting}>
                   Office Checked
                 </Button>
