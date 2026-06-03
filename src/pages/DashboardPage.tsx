@@ -388,6 +388,8 @@ export const DashboardPage: React.FC = () => {
                       submissionCount: Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0),
                       submittedAt: row.submitted_at ?? null,
                       attemptResults: rawAttemptResults,
+                      status: row.status,
+                      role_context: row.role_context,
                     });
                     const trainerAttemptFailedText = getTrainerAttemptFailedText(rawAttemptResults);
                     const missedAttemptText = getMissedAttemptWindowText({

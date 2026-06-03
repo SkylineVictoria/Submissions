@@ -118,6 +118,8 @@ const getExportStatusText = (row: SubmittedInstanceRow, rawAttemptResults: Attem
     submissionCount: submittedCount,
     submittedAt: row.submitted_at ?? null,
     attemptResults: rawAttemptResults,
+    status: row.status,
+    role_context: row.role_context,
   });
   const trainerAttemptFailedText = getTrainerAttemptFailedText(rawAttemptResults);
   const missedAttemptText = normalizeMissedAttemptText(missedAttemptTextRaw);

@@ -15,8 +15,10 @@ import {
   getTrainerAttemptFailedText,
   getMissedAttemptWindowText,
   computeAttemptTones,
-  hasCompetentAttempt,
+  computeWorkflowStageChecks,
+  getAssessmentOutcomeDisplay,
   maskCompetentWhileAwaitingTrainer,
+  type WorkflowStageState,
   withinInstanceAccessWindow,
   type AttemptResult,
   type AttemptDotTone,
@@ -39,20 +41,28 @@ const formatDDMMYYYY = (value: string | null): string => {
 };
 
 function StatusChecks({ row, attemptResults }: { row: SubmittedInstanceRow; attemptResults: AttemptResult[] }) {
-  const studentDone = hasCompetentAttempt(attemptResults);
-  const trainerDone = row.status === 'locked' || row.role_context === 'office';
-  const adminDone = row.status === 'locked';
-  const Item = ({ label, ok }: { label: string; ok: boolean }) => (
-    <div className="inline-flex items-center gap-1.5 text-xs">
-      <CheckCircle className={ok ? 'w-4 h-4 text-emerald-600' : 'w-4 h-4 text-gray-300'} />
-      <span className={ok ? 'text-emerald-700 font-medium' : 'text-gray-500'}>{label}</span>
-    </div>
-  );
+  const { studentDone, trainerDone, adminState } = computeWorkflowStageChecks({
+    status: row.status,
+    role_context: row.role_context,
+    attemptResults,
+  });
+  const Item = ({ label, state }: { label: string; state: WorkflowStageState }) => {
+    const iconClass =
+      state === 'done' ? 'text-emerald-600' : state === 'pending' ? 'text-amber-500' : 'text-gray-300';
+    const textClass =
+      state === 'done' ? 'text-emerald-700 font-medium' : state === 'pending' ? 'text-amber-700 font-medium' : 'text-gray-500';
+    return (
+      <div className="inline-flex items-center gap-1.5 text-xs">
+        <CheckCircle className={`w-4 h-4 ${iconClass}`} />
+        <span className={textClass}>{label}</span>
+      </div>
+    );
+  };
   return (
     <div className="flex flex-wrap gap-x-3 gap-y-1">
-      <Item label="Student" ok={studentDone} />
-      <Item label="Trainer" ok={trainerDone} />
-      <Item label="Completed" ok={adminDone} />
+      <Item label="Student" state={studentDone ? 'done' : 'idle'} />
+      <Item label="Trainer" state={trainerDone ? 'done' : 'idle'} />
+      <Item label="Office" state={adminState} />
     </div>
   );
 }
@@ -78,18 +88,17 @@ function AttemptDots({ tones, titlePrefix }: { tones: AttemptDotTone[]; titlePre
   );
 }
 
-function getOutcomeLabel(summary: { final_attempt_1_result: AttemptResult; final_attempt_2_result: AttemptResult; final_attempt_3_result: AttemptResult } | null): {
-  label: string;
-  className: string;
-} {
-  const r1 = summary?.final_attempt_1_result ?? null;
-  const r2 = summary?.final_attempt_2_result ?? null;
-  const r3 = summary?.final_attempt_3_result ?? null;
-  const anyCompetent = r1 === 'competent' || r2 === 'competent' || r3 === 'competent';
-  if (anyCompetent) return { label: 'Completed', className: 'text-emerald-700' };
-  const anyNYC = r1 === 'not_yet_competent' || r2 === 'not_yet_competent' || r3 === 'not_yet_competent';
-  if (anyNYC) return { label: 'Not competent', className: 'text-red-700' };
-  return { label: 'In progress', className: 'text-gray-700' };
+function getOutcomeLabel(
+  summary: { final_attempt_1_result: AttemptResult; final_attempt_2_result: AttemptResult; final_attempt_3_result: AttemptResult } | null,
+  row?: Pick<SubmittedInstanceRow, 'status' | 'role_context'>
+): { label: string; className: string; subtext: string | null; subtextClassName: string } {
+  return getAssessmentOutcomeDisplay({
+    status: row?.status,
+    role_context: row?.role_context,
+    attemptResults: summary
+      ? [summary.final_attempt_1_result, summary.final_attempt_2_result, summary.final_attempt_3_result]
+      : [],
+  });
 }
 
 const STORAGE_KEY = STUDENT_DASHBOARD_AUTH_STORAGE_KEY;
@@ -466,13 +475,18 @@ export const StudentDashboardPage: React.FC = () => {
                             submissionCount: Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0),
                             submittedAt: row.submitted_at ?? null,
                             attemptResults: rawAttemptResults,
+                            status: row.status,
+                            role_context: row.role_context,
                           });
                           const trainerAttemptFailedText = getTrainerAttemptFailedText(rawAttemptResults);
                           const missedAttemptText = getMissedAttemptWindowText({
                             noAttemptRollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
                             didNotAttempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
                           });
-                          const ui = computeRowUi({ row: { ...row, did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null }, attemptResults });
+                          const ui = computeRowUi({
+                            row: { ...row, did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null, status: row.status },
+                            attemptResults,
+                          });
                           const win = withinInstanceAccessWindow(row, 'student');
                           const disabled = ui.disabled || !win.ok;
                           const trainerHighlightExtra = rowMatchesTrainerHighlightCourse(row, trainerHighlightCourseId)
@@ -528,24 +542,27 @@ export const StudentDashboardPage: React.FC = () => {
                               </td>
                               <td className="px-3 py-2 border-b border-[var(--border)] align-top min-w-[220px]">
                                 {(() => {
-                                    const outcomeClass =
-                                    ui.kind === 'past_not_competent'
-                                      ? ui.outcomeClassName
-                                      : ui.kind === 'past_competent'
-                                        ? ui.outcomeClassName
-                                        : getOutcomeLabel(displaySum).className;
-                                  const outcomeLabel =
-                                    ui.kind === 'past_not_competent'
-                                      ? ui.outcomeLabel
-                                      : ui.kind === 'past_competent'
-                                        ? ui.outcomeLabel
-                                        : getOutcomeLabel(displaySum).label;
-                                  const comments: Array<{ text: string; className: string }> = [];
-                                  const missedAll = missedAttemptText === "Didn't attempt any";
-                                  if (missedAll) {
-                                    comments.push({ text: "Didn't attempt any", className: 'text-[11px] font-medium text-red-700' });
-                                  } else {
-                                    comments.push({ text: outcomeLabel, className: `text-xs font-medium ${outcomeClass}` });
+                                    const outcomeDisplay =
+                                      ui.kind === 'past_not_competent' || ui.kind === 'past_competent'
+                                        ? {
+                                            label: ui.outcomeLabel ?? '',
+                                            className: ui.outcomeClassName ?? '',
+                                            subtext:
+                                              ui.kind === 'past_competent' && row.status !== 'locked' ? 'Office' : null,
+                                            subtextClassName: 'text-[11px] font-medium text-amber-700',
+                                          }
+                                        : getOutcomeLabel(displaySum, row);
+                                    const outcomeClass = outcomeDisplay.className;
+                                    const outcomeLabel = outcomeDisplay.label;
+                                    const comments: Array<{ text: string; className: string }> = [];
+                                    const missedAll = missedAttemptText === "Didn't attempt any";
+                                    if (missedAll) {
+                                      comments.push({ text: "Didn't attempt any", className: 'text-[11px] font-medium text-red-700' });
+                                    } else {
+                                      comments.push({ text: outcomeLabel, className: `text-xs font-medium ${outcomeClass}` });
+                                      if (outcomeDisplay.subtext) {
+                                        comments.push({ text: outcomeDisplay.subtext, className: outcomeDisplay.subtextClassName });
+                                      }
                                     if (trainerAttemptFailedText) {
                                       comments.push({ text: trainerAttemptFailedText, className: 'text-[11px] font-medium text-red-700' });
                                     }

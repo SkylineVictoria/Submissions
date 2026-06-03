@@ -11,7 +11,12 @@ export type AssessmentRowUiState =
   | { kind: 'expired'; disabled: true; reason: string; rowClassName: string; outcomeLabel?: never; outcomeClassName?: never }
   | { kind: 'unknown'; disabled: false; rowClassName: string; outcomeLabel?: never; outcomeClassName?: never };
 
-export type RowWindowInput = { start_date?: string | null; end_date?: string | null; did_not_attempt?: boolean | null };
+export type RowWindowInput = {
+  start_date?: string | null;
+  end_date?: string | null;
+  did_not_attempt?: boolean | null;
+  status?: string | null;
+};
 
 export function melDateString(d: Date = new Date()): string {
   const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: MEL_TZ, year: 'numeric', month: '2-digit', day: '2-digit' });
@@ -108,13 +113,16 @@ export function computeRowUi(input: {
 
   // Outcome takes precedence over window state.
   if (anyCompetent) {
+    const isLocked = String(input.row.status ?? '').trim() === 'locked';
+    const awaitingOffice = !isLocked;
     return {
-      kind: today && end && today > end ? 'past_competent' : 'past_competent',
+      kind: 'past_competent',
       disabled: false,
-      rowClassName:
-        'bg-emerald-50/70 hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors',
-      outcomeLabel: 'Completed',
-      outcomeClassName: 'text-emerald-800',
+      rowClassName: awaitingOffice
+        ? 'bg-amber-50/70 hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors'
+        : 'bg-emerald-50/70 hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors',
+      outcomeLabel: isLocked ? 'Completed' : 'Competent',
+      outcomeClassName: isLocked ? 'text-emerald-800' : 'text-emerald-800',
     };
   }
   if (anyNYC) {
@@ -186,26 +194,109 @@ export function getAttemptDoneText(attemptResults?: AttemptResult[] | null): str
   return null;
 }
 
+export type WorkflowStageState = 'done' | 'pending' | 'idle';
+
+export function computeWorkflowStageChecks(input: {
+  status?: string | null;
+  role_context?: string | null;
+  attemptResults: AttemptResult[];
+}): { studentDone: boolean; trainerDone: boolean; adminState: WorkflowStageState } {
+  const hasCompetent = hasCompetentAttempt(input.attemptResults);
+  const isLocked = String(input.status ?? '').trim() === 'locked';
+  const rc = String(input.role_context ?? '').trim();
+  const awaitingOffice = !isLocked && (rc === 'office' || hasCompetent);
+  return {
+    studentDone: hasCompetent,
+    trainerDone: isLocked || rc === 'office' || hasCompetent,
+    adminState: isLocked ? 'done' : awaitingOffice ? 'pending' : 'idle',
+  };
+}
+
+/** Primary outcome label + optional subtext (e.g. Office) for dashboard rows. */
+export function getAssessmentOutcomeDisplay(input: {
+  status?: string | null;
+  role_context?: string | null;
+  attemptResults?: AttemptResult[] | null;
+}): { label: string; className: string; subtext: string | null; subtextClassName: string } {
+  const r = (input.attemptResults ?? []).slice(0, 3);
+  const isLocked = String(input.status ?? '').trim() === 'locked';
+  const anyCompetent = r.some((x) => x === 'competent');
+  const anyNYC = r.some((x) => x === 'not_yet_competent');
+
+  if (anyCompetent) {
+    if (isLocked) {
+      return {
+        label: 'Completed',
+        className: 'text-emerald-700',
+        subtext: null,
+        subtextClassName: '',
+      };
+    }
+    return {
+      label: 'Competent',
+      className: 'text-emerald-700',
+      subtext: 'Office',
+      subtextClassName: 'text-[11px] font-medium text-amber-700',
+    };
+  }
+  if (anyNYC) {
+    return {
+      label: 'Not competent',
+      className: 'text-red-700',
+      subtext: null,
+      subtextClassName: '',
+    };
+  }
+  const rc = String(input.role_context ?? '').trim();
+  if (rc === 'office') {
+    return {
+      label: 'In progress',
+      className: 'text-gray-700',
+      subtext: 'Office',
+      subtextClassName: 'text-[11px] font-medium text-amber-700',
+    };
+  }
+  return { label: 'In progress', className: 'text-gray-700', subtext: null, subtextClassName: '' };
+}
+
 export function getStudentAttemptDoneText(input: {
   submissionCount?: number | null;
   submittedAt?: string | null;
   attemptResults?: AttemptResult[] | null;
+  status?: string | null;
+  role_context?: string | null;
 }): string | null {
   const r = (input.attemptResults ?? []).slice(0, 3);
-  // Once trainer marks NYC, next-attempt requirement text takes precedence.
+  const status = String(input.status ?? '').trim();
+  const rc = String(input.role_context ?? '').trim();
+
+  if (status === 'locked') return null;
+
+  // Competent but not office-locked — primary/subtext handled by getAssessmentOutcomeDisplay.
+  if (r.some((x) => x === 'competent')) return null;
+
+  if (rc === 'office') return null;
+
+  // NYC messaging is handled by getTrainerAttemptFailedText.
   if (r.some((x) => x === 'not_yet_competent')) return null;
+
   const submitted = Math.min(
     3,
     Math.max(0, Number(input.submissionCount ?? 0) || (String(input.submittedAt ?? '').trim() ? 1 : 0))
   );
-  if (submitted >= 3) return 'Submitted 3rd attempt awaiting trainer';
-  if (submitted >= 2) return 'Submitted 2nd attempt awaiting trainer';
-  if (submitted >= 1) return 'Submitted First Attempt awaiting trainer';
-  // Fallback to trainer result-based text when submissions aren't tracked (older data).
+
+  if (rc === 'trainer' || (rc === '' && submitted > 0)) {
+    if (submitted >= 3) return 'Submitted 3rd attempt — awaiting trainer';
+    if (submitted >= 2) return 'Submitted 2nd attempt — awaiting trainer';
+    if (submitted >= 1) return 'Submitted 1st attempt — awaiting trainer';
+  }
+
   const fallback = getAttemptDoneText(input.attemptResults);
-  if (fallback === 'First Attempt Done') return 'Submitted First Attempt awaiting trainer';
-  if (fallback === 'Second Attempt Done') return 'Submitted 2nd attempt awaiting trainer';
-  if (fallback === 'Third Attempt Done') return 'Submitted 3rd attempt awaiting trainer';
+  if (rc === 'trainer' || rc === '') {
+    if (fallback === 'First Attempt Done') return 'Submitted 1st attempt — awaiting trainer';
+    if (fallback === 'Second Attempt Done') return 'Submitted 2nd attempt — awaiting trainer';
+    if (fallback === 'Third Attempt Done') return 'Submitted 3rd attempt — awaiting trainer';
+  }
   return fallback;
 }
 

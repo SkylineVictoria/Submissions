@@ -214,6 +214,8 @@ export const TrainerGradeMePanel: React.FC<Props> = ({ trainerUserId }) => {
                           submissionCount: Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0),
                           submittedAt: row.submitted_at ?? null,
                           attemptResults: rawAttemptResults,
+                          status: row.status,
+                          role_context: row.role_context,
                         });
                         const missedAttemptText = getMissedAttemptWindowText({
                           noAttemptRollovers: row.no_attempt_rollovers ?? null,
