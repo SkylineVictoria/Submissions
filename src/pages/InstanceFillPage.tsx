@@ -485,6 +485,7 @@ export const InstanceFillPage: React.FC = () => {
   const [submissionCount, setSubmissionCount] = useState<number>(0);
   const [didNotAttempt, setDidNotAttempt] = useState(false);
   const [instanceLegacyStatus, setInstanceLegacyStatus] = useState<string>('draft');
+  const [instanceRoleContext, setInstanceRoleContext] = useState<FormRole>('student');
 
   /** Trainer (and office) may edit fields marked student-only in the template so they can correct student answers. */
   const isQuestionEditableForRole = useCallback(
@@ -612,6 +613,7 @@ export const InstanceFillPage: React.FC = () => {
     }
     setTemplate(tpl || null);
     const roleCtx = (inst?.role_context as FormRole) || 'student';
+    setInstanceRoleContext(roleCtx);
     const rawWorkflow = (inst as unknown as { workflow_status?: string } | null)?.workflow_status;
     const legacyStatus = String((inst as unknown as { status?: string } | null)?.status ?? 'draft').trim() || 'draft';
     setInstanceLegacyStatus(legacyStatus);
@@ -1378,15 +1380,26 @@ export const InstanceFillPage: React.FC = () => {
     [id, getTrainerAttemptOutcome, template, resultsData, answers, trainerAssessments, resultsOffice, checkAndAutoCompleteOffice]
   );
 
+  /** Trainer may submit while waiting for trainer, or if sent to office prematurely while instance is still on trainer. */
+  const trainerCanFinaliseReview = useMemo(
+    () =>
+      role === 'trainer' &&
+      (workflowStatus === 'waiting_trainer' ||
+        (workflowStatus === 'waiting_office' && instanceRoleContext === 'trainer' && instanceLegacyStatus !== 'locked')),
+    [role, workflowStatus, instanceRoleContext, instanceLegacyStatus]
+  );
+
   const canRoleEditCurrentWorkflow = useMemo(() => {
     if (role === 'office' && isAdminEditMode) return true;
     if (workflowStatus === 'completed' || workflowStatus === 'failed') return false;
     if (role === 'student') return workflowStatus === 'draft';
-    // Trainer can review/edit student work whenever the instance is not terminal (completed/failed ruled out above).
-    if (role === 'trainer') return true;
+    if (role === 'trainer') {
+      if (workflowStatus === 'waiting_office' && instanceRoleContext !== 'trainer') return false;
+      return true;
+    }
     if (role === 'office') return workflowStatus === 'waiting_office';
     return false;
-  }, [role, workflowStatus, isAdminEditMode]);
+  }, [role, workflowStatus, isAdminEditMode, instanceRoleContext]);
 
   /** Office may edit admin fields (summary dates, SMS checkboxes) while waiting or after finalisation for corrections. */
   const canOfficeAdminEdit = useMemo(
@@ -1487,7 +1500,7 @@ export const InstanceFillPage: React.FC = () => {
       );
       /** Trainer/office must finish result sheets + summary by resubmission cycle before leaving review. */
       const strictReviewCycle =
-        (workflowStatus === 'waiting_trainer' && role === 'trainer') ||
+        (role === 'trainer' && trainerCanFinaliseReview) ||
         (workflowStatus === 'waiting_office' && role === 'office');
       const resubmissionCycle = markingRound;
       const taskResultIdsAppendixVal = buildTaskResultSections(template, resultsData)
@@ -1510,10 +1523,8 @@ export const InstanceFillPage: React.FC = () => {
           if (!isPreSummarySection(template, section.id)) continue;
           const rd = resultsData[section.id];
           const trainerCanEdit = role === 'trainer' || role === 'office';
-          const studentCanEdit =
-            role === 'student' || role === 'office' || (role === 'trainer' && canRoleEditCurrentWorkflow);
 
-          if (studentCanEdit) {
+          if (role === 'student') {
             if (!rowAnswerHasContent(rd?.student_name ?? undefined)) {
               stepErrors[`task-results-${section.id}-student_name`] = 'Student name is required';
             }
@@ -1625,8 +1636,6 @@ export const InstanceFillPage: React.FC = () => {
           const sum = assessmentSummary || ({} as import('../lib/formEngine').AssessmentSummaryDataEntry);
 
           const trainerCanEdit = role === 'trainer' || role === 'office';
-          const studentCanEdit =
-            role === 'student' || role === 'office' || (role === 'trainer' && canRoleEditCurrentWorkflow);
 
           if (rowAnswerHasContent(sum.start_date ?? undefined) && rowAnswerHasContent(sum.end_date ?? undefined)) {
             const start = String(sum.start_date ?? '');
@@ -1751,7 +1760,7 @@ export const InstanceFillPage: React.FC = () => {
             }
           }
 
-          if (studentCanEdit) {
+          if (role === 'student') {
             if (sumFirstEditable) {
               if (!rowAnswerHasContent(sum.student_sig_1 ?? undefined)) {
                 stepErrors['assessment-summary-student_sig_1'] = 'Student signature (attempt 1) is required';
@@ -1805,9 +1814,25 @@ export const InstanceFillPage: React.FC = () => {
           const effectiveEditable = editable && appendixFirstCycleEditableForStep;
           if (!q.required || !effectiveEditable) continue;
 
-          // Trainer review: allow advancing even if the student's answer is blank,
-          // as long as the trainer explicitly marked the item Yes/No (checked).
-          // This prevents the wizard from blocking trainer navigation for missing student content.
+          // Trainer review: do not force trainers to complete blank student answers.
+          if (role === 'trainer' && strictReviewCycle) {
+            if (q.type === 'likert_5' || section.pdf_render_mode === 'likert_table') {
+              continue;
+            }
+            const re = (q.role_editability as Record<string, boolean>) || {};
+            const studentPrimary =
+              isRoleEditable(re, 'student') && !isRoleEditable(re, 'trainer');
+            if (studentPrimary) {
+              continue;
+            }
+            const taskStyleSection =
+              section.pdf_render_mode === 'task_questions' || section.pdf_render_mode === 'assessment_tasks';
+            if (taskStyleSection && trainerAssessments[q.id] !== 'yes' && trainerAssessments[q.id] !== 'no') {
+              stepErrors[`q-${q.id}`] = 'Mark Satisfactory (Yes or No) before continuing.';
+            }
+            continue;
+          }
+
           const trainerHasChecked =
             strictReviewCycle &&
             role === 'trainer' &&
@@ -1890,6 +1915,7 @@ export const InstanceFillPage: React.FC = () => {
       assessmentSummary,
       markingRound,
       trainerAssessments,
+      trainerCanFinaliseReview,
       canRoleEditCurrentWorkflow,
       isQuestionReadOnlyByTrainer,
       isQuestionEditableForRole,
@@ -1955,7 +1981,7 @@ export const InstanceFillPage: React.FC = () => {
         setConfirmConfig(null);
         return;
       }
-      if (role === 'trainer' && workflowStatus === 'waiting_trainer') {
+      if (role === 'trainer' && trainerCanFinaliseReview) {
       if (!validateAllStepsForTrainerSubmit()) {
         setWorkflowSubmitting(false);
         setConfirmConfig(null);
@@ -2072,6 +2098,7 @@ export const InstanceFillPage: React.FC = () => {
     assessmentSummary,
     validateAllStepsForTrainerSubmit,
     template,
+    trainerCanFinaliseReview,
   ]);
 
   const handleFinalSubmitByRole = useCallback(() => {
@@ -2083,7 +2110,7 @@ export const InstanceFillPage: React.FC = () => {
       });
       return;
     }
-    if (role === 'trainer' && workflowStatus === 'waiting_trainer') {
+    if (role === 'trainer' && trainerCanFinaliseReview) {
       setConfirmConfig({
         title: 'Final Submit',
         message: 'After submitting, you will not be able to edit this form again. Please verify all answers before continuing.',
@@ -2098,7 +2125,7 @@ export const InstanceFillPage: React.FC = () => {
         confirmLabel: 'Finalize',
       });
     }
-  }, [role, workflowStatus, isAdminEditMode]);
+  }, [role, workflowStatus, isAdminEditMode, trainerCanFinaliseReview]);
 
   if (loading) {
     return <Loader fullPage variant="dots" size="lg" message="Loading..." />;
@@ -2134,7 +2161,10 @@ export const InstanceFillPage: React.FC = () => {
   const showSubmittedPage =
     !isAdminEditMode &&
     ((role === 'student' && studentHasSubmitted && workflowStatus !== 'draft') ||
-      (role === 'trainer' && (workflowStatus === 'waiting_office' || workflowStatus === 'completed' || workflowStatus === 'failed')));
+      (role === 'trainer' &&
+        (workflowStatus === 'completed' ||
+          workflowStatus === 'failed' ||
+          (workflowStatus === 'waiting_office' && instanceRoleContext !== 'trainer'))));
 
   const canViewPdfPreview = role === 'office';
 
@@ -4672,8 +4702,24 @@ export const InstanceFillPage: React.FC = () => {
                   Final Submit
                 </Button>
               )}
-              {currentStep >= steps.length && role === 'trainer' && workflowStatus === 'waiting_trainer' && (
+              {currentStep >= steps.length && role === 'trainer' && trainerCanFinaliseReview && (
                 <Button variant="primary" className="w-full sm:w-auto shrink-0" onClick={handleFinalSubmitByRole} disabled={workflowSubmitting}>
+                  Trainer Checked (Submit)
+                </Button>
+              )}
+              {currentStep >= steps.length && role === 'trainer' && !trainerCanFinaliseReview && (
+                <Button
+                  variant="primary"
+                  className="w-full sm:w-auto shrink-0 opacity-60 cursor-not-allowed"
+                  disabled
+                  title={
+                    workflowStatus === 'waiting_office'
+                      ? 'This assessment is already with office for checking.'
+                      : workflowStatus === 'completed' || instanceLegacyStatus === 'locked'
+                        ? 'This assessment is already completed.'
+                        : 'Trainer submit is not available in the current workflow state.'
+                  }
+                >
                   Trainer Checked (Submit)
                 </Button>
               )}
