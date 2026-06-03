@@ -1436,6 +1436,21 @@ export const InstanceFillPage: React.FC = () => {
     return false;
   }, [role, workflowStatus, isAdminEditMode, instanceRoleContext]);
 
+  /** Student declaration: editable on first cycle; historical after resubmission. Trainers may correct during first review. */
+  const getStudentDeclarationEditable = useCallback(
+    (baseEditable: boolean, questionCode: string | undefined) => {
+      if (questionCode !== 'student.declarationSignature') return baseEditable;
+      if (markingRound >= 2) {
+        return isAdminEditMode;
+      }
+      if (role === 'trainer' || role === 'office') {
+        return canRoleEditCurrentWorkflow;
+      }
+      return baseEditable;
+    },
+    [markingRound, role, canRoleEditCurrentWorkflow, isAdminEditMode]
+  );
+
   /** Office may edit admin fields (summary dates, SMS checkboxes) while waiting or after finalisation for corrections. */
   const canOfficeAdminEdit = useMemo(
     () => role === 'office' && (isAdminEditMode || workflowStatus === 'waiting_office' || workflowStatus === 'completed' || workflowStatus === 'failed'),
@@ -4431,11 +4446,8 @@ export const InstanceFillPage: React.FC = () => {
                                 const dateVal = sigObj ? String(sigObj.date ?? sigObj.signedAtDate ?? '') : '';
                                 const todayIsoDecl = new Date().toISOString().split('T')[0];
                                 const hasDateField = (q.pdf_meta as { showDateField?: boolean } | undefined)?.showDateField;
-                                const minDeclDate = getStudentResubDeclarationMinDate(firstTaskRdForDecl, markingRound);
-                                // Declaration must only ever be set on the first attempt cycle.
-                                // After attempt 1 is completed / resubmission begins, keep it read-only (historical).
-                                const declarationLockedToFirstAttempt = role === 'student' && q.code === 'student.declarationSignature' && markingRound >= 2;
-                                const effectiveEditable = editable && !declarationLockedToFirstAttempt;
+                                const minDeclDate = getStudentResubDeclarationMinDate(firstTaskRdForDecl, submissionCount);
+                                const effectiveEditable = getStudentDeclarationEditable(editable, q.code ?? undefined);
                                 return (
                                   <div key={q.id} className="space-y-2">
                                     <div className="text-sm font-semibold text-gray-700">{q.label}{q.required ? ' *' : ''}</div>
@@ -4619,11 +4631,8 @@ export const InstanceFillPage: React.FC = () => {
                             const dateVal = sigObj ? String(sigObj.date ?? sigObj.signedAtDate ?? '') : '';
                             const todayIsoDecl = new Date().toISOString().split('T')[0];
                             const hasDateField = (q.pdf_meta as { showDateField?: boolean } | undefined)?.showDateField;
-                            const minDeclDate = getStudentResubDeclarationMinDate(firstTaskRdForDecl, markingRound);
-                            // Declaration must only ever be set on the first attempt cycle.
-                            // After attempt 1 is completed / resubmission begins, keep it read-only (historical).
-                            const declarationLockedToFirstAttempt = q.code === 'student.declarationSignature' && markingRound >= 2;
-                            const effectiveEditable = editable && !declarationLockedToFirstAttempt;
+                            const minDeclDate = getStudentResubDeclarationMinDate(firstTaskRdForDecl, submissionCount);
+                            const effectiveEditable = getStudentDeclarationEditable(editable, q.code ?? undefined);
                             return (
                               <div key={q.id} className="space-y-2">
                                 <div className="text-sm font-semibold text-gray-700">{q.label}{q.required ? ' *' : ''}</div>
