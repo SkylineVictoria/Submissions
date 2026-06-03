@@ -453,6 +453,37 @@ function isRequiredSatisfiedByContentBlocks(
   return (anyGridBlock && allGridsOk) || (anyTextBlock && allTextBlocksOk);
 }
 
+/** Trainer Yes/No on a parent question also applies to embedded / linked child questions. */
+function getTrainerSatisfactoryForQuestion(
+  section: FormSectionWithQuestions,
+  questionId: number,
+  trainerAssessments: Record<number, string>
+): 'yes' | 'no' | null {
+  const direct = trainerAssessments[questionId];
+  if (direct === 'yes' || direct === 'no') return direct;
+  const childQ = section.questions.find((x) => x.id === questionId);
+  const childPm = (childQ?.pdf_meta as Record<string, unknown>) || {};
+  const additionalParentId = childPm.isAdditionalBlockOf;
+  if (typeof additionalParentId === 'number') {
+    const parentSat = trainerAssessments[additionalParentId];
+    if (parentSat === 'yes' || parentSat === 'no') return parentSat;
+  }
+  for (const parent of section.questions) {
+    const pm = (parent.pdf_meta as Record<string, unknown>) || {};
+    const blocks = pm.contentBlocks as Array<{ questionId?: number }> | undefined;
+    if (!Array.isArray(blocks)) continue;
+    if (!blocks.some((b) => b.questionId === questionId)) continue;
+    const parentSat = trainerAssessments[parent.id];
+    if (parentSat === 'yes' || parentSat === 'no') return parentSat;
+    const legacyAb = pm.additionalBlock as { questionId?: number } | undefined;
+    if (legacyAb?.questionId === questionId) {
+      const legacySat = trainerAssessments[parent.id];
+      if (legacySat === 'yes' || legacySat === 'no') return legacySat;
+    }
+  }
+  return null;
+}
+
 function parseAnswerValue(a: FormAnswer): string | number | boolean | Record<string, unknown> | string[] | null {
   const j =
     a.value_json != null && typeof a.value_json === 'object' && !Array.isArray(a.value_json)
@@ -638,6 +669,10 @@ export const InstanceFillPage: React.FC = () => {
                 ? 'waiting_office'
                 : 'draft'
     ) as 'draft' | 'waiting_trainer' | 'waiting_office' | 'completed' | 'failed';
+    // Student handed in but instance row still draft/submitted mismatch → treat as in trainer review queue.
+    if (studentHasSubmitted && !instDidNotAttempt && normalizedWorkflow === 'draft') {
+      normalizedWorkflow = roleCtx === 'office' ? 'waiting_office' : 'waiting_trainer';
+    }
     // Stale workflow_status=failed/completed while instance is still draft and student never submitted
     // (e.g. admin reopened dates but workflow_status was not reset).
     if (roleCtx === 'student' && legacyStatus === 'draft' && !studentHasSubmitted && !instDidNotAttempt) {
@@ -1812,31 +1847,30 @@ export const InstanceFillPage: React.FC = () => {
           const baseEditable = isQuestionEditableForRole((q.role_editability as Record<string, boolean>) || {}) && canRoleEditCurrentWorkflow;
           const editable = baseEditable && !isQuestionReadOnlyByTrainer(q.id);
           const effectiveEditable = editable && appendixFirstCycleEditableForStep;
-          if (!q.required || !effectiveEditable) continue;
+          const taskStyleSection =
+            section.pdf_render_mode === 'task_questions' || section.pdf_render_mode === 'assessment_tasks';
+          const trainerSat = getTrainerSatisfactoryForQuestion(section, q.id, trainerAssessments);
+          const trainerReviewingTaskQuestions =
+            (role === 'trainer' || role === 'office') &&
+            taskStyleSection &&
+            workflowStatus !== 'completed' &&
+            workflowStatus !== 'failed';
 
-          // Trainer review: do not force trainers to complete blank student answers.
-          if (role === 'trainer' && strictReviewCycle) {
+          // Trainer review on task questions: never require student fill; only Yes/No (or likert skip).
+          if (trainerReviewingTaskQuestions && q.required) {
             if (q.type === 'likert_5' || section.pdf_render_mode === 'likert_table') {
               continue;
             }
-            const re = (q.role_editability as Record<string, boolean>) || {};
-            const studentPrimary =
-              isRoleEditable(re, 'student') && !isRoleEditable(re, 'trainer');
-            if (studentPrimary) {
+            if (trainerSat === 'yes' || trainerSat === 'no') {
               continue;
             }
-            const taskStyleSection =
-              section.pdf_render_mode === 'task_questions' || section.pdf_render_mode === 'assessment_tasks';
-            if (taskStyleSection && trainerAssessments[q.id] !== 'yes' && trainerAssessments[q.id] !== 'no') {
-              stepErrors[`q-${q.id}`] = 'Mark Satisfactory (Yes or No) before continuing.';
-            }
+            stepErrors[`q-${q.id}`] = 'Mark Satisfactory (Yes or No) before continuing.';
             continue;
           }
 
-          const trainerHasChecked =
-            strictReviewCycle &&
-            role === 'trainer' &&
-            (trainerAssessments[q.id] === 'yes' || trainerAssessments[q.id] === 'no');
+          if (!q.required || !effectiveEditable) continue;
+
+          const trainerHasChecked = role === 'trainer' && (trainerSat === 'yes' || trainerSat === 'no');
 
           if (q.type === 'grid_table' && q.rows?.length) {
             if (!trainerHasChecked && !isGridTableFilled(q, answers)) {
