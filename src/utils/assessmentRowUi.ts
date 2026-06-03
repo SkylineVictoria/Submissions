@@ -382,6 +382,17 @@ function computeStudentNextYellowIndex(r: AttemptResult[], submitted: number): n
   return null;
 }
 
+export function getAdminOfficeDotTone(input: {
+  status?: string | null;
+  role_context?: string | null;
+  attemptResults: AttemptResult[];
+}): AttemptDotTone {
+  const { adminState } = computeWorkflowStageChecks(input);
+  if (adminState === 'done') return 'green';
+  if (adminState === 'pending') return 'yellow';
+  return 'gray';
+}
+
 export function computeAttemptTones(input: {
   submissionCount: number;
   results: AttemptResult[];

@@ -16,6 +16,7 @@ import {
   getMissedAttemptWindowText,
   computeAttemptTones,
   computeWorkflowStageChecks,
+  getAdminOfficeDotTone,
   getAssessmentOutcomeDisplay,
   maskCompetentWhileAwaitingTrainer,
   type WorkflowStageState,
@@ -40,29 +41,59 @@ const formatDDMMYYYY = (value: string | null): string => {
   return v;
 };
 
-function StatusChecks({ row, attemptResults }: { row: SubmittedInstanceRow; attemptResults: AttemptResult[] }) {
-  const { studentDone, trainerDone, adminState } = computeWorkflowStageChecks({
-    status: row.status,
-    role_context: row.role_context,
-    attemptResults,
-  });
-  const Item = ({ label, state }: { label: string; state: WorkflowStageState }) => {
+function SingleDot({ tone, title }: { tone: AttemptDotTone; title: string }) {
+  return (
+    <div
+      className={`h-2.5 w-2.5 rounded-full border ${dotToneClass[tone]}`}
+      title={title}
+    />
+  );
+}
+
+function WorkflowProgressColumns({
+  row,
+  attemptResults,
+  submissionCount,
+}: {
+  row: SubmittedInstanceRow;
+  attemptResults: AttemptResult[];
+  submissionCount: number;
+}) {
+  const stageInput = { status: row.status, role_context: row.role_context, attemptResults };
+  const { studentDone, trainerDone, adminState } = computeWorkflowStageChecks(stageInput);
+  const tones = computeAttemptTones({ submissionCount, results: attemptResults });
+  const adminDot = getAdminOfficeDotTone(stageInput);
+
+  const StageItem = ({ label, state }: { label: string; state: WorkflowStageState }) => {
     const iconClass =
       state === 'done' ? 'text-emerald-600' : state === 'pending' ? 'text-amber-500' : 'text-gray-300';
     const textClass =
       state === 'done' ? 'text-emerald-700 font-medium' : state === 'pending' ? 'text-amber-700 font-medium' : 'text-gray-500';
     return (
-      <div className="inline-flex items-center gap-1.5 text-xs">
-        <CheckCircle className={`w-4 h-4 ${iconClass}`} />
+      <div className="inline-flex items-center gap-1.5 text-xs whitespace-nowrap">
+        <CheckCircle className={`w-4 h-4 shrink-0 ${iconClass}`} />
         <span className={textClass}>{label}</span>
       </div>
     );
   };
+
   return (
-    <div className="flex flex-wrap gap-x-3 gap-y-1">
-      <Item label="Student" state={studentDone ? 'done' : 'idle'} />
-      <Item label="Trainer" state={trainerDone ? 'done' : 'idle'} />
-      <Item label="Office" state={adminState} />
+    <div className="flex items-start gap-6">
+      <div className="flex flex-col gap-1 items-start min-w-[4.5rem]">
+        <StageItem label="Student" state={studentDone ? 'done' : 'idle'} />
+        <AttemptDots tones={tones.student} titlePrefix="Student" />
+      </div>
+      <div className="flex flex-col gap-1 items-start min-w-[4.5rem]">
+        <StageItem label="Trainer" state={trainerDone ? 'done' : 'idle'} />
+        <AttemptDots tones={tones.trainer} titlePrefix="Trainer" />
+      </div>
+      <div className="flex flex-col gap-1 items-start min-w-[4.5rem]">
+        <StageItem label="Office" state={adminState} />
+        <SingleDot
+          tone={adminDot}
+          title={adminDot === 'green' ? 'Office finalised' : adminDot === 'yellow' ? 'Awaiting office' : 'Office not started'}
+        />
+      </div>
     </div>
   );
 }
@@ -522,23 +553,11 @@ export const StudentDashboardPage: React.FC = () => {
                                 {formatDDMMYYYY(row.end_date)}
                               </td>
                               <td className="px-3 py-2 border-b border-[var(--border)] min-w-[220px]">
-                                <div className="flex flex-col gap-1">
-                                  <div className="flex items-center justify-between gap-3">
-                                    <StatusChecks row={row} attemptResults={attemptResults} />
-                                  </div>
-                                  {(() => {
-                                    const tones = computeAttemptTones({
-                                      submissionCount: Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0),
-                                      results: attemptResults,
-                                    });
-                                    return (
-                                      <div className="flex items-center gap-6">
-                                        <AttemptDots tones={tones.student} titlePrefix="Student" />
-                                        <AttemptDots tones={tones.trainer} titlePrefix="Trainer" />
-                                      </div>
-                                    );
-                                  })()}
-                                </div>
+                                <WorkflowProgressColumns
+                                  row={row}
+                                  attemptResults={attemptResults}
+                                  submissionCount={Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0)}
+                                />
                               </td>
                               <td className="px-3 py-2 border-b border-[var(--border)] align-top min-w-[220px]">
                                 {(() => {
