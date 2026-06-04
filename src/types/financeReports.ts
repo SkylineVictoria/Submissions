@@ -24,8 +24,6 @@ export type FinanceReportRow = {
   studentName: string;
   email: string;
   organisation?: string;
-  course: string;
-  agent: string;
   invoiceDate: string;
   dueDate: string;
   invoiceAmount: number;

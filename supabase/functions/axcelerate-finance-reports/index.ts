@@ -28,8 +28,6 @@ type NormalizedRow = {
   contactId: string;
   studentName: string;
   email: string;
-  course: string;
-  agent: string;
   invoiceDate: string;
   dueDate: string;
   invoiceAmount: number;
@@ -55,8 +53,6 @@ type DbInvoice = {
   is_paid: boolean | null;
   is_void: boolean | null;
   is_cancelled: boolean | null;
-  course_name: string | null;
-  agent_name: string | null;
   updated_at: string | null;
 };
 
@@ -124,8 +120,6 @@ function dbToRow(r: DbInvoice): NormalizedRow {
     contactId: r.contact_id != null ? String(r.contact_id) : '',
     studentName: String(r.student_name ?? ''),
     email: String(r.email ?? ''),
-    course: String(r.course_name ?? ''),
-    agent: String(r.agent_name ?? ''),
     invoiceDate: r.invoice_date ? String(r.invoice_date).slice(0, 10) : '',
     dueDate: r.due_date ? String(r.due_date).slice(0, 10) : '',
     invoiceAmount: parseAmount(r.invoice_amount),
@@ -331,7 +325,7 @@ Deno.serve(async (req) => {
     const { data, error } = await supabase
       .from('ax_invoices')
       .select(
-        'invoice_id, invoice_number, contact_id, student_name, email, invoice_date, due_date, invoice_amount, paid_amount, balance, is_paid, is_void, is_cancelled, course_name, agent_name, updated_at'
+        'invoice_id, invoice_number, contact_id, student_name, email, invoice_date, due_date, invoice_amount, paid_amount, balance, is_paid, is_void, is_cancelled, updated_at'
       )
       .order('invoice_date', { ascending: true, nullsFirst: false });
 

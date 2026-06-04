@@ -13,8 +13,6 @@ import { toast } from '../../utils/toast';
 type SortKey =
   | 'studentName'
   | 'email'
-  | 'course'
-  | 'agent'
   | 'invoiceNo'
   | 'invoiceDate'
   | 'dueDate'
@@ -48,7 +46,7 @@ export const FinanceReportsTable: React.FC<Props> = ({ rows }) => {
     let list = rows;
     if (q) {
       list = rows.filter((r) => {
-        const hay = `${r.studentName} ${r.email} ${r.invoiceNo} ${r.course} ${r.agent} ${r.status}`.toLowerCase();
+        const hay = `${r.studentName} ${r.email} ${r.invoiceNo} ${r.status}`.toLowerCase();
         return hay.includes(q);
       });
     }
@@ -151,7 +149,7 @@ export const FinanceReportsTable: React.FC<Props> = ({ rows }) => {
       />
 
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[1100px] text-sm">
+        <table className="w-full min-w-[900px] text-sm">
           <thead>
             <tr className="border-b border-gray-200 text-left text-xs uppercase tracking-wide text-gray-500">
               <th className="py-3 pr-2 w-10">
@@ -164,8 +162,6 @@ export const FinanceReportsTable: React.FC<Props> = ({ rows }) => {
               </th>
               <SortableTh label="Student Name" className="py-3 pr-3" active={sort.key === 'studentName'} direction={sort.dir} onToggle={() => toggleSort('studentName')} />
               <SortableTh label="Email" className="py-3 pr-3" active={sort.key === 'email'} direction={sort.dir} onToggle={() => toggleSort('email')} />
-              <SortableTh label="Course" className="py-3 pr-3" active={sort.key === 'course'} direction={sort.dir} onToggle={() => toggleSort('course')} />
-              <SortableTh label="Agent" className="py-3 pr-3" active={sort.key === 'agent'} direction={sort.dir} onToggle={() => toggleSort('agent')} />
               <SortableTh label="Invoice No" className="py-3 pr-3" active={sort.key === 'invoiceNo'} direction={sort.dir} onToggle={() => toggleSort('invoiceNo')} />
               <SortableTh label="Invoice Date" className="py-3 pr-3" active={sort.key === 'invoiceDate'} direction={sort.dir} onToggle={() => toggleSort('invoiceDate')} />
               <SortableTh label="Due Date" className="py-3 pr-3" active={sort.key === 'dueDate'} direction={sort.dir} onToggle={() => toggleSort('dueDate')} />
@@ -179,7 +175,7 @@ export const FinanceReportsTable: React.FC<Props> = ({ rows }) => {
           <tbody>
             {pageRows.length === 0 ? (
               <tr>
-                <td colSpan={13} className="py-10 text-center text-gray-500">
+                <td colSpan={11} className="py-10 text-center text-gray-500">
                   No invoices match your filters.
                 </td>
               </tr>
@@ -198,8 +194,6 @@ export const FinanceReportsTable: React.FC<Props> = ({ rows }) => {
                     </td>
                     <td className="py-3 pr-3 font-medium text-gray-900">{row.studentName || '—'}</td>
                     <td className="py-3 pr-3 text-gray-600">{row.email || '—'}</td>
-                    <td className="py-3 pr-3 text-gray-700">{row.course || '—'}</td>
-                    <td className="py-3 pr-3 text-gray-700">{row.agent || '—'}</td>
                     <td className="py-3 pr-3 font-mono text-xs">{row.invoiceNo || '—'}</td>
                     <td className="py-3 pr-3 text-gray-700">{formatFinanceDate(row.invoiceDate)}</td>
                     <td className="py-3 pr-3 text-gray-700">{formatFinanceDate(row.dueDate)}</td>

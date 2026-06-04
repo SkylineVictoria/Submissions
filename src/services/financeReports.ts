@@ -243,8 +243,6 @@ export function exportFinanceRowsToCsv(rows: import('../types/financeReports').F
   const headers = [
     'Student Name',
     'Email',
-    'Course',
-    'Agent',
     'Invoice No',
     'Invoice Date',
     'Due Date',
@@ -260,8 +258,6 @@ export function exportFinanceRowsToCsv(rows: import('../types/financeReports').F
       [
         r.studentName,
         r.email,
-        r.course,
-        r.agent,
         r.invoiceNo,
         r.invoiceDate,
         r.dueDate,
