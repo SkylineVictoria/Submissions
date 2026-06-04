@@ -1,23 +1,26 @@
-// Live aXcelerate invoice report proxy — tokens stay server-side only.
-// Future: persist reminder_logs in Supabase when send-reminder is implemented.
+// Finance reports from cached public.ax_invoices (no live aXcelerate calls).
 
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
+import { createClient } from 'npm:@supabase/supabase-js@2';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-type StatusFilter = 'all' | 'paid' | 'pending' | 'partially_paid';
+type DateType = 'invoice_date' | 'due_date';
+type StatusFilter = 'all' | 'paid' | 'pending' | 'void' | 'cancelled';
 
 type RequestBody = {
   dateFrom?: string;
   dateTo?: string;
+  dateType?: string;
   status?: string;
   studentSearch?: string;
-  course?: string;
-  agent?: string;
 };
+
+type InvoiceStatus = 'Paid' | 'Pending' | 'Partially Paid' | 'Void' | 'Cancelled';
 
 type NormalizedRow = {
   invoiceId: string;
@@ -25,7 +28,6 @@ type NormalizedRow = {
   contactId: string;
   studentName: string;
   email: string;
-  organisation: string;
   course: string;
   agent: string;
   invoiceDate: string;
@@ -34,7 +36,26 @@ type NormalizedRow = {
   paidAmount: number;
   balance: number;
   isPaid: boolean;
-  status: 'Paid' | 'Pending' | 'Partially Paid';
+  status: InvoiceStatus;
+};
+
+type DbInvoice = {
+  invoice_id: number;
+  invoice_number: string | null;
+  contact_id: number | null;
+  student_name: string | null;
+  email: string | null;
+  invoice_date: string | null;
+  due_date: string | null;
+  invoice_amount: number | string | null;
+  paid_amount: number | string | null;
+  balance: number | string | null;
+  is_paid: boolean | null;
+  is_void: boolean | null;
+  is_cancelled: boolean | null;
+  course_name: string | null;
+  agent_name: string | null;
+  updated_at: string | null;
 };
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -48,92 +69,76 @@ function isIsoDate(s: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/.test(s.trim());
 }
 
-/** Normalize aXcelerate / UI dates to YYYY-MM-DD for comparisons. */
-function normalizeToIsoDate(value: string): string {
-  const v = String(value ?? '').trim();
-  if (!v) return '';
-  if (/^\d{4}-\d{2}-\d{2}/.test(v)) return v.slice(0, 10);
-  const ddmmyyyy = v.match(/^(\d{2})[-/](\d{2})[-/](\d{4})/);
-  if (ddmmyyyy) return `${ddmmyyyy[3]}-${ddmmyyyy[2]}-${ddmmyyyy[1]}`;
-  const yyyymmdd = v.match(/^(\d{4})[-/](\d{2})[-/](\d{2})/);
-  if (yyyymmdd) return `${yyyymmdd[1]}-${yyyymmdd[2]}-${yyyymmdd[3]}`;
-  return v.slice(0, 10);
-}
-
-function parseNumber(v: unknown): number {
+function parseAmount(v: number | string | null | undefined): number {
   if (typeof v === 'number' && Number.isFinite(v)) return v;
   const n = Number(String(v ?? '').replace(/[^0-9.-]/g, ''));
   return Number.isFinite(n) ? n : 0;
 }
 
-function pickField(row: Record<string, unknown>, ...keys: string[]): string {
-  for (const k of keys) {
-    const v = row[k];
-    if (v != null && String(v).trim() !== '') return String(v).trim();
+function derivePaidAmount(invoiceAmount: number, balance: number, storedPaid: number): number {
+  if (storedPaid > 0) return storedPaid;
+  if (invoiceAmount <= 0) return 0;
+  if (balance >= 0 && balance <= invoiceAmount) {
+    return Math.max(0, invoiceAmount - balance);
   }
-  return '';
+  return 0;
 }
 
-function calculateStatus(balance: number, paidAmount: number): NormalizedRow['status'] {
-  if (balance === 0) return 'Paid';
-  if (paidAmount > 0 && balance > 0) return 'Partially Paid';
-  return 'Pending';
+function calculateStatus(row: {
+  is_void: boolean;
+  is_cancelled: boolean;
+  balance: number;
+  paid_amount: number;
+  invoice_amount: number;
+  is_paid: boolean;
+}): InvoiceStatus {
+  if (row.is_void) return 'Void';
+  if (row.is_cancelled) return 'Cancelled';
+  if (row.paid_amount > 0 && row.balance > 0 && row.balance < row.invoice_amount) {
+    return 'Partially Paid';
+  }
+  if (
+    row.balance <= 0 ||
+    row.is_paid ||
+    (row.invoice_amount > 0 && row.paid_amount >= row.invoice_amount)
+  ) {
+    return 'Paid';
+  }
+  if (row.balance > 0) return 'Pending';
+  return 'Paid';
 }
 
-function normalizeRow(raw: Record<string, unknown>): NormalizedRow {
-  const invoiceAmount = parseNumber(
-    pickField(raw, 'invoice.pricegross', 'pricegross', 'invoiceAmount', 'InvoiceAmount')
-  );
-  const paidAmount = parseNumber(
-    pickField(raw, 'invoice.actualreceivedamount', 'actualreceivedamount', 'paidAmount', 'PaidAmount')
-  );
-  const balance = parseNumber(pickField(raw, 'invoice.balance', 'balance', 'Balance'));
-  const isPaidRaw = pickField(raw, 'invoice.ispaid', 'ispaid', 'isPaid');
-  const isPaid = isPaidRaw === 'true' || isPaidRaw === '1' || balance === 0;
-
-  const organisation = pickField(
-    raw,
-    'invoice.invoicetoorganisation',
-    'invoicetoorganisation',
-    'organisation',
-    'Organisation'
-  );
+function dbToRow(r: DbInvoice): NormalizedRow {
+  const balance = parseAmount(r.balance);
+  const invoiceAmount = parseAmount(r.invoice_amount);
+  const paidAmount = derivePaidAmount(invoiceAmount, balance, parseAmount(r.paid_amount));
+  const isPaid = Boolean(r.is_paid) || balance <= 0 || (invoiceAmount > 0 && paidAmount >= invoiceAmount);
+  const isVoid = Boolean(r.is_void);
+  const isCancelled = Boolean(r.is_cancelled);
 
   return {
-    invoiceId: pickField(raw, 'invoice.invoiceid', 'invoiceid', 'invoiceId'),
-    invoiceNo: pickField(raw, 'invoice.invoicenr', 'invoicenr', 'invoiceNo'),
-    contactId: pickField(raw, 'invoice.invoicecontactid', 'invoicecontactid', 'contactId'),
-    studentName: pickField(raw, 'invoice.invoicetofullname', 'invoicetofullname', 'studentName'),
-    email: pickField(raw, 'invoice.invoicetoemail', 'invoicetoemail', 'email'),
-    organisation,
-    course: pickField(raw, 'invoice.course', 'course', 'Course') || '',
-    agent: pickField(raw, 'invoice.agent', 'agent', 'Agent') || organisation,
-    invoiceDate: normalizeToIsoDate(pickField(raw, 'invoice.invoicedate', 'invoicedate', 'invoiceDate')),
-    dueDate: normalizeToIsoDate(pickField(raw, 'invoice.invoiceduedate', 'invoiceduedate', 'dueDate')),
-    invoiceAmount,
+    invoiceId: String(r.invoice_id),
+    invoiceNo: String(r.invoice_number ?? ''),
+    contactId: r.contact_id != null ? String(r.contact_id) : '',
+    studentName: String(r.student_name ?? ''),
+    email: String(r.email ?? ''),
+    course: String(r.course_name ?? ''),
+    agent: String(r.agent_name ?? ''),
+    invoiceDate: r.invoice_date ? String(r.invoice_date).slice(0, 10) : '',
+    dueDate: r.due_date ? String(r.due_date).slice(0, 10) : '',
+    invoiceAmount: parseAmount(r.invoice_amount),
     paidAmount,
     balance,
     isPaid,
-    status: calculateStatus(balance, paidAmount),
+    status: calculateStatus({
+      is_void: isVoid,
+      is_cancelled: isCancelled,
+      balance,
+      paid_amount: paidAmount,
+      invoice_amount: invoiceAmount,
+      is_paid: isPaid,
+    }),
   };
-}
-
-function parseAxData(payload: unknown): Record<string, unknown>[] {
-  if (!payload || typeof payload !== 'object') return [];
-  const obj = payload as Record<string, unknown>;
-  const data = obj.DATA ?? obj.data ?? obj.Data ?? obj.rows ?? obj.ROWS;
-  if (Array.isArray(data)) {
-    return data.filter((r) => r && typeof r === 'object') as Record<string, unknown>[];
-  }
-  if (typeof data === 'string') {
-    try {
-      const parsed = JSON.parse(data);
-      if (Array.isArray(parsed)) return parsed as Record<string, unknown>[];
-    } catch {
-      /* ignore */
-    }
-  }
-  return [];
 }
 
 function monthKey(isoDate: string): string | null {
@@ -147,72 +152,69 @@ function applyFilters(
   filters: {
     dateFrom: string;
     dateTo: string;
+    dateType: DateType;
     status: StatusFilter;
     studentSearch: string;
-    course: string;
-    agent: string;
   }
 ): NormalizedRow[] {
   const search = filters.studentSearch.trim().toLowerCase();
-  const course = filters.course.trim().toLowerCase();
-  const agent = filters.agent.trim().toLowerCase();
+  const applyDateFilter = Boolean(filters.dateFrom || filters.dateTo);
 
   return rows.filter((r) => {
-    const invDate = r.invoiceDate.slice(0, 10);
-    if (filters.dateFrom && isIsoDate(filters.dateFrom) && invDate && invDate < filters.dateFrom) return false;
-    if (filters.dateTo && isIsoDate(filters.dateTo) && invDate && invDate > filters.dateTo) return false;
+    if (applyDateFilter) {
+      const dateValue = (filters.dateType === 'due_date' ? r.dueDate : r.invoiceDate).slice(0, 10);
+      if (!dateValue) return false;
+      if (filters.dateFrom && isIsoDate(filters.dateFrom) && dateValue < filters.dateFrom) return false;
+      if (filters.dateTo && isIsoDate(filters.dateTo) && dateValue > filters.dateTo) return false;
+    }
 
     if (filters.status === 'paid' && r.status !== 'Paid') return false;
-    if (filters.status === 'pending' && r.status !== 'Pending') return false;
-    if (filters.status === 'partially_paid' && r.status !== 'Partially Paid') return false;
+    if (filters.status === 'pending' && r.status !== 'Pending' && r.status !== 'Partially Paid') return false;
+    if (filters.status === 'void' && r.status !== 'Void') return false;
+    if (filters.status === 'cancelled' && r.status !== 'Cancelled') return false;
 
     if (search) {
-      const hay = `${r.studentName} ${r.email} ${r.invoiceNo}`.toLowerCase();
+      const hay = `${r.studentName} ${r.email} ${r.invoiceNo} ${r.contactId}`.toLowerCase();
       if (!hay.includes(search)) return false;
     }
-    if (course && !r.course.toLowerCase().includes(course)) return false;
-    if (agent && !r.agent.toLowerCase().includes(agent)) return false;
     return true;
   });
 }
 
 function buildSummary(rows: NormalizedRow[]) {
-  let totalInvoiced = 0;
-  let totalCollected = 0;
-  let totalOutstanding = 0;
-  let paidInvoices = 0;
-  let pendingInvoices = 0;
-  let partiallyPaidInvoices = 0;
-
-  for (const r of rows) {
-    totalInvoiced += r.invoiceAmount;
-    totalCollected += r.paidAmount;
-    totalOutstanding += r.balance;
-    if (r.status === 'Paid') paidInvoices++;
-    else if (r.status === 'Partially Paid') partiallyPaidInvoices++;
-    else pendingInvoices++;
-  }
-
-  return {
-    totalInvoiced,
-    totalCollected,
-    totalOutstanding,
-    paidInvoices,
-    pendingInvoices,
-    partiallyPaidInvoices,
-  };
+  return rows.reduce(
+    (acc, r) => {
+      acc.totalInvoiced += r.invoiceAmount;
+      acc.totalCollected += r.paidAmount;
+      acc.totalOutstanding += r.balance;
+      if (r.status === 'Paid') {
+        acc.paidInvoices += 1;
+        acc.paidTotal += r.paidAmount;
+      } else if (r.status === 'Pending' || r.status === 'Partially Paid') {
+        acc.pendingInvoices += 1;
+      }
+      return acc;
+    },
+    {
+      totalInvoiced: 0,
+      totalCollected: 0,
+      paidTotal: 0,
+      totalOutstanding: 0,
+      paidInvoices: 0,
+      pendingInvoices: 0,
+    }
+  );
 }
 
 function buildCharts(rows: NormalizedRow[]) {
-  const statusBreakdown: { name: NormalizedRow['status']; value: number }[] = [
-    { name: 'Paid', value: 0 },
-    { name: 'Pending', value: 0 },
-    { name: 'Partially Paid', value: 0 },
-  ];
-  for (const r of rows) {
-    const item = statusBreakdown.find((s) => s.name === r.status);
-    if (item) item.value++;
-  }
+  const statusNames: InvoiceStatus[] = ['Paid', 'Pending', 'Void', 'Cancelled'];
+  const statusBreakdown = statusNames.map((name) => ({
+    name,
+    value:
+      name === 'Pending'
+        ? rows.filter((r) => r.status === 'Pending' || r.status === 'Partially Paid').length
+        : rows.filter((r) => r.status === name).length,
+  }));
 
   const trendMap = new Map<string, { invoiced: number; collected: number }>();
   for (const r of rows) {
@@ -250,21 +252,17 @@ Deno.serve(async (req) => {
     return jsonResponse({ success: false, message: 'Method not allowed. Use POST.' }, 405);
   }
 
-  let body: RequestBody;
+  let body: RequestBody = {};
   try {
     body = await req.json();
   } catch {
-    return jsonResponse({ success: false, message: 'Invalid JSON body.' }, 400);
+    body = {};
   }
 
   const dateFrom = typeof body.dateFrom === 'string' ? body.dateFrom.trim() : '';
   const dateTo = typeof body.dateTo === 'string' ? body.dateTo.trim() : '';
-  const statusRaw = typeof body.status === 'string' ? body.status.trim().toLowerCase() : 'all';
-  const status: StatusFilter =
-    statusRaw === 'paid' || statusRaw === 'pending' || statusRaw === 'partially_paid' ? statusRaw : 'all';
-  const studentSearch = typeof body.studentSearch === 'string' ? body.studentSearch : '';
-  const course = typeof body.course === 'string' ? body.course : '';
-  const agent = typeof body.agent === 'string' ? body.agent : '';
+  const dateTypeRaw = typeof body.dateType === 'string' ? body.dateType.trim().toLowerCase() : 'invoice_date';
+  const dateType: DateType = dateTypeRaw === 'due_date' ? 'due_date' : 'invoice_date';
 
   if (dateFrom && !isIsoDate(dateFrom)) {
     return jsonResponse({ success: false, message: 'dateFrom must be YYYY-MM-DD.' }, 400);
@@ -273,125 +271,92 @@ Deno.serve(async (req) => {
     return jsonResponse({ success: false, message: 'dateTo must be YYYY-MM-DD.' }, 400);
   }
 
-  const baseUrl = (Deno.env.get('AXCELERATE_BASE_URL') || 'https://slit.app.axcelerate.com/api').replace(/\/$/, '');
-  const apiToken = Deno.env.get('AXCELERATE_API_TOKEN') ?? '';
-  const wsToken = Deno.env.get('AXCELERATE_WS_TOKEN') ?? '';
+  const statusRaw = typeof body.status === 'string' ? body.status.trim().toLowerCase() : 'all';
+  const status: StatusFilter =
+    statusRaw === 'paid' || statusRaw === 'pending' || statusRaw === 'void' || statusRaw === 'cancelled'
+      ? statusRaw
+      : 'all';
 
-  if (!apiToken || !wsToken) {
+  const studentSearch = typeof body.studentSearch === 'string' ? body.studentSearch : '';
+
+  const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
+  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+
+  if (!supabaseUrl || !serviceRoleKey) {
     return jsonResponse(
       {
         success: false,
-        message: 'aXcelerate API is not configured.',
-        details: 'Set AXCELERATE_API_TOKEN and AXCELERATE_WS_TOKEN secrets on the Edge Function.',
+        message: 'Supabase service role is not configured.',
       },
       500
     );
   }
 
-  const selectedFilterFields = JSON.stringify([
-    { name: 'invoice.areitemslocked', value: 'true', operator: 'IS' },
-  ]);
-
-  const form = new URLSearchParams();
-  form.set('reportReference', 'invoices');
-  form.set(
-    'selectedViewFields',
-    [
-      'invoice.invoiceid',
-      'invoice.invoicenr',
-      'invoice.invoicecontactid',
-      'invoice.invoicedate',
-      'invoice.invoiceduedate',
-      'invoice.pricegross',
-      'invoice.balance',
-      'invoice.actualreceivedamount',
-      'invoice.ispaid',
-      'invoice.invoicetofullname',
-      'invoice.invoicetoemail',
-      'invoice.invoicetoorganisation',
-    ].join(',')
-  );
-  form.set('selectedFilterFields', selectedFilterFields);
+  const supabase = createClient(supabaseUrl, serviceRoleKey);
 
   try {
-    const axRes = await fetch(`${baseUrl}/report/run`, {
-      method: 'POST',
-      headers: {
-        apitoken: apiToken,
-        wstoken: wsToken,
-        Accept: 'application/json',
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: form.toString(),
-    });
+    const { data, error } = await supabase
+      .from('ax_invoices')
+      .select(
+        'invoice_id, invoice_number, contact_id, student_name, email, invoice_date, due_date, invoice_amount, paid_amount, balance, is_paid, is_void, is_cancelled, course_name, agent_name, updated_at'
+      )
+      .order('invoice_date', { ascending: true, nullsFirst: false });
 
-    const text = await axRes.text();
-    let payload: unknown;
-    try {
-      payload = JSON.parse(text);
-    } catch {
-      payload = { raw: text };
-    }
-
-    if (!axRes.ok) {
+    if (error) {
       return jsonResponse(
         {
           success: false,
-          message: `aXcelerate report failed (${axRes.status}).`,
-          details: payload,
+          message: `Failed to load invoices: ${error.message}`,
         },
-        502
+        500
       );
     }
 
-    const rawRows = parseAxData(payload);
-    const normalized = rawRows.map((r) => normalizeRow(r));
+    const dbRows = (data ?? []) as DbInvoice[];
+    const normalized = dbRows.map((r) => dbToRow(r));
 
-    console.log(
-      normalized.slice(0, 10).map((r) => ({
-        invoiceNo: r.invoiceNo,
-        invoiceDate: r.invoiceDate,
-        dueDate: r.dueDate,
-      }))
-    );
+    const invoiceDates = normalized.map((r) => r.invoiceDate).filter(Boolean).sort();
+    const minInvoiceDate = invoiceDates[0] ?? null;
+    const maxInvoiceDate = invoiceDates[invoiceDates.length - 1] ?? null;
+
+    const lastSyncedAt =
+      dbRows
+        .map((r) => r.updated_at)
+        .filter(Boolean)
+        .sort()
+        .at(-1) ?? null;
 
     const filtered = applyFilters(normalized, {
       dateFrom,
       dateTo,
+      dateType,
       status,
       studentSearch,
-      course,
-      agent,
     });
-
-    const debug = {
-      rawCount: normalized.length,
-      filteredCount: filtered.length,
-      dateFrom,
-      dateTo,
-      sampleDates: normalized.slice(0, 10).map((r) => ({
-        invoiceNo: r.invoiceNo,
-        invoiceDate: r.invoiceDate,
-        dueDate: r.dueDate,
-      })),
-    };
-
-    const summary = buildSummary(filtered);
-    const charts = buildCharts(filtered);
 
     return jsonResponse({
       success: true,
-      summary,
+      debug: {
+        rawCount: normalized.length,
+        filteredCount: filtered.length,
+        minInvoiceDate,
+        maxInvoiceDate,
+        dateFilterApplied: Boolean(dateFrom || dateTo),
+        dateType,
+        dateFrom,
+        dateTo,
+        lastSyncedAt,
+      },
+      summary: buildSummary(filtered),
       rows: filtered,
-      charts,
-      debug,
+      charts: buildCharts(filtered),
     });
   } catch (err) {
     console.error('axcelerate-finance-reports error', err);
     return jsonResponse(
       {
         success: false,
-        message: err instanceof Error ? err.message : 'Failed to fetch finance report.',
+        message: err instanceof Error ? err.message : 'Failed to load finance report.',
         details: String(err),
       },
       500

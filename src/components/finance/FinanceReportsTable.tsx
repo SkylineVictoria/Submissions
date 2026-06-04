@@ -6,7 +6,7 @@ import { Input } from '../ui/Input';
 import { AdminListPagination } from '../admin/AdminListPagination';
 import { SortableTh } from '../admin/SortableTh';
 import type { SortDirection } from '../admin/SortableTh';
-import { formatAud, formatFinanceDate, exportFinanceRowsToCsv } from '../../lib/financeReports';
+import { formatAud, formatFinanceDate, exportFinanceRowsToCsv } from '../../services/financeReports';
 import type { FinanceReportRow } from '../../types/financeReports';
 import { toast } from '../../utils/toast';
 
@@ -32,7 +32,9 @@ const PAGE_SIZE = 20;
 const statusClass: Record<string, string> = {
   Paid: 'bg-emerald-50 text-emerald-800 border-emerald-200',
   Pending: 'bg-amber-50 text-amber-800 border-amber-200',
-  'Partially Paid': 'bg-sky-50 text-sky-800 border-sky-200',
+  'Partially Paid': 'bg-amber-50 text-amber-800 border-amber-200',
+  Void: 'bg-gray-100 text-gray-700 border-gray-200',
+  Cancelled: 'bg-red-50 text-red-800 border-red-200',
 };
 
 export const FinanceReportsTable: React.FC<Props> = ({ rows }) => {

@@ -1,14 +1,20 @@
-export type FinanceReportStatusFilter = 'all' | 'paid' | 'pending' | 'partially_paid';
+export type FinanceReportDateType = 'invoice_date' | 'due_date';
 
-export type FinanceInvoiceStatus = 'Paid' | 'Pending' | 'Partially Paid';
+export type FinanceReportStatusFilter =
+  | 'all'
+  | 'paid'
+  | 'pending'
+  | 'void'
+  | 'cancelled';
+
+export type FinanceInvoiceStatus = 'Paid' | 'Pending' | 'Partially Paid' | 'Void' | 'Cancelled';
 
 export type FinanceReportsFilters = {
   dateFrom: string;
   dateTo: string;
+  dateType: FinanceReportDateType;
   status: FinanceReportStatusFilter;
   studentSearch: string;
-  course: string;
-  agent: string;
 };
 
 export type FinanceReportRow = {
@@ -17,7 +23,7 @@ export type FinanceReportRow = {
   contactId: string;
   studentName: string;
   email: string;
-  organisation: string;
+  organisation?: string;
   course: string;
   agent: string;
   invoiceDate: string;
@@ -32,10 +38,10 @@ export type FinanceReportRow = {
 export type FinanceReportsSummary = {
   totalInvoiced: number;
   totalCollected: number;
+  paidTotal: number;
   totalOutstanding: number;
   paidInvoices: number;
   pendingInvoices: number;
-  partiallyPaidInvoices: number;
 };
 
 export type FinanceStatusBreakdownItem = {
@@ -63,9 +69,13 @@ export type FinanceReportsCharts = {
 export type FinanceReportsDebug = {
   rawCount: number;
   filteredCount: number;
-  dateFrom: string;
-  dateTo: string;
-  sampleDates: Array<{ invoiceNo: string; invoiceDate: string; dueDate: string }>;
+  minInvoiceDate: string | null;
+  maxInvoiceDate: string | null;
+  dateFilterApplied: boolean;
+  dateType?: FinanceReportDateType;
+  dateFrom?: string;
+  dateTo?: string;
+  lastSyncedAt?: string | null;
 };
 
 export type FinanceReportsSuccessResponse = {
@@ -83,3 +93,25 @@ export type FinanceReportsErrorResponse = {
 };
 
 export type FinanceReportsResponse = FinanceReportsSuccessResponse | FinanceReportsErrorResponse;
+
+export type FinanceSyncSuccessResponse = {
+  success: true;
+  syncedContacts: number;
+  syncedInvoices: number;
+  insertedOrUpdated: number;
+  errors: string[];
+  offset?: number;
+  limit?: number;
+  totalContacts?: number;
+  nextOffset?: number | null;
+  hasMore?: boolean;
+};
+
+export type FinanceSyncErrorResponse = {
+  success: false;
+  message: string;
+  errors?: string[];
+  details?: unknown;
+};
+
+export type FinanceSyncResponse = FinanceSyncSuccessResponse | FinanceSyncErrorResponse;

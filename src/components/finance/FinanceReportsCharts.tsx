@@ -15,13 +15,14 @@ import {
   Legend,
 } from 'recharts';
 import { Card } from '../ui/Card';
-import { formatAud } from '../../lib/financeReports';
+import { formatAud } from '../../services/financeReports';
 import type { FinanceReportsCharts as ChartsData } from '../../types/financeReports';
 
 const STATUS_COLORS: Record<string, string> = {
   Paid: '#10b981',
   Pending: '#f59e0b',
-  'Partially Paid': '#0ea5e9',
+  Void: '#94a3b8',
+  Cancelled: '#ef4444',
 };
 
 type Props = {

@@ -1,6 +1,6 @@
 import React from 'react';
 import { Card } from '../ui/Card';
-import { formatAud } from '../../lib/financeReports';
+import { formatAud } from '../../services/financeReports';
 import type { FinanceReportsSummary } from '../../types/financeReports';
 
 type Props = {
@@ -14,11 +14,10 @@ const items: {
   accent?: string;
 }[] = [
   { key: 'totalInvoiced', label: 'Total Invoiced', format: 'currency' },
-  { key: 'totalCollected', label: 'Total Collected', format: 'currency', accent: 'text-emerald-700' },
+  { key: 'paidTotal', label: 'Paid Total', format: 'currency', accent: 'text-emerald-700' },
   { key: 'totalOutstanding', label: 'Total Outstanding', format: 'currency', accent: 'text-amber-700' },
-  { key: 'pendingInvoices', label: 'Total Pending Invoices', format: 'count' },
+  { key: 'pendingInvoices', label: 'Pending Invoices', format: 'count' },
   { key: 'paidInvoices', label: 'Paid Invoices', format: 'count', accent: 'text-emerald-700' },
-  { key: 'partiallyPaidInvoices', label: 'Partially Paid Invoices', format: 'count', accent: 'text-sky-700' },
 ];
 
 export const FinanceReportsKpiCards: React.FC<Props> = ({ summary }) => (
