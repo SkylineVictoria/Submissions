@@ -13,10 +13,12 @@ import { FinanceReportsCharts } from '../components/finance/FinanceReportsCharts
 import { FinanceReportsTable } from '../components/finance/FinanceReportsTable';
 import {
   callAxcelerateFinanceReports,
-  DEFAULT_FINANCE_FILTERS,
+  getDefaultFinanceFilters,
+  toIsoDate,
 } from '../lib/financeReports';
 import type {
   FinanceReportsCharts as ChartsData,
+  FinanceReportsDebug,
   FinanceReportsFilters,
   FinanceReportsSummary,
   FinanceReportRow,
@@ -31,31 +33,46 @@ const STATUS_OPTIONS: { value: FinanceReportStatusFilter; label: string }[] = [
 ];
 
 export const AdminFinanceReportsPage: React.FC = () => {
-  const [filters, setFilters] = useState<FinanceReportsFilters>(DEFAULT_FINANCE_FILTERS);
+  const [filters, setFilters] = useState<FinanceReportsFilters>(() => getDefaultFinanceFilters());
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [summary, setSummary] = useState<FinanceReportsSummary | null>(null);
   const [rows, setRows] = useState<FinanceReportRow[]>([]);
   const [charts, setCharts] = useState<ChartsData | null>(null);
+  const [financeDebug, setFinanceDebug] = useState<FinanceReportsDebug | null>(null);
 
-  const load = useCallback(async (opts?: { silent?: boolean }) => {
+  const fetchReports = useCallback((activeFilters: FinanceReportsFilters) => {
+    return callAxcelerateFinanceReports({
+      dateFrom: toIsoDate(activeFilters.dateFrom),
+      dateTo: toIsoDate(activeFilters.dateTo),
+      status: activeFilters.status,
+      studentSearch: activeFilters.studentSearch,
+      course: activeFilters.course,
+      agent: activeFilters.agent,
+    });
+  }, []);
+
+  const load = useCallback(async (opts?: { silent?: boolean; filtersOverride?: FinanceReportsFilters }) => {
+    const activeFilters = opts?.filtersOverride ?? filters;
     if (!opts?.silent) setLoading(true);
     else setRefreshing(true);
     setError(null);
     try {
-      const res = await callAxcelerateFinanceReports(filters);
+      const res = await fetchReports(activeFilters);
       if (!res.success) {
         setError(res.message);
         setSummary(null);
         setRows([]);
         setCharts(null);
+        setFinanceDebug(null);
         toast.error(res.message);
         return;
       }
       setSummary(res.summary);
       setRows(res.rows);
       setCharts(res.charts);
+      setFinanceDebug(res.debug ?? null);
       if (opts?.silent) toast.success('Finance reports refreshed');
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Failed to load finance reports';
@@ -65,7 +82,7 @@ export const AdminFinanceReportsPage: React.FC = () => {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [filters]);
+  }, [filters, fetchReports]);
 
   useEffect(() => {
     void load();
@@ -88,11 +105,12 @@ export const AdminFinanceReportsPage: React.FC = () => {
   }, [rows]);
 
   const resetFilters = () => {
-    setFilters(DEFAULT_FINANCE_FILTERS);
+    const defaults = getDefaultFinanceFilters();
+    setFilters(defaults);
     void (async () => {
       setRefreshing(true);
       setError(null);
-      const res = await callAxcelerateFinanceReports(DEFAULT_FINANCE_FILTERS);
+      const res = await fetchReports(defaults);
       if (!res.success) {
         setError(res.message);
         toast.error(res.message);
@@ -100,6 +118,7 @@ export const AdminFinanceReportsPage: React.FC = () => {
         setSummary(res.summary);
         setRows(res.rows);
         setCharts(res.charts);
+        setFinanceDebug(res.debug ?? null);
         toast.success('Filters reset');
       }
       setRefreshing(false);
@@ -128,23 +147,30 @@ export const AdminFinanceReportsPage: React.FC = () => {
             <Card>
               <div className="space-y-4">
                 <div className="flex flex-wrap items-end gap-3">
-                  <div className="w-full min-w-0 sm:w-[11rem]">
-                    <div className="mb-1 text-xs font-medium text-gray-600">Date from</div>
-                    <DatePicker
-                      value={filters.dateFrom}
-                      onChange={(v) => setFilters((f) => ({ ...f, dateFrom: v || '' }))}
-                      compact
-                      maxDate={filters.dateTo || undefined}
-                    />
-                  </div>
-                  <div className="w-full min-w-0 sm:w-[11rem]">
-                    <div className="mb-1 text-xs font-medium text-gray-600">Date to</div>
-                    <DatePicker
-                      value={filters.dateTo}
-                      onChange={(v) => setFilters((f) => ({ ...f, dateTo: v || '' }))}
-                      compact
-                      minDate={filters.dateFrom || undefined}
-                    />
+                  <div className="w-full min-w-0 sm:w-auto">
+                    <div className="flex flex-wrap items-end gap-3">
+                      <div className="w-full min-w-0 sm:w-[11rem]">
+                        <div className="mb-1 text-xs font-medium text-gray-600">Date from</div>
+                        <DatePicker
+                          value={filters.dateFrom}
+                          onChange={(v) => setFilters((f) => ({ ...f, dateFrom: v || '' }))}
+                          compact
+                          maxDate={filters.dateTo || undefined}
+                        />
+                      </div>
+                      <div className="w-full min-w-0 sm:w-[11rem]">
+                        <div className="mb-1 text-xs font-medium text-gray-600">Date to</div>
+                        <DatePicker
+                          value={filters.dateTo}
+                          onChange={(v) => setFilters((f) => ({ ...f, dateTo: v || '' }))}
+                          compact
+                          minDate={filters.dateFrom || undefined}
+                        />
+                      </div>
+                    </div>
+                    <p className="mt-1.5 text-xs text-gray-500">
+                      Showing invoices by invoice date. Default range starts from 01/01/2024.
+                    </p>
                   </div>
                   <div className="w-full min-w-0 sm:w-[10rem] sm:flex-shrink-0">
                     <Select
@@ -222,6 +248,13 @@ export const AdminFinanceReportsPage: React.FC = () => {
               <div className="flex justify-center py-16">
                 <Loader variant="dots" size="lg" message="Loading report data…" />
               </div>
+            ) : null}
+
+            {import.meta.env.DEV && financeDebug ? (
+              <Card className="border-dashed border-amber-300 bg-amber-50/50 p-4">
+                <p className="mb-2 text-xs font-semibold text-amber-900">Finance debug (development only)</p>
+                <pre className="overflow-x-auto text-[11px] text-amber-950">{JSON.stringify(financeDebug, null, 2)}</pre>
+              </Card>
             ) : null}
           </div>
         )}

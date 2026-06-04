@@ -1522,10 +1522,26 @@ export async function extendInstanceAccessTokensToDate(
 /** Allow student resubmission: set instance back to draft, role to student, and re-enable student link. For 2nd/3rd attempts. */
 export async function allowStudentResubmission(instanceId: number): Promise<void> {
   const { updated_by } = getAuditFields();
-  await supabase
-    .from('skyline_form_instances')
-    .update({ status: 'draft', role_context: 'student', updated_by })
-    .eq('id', instanceId);
+  const payload: Record<string, unknown> = {
+    status: 'draft',
+    role_context: 'student',
+    workflow_status: 'draft',
+    updated_by,
+  };
+  const { error } = await supabase.from('skyline_form_instances').update(payload).eq('id', instanceId);
+  if (error) {
+    const msg = String(error.message ?? '').toLowerCase();
+    if (msg.includes('workflow_status')) {
+      const { workflow_status: _wf, ...withoutWf } = payload;
+      const { error: retryErr } = await supabase
+        .from('skyline_form_instances')
+        .update(withoutWf)
+        .eq('id', instanceId);
+      if (retryErr) throw retryErr;
+    } else {
+      throw error;
+    }
+  }
   await extendInstanceAccessTokens(instanceId, 'student', 30);
 }
 

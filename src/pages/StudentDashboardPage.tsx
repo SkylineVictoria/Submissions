@@ -509,7 +509,7 @@ export const StudentDashboardPage: React.FC = () => {
                             status: row.status,
                             role_context: row.role_context,
                           });
-                          const trainerAttemptFailedText = getTrainerAttemptFailedText(rawAttemptResults);
+                          const trainerAttemptFailedText = getTrainerAttemptFailedText(rawAttemptResults, row);
                           const missedAttemptText = getMissedAttemptWindowText({
                             noAttemptRollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
                             didNotAttempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,

@@ -277,15 +277,23 @@ export function getStudentAttemptDoneText(input: {
 
   if (rc === 'office') return null;
 
-  // NYC messaging is handled by getTrainerAttemptFailedText.
-  if (r.some((x) => x === 'not_yet_competent')) return null;
-
   const submitted = Math.min(
     3,
     Math.max(0, Number(input.submissionCount ?? 0) || (String(input.submittedAt ?? '').trim() ? 1 : 0))
   );
 
-  if (rc === 'trainer' || (rc === '' && submitted > 0)) {
+  const awaitingTrainerMark =
+    rc === 'trainer' || (submitted > 0 && rc !== 'student' && rc !== 'office');
+
+  if (r.some((x) => x === 'not_yet_competent') && awaitingTrainerMark) {
+    if (submitted >= 3) return 'Submitted 3rd attempt — awaiting trainer';
+    if (submitted >= 2) return 'Submitted 2nd attempt — awaiting trainer';
+    if (submitted >= 1) return 'Submitted 1st attempt — awaiting trainer';
+  }
+
+  if (r.some((x) => x === 'not_yet_competent')) return null;
+
+  if (awaitingTrainerMark) {
     if (submitted >= 3) return 'Submitted 3rd attempt — awaiting trainer';
     if (submitted >= 2) return 'Submitted 2nd attempt — awaiting trainer';
     if (submitted >= 1) return 'Submitted 1st attempt — awaiting trainer';
@@ -300,9 +308,16 @@ export function getStudentAttemptDoneText(input: {
   return fallback;
 }
 
-export function getTrainerAttemptFailedText(attemptResults?: AttemptResult[] | null): string | null {
+export function getTrainerAttemptFailedText(
+  attemptResults?: AttemptResult[] | null,
+  row?: Pick<{ role_context?: string | null; status?: string | null }, 'role_context' | 'status'> | null
+): string | null {
   const r = (attemptResults ?? []).slice(0, 3);
-  // If a trainer marks an attempt as NYC, the next attempt becomes required.
+  const rc = String(row?.role_context ?? '').trim();
+  const st = String(row?.status ?? '').trim();
+  // Next-attempt messaging only when the instance is back with the student (resubmission window open).
+  const resubmissionOpen = rc === 'student' && st === 'draft';
+  if (!resubmissionOpen) return null;
   if (r[0] === 'not_yet_competent' && !r[1] && !r[2]) return 'Second Attempt Required';
   if (r[1] === 'not_yet_competent' && !r[2]) return 'Third Attempt Required';
   if (r[2] === 'not_yet_competent') return 'No more attempts (contact admin)';

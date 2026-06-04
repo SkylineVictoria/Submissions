@@ -48,6 +48,18 @@ function isIsoDate(s: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/.test(s.trim());
 }
 
+/** Normalize aXcelerate / UI dates to YYYY-MM-DD for comparisons. */
+function normalizeToIsoDate(value: string): string {
+  const v = String(value ?? '').trim();
+  if (!v) return '';
+  if (/^\d{4}-\d{2}-\d{2}/.test(v)) return v.slice(0, 10);
+  const ddmmyyyy = v.match(/^(\d{2})[-/](\d{2})[-/](\d{4})/);
+  if (ddmmyyyy) return `${ddmmyyyy[3]}-${ddmmyyyy[2]}-${ddmmyyyy[1]}`;
+  const yyyymmdd = v.match(/^(\d{4})[-/](\d{2})[-/](\d{2})/);
+  if (yyyymmdd) return `${yyyymmdd[1]}-${yyyymmdd[2]}-${yyyymmdd[3]}`;
+  return v.slice(0, 10);
+}
+
 function parseNumber(v: unknown): number {
   if (typeof v === 'number' && Number.isFinite(v)) return v;
   const n = Number(String(v ?? '').replace(/[^0-9.-]/g, ''));
@@ -96,8 +108,8 @@ function normalizeRow(raw: Record<string, unknown>): NormalizedRow {
     organisation,
     course: pickField(raw, 'invoice.course', 'course', 'Course') || '',
     agent: pickField(raw, 'invoice.agent', 'agent', 'Agent') || organisation,
-    invoiceDate: pickField(raw, 'invoice.invoicedate', 'invoicedate', 'invoiceDate'),
-    dueDate: pickField(raw, 'invoice.invoiceduedate', 'invoiceduedate', 'dueDate'),
+    invoiceDate: normalizeToIsoDate(pickField(raw, 'invoice.invoicedate', 'invoicedate', 'invoiceDate')),
+    dueDate: normalizeToIsoDate(pickField(raw, 'invoice.invoiceduedate', 'invoiceduedate', 'dueDate')),
     invoiceAmount,
     paidAmount,
     balance,
@@ -334,6 +346,15 @@ Deno.serve(async (req) => {
 
     const rawRows = parseAxData(payload);
     const normalized = rawRows.map((r) => normalizeRow(r));
+
+    console.log(
+      normalized.slice(0, 10).map((r) => ({
+        invoiceNo: r.invoiceNo,
+        invoiceDate: r.invoiceDate,
+        dueDate: r.dueDate,
+      }))
+    );
+
     const filtered = applyFilters(normalized, {
       dateFrom,
       dateTo,
@@ -343,6 +364,18 @@ Deno.serve(async (req) => {
       agent,
     });
 
+    const debug = {
+      rawCount: normalized.length,
+      filteredCount: filtered.length,
+      dateFrom,
+      dateTo,
+      sampleDates: normalized.slice(0, 10).map((r) => ({
+        invoiceNo: r.invoiceNo,
+        invoiceDate: r.invoiceDate,
+        dueDate: r.dueDate,
+      })),
+    };
+
     const summary = buildSummary(filtered);
     const charts = buildCharts(filtered);
 
@@ -351,6 +384,7 @@ Deno.serve(async (req) => {
       summary,
       rows: filtered,
       charts,
+      debug,
     });
   } catch (err) {
     console.error('axcelerate-finance-reports error', err);

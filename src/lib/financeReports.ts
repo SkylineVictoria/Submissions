@@ -5,28 +5,60 @@ import type {
   FinanceReportsSuccessResponse,
 } from '../types/financeReports';
 
-export const DEFAULT_FINANCE_FILTERS: FinanceReportsFilters = {
-  dateFrom: '',
-  dateTo: '',
-  status: 'all',
-  studentSearch: '',
-  course: '',
-  agent: '',
-};
+/** Convert UI date (DD-MM-YYYY or YYYY-MM-DD) to ISO YYYY-MM-DD for the Edge Function. */
+export function toIsoDate(value: string): string {
+  const v = String(value ?? '').trim();
+
+  if (!v) return '';
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) {
+    return v;
+  }
+
+  const match = v.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+
+  if (match) {
+    const [, dd, mm, yyyy] = match;
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  return v;
+}
+
+const todayIso = () => new Date().toISOString().slice(0, 10);
+
+export function getDefaultFinanceFilters(): FinanceReportsFilters {
+  return {
+    dateFrom: '2024-01-01',
+    dateTo: todayIso(),
+    status: 'all',
+    studentSearch: '',
+    course: '',
+    agent: '',
+  };
+}
+
+export const DEFAULT_FINANCE_FILTERS: FinanceReportsFilters = getDefaultFinanceFilters();
 
 export async function callAxcelerateFinanceReports(
   filters: FinanceReportsFilters
 ): Promise<FinanceReportsResponse> {
+  const payload = {
+    dateFrom: toIsoDate(filters.dateFrom),
+    dateTo: toIsoDate(filters.dateTo),
+    status: filters.status,
+    studentSearch: filters.studentSearch || '',
+    course: filters.course || '',
+    agent: filters.agent || '',
+  };
+
+  console.log('Finance filters', payload);
+
   const { data, error } = await supabase.functions.invoke('axcelerate-finance-reports', {
-    body: {
-      dateFrom: filters.dateFrom || '',
-      dateTo: filters.dateTo || '',
-      status: filters.status,
-      studentSearch: filters.studentSearch || '',
-      course: filters.course || '',
-      agent: filters.agent || '',
-    },
+    body: payload,
   });
+
+  console.log('Finance response', (data as { debug?: unknown } | null)?.debug);
 
   if (error) {
     return {

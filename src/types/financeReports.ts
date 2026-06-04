@@ -60,11 +60,20 @@ export type FinanceReportsCharts = {
   outstandingByDueMonth: FinanceOutstandingByMonthItem[];
 };
 
+export type FinanceReportsDebug = {
+  rawCount: number;
+  filteredCount: number;
+  dateFrom: string;
+  dateTo: string;
+  sampleDates: Array<{ invoiceNo: string; invoiceDate: string; dueDate: string }>;
+};
+
 export type FinanceReportsSuccessResponse = {
   success: true;
   summary: FinanceReportsSummary;
   rows: FinanceReportRow[];
   charts: FinanceReportsCharts;
+  debug?: FinanceReportsDebug;
 };
 
 export type FinanceReportsErrorResponse = {

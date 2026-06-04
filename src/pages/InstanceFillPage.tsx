@@ -669,8 +669,13 @@ export const InstanceFillPage: React.FC = () => {
                 ? 'waiting_office'
                 : 'draft'
     ) as 'draft' | 'waiting_trainer' | 'waiting_office' | 'completed' | 'failed';
-    // Student handed in but instance row still draft/submitted mismatch → treat as in trainer review queue.
-    if (studentHasSubmitted && !instDidNotAttempt && normalizedWorkflow === 'draft') {
+    // Student handed in while still with trainer/office — not when reopened for resubmission (student + draft).
+    if (
+      studentHasSubmitted &&
+      !instDidNotAttempt &&
+      normalizedWorkflow === 'draft' &&
+      roleCtx !== 'student'
+    ) {
       normalizedWorkflow = roleCtx === 'office' ? 'waiting_office' : 'waiting_trainer';
     }
     // Stale workflow_status=failed/completed while instance is still draft and student never submitted

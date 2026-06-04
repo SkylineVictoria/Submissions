@@ -391,7 +391,7 @@ export const DashboardPage: React.FC = () => {
                       status: row.status,
                       role_context: row.role_context,
                     });
-                    const trainerAttemptFailedText = getTrainerAttemptFailedText(rawAttemptResults);
+                    const trainerAttemptFailedText = getTrainerAttemptFailedText(rawAttemptResults, row);
                     const missedAttemptText = getMissedAttemptWindowText({
                       noAttemptRollovers: row.no_attempt_rollovers ?? null,
                       didNotAttempt: row.did_not_attempt ?? null,

@@ -121,7 +121,7 @@ const getExportStatusText = (row: SubmittedInstanceRow, rawAttemptResults: Attem
     status: row.status,
     role_context: row.role_context,
   });
-  const trainerAttemptFailedText = getTrainerAttemptFailedText(rawAttemptResults);
+  const trainerAttemptFailedText = getTrainerAttemptFailedText(rawAttemptResults, row);
   const missedAttemptText = normalizeMissedAttemptText(missedAttemptTextRaw);
 
   const accessRole = row.role_context === 'trainer' ? 'trainer' : row.role_context === 'office' ? 'office' : 'student';
