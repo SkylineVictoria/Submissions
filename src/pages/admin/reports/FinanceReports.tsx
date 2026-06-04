@@ -10,6 +10,7 @@ import { Loader } from '../../../components/ui/Loader';
 import { toast } from '../../../utils/toast';
 import { FinanceReportsSkeleton } from '../../../components/finance/FinanceReportsSkeleton';
 import { FinanceReportsKpiCards } from '../../../components/finance/FinanceReportsKpiCards';
+import { FinanceReportsReconciliation } from '../../../components/finance/FinanceReportsReconciliation';
 import { FinanceReportsCharts } from '../../../components/finance/FinanceReportsCharts';
 import { FinanceReportsTable } from '../../../components/finance/FinanceReportsTable';
 import {
@@ -352,6 +353,7 @@ export const FinanceReportsPage: React.FC = () => {
             {summary && charts && !noDataSynced ? (
               <>
                 <FinanceReportsKpiCards summary={summary} />
+                <FinanceReportsReconciliation summary={summary} />
                 <FinanceReportsCharts charts={charts} />
                 <FinanceReportsTable rows={rows} />
               </>

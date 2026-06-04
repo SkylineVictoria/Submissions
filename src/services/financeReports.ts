@@ -6,6 +6,9 @@ import type {
   FinanceSyncResponse,
 } from '../types/financeReports';
 
+export const ADJUSTMENT_HELPER_TEXT =
+  'Adjustment / Unreconciled represents credit notes, write-offs, cancellations, rounding differences, or other invoice accounting differences not represented by paid, outstanding, or void totals.';
+
 /** Convert UI date (DD-MM-YYYY or YYYY-MM-DD) to ISO YYYY-MM-DD for the Edge Function. */
 export function toIsoDate(value: string): string {
   const v = String(value ?? '').trim();

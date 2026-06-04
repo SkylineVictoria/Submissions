@@ -37,11 +37,13 @@ export type FinanceReportRow = {
 
 export type FinanceReportsSummary = {
   totalInvoiced: number;
-  totalCollected: number;
   paidTotal: number;
-  totalOutstanding: number;
-  paidInvoices: number;
-  pendingInvoices: number;
+  outstandingTotal: number;
+  voidTotal: number;
+  cancelledTotal: number;
+  adjustmentTotal: number;
+  reconciliationTotal: number;
+  isReconciled: boolean;
 };
 
 export type FinanceStatusBreakdownItem = {

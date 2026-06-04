@@ -36,6 +36,8 @@ type NormalizedRow = {
   paidAmount: number;
   balance: number;
   isPaid: boolean;
+  isVoid: boolean;
+  isCancelled: boolean;
   status: InvoiceStatus;
 };
 
@@ -130,6 +132,8 @@ function dbToRow(r: DbInvoice): NormalizedRow {
     paidAmount,
     balance,
     isPaid,
+    isVoid,
+    isCancelled,
     status: calculateStatus({
       is_void: isVoid,
       is_cancelled: isCancelled,
@@ -181,29 +185,58 @@ function applyFilters(
   });
 }
 
+function roundMoney(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
 function buildSummary(rows: NormalizedRow[]) {
-  return rows.reduce(
-    (acc, r) => {
-      acc.totalInvoiced += r.invoiceAmount;
-      acc.totalCollected += r.paidAmount;
-      acc.totalOutstanding += r.balance;
-      if (r.status === 'Paid') {
-        acc.paidInvoices += 1;
-        acc.paidTotal += r.paidAmount;
-      } else if (r.status === 'Pending' || r.status === 'Partially Paid') {
-        acc.pendingInvoices += 1;
-      }
-      return acc;
-    },
-    {
-      totalInvoiced: 0,
-      totalCollected: 0,
-      paidTotal: 0,
-      totalOutstanding: 0,
-      paidInvoices: 0,
-      pendingInvoices: 0,
+  let totalInvoiced = 0;
+  let paidTotal = 0;
+  let outstandingTotal = 0;
+  let voidTotal = 0;
+  let cancelledTotal = 0;
+
+  for (const r of rows) {
+    totalInvoiced += r.invoiceAmount;
+
+    if (r.isVoid) {
+      voidTotal += r.invoiceAmount;
+      continue;
     }
+
+    if (r.isCancelled) {
+      cancelledTotal += r.invoiceAmount;
+      continue;
+    }
+
+    paidTotal += r.paidAmount;
+    outstandingTotal += r.balance;
+  }
+
+  totalInvoiced = roundMoney(totalInvoiced);
+  paidTotal = roundMoney(paidTotal);
+  outstandingTotal = roundMoney(outstandingTotal);
+  voidTotal = roundMoney(voidTotal);
+  cancelledTotal = roundMoney(cancelledTotal);
+
+  const adjustmentTotal = roundMoney(
+    totalInvoiced - (paidTotal + outstandingTotal + voidTotal + cancelledTotal)
   );
+  const reconciliationTotal = roundMoney(
+    paidTotal + outstandingTotal + voidTotal + cancelledTotal + adjustmentTotal
+  );
+  const isReconciled = Math.abs(totalInvoiced - reconciliationTotal) < 0.01;
+
+  return {
+    totalInvoiced,
+    paidTotal,
+    outstandingTotal,
+    voidTotal,
+    cancelledTotal,
+    adjustmentTotal,
+    reconciliationTotal,
+    isReconciled,
+  };
 }
 
 function buildCharts(rows: NormalizedRow[]) {
