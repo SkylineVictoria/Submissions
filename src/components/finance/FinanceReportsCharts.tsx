@@ -37,7 +37,15 @@ const chartTooltipStyle = {
 
 export const FinanceReportsCharts: React.FC<Props> = ({ charts }) => {
   const pieData = charts.statusBreakdown.filter((d) => d.value > 0);
-  const hasTrend = charts.monthlyCollectionTrend.length > 0;
+  const trendData =
+    charts.paymentDatesAvailable && charts.monthlyPaymentTrend.length > 0
+      ? charts.monthlyPaymentTrend.map((p) => ({
+          month: p.month,
+          invoiced: charts.monthlyCollectionTrend.find((m) => m.month === p.month)?.invoiced ?? 0,
+          collected: p.collected,
+        }))
+      : charts.monthlyCollectionTrend;
+  const hasTrend = trendData.length > 0;
   const hasOutstanding = charts.outstandingByDueMonth.length > 0;
 
   return (
@@ -65,12 +73,15 @@ export const FinanceReportsCharts: React.FC<Props> = ({ charts }) => {
 
       <Card className="p-4 lg:col-span-1 xl:col-span-1">
         <h3 className="mb-3 text-sm font-semibold text-[var(--text)]">Monthly Collection Trend</h3>
+        {charts.collectionTrendWarning ? (
+          <p className="mb-3 text-xs text-amber-700">{charts.collectionTrendWarning}</p>
+        ) : null}
         {!hasTrend ? (
           <p className="py-12 text-center text-sm text-gray-500">No data for chart</p>
         ) : (
           <div className="h-64 w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={charts.monthlyCollectionTrend}>
+              <LineChart data={trendData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
                 <XAxis dataKey="month" tick={{ fontSize: 11 }} />
                 <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} />

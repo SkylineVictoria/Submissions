@@ -226,6 +226,24 @@ export function formatFinanceDate(value: string): string {
   return v;
 }
 
+export function formatPaymentDateTime(value: string | null | undefined): string {
+  const v = String(value ?? '').trim();
+  if (!v) return 'Paid date unavailable';
+  try {
+    return new Intl.DateTimeFormat('en-AU', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+      timeZone: 'Australia/Melbourne',
+    }).format(new Date(v));
+  } catch {
+    return formatFinanceDate(v);
+  }
+}
+
 export function formatSyncTimestamp(iso: string | null | undefined): string {
   if (!iso) return 'Never';
   try {
@@ -246,6 +264,8 @@ export function exportFinanceRowsToCsv(rows: import('../types/financeReports').F
     'Invoice No',
     'Invoice Date',
     'Due Date',
+    'Payment Date',
+    'Payment Method',
     'Invoice Amount',
     'Paid Amount',
     'Balance',
@@ -261,6 +281,8 @@ export function exportFinanceRowsToCsv(rows: import('../types/financeReports').F
         r.invoiceNo,
         r.invoiceDate,
         r.dueDate,
+        r.lastPaymentDate ?? '',
+        r.paymentMethod ?? '',
         r.invoiceAmount,
         r.paidAmount,
         r.balance,

@@ -8,6 +8,7 @@ export {
   syncAxcelerateFinanceBatch,
   formatAud,
   formatFinanceDate,
+  formatPaymentDateTime,
   formatSyncTimestamp,
   exportFinanceRowsToCsv,
   markFinanceSyncInProgress,

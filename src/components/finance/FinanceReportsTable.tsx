@@ -6,7 +6,7 @@ import { Input } from '../ui/Input';
 import { AdminListPagination } from '../admin/AdminListPagination';
 import { SortableTh } from '../admin/SortableTh';
 import type { SortDirection } from '../admin/SortableTh';
-import { formatAud, formatFinanceDate, exportFinanceRowsToCsv } from '../../services/financeReports';
+import { formatAud, formatFinanceDate, formatPaymentDateTime, exportFinanceRowsToCsv } from '../../services/financeReports';
 import type { FinanceReportRow } from '../../types/financeReports';
 import { toast } from '../../utils/toast';
 
@@ -16,6 +16,8 @@ type SortKey =
   | 'invoiceNo'
   | 'invoiceDate'
   | 'dueDate'
+  | 'lastPaymentDate'
+  | 'paymentMethod'
   | 'invoiceAmount'
   | 'paidAmount'
   | 'balance'
@@ -149,7 +151,7 @@ export const FinanceReportsTable: React.FC<Props> = ({ rows }) => {
       />
 
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[900px] text-sm">
+        <table className="w-full min-w-[1100px] text-sm">
           <thead>
             <tr className="border-b border-gray-200 text-left text-xs uppercase tracking-wide text-gray-500">
               <th className="py-3 pr-2 w-10">
@@ -165,6 +167,8 @@ export const FinanceReportsTable: React.FC<Props> = ({ rows }) => {
               <SortableTh label="Invoice No" className="py-3 pr-3" active={sort.key === 'invoiceNo'} direction={sort.dir} onToggle={() => toggleSort('invoiceNo')} />
               <SortableTh label="Invoice Date" className="py-3 pr-3" active={sort.key === 'invoiceDate'} direction={sort.dir} onToggle={() => toggleSort('invoiceDate')} />
               <SortableTh label="Due Date" className="py-3 pr-3" active={sort.key === 'dueDate'} direction={sort.dir} onToggle={() => toggleSort('dueDate')} />
+              <SortableTh label="Payment Date" className="py-3 pr-3" active={sort.key === 'lastPaymentDate'} direction={sort.dir} onToggle={() => toggleSort('lastPaymentDate')} />
+              <SortableTh label="Payment Method" className="py-3 pr-3" active={sort.key === 'paymentMethod'} direction={sort.dir} onToggle={() => toggleSort('paymentMethod')} />
               <SortableTh label="Invoice Amount" className="py-3 pr-3 text-right" active={sort.key === 'invoiceAmount'} direction={sort.dir} onToggle={() => toggleSort('invoiceAmount')} />
               <SortableTh label="Paid Amount" className="py-3 pr-3 text-right" active={sort.key === 'paidAmount'} direction={sort.dir} onToggle={() => toggleSort('paidAmount')} />
               <SortableTh label="Balance" className="py-3 pr-3 text-right" active={sort.key === 'balance'} direction={sort.dir} onToggle={() => toggleSort('balance')} />
@@ -175,7 +179,7 @@ export const FinanceReportsTable: React.FC<Props> = ({ rows }) => {
           <tbody>
             {pageRows.length === 0 ? (
               <tr>
-                <td colSpan={11} className="py-10 text-center text-gray-500">
+                <td colSpan={13} className="py-10 text-center text-gray-500">
                   No invoices match your filters.
                 </td>
               </tr>
@@ -197,6 +201,12 @@ export const FinanceReportsTable: React.FC<Props> = ({ rows }) => {
                     <td className="py-3 pr-3 font-mono text-xs">{row.invoiceNo || '—'}</td>
                     <td className="py-3 pr-3 text-gray-700">{formatFinanceDate(row.invoiceDate)}</td>
                     <td className="py-3 pr-3 text-gray-700">{formatFinanceDate(row.dueDate)}</td>
+                    <td className="py-3 pr-3 text-gray-700">
+                      {row.status === 'Paid' || row.paidAmount > 0
+                        ? formatPaymentDateTime(row.lastPaymentDate)
+                        : '—'}
+                    </td>
+                    <td className="py-3 pr-3 text-gray-700">{row.paymentMethod || '—'}</td>
                     <td className="py-3 pr-3 text-right tabular-nums">{formatAud(row.invoiceAmount)}</td>
                     <td className="py-3 pr-3 text-right tabular-nums text-emerald-700">{formatAud(row.paidAmount)}</td>
                     <td className="py-3 pr-3 text-right tabular-nums font-medium">{formatAud(row.balance)}</td>

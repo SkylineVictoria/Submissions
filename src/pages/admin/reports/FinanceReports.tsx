@@ -46,6 +46,7 @@ const STATUS_OPTIONS: { value: FinanceReportStatusFilter; label: string }[] = [
 const DATE_TYPE_OPTIONS: { value: FinanceReportDateType; label: string }[] = [
   { value: 'invoice_date', label: 'Invoice Date' },
   { value: 'due_date', label: 'Due Date' },
+  { value: 'last_payment_date', label: 'Payment Date' },
 ];
 
 export const FinanceReportsPage: React.FC = () => {
@@ -205,7 +206,17 @@ export const FinanceReportsPage: React.FC = () => {
   const dateHelperText =
     filters.dateType === 'due_date'
       ? 'Filtering by due date. Leave dates blank to include all synced invoices.'
-      : 'Filtering by invoice date. Leave dates blank to include all synced invoices.';
+      : filters.dateType === 'last_payment_date'
+        ? 'Filtering by payment received date. Only invoices with a synced payment date are included.'
+        : 'Filtering by invoice date. Leave dates blank to include all synced invoices.';
+
+  const paymentDateEmptyState =
+    filters.dateType === 'last_payment_date' &&
+    !loading &&
+    !error &&
+    !noDataSynced &&
+    rows.length === 0 &&
+    (financeDebug?.paymentCount ?? 0) === 0;
 
   const syncButtonLabel =
     syncing && syncProgress && syncProgress.total > 0
@@ -350,7 +361,20 @@ export const FinanceReportsPage: React.FC = () => {
               </Card>
             ) : null}
 
-            {summary && charts && !noDataSynced ? (
+            {paymentDateEmptyState ? (
+              <Card className="border-amber-200 bg-amber-50 p-6 text-center">
+                <p className="text-sm font-medium text-amber-900">
+                  No payment-date records found. Run payment sync or verify aXcelerate payment endpoint access.
+                </p>
+                {isSuperadmin ? (
+                  <Button type="button" className="mt-4" onClick={() => void handleSyncNow()} disabled={syncing} aria-busy={syncing}>
+                    {syncButtonLabel}
+                  </Button>
+                ) : null}
+              </Card>
+            ) : null}
+
+            {summary && charts && !noDataSynced && !paymentDateEmptyState ? (
               <>
                 <FinanceReportsKpiCards summary={summary} />
                 <FinanceReportsReconciliation summary={summary} />

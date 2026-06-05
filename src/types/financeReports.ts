@@ -1,4 +1,4 @@
-export type FinanceReportDateType = 'invoice_date' | 'due_date';
+export type FinanceReportDateType = 'invoice_date' | 'due_date' | 'last_payment_date';
 
 export type FinanceReportStatusFilter =
   | 'all'
@@ -31,6 +31,10 @@ export type FinanceReportRow = {
   balance: number;
   isPaid: boolean;
   status: FinanceInvoiceStatus;
+  firstPaymentDate?: string | null;
+  lastPaymentDate?: string | null;
+  paymentCount?: number;
+  paymentMethod?: string | null;
 };
 
 export type FinanceReportsSummary = {
@@ -42,6 +46,8 @@ export type FinanceReportsSummary = {
   adjustmentTotal: number;
   reconciliationTotal: number;
   isReconciled: boolean;
+  collectedByPaymentDate: number;
+  paidWithoutPaymentDateCount: number;
 };
 
 export type FinanceStatusBreakdownItem = {
@@ -55,6 +61,11 @@ export type FinanceMonthlyTrendItem = {
   collected: number;
 };
 
+export type FinanceMonthlyPaymentTrendItem = {
+  month: string;
+  collected: number;
+};
+
 export type FinanceOutstandingByMonthItem = {
   month: string;
   outstanding: number;
@@ -63,10 +74,19 @@ export type FinanceOutstandingByMonthItem = {
 export type FinanceReportsCharts = {
   statusBreakdown: FinanceStatusBreakdownItem[];
   monthlyCollectionTrend: FinanceMonthlyTrendItem[];
+  monthlyPaymentTrend: FinanceMonthlyPaymentTrendItem[];
   outstandingByDueMonth: FinanceOutstandingByMonthItem[];
+  paymentDatesAvailable: boolean;
+  collectionTrendWarning: string | null;
 };
 
 export type FinanceReportsDebug = {
+  invoiceCount: number;
+  paymentCount: number;
+  matchedPaymentCount: number;
+  unmatchedPaymentCount: number;
+  paymentEndpointUsed: string | null;
+  paymentEndpointWarning: string | null;
   rawCount: number;
   filteredCount: number;
   minInvoiceDate: string | null;
@@ -99,6 +119,11 @@ export type FinanceSyncSuccessResponse = {
   syncedContacts: number;
   syncedInvoices: number;
   insertedOrUpdated: number;
+  syncedPayments?: number;
+  matchedPaymentCount?: number;
+  unmatchedPaymentCount?: number;
+  paymentEndpointUsed?: string | null;
+  paymentEndpointWarning?: string | null;
   errors: string[];
   offset?: number;
   limit?: number;
