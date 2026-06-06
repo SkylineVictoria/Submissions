@@ -244,7 +244,7 @@ export function legacyGridCountsAsFilled(q: GridQuestionLike, answers: GridAnswe
   return Object.keys(buildGridCellsFromLegacyText(q, legacy)).length > 0;
 }
 
-function groupGridCellsByRow(cells: Record<string, string>): Map<number, Record<string, string>> {
+export function groupGridCellsByRow(cells: Record<string, string>): Map<number, Record<string, string>> {
   const byRow = new Map<number, Record<string, string>>();
   for (const [key, val] of Object.entries(cells)) {
     const match = /^r(\d+)_c/.exec(key);

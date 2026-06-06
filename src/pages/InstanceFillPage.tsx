@@ -30,6 +30,7 @@ export function normalizeRichTextForPage(html?: string): string {
 }
 
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
+import { Check, Loader2 } from 'lucide-react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import {
   fetchTemplateForInstance,
@@ -63,6 +64,11 @@ import type { FormAnswer } from '../types/database';
 import type { FormRole } from '../utils/roleGuard';
 import { isRoleVisible, isRoleEditable } from '../utils/roleGuard';
 import { legacyGridCountsAsFilled, mergeGridTableAnswers } from '../utils/gridTableAnswers';
+import {
+  collectOrderedQuestionIdsFromSections,
+  collectStepAnswerSaveTargets,
+  groupSaveTargetsByQuestion,
+} from '../utils/stepAnswerSave';
 import { Card } from '../components/ui/Card';
 import { Loader } from '../components/ui/Loader';
 import { Button } from '../components/ui/Button';
@@ -92,6 +98,24 @@ import {
 const PDF_BASE = import.meta.env.VITE_PDF_API_URL ?? '';
 
 type AttemptOutcome = 'competent' | 'not_yet_competent' | null;
+
+type QuestionSaveStatus = 'idle' | 'saving' | 'saved' | 'error';
+
+function AnswerSaveStatusIcon({ status }: { status?: QuestionSaveStatus }) {
+  if (!status || status === 'idle') return null;
+  if (status === 'saving') {
+    return <Loader2 className="w-4 h-4 animate-spin text-gray-500 shrink-0" aria-label="Saving answer" />;
+  }
+  if (status === 'saved') {
+    return <Check className="w-4 h-4 text-emerald-600 shrink-0" strokeWidth={2.5} aria-label="Answer saved" />;
+  }
+  return <span className="w-4 h-4 text-red-600 text-xs font-bold shrink-0 leading-4" title="Save failed">!</span>;
+}
+
+function getVisibleStepsForRole(template: FormTemplate, role: FormRole) {
+  const isAppendixAStep = (s: { title?: string | null }) => /Appendix\s*A/i.test((s.title || '').trim());
+  return (template.steps ?? []).filter((s) => role !== 'student' || !isAppendixAStep(s));
+}
 
 function batchTrainerNotifyUserIds(ctx: InstanceWorkflowNotificationContext | null): string[] {
   if (!ctx) return [];
@@ -594,6 +618,8 @@ export const InstanceFillPage: React.FC = () => {
   } | null>(null);
   const [workflowSubmitting, setWorkflowSubmitting] = useState(false);
   const [manualSaveBusy, setManualSaveBusy] = useState(false);
+  const [questionSaveStatus, setQuestionSaveStatus] = useState<Record<number, QuestionSaveStatus>>({});
+  const [stepNavSaving, setStepNavSaving] = useState(false);
   const [currentStep, setCurrentStep] = useState(1);
   const [loading, setLoading] = useState(true);
   const [accessDenied, setAccessDenied] = useState<string | null>(null);
@@ -1287,10 +1313,17 @@ export const InstanceFillPage: React.FC = () => {
       const key = getAnswerKey(questionId, rowId);
       clearPendingSave(key);
       const t = setTimeout(async () => {
-        const payload = valueToSavePayload(value);
-        await saveAnswer(id, questionId, rowId, payload);
-        setPdfRefresh((r) => r + 1);
-        saveTimeoutsRef.current.delete(key);
+        setQuestionSaveStatus((prev) => ({ ...prev, [questionId]: 'saving' }));
+        try {
+          const payload = valueToSavePayload(value);
+          await saveAnswer(id, questionId, rowId, payload);
+          setQuestionSaveStatus((prev) => ({ ...prev, [questionId]: 'saved' }));
+          setPdfRefresh((r) => r + 1);
+        } catch {
+          setQuestionSaveStatus((prev) => ({ ...prev, [questionId]: 'error' }));
+        } finally {
+          saveTimeoutsRef.current.delete(key);
+        }
       }, 300);
       saveTimeoutsRef.current.set(key, t);
     },
@@ -1301,10 +1334,22 @@ export const InstanceFillPage: React.FC = () => {
     (questionId: number, rowId: number | null, value: string | number | boolean | Record<string, unknown> | string[], immediate = false) => {
       const key = getAnswerKey(questionId, rowId);
       setAnswers((prev) => ({ ...prev, [key]: value }));
+      setQuestionSaveStatus((prev) => {
+        if (prev[questionId] === 'saved' || prev[questionId] === 'error') {
+          return { ...prev, [questionId]: 'idle' };
+        }
+        return prev;
+      });
       if (immediate) {
         clearPendingSave(key);
+        setQuestionSaveStatus((prev) => ({ ...prev, [questionId]: 'saving' }));
         const payload = valueToSavePayload(value);
-        saveAnswer(id, questionId, rowId, payload).then(() => setPdfRefresh((r) => r + 1));
+        saveAnswer(id, questionId, rowId, payload)
+          .then(() => {
+            setQuestionSaveStatus((prev) => ({ ...prev, [questionId]: 'saved' }));
+            setPdfRefresh((r) => r + 1);
+          })
+          .catch(() => setQuestionSaveStatus((prev) => ({ ...prev, [questionId]: 'error' })));
       } else {
         debouncedSave(questionId, rowId, value);
       }
@@ -1474,13 +1519,70 @@ export const InstanceFillPage: React.FC = () => {
       if (!parsed) continue;
       const raw = answers[key];
       if (raw === undefined) continue;
-      const payload = valueToSavePayload(raw);
-      await saveAnswer(id, parsed.questionId, parsed.rowId, payload);
-      flushed += 1;
+      setQuestionSaveStatus((prev) => ({ ...prev, [parsed.questionId]: 'saving' }));
+      try {
+        const payload = valueToSavePayload(raw);
+        await saveAnswer(id, parsed.questionId, parsed.rowId, payload);
+        setQuestionSaveStatus((prev) => ({ ...prev, [parsed.questionId]: 'saved' }));
+        flushed += 1;
+      } catch {
+        setQuestionSaveStatus((prev) => ({ ...prev, [parsed.questionId]: 'error' }));
+        throw new Error('flush failed');
+      }
     }
     if (flushed > 0) setPdfRefresh((r) => r + 1);
     return flushed;
   }, [id, answers, clearPendingSave]);
+
+  /** Save task_questions answers one question at a time (correct grid row format) before advancing. */
+  const saveStepTaskQuestionsSequential = useCallback(
+    async (taskSections: FormSectionWithQuestions[]): Promise<boolean> => {
+      if (!template || !id || taskSections.length === 0) return true;
+
+      try {
+        await flushPendingDebouncedAnswerSaves();
+      } catch {
+        return false;
+      }
+
+      const orderedIds = collectOrderedQuestionIdsFromSections(taskSections);
+      const targets = collectStepAnswerSaveTargets(template, taskSections, answers);
+      const byQuestion = groupSaveTargetsByQuestion(targets);
+
+      let anySaved = false;
+      for (const qid of orderedIds) {
+        const qTargets = byQuestion.get(qid);
+        if (!qTargets?.length) continue;
+
+        setQuestionSaveStatus((prev) => ({ ...prev, [qid]: 'saving' }));
+        try {
+          for (const t of qTargets) {
+            const payload = valueToSavePayload(t.value);
+            await saveAnswer(id, t.questionId, t.rowId, payload);
+          }
+          setQuestionSaveStatus((prev) => ({ ...prev, [qid]: 'saved' }));
+          anySaved = true;
+        } catch {
+          setQuestionSaveStatus((prev) => ({ ...prev, [qid]: 'error' }));
+          return false;
+        }
+      }
+
+      if (anySaved) {
+        setAnswers((prev) => {
+          const next = { ...prev };
+          for (const t of targets) {
+            next[getAnswerKey(t.questionId, t.rowId)] = t.value;
+            if (t.rowId != null) delete next[getAnswerKey(t.questionId, null)];
+          }
+          return next;
+        });
+        setPdfRefresh((r) => r + 1);
+      }
+      return true;
+    },
+    [template, id, answers, flushPendingDebouncedAnswerSaves]
+  );
 
   const handleManualSaveDraft = useCallback(async () => {
     if (!canRoleEditCurrentWorkflow) return;
@@ -2182,6 +2284,43 @@ export const InstanceFillPage: React.FC = () => {
     }
   }, [role, workflowStatus, isAdminEditMode, trainerCanFinaliseReview]);
 
+  const handleNextStep = useCallback(async () => {
+    if (stepNavSaving || !template) return;
+    if (!validateStep(currentStep)) return;
+
+    const visibleStepsForNav = getVisibleStepsForRole(template, role);
+    const totalSteps = 1 + visibleStepsForNav.length;
+    const stepData = currentStep === 1 ? null : visibleStepsForNav[currentStep - 2];
+    const taskSections =
+      stepData?.sections.filter((s) => s.pdf_render_mode === 'task_questions') ?? [];
+
+    if (taskSections.length > 0 && canRoleEditCurrentWorkflow) {
+      setStepNavSaving(true);
+      try {
+        const ok = await saveStepTaskQuestionsSequential(taskSections);
+        if (!ok) {
+          toast.error('Could not save answers. Please try again.');
+          return;
+        }
+      } finally {
+        setStepNavSaving(false);
+      }
+    }
+
+    setErrors({});
+    setCurrentStep((s) => Math.min(totalSteps, s + 1));
+    formScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [
+    stepNavSaving,
+    template,
+    role,
+    validateStep,
+    currentStep,
+    canRoleEditCurrentWorkflow,
+    saveStepTaskQuestionsSequential,
+  ]);
+
   if (loading) {
     return <Loader fullPage variant="dots" size="lg" message="Loading..." />;
   }
@@ -2285,10 +2424,7 @@ export const InstanceFillPage: React.FC = () => {
   }
 
   // Introduction step is always first, then form steps. Appendix A hidden from students.
-  const isAppendixAStep = (s: { title?: string | null }) => /Appendix\s*A/i.test((s.title || '').trim());
-  const visibleSteps = (template.steps ?? []).filter(
-    (s) => role !== 'student' || !isAppendixAStep(s)
-  );
+  const visibleSteps = getVisibleStepsForRole(template, role);
   const steps = [
     { number: 1, label: 'Introduction', description: 'Student Pack overview' },
     ...visibleSteps.map((s, i) => ({
@@ -3283,7 +3419,9 @@ export const InstanceFillPage: React.FC = () => {
                                           const childSatYes = childSat === 'yes';
                                           const childSatNo = childSat === 'no';
                                           return wrapWithHeader(key, block.headerText, (
-                                            <div>
+                                            <div className="flex gap-2 items-start">
+                                              <AnswerSaveStatusIcon status={questionSaveStatus[childQ.id]} />
+                                              <div className="flex-1 min-w-0">
                                               <div className="mb-3 py-2 px-3 rounded bg-gray-50 border-b border-gray-200 flex flex-wrap items-center justify-end gap-2">
                                                 <span className="text-sm font-semibold text-gray-700">Satisfactory response:</span>
                                                 <button
@@ -3321,12 +3459,20 @@ export const InstanceFillPage: React.FC = () => {
                                                 showRowAssessmentColumn={false}
                                                 studentResubmissionReadOnlyForSatisfactoryRows={isResubmissionAfterTrainer}
                                               />
+                                              </div>
                                             </div>
                                           ));
                                         }
                                         if (block.type === 'short_text' || block.type === 'long_text') {
                                           const val = answers[getAnswerKey(childQ.id, null)] as string | undefined;
-                                          return wrapWithHeader(key, block.headerText, <QuestionRenderer instanceId={id} question={childQ} value={val ?? null} onChange={(v) => handleAnswerChange(childQ.id, null, v as string | number | boolean | Record<string, unknown> | string[])} disabled={!editable} error={errors[`q-${childQ.id}`]} highlightAsFill={editable} />);
+                                          return wrapWithHeader(key, block.headerText, (
+                                            <div className="flex gap-2 items-start">
+                                              <AnswerSaveStatusIcon status={questionSaveStatus[childQ.id]} />
+                                              <div className="flex-1 min-w-0">
+                                                <QuestionRenderer instanceId={id} question={childQ} value={val ?? null} onChange={(v) => handleAnswerChange(childQ.id, null, v as string | number | boolean | Record<string, unknown> | string[])} disabled={!editable} error={errors[`q-${childQ.id}`]} highlightAsFill={editable} />
+                                              </div>
+                                            </div>
+                                          ));
                                         }
                                         return null;
                                       };
@@ -3371,11 +3517,15 @@ export const InstanceFillPage: React.FC = () => {
                                               })();
                                               return qn != null ? (
                                                 <div className="flex gap-2 items-start">
+                                                  <AnswerSaveStatusIcon status={questionSaveStatus[q.id]} />
                                                   <span className="font-semibold text-gray-900 shrink-0">Q{qn}:</span>
                                                   <div className="flex-1 min-w-0 font-semibold text-gray-800">{inner}</div>
                                                 </div>
                                               ) : (
-                                                inner
+                                                <div className="flex gap-2 items-start">
+                                                  <AnswerSaveStatusIcon status={questionSaveStatus[q.id]} />
+                                                  <div className="flex-1 min-w-0 font-semibold text-gray-800">{inner}</div>
+                                                </div>
                                               );
                                             })()}
                                           </div>
@@ -3639,16 +3789,33 @@ export const InstanceFillPage: React.FC = () => {
                                                     handleAnswerChange(childQ.id, rowId, { ...base, ...patch });
                                                   }
                                                 };
-                                                return wrapWithHeader(key, block.headerText, <QuestionRenderer instanceId={id} question={childQ} value={Object.keys(merged).length ? merged : null} onChange={onGridChange} disabled={!editable} error={errors[`q-${childQ.id}`]} studentResubmissionReadOnlyForSatisfactoryRows={isResubmissionAfterTrainer} taskQuestionDisplayNumber={taskQNumbers.get(childQ.id)} highlightAsFill={editable} />);
+                                                return wrapWithHeader(key, block.headerText, (
+                                                  <div className="flex gap-2 items-start">
+                                                    <AnswerSaveStatusIcon status={questionSaveStatus[childQ.id]} />
+                                                    <div className="flex-1 min-w-0">
+                                                      <QuestionRenderer instanceId={id} question={childQ} value={Object.keys(merged).length ? merged : null} onChange={onGridChange} disabled={!editable} error={errors[`q-${childQ.id}`]} studentResubmissionReadOnlyForSatisfactoryRows={isResubmissionAfterTrainer} taskQuestionDisplayNumber={taskQNumbers.get(childQ.id)} highlightAsFill={editable} />
+                                                    </div>
+                                                  </div>
+                                                ));
                                               }
                                               if (block.type === 'short_text' || block.type === 'long_text') {
                                                 const val = answers[getAnswerKey(childQ.id, null)] as string | undefined;
-                                                return wrapWithHeader(key, block.headerText, <QuestionRenderer instanceId={id} question={childQ} value={val ?? null} onChange={(v) => handleAnswerChange(childQ.id, null, v as string | number | boolean | Record<string, unknown> | string[])} disabled={!editable} error={errors[`q-${childQ.id}`]} taskQuestionDisplayNumber={taskQNumbers.get(childQ.id)} highlightAsFill={editable} />);
+                                                return wrapWithHeader(key, block.headerText, (
+                                                  <div className="flex gap-2 items-start">
+                                                    <AnswerSaveStatusIcon status={questionSaveStatus[childQ.id]} />
+                                                    <div className="flex-1 min-w-0">
+                                                      <QuestionRenderer instanceId={id} question={childQ} value={val ?? null} onChange={(v) => handleAnswerChange(childQ.id, null, v as string | number | boolean | Record<string, unknown> | string[])} disabled={!editable} error={errors[`q-${childQ.id}`]} taskQuestionDisplayNumber={taskQNumbers.get(childQ.id)} highlightAsFill={editable} />
+                                                    </div>
+                                                  </div>
+                                                ));
                                               }
                                               return null;
                                             };
                                             return (
                                               <div className="space-y-3">
+                                                <div className="flex items-start gap-2">
+                                                  <AnswerSaveStatusIcon status={questionSaveStatus[q.id]} />
+                                                  <div className="flex-1 min-w-0 space-y-3">
                                                 {textAboveHeader && <div className="font-bold text-gray-900">{textAboveHeader}</div>}
                                                 {q.type === 'grid_table' && q.rows.length > 0 ? (
                                                   (() => {
@@ -3684,6 +3851,8 @@ export const InstanceFillPage: React.FC = () => {
                                                   <QuestionRenderer instanceId={id} question={q} value={(answers[getAnswerKey(q.id, null)] as string | number | boolean | Record<string, unknown> | string[] | undefined) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string | number | boolean | Record<string, unknown> | string[])} disabled={!editable} error={errors[`q-${q.id}`]} taskQuestionDisplayNumber={taskQNumbers.get(q.id)} highlightAsFill={editable} />
                                                 )}
                                                 {contentBlocks.map((block, bi) => renderBlock(block, String(block.questionId ?? `block-${bi}`)))}
+                                                  </div>
+                                                </div>
                                               </div>
                                             );
                                           })()}
@@ -4716,17 +4885,17 @@ export const InstanceFillPage: React.FC = () => {
               <Button
                 variant="primary"
                 className="w-full sm:w-auto shrink-0"
-                onClick={() => {
-                  if (validateStep(currentStep)) {
-                    setErrors({});
-                    setCurrentStep((s) => Math.min(steps.length, s + 1));
-                    formScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
-                    window.scrollTo({ top: 0, behavior: 'smooth' });
-                  }
-                }}
-                disabled={currentStep >= steps.length}
+                onClick={() => void handleNextStep()}
+                disabled={currentStep >= steps.length || stepNavSaving}
               >
-                Next
+                {stepNavSaving ? (
+                  <span className="inline-flex items-center gap-2">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Saving…
+                  </span>
+                ) : (
+                  'Next'
+                )}
               </Button>
               {currentStep >= steps.length && role === 'student' && workflowStatus === 'draft' && (
                 <Button variant="primary" className="w-full sm:w-auto shrink-0" onClick={handleFinalSubmitByRole} disabled={workflowSubmitting}>
