@@ -62,6 +62,7 @@ import { getTaskQuestionDisplayNumbers } from '../lib/taskQuestionsNumbering';
 import type { FormAnswer } from '../types/database';
 import type { FormRole } from '../utils/roleGuard';
 import { isRoleVisible, isRoleEditable } from '../utils/roleGuard';
+import { legacyGridCountsAsFilled, mergeGridTableAnswers } from '../utils/gridTableAnswers';
 import { Card } from '../components/ui/Card';
 import { Loader } from '../components/ui/Loader';
 import { Button } from '../components/ui/Button';
@@ -364,7 +365,7 @@ function isGridTableFilled(q: FormQuestionWithOptionsAndRows, answers: AnswersMa
       }
       if (allRowsFilledForColumn) return true;
     }
-    return false;
+    return legacyGridCountsAsFilled(q, answers);
   }
 
   // Case 1: header table (or generic grid):
@@ -386,7 +387,7 @@ function isGridTableFilled(q: FormQuestionWithOptionsAndRows, answers: AnswersMa
       }
       if (fullRow) return true;
     }
-    return false;
+    return legacyGridCountsAsFilled(q, answers);
   }
 
   // Fallback for legacy data shapes: any row having content counts as answered.
@@ -394,7 +395,7 @@ function isGridTableFilled(q: FormQuestionWithOptionsAndRows, answers: AnswersMa
     const key = getAnswerKey(q.id, r.id);
     if (rowAnswerHasContent(answers[key])) return true;
   }
-  return false;
+  return legacyGridCountsAsFilled(q, answers);
 }
 
 function isLikertFilled(q: FormQuestionWithOptionsAndRows, answers: AnswersMap): boolean {
@@ -3261,11 +3262,7 @@ export const InstanceFillPage: React.FC = () => {
                                         const childQ = block.questionId ? section.questions.find((x) => x.id === block.questionId) : null;
                                         if (!childQ) return null;
                                         if (block.type === 'grid_table' && childQ.rows?.length) {
-                                          const merged: Record<string, string> = {};
-                                          for (const r of childQ.rows) {
-                                            const v = answers[getAnswerKey(childQ.id, r.id)];
-                                            if (v && typeof v === 'object') Object.assign(merged, v as Record<string, string>);
-                                          }
+                                          const merged = mergeGridTableAnswers(childQ, answers);
                                           const onGridChange = (v: string | number | boolean | Record<string, unknown> | string[]) => {
                                             const o = v as Record<string, string>;
                                             if (!o || typeof o !== 'object') return;
@@ -3386,11 +3383,7 @@ export const InstanceFillPage: React.FC = () => {
                                             {textAboveHeader && <div className="font-bold text-gray-900 mb-2">{textAboveHeader}</div>}
                                             {q.type === 'grid_table' && q.rows.length > 0 ? (
                                               (() => {
-                                                const merged: Record<string, string> = {};
-                                                for (const r of q.rows) {
-                                                  const v = answers[getAnswerKey(q.id, r.id)];
-                                                  if (v && typeof v === 'object') Object.assign(merged, v as Record<string, string>);
-                                                }
+                                                const merged = mergeGridTableAnswers(q, answers);
                                                 const onGridChange = (v: string | number | boolean | Record<string, unknown> | string[]) => {
                                                   const o = v as Record<string, string>;
                                                   if (!o || typeof o !== 'object') return;
@@ -3622,11 +3615,7 @@ export const InstanceFillPage: React.FC = () => {
                                               const childQ = block.questionId ? section.questions.find((x) => x.id === block.questionId) : null;
                                               if (!childQ) return null;
                                               if (block.type === 'grid_table' && childQ.rows?.length) {
-                                                const merged: Record<string, string> = {};
-                                                for (const r of childQ.rows) {
-                                                  const v = answers[getAnswerKey(childQ.id, r.id)];
-                                                  if (v && typeof v === 'object') Object.assign(merged, v as Record<string, string>);
-                                                }
+                                                const merged = mergeGridTableAnswers(childQ, answers);
                                                 const onGridChange = (v: string | number | boolean | Record<string, unknown> | string[]) => {
                                                   const o = v as Record<string, string>;
                                                   if (!o || typeof o !== 'object') return;
@@ -3663,11 +3652,7 @@ export const InstanceFillPage: React.FC = () => {
                                                 {textAboveHeader && <div className="font-bold text-gray-900">{textAboveHeader}</div>}
                                                 {q.type === 'grid_table' && q.rows.length > 0 ? (
                                                   (() => {
-                                                    const merged: Record<string, string> = {};
-                                                    for (const r of q.rows) {
-                                                      const v = answers[getAnswerKey(q.id, r.id)];
-                                                      if (v && typeof v === 'object') Object.assign(merged, v as Record<string, string>);
-                                                    }
+                                                    const merged = mergeGridTableAnswers(q, answers);
                                                     const onGridChange = (v: string | number | boolean | Record<string, unknown> | string[]) => {
                                                       const o = v as Record<string, string>;
                                                       if (!o || typeof o !== 'object') return;
@@ -3691,7 +3676,9 @@ export const InstanceFillPage: React.FC = () => {
                                                         handleAnswerChange(q.id, rowId, { ...base, ...patch });
                                                       }
                                                     };
-                                                    return <QuestionRenderer instanceId={id} question={q} value={Object.keys(merged).length ? merged : null} onChange={onGridChange} disabled={!editable} error={errors[`q-${q.id}`]} studentResubmissionReadOnlyForSatisfactoryRows={isResubmissionAfterTrainer} taskQuestionDisplayNumber={taskQNumbers.get(q.id)} highlightAsFill={editable} />;
+                                                    return (
+                                                      <QuestionRenderer instanceId={id} question={q} value={Object.keys(merged).length ? merged : null} onChange={onGridChange} disabled={!editable} error={errors[`q-${q.id}`]} studentResubmissionReadOnlyForSatisfactoryRows={isResubmissionAfterTrainer} taskQuestionDisplayNumber={taskQNumbers.get(q.id)} highlightAsFill={editable} />
+                                                    );
                                                   })()
                                                 ) : (
                                                   <QuestionRenderer instanceId={id} question={q} value={(answers[getAnswerKey(q.id, null)] as string | number | boolean | Record<string, unknown> | string[] | undefined) ?? null} onChange={(v) => handleAnswerChange(q.id, null, v as string | number | boolean | Record<string, unknown> | string[])} disabled={!editable} error={errors[`q-${q.id}`]} taskQuestionDisplayNumber={taskQNumbers.get(q.id)} highlightAsFill={editable} />
@@ -4589,11 +4576,7 @@ export const InstanceFillPage: React.FC = () => {
                             );
                           }
                           if (q.type === 'grid_table' && q.rows.length > 0) {
-                            const merged: Record<string, string> = {};
-                            for (const r of q.rows) {
-                              const v = answers[getAnswerKey(q.id, r.id)];
-                              if (v && typeof v === 'object') Object.assign(merged, v as Record<string, string>);
-                            }
+                            const merged = mergeGridTableAnswers(q, answers);
                             const onGridChange = (v: string | number | boolean | Record<string, unknown> | string[]) => {
                               const byRow = new Map<number, Record<string, string>>();
                               const o = v as Record<string, string>;
