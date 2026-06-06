@@ -185,9 +185,12 @@ export function buildGridCellsFromLegacyText(q: GridQuestionLike, legacyText: st
     return cells;
   }
 
-  // Single essay paragraph on a multi-row grid — cannot reliably split; leave cells empty.
+  // Single essay paragraph on a multi-row grid — show in the first row answer cell for copy/reference on resubmit.
   if (parsed.length === 1 && 'single' in parsed[0] && q.rows.length > 1) {
-    return {};
+    const row = q.rows[0];
+    const col = answerColIndexes[0] ?? 0;
+    cells[`r${row.id}_c${col}`] = parsed[0].single;
+    return cells;
   }
 
   // Single row / single block fallback.
@@ -233,6 +236,11 @@ export function legacyGridQuestionHasContent(q: GridQuestionLike, answers: GridA
 export function legacyGridCountsAsFilled(q: GridQuestionLike, answers: GridAnswersMap): boolean {
   const legacy = getLegacyGridQuestionText(q, answers);
   if (!legacy) return false;
+  const parsed = parseLegacyGridLines(legacy);
+  // Essay shown in first row for reference only — still require proper per-row fill on resubmit.
+  if (parsed.length === 1 && 'single' in parsed[0] && (q.rows?.length ?? 0) > 1) {
+    return false;
+  }
   return Object.keys(buildGridCellsFromLegacyText(q, legacy)).length > 0;
 }
 
