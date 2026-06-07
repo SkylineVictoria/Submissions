@@ -206,9 +206,16 @@ export const TrainerGradeMePanel: React.FC<Props> = ({ trainerUserId }) => {
                         ];
                         const attemptResults = maskCompetentWhileAwaitingTrainer(row, rawAttemptResults);
                         const ui = computeRowUi({
-                          row: { ...row, did_not_attempt: row.did_not_attempt ?? null },
+                          row: {
+                            ...row,
+                            did_not_attempt: row.did_not_attempt ?? null,
+                            status: row.status,
+                            role_context: row.role_context,
+                          },
                           attemptResults,
                           ignoreEndDateForAccess: true,
+                          submissionCount: Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0),
+                          submittedAt: row.submitted_at ?? null,
                         });
                         const attemptDoneText = getStudentAttemptDoneText({
                           submissionCount: Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0),

@@ -42,6 +42,7 @@ import {
   TERMINAL_DID_NOT_ATTEMPT_ROW_CLASS,
   maskCompetentWhileAwaitingTrainer,
   withinInstanceAccessWindow,
+  getAssessmentOutcomeDisplay,
   type AttemptResult,
 } from '../utils/assessmentRowUi';
 import { FormDocumentsPanel } from '../components/documents/FormDocumentsPanel';
@@ -73,11 +74,22 @@ const formatDDMMYYYY = (value: string | null): string => {
 };
 
 
-const getAttemptOutcomeLabel = (attemptResults: AttemptResult[]): string => {
-  const r = (attemptResults ?? []).slice(0, 3);
-  if (r.some((x) => x === 'competent')) return 'Completed';
-  if (r.some((x) => x === 'not_yet_competent')) return 'Competency Not Achieved';
-  return 'In progress';
+const getAttemptOutcomeLabel = (
+  attemptResults: AttemptResult[],
+  row: Pick<SubmittedInstanceRow, 'status' | 'role_context' | 'submission_count' | 'submitted_at'>,
+): string => {
+  const display = getAssessmentOutcomeDisplay({
+    status: row.status,
+    role_context: row.role_context,
+    attemptResults,
+    submissionCount: Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0),
+    submittedAt: row.submitted_at ?? null,
+  });
+  if (display.label === 'Not competent') return 'Competency Not Achieved';
+  if (display.label === 'Completed' || display.label === 'Competent') {
+    return display.label === 'Completed' ? 'Completed' : 'Competent';
+  }
+  return display.label;
 };
 
 const getExportStatusText = (row: SubmittedInstanceRow, rawAttemptResults: AttemptResult[]): string => {
@@ -114,7 +126,7 @@ const getExportStatusText = (row: SubmittedInstanceRow, rawAttemptResults: Attem
   };
 
   const masked = maskCompetentWhileAwaitingTrainer(row, rawAttemptResults);
-  const outcomeLabel = getAttemptOutcomeLabel(masked);
+  const outcomeLabel = getAttemptOutcomeLabel(masked, row);
 
   const attemptDoneText = getStudentAttemptDoneText({
     submissionCount: submittedCount,
@@ -134,9 +146,12 @@ const getExportStatusText = (row: SubmittedInstanceRow, rawAttemptResults: Attem
       did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
       no_attempt_rollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
       status: row.status,
+      role_context: row.role_context,
     },
     attemptResults: masked,
     ignoreEndDateForAccess: accessRole !== 'student',
+    submissionCount: submittedCount,
+    submittedAt: row.submitted_at ?? null,
   });
   const win = withinInstanceAccessWindow(
     { start_date: row.start_date, end_date: row.end_date },
@@ -187,8 +202,12 @@ const getDirectoryRowClass = (row: SubmittedInstanceRow, trainerHighlightCourseI
         start_date: row.start_date,
         end_date: row.end_date,
         did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
+        status: row.status,
+        role_context: row.role_context,
       },
       ignoreEndDateForAccess: row.role_context === 'trainer' || row.role_context === 'office',
+      submissionCount: Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0),
+      submittedAt: row.submitted_at ?? null,
     });
     base = ui.rowClassName || 'hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors';
   }

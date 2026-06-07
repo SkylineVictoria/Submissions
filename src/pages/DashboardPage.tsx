@@ -29,6 +29,7 @@ import {
   getMissedAttemptWindowText,
   maskCompetentWhileAwaitingTrainer,
   withinInstanceAccessWindow,
+  getAssessmentOutcomeDisplay,
   type AttemptResult,
 } from '../utils/assessmentRowUi';
 import { FormDocumentsPanel } from '../components/documents/FormDocumentsPanel';
@@ -40,22 +41,24 @@ import {
 } from '../utils/trainerCourseHighlight';
 import { TrainerGradeMePanel } from '../components/trainer/TrainerGradeMePanel';
 
-function getOutcomeLabel(summary: {
-  final_attempt_1_result: AttemptResult;
-  final_attempt_2_result: AttemptResult;
-  final_attempt_3_result: AttemptResult;
-} | null): {
-  label: string;
-  className: string;
-} {
-  const r1 = summary?.final_attempt_1_result ?? null;
-  const r2 = summary?.final_attempt_2_result ?? null;
-  const r3 = summary?.final_attempt_3_result ?? null;
-  const anyCompetent = r1 === 'competent' || r2 === 'competent' || r3 === 'competent';
-  if (anyCompetent) return { label: 'Completed', className: 'text-emerald-700' };
-  const anyNYC = r1 === 'not_yet_competent' || r2 === 'not_yet_competent' || r3 === 'not_yet_competent';
-  if (anyNYC) return { label: 'Not competent', className: 'text-red-700' };
-  return { label: 'In progress', className: 'text-gray-700' };
+function getOutcomeLabel(
+  summary: {
+    final_attempt_1_result: AttemptResult;
+    final_attempt_2_result: AttemptResult;
+    final_attempt_3_result: AttemptResult;
+  } | null,
+  row?: Pick<SubmittedInstanceRow, 'status' | 'role_context' | 'submission_count' | 'submitted_at'>,
+): { label: string; className: string } {
+  const display = getAssessmentOutcomeDisplay({
+    status: row?.status,
+    role_context: row?.role_context,
+    attemptResults: summary
+      ? [summary.final_attempt_1_result, summary.final_attempt_2_result, summary.final_attempt_3_result]
+      : [],
+    submissionCount: Number(row?.submission_count ?? 0) || (row?.submitted_at ? 1 : 0),
+    submittedAt: row?.submitted_at ?? null,
+  });
+  return { label: display.label, className: display.className };
 }
 
 export const DashboardPage: React.FC = () => {
@@ -397,13 +400,20 @@ export const DashboardPage: React.FC = () => {
                       didNotAttempt: row.did_not_attempt ?? null,
                     });
                     const ui = computeRowUi({
-                      row: { ...row, did_not_attempt: row.did_not_attempt ?? null },
+                      row: {
+                        ...row,
+                        did_not_attempt: row.did_not_attempt ?? null,
+                        status: row.status,
+                        role_context: row.role_context,
+                      },
                       attemptResults,
                       ignoreEndDateForAccess: true,
+                      submissionCount: Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0),
+                      submittedAt: row.submitted_at ?? null,
                     });
                     const disabled = ui.disabled;
                     const win = withinInstanceAccessWindow(row, role);
-                    const outcome = getOutcomeLabel(displaySum);
+                    const outcome = getOutcomeLabel(displaySum, row);
                     const trainerHighlightExtra = rowMatchesTrainerHighlightCourse(row, trainerHighlightCourseId)
                       ? TRAINER_HIGHLIGHT_ROW_EXTRA_CLASS
                       : '';

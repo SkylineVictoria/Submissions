@@ -15,7 +15,14 @@ import {
   updateFormInstanceDates,
   type SubmittedInstanceRow,
 } from '../lib/formEngine';
-import { formatDDMMYYYY, getInstanceWorkflowBadgeClass, getInstanceWorkflowLabel, maskCompetentWhileAwaitingTrainer, type AttemptResult } from '../utils/assessmentRowUi';
+import {
+  formatDDMMYYYY,
+  getAssessmentOutcomeDisplay,
+  getInstanceWorkflowBadgeClass,
+  getInstanceWorkflowLabel,
+  maskCompetentWhileAwaitingTrainer,
+  type AttemptResult,
+} from '../utils/assessmentRowUi';
 import { cn } from '../components/utils/cn';
 import { DatePicker } from '../components/ui/DatePicker';
 import { toast } from '../utils/toast';
@@ -28,15 +35,18 @@ function getOutcomeLabel(
     final_attempt_3_result: AttemptResult;
   } | null,
 ): { label: string; className: string } {
-  const r1 = summary?.final_attempt_1_result ?? null;
-  const r2 = summary?.final_attempt_2_result ?? null;
-  const r3 = summary?.final_attempt_3_result ?? null;
-  const [d1, d2, d3] = maskCompetentWhileAwaitingTrainer(row, [r1, r2, r3]);
-  const anyCompetent = d1 === 'competent' || d2 === 'competent' || d3 === 'competent';
-  if (anyCompetent) return { label: 'Completed', className: 'text-emerald-700' };
-  const anyNYC = r1 === 'not_yet_competent' || r2 === 'not_yet_competent' || r3 === 'not_yet_competent';
-  if (anyNYC) return { label: 'Not competent', className: 'text-red-700' };
-  return { label: 'In progress', className: 'text-gray-700' };
+  const raw = summary
+    ? [summary.final_attempt_1_result, summary.final_attempt_2_result, summary.final_attempt_3_result]
+    : [];
+  const masked = maskCompetentWhileAwaitingTrainer(row, raw);
+  const display = getAssessmentOutcomeDisplay({
+    status: row.status,
+    role_context: row.role_context,
+    attemptResults: masked,
+    submissionCount: Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0),
+    submittedAt: row.submitted_at ?? null,
+  });
+  return { label: display.label, className: display.className };
 }
 
 export const TrainerUnitSubmissionsPage: React.FC = () => {

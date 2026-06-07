@@ -19,6 +19,7 @@ export type RowWindowInput = {
   did_not_attempt?: boolean | null;
   no_attempt_rollovers?: number | null;
   status?: string | null;
+  role_context?: string | null;
 };
 
 /** All three submission windows missed — terminal failure (no competent path). */
@@ -119,6 +120,8 @@ export function computeRowUi(input: {
   attemptResults?: AttemptResult[]; // attempt1..3
   /** When true, passing end_date does not block access (trainer/office grading after student window). */
   ignoreEndDateForAccess?: boolean;
+  submissionCount?: number | null;
+  submittedAt?: string | null;
 }): AssessmentRowUiState {
   const today = (input.today ?? melDateString()).trim();
   const start = String(input.row.start_date ?? '').trim();
@@ -132,6 +135,13 @@ export function computeRowUi(input: {
   const r = (input.attemptResults ?? []).slice(0, 3);
   const anyCompetent = r.some((x) => x === 'competent');
   const anyNYC = r.some((x) => x === 'not_yet_competent');
+  const rc = String(input.row.role_context ?? '').trim();
+  const st = String(input.row.status ?? '').trim();
+  const submitted = getSubmittedAttemptCount({
+    submissionCount: input.submissionCount,
+    submittedAt: input.submittedAt,
+  });
+  const trainerReviewing = rc === 'trainer' && st !== 'locked' && submitted > 0;
 
   // Terminal missed-all-windows overrides summary NYC/auto-sync — student failed, all attempts gone.
   if (missedAllWindows || didNotAttempt) {
@@ -160,6 +170,15 @@ export function computeRowUi(input: {
     };
   }
   if (anyNYC) {
+    // Prior NYC exists but trainer is still marking a resubmission — stay in progress, not terminal red.
+    if (trainerReviewing) {
+      return {
+        kind: 'in_progress',
+        disabled: false,
+        rowClassName:
+          'bg-amber-50/70 hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors',
+      };
+    }
     if (end && today > end && !input.ignoreEndDateForAccess) {
       return {
         kind: 'past_not_competent',
@@ -240,11 +259,20 @@ export function getAssessmentOutcomeDisplay(input: {
   status?: string | null;
   role_context?: string | null;
   attemptResults?: AttemptResult[] | null;
+  submissionCount?: number | null;
+  submittedAt?: string | null;
 }): { label: string; className: string; subtext: string | null; subtextClassName: string } {
   const r = (input.attemptResults ?? []).slice(0, 3);
   const isLocked = String(input.status ?? '').trim() === 'locked';
   const anyCompetent = r.some((x) => x === 'competent');
   const anyNYC = r.some((x) => x === 'not_yet_competent');
+  const rc = String(input.role_context ?? '').trim();
+  const st = String(input.status ?? '').trim();
+  const submitted = getSubmittedAttemptCount({
+    submissionCount: input.submissionCount,
+    submittedAt: input.submittedAt,
+  });
+  const trainerReviewing = rc === 'trainer' && st !== 'locked' && submitted > 0;
 
   if (anyCompetent) {
     if (isLocked) {
@@ -263,6 +291,14 @@ export function getAssessmentOutcomeDisplay(input: {
     };
   }
   if (anyNYC) {
+    if (trainerReviewing) {
+      return {
+        label: 'In progress',
+        className: 'text-amber-800',
+        subtext: 'Trainer',
+        subtextClassName: 'text-[11px] font-medium text-amber-700',
+      };
+    }
     return {
       label: 'Not competent',
       className: 'text-red-700',
@@ -270,8 +306,8 @@ export function getAssessmentOutcomeDisplay(input: {
       subtextClassName: '',
     };
   }
-  const rc = String(input.role_context ?? '').trim();
-  if (rc === 'office') {
+  const rcLegacy = String(input.role_context ?? '').trim();
+  if (rcLegacy === 'office') {
     return {
       label: 'In progress',
       className: 'text-gray-700',
@@ -460,12 +496,51 @@ export function isTerminalFailureProgressRow(row: {
   );
 }
 
+function getTrainerActiveReviewAttempt(
+  role_context: string | null | undefined,
+  status: string | null | undefined,
+  submissionCount: number,
+  results: AttemptResult[],
+): number | null {
+  const rc = String(role_context ?? '').trim();
+  const st = String(status ?? '').trim();
+  if (rc !== 'trainer' || st === 'locked') return null;
+  return getAwaitingTrainerAttemptNumber({
+    submissionCount,
+    submittedAt: null,
+    attemptResults: results,
+  });
+}
+
+function toneForAttemptSlot(
+  slotIndex: number,
+  r: AttemptResult[],
+  submitted: number,
+  trainerActiveReview: number | null,
+  studentNextYellow: number | null,
+): AttemptDotTone {
+  const attemptNum = slotIndex + 1;
+
+  // Current attempt with trainer: yellow while reviewing; green once all tasks satisfactory.
+  if (trainerActiveReview === attemptNum) {
+    if (r[slotIndex] === 'competent') return 'green';
+    return 'yellow';
+  }
+
+  if (r[slotIndex] === 'competent') return 'green';
+  if (r[slotIndex] === 'not_yet_competent') return 'red';
+  if (slotIndex < submitted) return 'yellow';
+  if (studentNextYellow === slotIndex) return 'yellow';
+  return 'gray';
+}
+
 export function computeAttemptTones(input: {
   submissionCount: number;
   results: AttemptResult[];
   /** When all three windows were missed — show all attempt dots red. */
   terminalDidNotAttempt?: boolean;
   role_context?: string | null;
+  status?: string | null;
 }): { student: AttemptDotTone[]; trainer: AttemptDotTone[] } {
   if (input.terminalDidNotAttempt) {
     return { student: [...ALL_ATTEMPTS_FAILED_TONES], trainer: [...ALL_ATTEMPTS_FAILED_TONES] };
@@ -475,24 +550,18 @@ export function computeAttemptTones(input: {
   const r = [...input.results, null, null, null].slice(0, 3) as AttemptResult[];
   const rc = String(input.role_context ?? '').trim();
 
+  const trainerActiveReview = getTrainerActiveReviewAttempt(input.role_context, input.status, submitted, r);
+
   // Next-attempt yellow only when the instance is back with the student — not while trainer is reviewing.
   const studentNextYellow = rc === 'trainer' ? null : computeStudentNextYellowIndex(r, submitted);
 
-  const student: AttemptDotTone[] = [0, 1, 2].map((i) => {
-    if (r[i] === 'competent') return 'green';
-    if (r[i] === 'not_yet_competent') return 'red';
-    // Submitted but no published competent outcome yet — amber (not green) until trainer completes review.
-    if (i < submitted) return 'yellow';
-    if (studentNextYellow === i) return 'yellow';
-    return 'gray';
-  });
+  const student: AttemptDotTone[] = [0, 1, 2].map((i) =>
+    toneForAttemptSlot(i, r, submitted, trainerActiveReview, studentNextYellow),
+  );
 
-  const trainer: AttemptDotTone[] = [0, 1, 2].map((i) => {
-    if (r[i] === 'competent') return 'green';
-    if (r[i] === 'not_yet_competent') return 'red';
-    if (i < submitted) return 'yellow';
-    return 'gray';
-  });
+  const trainer: AttemptDotTone[] = [0, 1, 2].map((i) =>
+    toneForAttemptSlot(i, r, submitted, trainerActiveReview, null),
+  );
 
   return { student, trainer };
 }

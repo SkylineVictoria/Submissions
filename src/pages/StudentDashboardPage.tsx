@@ -68,6 +68,7 @@ function WorkflowProgressColumns({
     results: attemptResults,
     terminalDidNotAttempt: terminalFailed,
     role_context: row.role_context,
+    status: row.status,
   });
   const adminDot = getAdminOfficeDotTone({ ...stageInput, terminalDidNotAttempt: terminalFailed });
 
@@ -142,7 +143,7 @@ function AttemptDots({ tones, titlePrefix }: { tones: AttemptDotTone[]; titlePre
 
 function getOutcomeLabel(
   summary: { final_attempt_1_result: AttemptResult; final_attempt_2_result: AttemptResult; final_attempt_3_result: AttemptResult } | null,
-  row?: Pick<SubmittedInstanceRow, 'status' | 'role_context'>
+  row?: Pick<SubmittedInstanceRow, 'status' | 'role_context' | 'submission_count' | 'submitted_at'>
 ): { label: string; className: string; subtext: string | null; subtextClassName: string } {
   return getAssessmentOutcomeDisplay({
     status: row?.status,
@@ -150,6 +151,8 @@ function getOutcomeLabel(
     attemptResults: summary
       ? [summary.final_attempt_1_result, summary.final_attempt_2_result, summary.final_attempt_3_result]
       : [],
+    submissionCount: Number(row?.submission_count ?? 0) || (row?.submitted_at ? 1 : 0),
+    submittedAt: row?.submitted_at ?? null,
   });
 }
 
@@ -541,8 +544,11 @@ export const StudentDashboardPage: React.FC = () => {
                               did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
                               no_attempt_rollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
                               status: row.status,
+                              role_context: row.role_context,
                             },
                             attemptResults,
+                            submissionCount: Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0),
+                            submittedAt: row.submitted_at ?? null,
                           });
                           const win = withinInstanceAccessWindow(row, 'student');
                           const disabled = ui.disabled || !win.ok;
