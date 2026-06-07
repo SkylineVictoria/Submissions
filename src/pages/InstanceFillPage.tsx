@@ -367,6 +367,61 @@ function summaryRequiresThirdAttempt(sum: import('../lib/formEngine').Assessment
   return summaryRequiresSecondAttempt(sum) && sum.final_attempt_2_result === 'not_yet_competent';
 }
 
+function getSubmissionWave(submissionCount: number): 1 | 2 | 3 {
+  return Math.min(Math.max(submissionCount || 1, 1), 3) as 1 | 2 | 3;
+}
+
+/**
+ * Active attempt for trainer results / summary marking.
+ * Attempt 2+ only after the student has resubmitted (submission_count) AND the prior attempt was NYC on the summary.
+ * Satisfactory (S) on attempt 1 never advances to attempt 2.
+ */
+function getActiveMarkingAttemptNum(
+  submissionCount: number,
+  sum: import('../lib/formEngine').AssessmentSummaryDataEntry | null | undefined,
+  rd: import('../lib/formEngine').ResultsDataEntry | null | undefined,
+): 1 | 2 | 3 {
+  const wave = getSubmissionWave(submissionCount);
+  const entry = sum ?? ({} as import('../lib/formEngine').AssessmentSummaryDataEntry);
+  if (wave >= 3 && summaryRequiresThirdAttempt(entry) && resultsSheetRequiresThirdAttempt(rd)) return 3;
+  if (wave >= 2 && summaryRequiresSecondAttempt(entry) && resultsSheetRequiresSecondAttempt(rd)) return 2;
+  return 1;
+}
+
+/** Student may prep attempt 2/3 summary fields in draft after trainer NYC, before the next hand-in. */
+function getStudentPrepAttemptNum(
+  submissionCount: number,
+  sum: import('../lib/formEngine').AssessmentSummaryDataEntry | null | undefined,
+): 1 | 2 | 3 {
+  const wave = getSubmissionWave(submissionCount);
+  const entry = sum ?? ({} as import('../lib/formEngine').AssessmentSummaryDataEntry);
+  if (summaryRequiresThirdAttempt(entry) && wave < 3) return 3;
+  if (summaryRequiresSecondAttempt(entry) && wave < 2) return 2;
+  return wave;
+}
+
+/** Latest attempt the trainer is finalising on submit (summary-level, not per-task). */
+function getTrainerSubmitAttemptNum(
+  submissionCount: number,
+  sum: import('../lib/formEngine').AssessmentSummaryDataEntry | null | undefined,
+): 1 | 2 | 3 {
+  const wave = getSubmissionWave(submissionCount);
+  const entry = sum ?? ({} as import('../lib/formEngine').AssessmentSummaryDataEntry);
+  if (wave >= 3 && summaryRequiresThirdAttempt(entry)) return 3;
+  if (wave >= 2 && summaryRequiresSecondAttempt(entry)) return 2;
+  return 1;
+}
+
+/** Trainers/admins may edit attempt columns up to and including the active marking attempt (not future). */
+function isStaffAttemptColumnEditable(activeAttemptNum: 1 | 2 | 3, columnAttempt: 1 | 2 | 3): boolean {
+  return columnAttempt <= activeAttemptNum;
+}
+
+/** Step validation requires the current active attempt column to be complete. */
+function isCurrentMarkingAttemptColumn(activeAttemptNum: 1 | 2 | 3, columnAttempt: 1 | 2 | 3): boolean {
+  return columnAttempt === activeAttemptNum;
+}
+
 type GridColumnType = 'question' | 'answer';
 
 function normalizeGridColumnType(raw: unknown): GridColumnType {
@@ -795,18 +850,18 @@ export const InstanceFillPage: React.FC = () => {
     loadData();
   }, [loadData]);
 
-  /** Resubmission wave for UI + validation: DB count increments on each student hand-in; student draft also bumps when summary shows prior NYC so attempt 2/3 columns unlock without admin Resubmit. */
+  /** Completed student hand-ins (DB submission_count). Trainers always use this — never a prep bump. */
+  const submissionWave = useMemo(() => getSubmissionWave(submissionCount), [submissionCount]);
+
+  /** Student-only: prep attempt 2/3 fields in draft after trainer NYC, before the next hand-in. */
   const markingRound = useMemo(() => {
-    const capped = Math.min(Math.max(submissionCount || 1, 1), 3);
     if (role === 'student' && workflowStatus === 'draft') {
-      const nyc1 = assessmentSummary?.final_attempt_1_result === 'not_yet_competent';
-      const nyc2 = assessmentSummary?.final_attempt_2_result === 'not_yet_competent';
-      if (nyc2 && capped < 3) return 3;
-      if (nyc1 && capped < 2) return 2;
+      return getStudentPrepAttemptNum(submissionCount, assessmentSummary);
     }
-    return capped;
+    return submissionWave;
   }, [
     submissionCount,
+    submissionWave,
     assessmentSummary?.final_attempt_1_result,
     assessmentSummary?.final_attempt_2_result,
     role,
@@ -1045,7 +1100,7 @@ export const InstanceFillPage: React.FC = () => {
       if (
         !rd?.first_attempt_date &&
         firstAttemptVal &&
-        markingRound < 2 &&
+        submissionWave < 2 &&
         !secondStartedOnFirstTask
       ) {
         updates.push({ sectionId, field: 'first_attempt_date', value: firstAttemptVal });
@@ -1065,13 +1120,13 @@ export const InstanceFillPage: React.FC = () => {
       setPdfRefresh((r) => r + 1);
       return next;
     });
-  }, [template, answers, resultsData, id, markingRound]);
+  }, [template, answers, resultsData, id, submissionWave]);
 
   /** When all marking for a task is Yes but Results S/NS was never set, persist S on attempt 1. */
   useEffect(() => {
     if (!template || !id) return;
     if (role !== 'trainer' && role !== 'office') return;
-    if (markingRound >= 2) return;
+    if (submissionWave >= 2) return;
 
     const updates: { sectionId: number; value: 's' }[] = [];
     for (const entry of buildTaskResultSections(template, resultsData)) {
@@ -1107,7 +1162,7 @@ export const InstanceFillPage: React.FC = () => {
       setPdfRefresh((r) => r + 1);
       return next;
     });
-  }, [template, id, role, markingRound, resultsData, answers, trainerAssessments]);
+  }, [template, id, role, submissionWave, resultsData, answers, trainerAssessments]);
 
   useEffect(() => {
     if (!template || !id) return;
@@ -1115,6 +1170,12 @@ export const InstanceFillPage: React.FC = () => {
       .map((e) => e.sectionId)
       .filter((id): id is number => id != null);
     if (taskResultSectionIds.length === 0) return;
+
+    const sumEntry = assessmentSummary ?? ({} as import('../lib/formEngine').AssessmentSummaryDataEntry);
+    const secondUnlockedByResubmission =
+      submissionCount >= 2 && summaryRequiresSecondAttempt(sumEntry);
+    const thirdUnlockedByResubmission =
+      submissionCount >= 3 && summaryRequiresThirdAttempt(sumEntry);
 
     // If a later attempt was accidentally set before the prior attempt is truly complete,
     // clear the later attempt to avoid locking the workflow.
@@ -1125,8 +1186,6 @@ export const InstanceFillPage: React.FC = () => {
 
       const firstComplete = rowAnswerHasContent(rd.first_attempt_satisfactory ?? undefined) && rowAnswerHasContent(rd.first_attempt_date ?? undefined);
       const secondComplete = rowAnswerHasContent(rd.second_attempt_satisfactory ?? undefined) && rowAnswerHasContent(rd.second_attempt_date ?? undefined);
-      const secondUnlockedByResubmission = markingRound >= 2;
-      const thirdUnlockedByResubmission = markingRound >= 3;
 
       const hasSecondAny =
         rowAnswerHasContent(rd.second_attempt_satisfactory ?? undefined) ||
@@ -1163,7 +1222,7 @@ export const InstanceFillPage: React.FC = () => {
       setPdfRefresh((r) => r + 1);
       return next;
     });
-  }, [template, id, resultsData, markingRound]);
+  }, [template, id, resultsData, submissionCount, assessmentSummary]);
 
   // NOTE: We intentionally do not auto-bump the stored student declaration date on resubmissions.
   // The declaration is treated as historical evidence of when the student originally signed,
@@ -1214,21 +1273,25 @@ export const InstanceFillPage: React.FC = () => {
       if (c && isCalendarBefore(c, min)) (patch as unknown as Record<string, unknown>)[k as string] = min;
     };
     // Attempt 1 is historical after resubmission — do not bump from changing declaration / attempt 2 mins.
-    if (markingRound < 2) {
+    if (submissionWave < 2) {
       bump('student_date_1', mins.minStudentDate1);
       bump('trainer_date_1', mins.minTrainerDate1);
     }
-    bump('student_date_2', mins.minStudentDate2);
-    bump('trainer_date_2', mins.minTrainerDate2);
-    bump('student_date_3', mins.minStudentDate3);
-    bump('trainer_date_3', mins.minTrainerDate3);
+    if (submissionWave >= 2) {
+      bump('student_date_2', mins.minStudentDate2);
+      bump('trainer_date_2', mins.minTrainerDate2);
+    }
+    if (submissionWave >= 3) {
+      bump('student_date_3', mins.minStudentDate3);
+      bump('trainer_date_3', mins.minTrainerDate3);
+    }
     if (Object.keys(patch).length === 0) return;
     setAssessmentSummary((prev) =>
       prev ? { ...prev, ...patch } : ({ ...patch } as import('../lib/formEngine').AssessmentSummaryDataEntry),
     );
     saveAssessmentSummaryData(id, patch);
     setPdfRefresh((r) => r + 1);
-  }, [template, id, assessmentSummary, markingRound, staffBypassDateConstraints]);
+  }, [template, id, assessmentSummary, submissionWave, staffBypassDateConstraints]);
 
   useEffect(() => {
     if (!template || !id) return;
@@ -1243,26 +1306,11 @@ export const InstanceFillPage: React.FC = () => {
     const firstTaskSectionId = taskResultSections[0].id;
     const firstTaskRd = firstTaskSectionId ? resultsData[firstTaskSectionId] : null;
 
-    const sumFirstComplete =
-      rowAnswerHasContent(firstTaskRd?.first_attempt_satisfactory ?? undefined) &&
-      rowAnswerHasContent(firstTaskRd?.first_attempt_date ?? undefined);
-    const sumSecondOrThirdHasData = !!(
-      firstTaskRd?.second_attempt_date ||
-      firstTaskRd?.second_attempt_satisfactory ||
-      firstTaskRd?.third_attempt_date ||
-      firstTaskRd?.third_attempt_satisfactory
-    );
-    const sumThirdHasData = !!(firstTaskRd?.third_attempt_date || firstTaskRd?.third_attempt_satisfactory);
-    const sumSecondComplete =
-      rowAnswerHasContent(firstTaskRd?.second_attempt_satisfactory ?? undefined) &&
-      rowAnswerHasContent(firstTaskRd?.second_attempt_date ?? undefined);
-
-    // Which summary column is active follows submission / marking round (count + NYC unlock for students).
-    const sumFirstEditable = !sumSecondOrThirdHasData && markingRound < 2;
-    const sumSecondEditable = sumFirstComplete && !sumThirdHasData && markingRound >= 2;
-    const sumThirdEditable = sumSecondComplete && markingRound >= 3;
-
     const sum = assessmentSummary;
+    const activeSummaryAttemptNum = getActiveMarkingAttemptNum(submissionCount, sum, firstTaskRd);
+    const sumFirstEditable = isCurrentMarkingAttemptColumn(activeSummaryAttemptNum, 1);
+    const sumSecondEditable = isCurrentMarkingAttemptColumn(activeSummaryAttemptNum, 2);
+    const sumThirdEditable = isCurrentMarkingAttemptColumn(activeSummaryAttemptNum, 3);
     const patch: Partial<import('../lib/formEngine').AssessmentSummaryDataEntry> = {};
     const setIfEmpty = (field: keyof import('../lib/formEngine').AssessmentSummaryDataEntry, value: string | null) => {
       const cur = (sum as unknown as Record<string, unknown>)[field];
@@ -1270,21 +1318,23 @@ export const InstanceFillPage: React.FC = () => {
       if (!curStr && value) (patch as unknown as Record<string, unknown>)[field] = value;
     };
 
-    const syncFinalResult = (
+    /** Auto-sync Competent only — NYC must be chosen explicitly or set on trainer submit, not inferred mid-review. */
+    const syncCompetentOnly = (
       field: 'final_attempt_1_result' | 'final_attempt_2_result' | 'final_attempt_3_result',
-      derived: AttemptOutcome
+      attempt: 1 | 2 | 3,
     ) => {
+      const derived = getTrainerAttemptOutcome(attempt);
       const cur = (sum as unknown as Record<string, unknown>)[field];
       const curVal = cur == null ? null : String(cur).trim();
-      if (derived !== null) {
-        if (curVal !== derived) (patch as unknown as Record<string, unknown>)[field] = derived;
-      } else if (curVal === 'competent') {
+      if (derived === 'competent') {
+        if (curVal !== 'competent') (patch as unknown as Record<string, unknown>)[field] = 'competent';
+      } else if (derived === null && curVal === 'competent') {
         (patch as unknown as Record<string, unknown>)[field] = null;
       }
     };
 
     if (sumFirstEditable) {
-      syncFinalResult('final_attempt_1_result', getTrainerAttemptOutcome(1));
+      syncCompetentOnly('final_attempt_1_result', 1);
       // Auto-fill attempt 1 signatures/dates from known sources (do not overwrite).
       const todayIso = new Date().toISOString().split('T')[0];
       const raTrainerQ = template.steps?.flatMap((st) => st.sections).flatMap((s) => s.questions).find((q) => q.code === 'trainer.reasonableAdjustmentSignature');
@@ -1310,17 +1360,17 @@ export const InstanceFillPage: React.FC = () => {
       setIfEmpty('student_date_1', studentRefDate || null);
     }
     if (sumSecondEditable) {
-      syncFinalResult('final_attempt_2_result', getTrainerAttemptOutcome(2));
+      syncCompetentOnly('final_attempt_2_result', 2);
     }
     if (sumThirdEditable) {
-      syncFinalResult('final_attempt_3_result', getTrainerAttemptOutcome(3));
+      syncCompetentOnly('final_attempt_3_result', 3);
     }
 
     if (Object.keys(patch).length === 0) return;
     setAssessmentSummary((prev) => (prev ? { ...prev, ...patch } : ({ ...patch } as import('../lib/formEngine').AssessmentSummaryDataEntry)));
     saveAssessmentSummaryData(id, patch);
     setPdfRefresh((r) => r + 1);
-  }, [template, id, role, resultsData, assessmentSummary, answers, markingRound, getTrainerAttemptOutcome]);
+  }, [template, id, role, resultsData, assessmentSummary, answers, submissionCount, getTrainerAttemptOutcome]);
 
   const valueToSavePayload = (value: string | number | boolean | Record<string, unknown> | string[]) => {
     let text: string | undefined;
@@ -1716,7 +1766,7 @@ export const InstanceFillPage: React.FC = () => {
       const strictReviewCycle =
         (role === 'trainer' && trainerCanFinaliseReview) ||
         (workflowStatus === 'waiting_office' && role === 'office');
-      const resubmissionCycle = markingRound;
+      const resubmissionCycle = submissionWave;
       const taskResultIdsAppendixVal = buildTaskResultSections(template, resultsData)
         .map((e) => e.sectionId)
         .filter((id): id is number => id != null);
@@ -1751,13 +1801,6 @@ export const InstanceFillPage: React.FC = () => {
             const firstAttemptComplete =
               rowAnswerHasContent(rd?.first_attempt_satisfactory ?? undefined) &&
               rowAnswerHasContent(rd?.first_attempt_date ?? undefined);
-            const secondOrThirdHasData = !!(
-              rd?.second_attempt_date ||
-              rd?.second_attempt_satisfactory ||
-              rd?.third_attempt_date ||
-              rd?.third_attempt_satisfactory
-            );
-            const thirdAttemptHasData = !!(rd?.third_attempt_date || rd?.third_attempt_satisfactory);
             const secondAttemptComplete =
               rowAnswerHasContent(rd?.second_attempt_satisfactory ?? undefined) &&
               rowAnswerHasContent(rd?.second_attempt_date ?? undefined);
@@ -1802,21 +1845,9 @@ export const InstanceFillPage: React.FC = () => {
                 }
               }
             } else {
-              const firstAttemptNYC = resultsAttemptOutcomeIsNYC(rd?.first_attempt_satisfactory ?? undefined);
-              const secondAttemptNYC = resultsAttemptOutcomeIsNYC(rd?.second_attempt_satisfactory ?? undefined);
-              const firstAttemptEditable = trainerCanEdit && markingRound < 2 && !secondOrThirdHasData;
-              const secondAttemptUnlockedByResubmission = markingRound >= 2;
-              const thirdAttemptUnlockedByResubmission = markingRound >= 3;
-              const secondAttemptEditable =
-                trainerCanEdit &&
-                firstAttemptNYC &&
-                firstAttemptComplete &&
-                secondAttemptUnlockedByResubmission &&
-                !thirdAttemptHasData;
-              const thirdAttemptEditable =
-                trainerCanEdit && secondAttemptNYC && secondAttemptComplete && thirdAttemptUnlockedByResubmission;
+              const activeResultsAttemptNum = getActiveMarkingAttemptNum(submissionCount, assessmentSummary, rd);
 
-              if (firstAttemptEditable) {
+              if (isCurrentMarkingAttemptColumn(activeResultsAttemptNum, 1)) {
                 if (!rowAnswerHasContent(rd?.first_attempt_satisfactory ?? undefined)) {
                   stepErrors[`task-results-${section.id}-first_attempt_satisfactory`] = 'First attempt outcome (S/NS) is required';
                 }
@@ -1824,7 +1855,7 @@ export const InstanceFillPage: React.FC = () => {
                   stepErrors[`task-results-${section.id}-first_attempt_date`] = 'First attempt date is required';
                 }
               }
-              if (secondAttemptEditable) {
+              if (isCurrentMarkingAttemptColumn(activeResultsAttemptNum, 2)) {
                 if (!rowAnswerHasContent(rd?.second_attempt_satisfactory ?? undefined)) {
                   stepErrors[`task-results-${section.id}-second_attempt_satisfactory`] = 'Second attempt outcome (S/NS) is required';
                 }
@@ -1832,7 +1863,7 @@ export const InstanceFillPage: React.FC = () => {
                   stepErrors[`task-results-${section.id}-second_attempt_date`] = 'Second attempt date is required';
                 }
               }
-              if (thirdAttemptEditable) {
+              if (isCurrentMarkingAttemptColumn(activeResultsAttemptNum, 3)) {
                 if (!rowAnswerHasContent(rd?.third_attempt_satisfactory ?? undefined)) {
                   stepErrors[`task-results-${section.id}-third_attempt_satisfactory`] = 'Third attempt outcome (S/NS) is required';
                 }
@@ -1881,29 +1912,12 @@ export const InstanceFillPage: React.FC = () => {
           const firstTaskSectionId = taskResultSectionIds[0] ?? getFirstPreSummaryTaskResultSectionId(template, resultsData);
           const firstTaskRd = firstTaskSectionId ? resultsData[firstTaskSectionId] : null;
 
-          const sumFirstComplete =
-            rowAnswerHasContent(firstTaskRd?.first_attempt_satisfactory ?? undefined) &&
-            rowAnswerHasContent(firstTaskRd?.first_attempt_date ?? undefined);
-          const sumSecondOrThirdHasData = !!(
-            firstTaskRd?.second_attempt_date ||
-            firstTaskRd?.second_attempt_satisfactory ||
-            firstTaskRd?.third_attempt_date ||
-            firstTaskRd?.third_attempt_satisfactory
-          );
-          const sumThirdHasData = !!(firstTaskRd?.third_attempt_date || firstTaskRd?.third_attempt_satisfactory);
-          const sumSecondComplete =
-            rowAnswerHasContent(firstTaskRd?.second_attempt_satisfactory ?? undefined) &&
-            rowAnswerHasContent(firstTaskRd?.second_attempt_date ?? undefined);
-
-          const sumFirstEditable = !sumSecondOrThirdHasData && markingRound < 2;
-          const sumAttempt1NYC =
-            summaryRequiresSecondAttempt(sum) ||
-            resultsAttemptOutcomeIsNYC(firstTaskRd?.first_attempt_satisfactory ?? undefined);
-          const sumAttempt2NYC =
-            summaryRequiresThirdAttempt(sum) ||
-            resultsAttemptOutcomeIsNYC(firstTaskRd?.second_attempt_satisfactory ?? undefined);
-          const sumSecondEditable = sumAttempt1NYC && sumFirstComplete && !sumThirdHasData && markingRound >= 2;
-          const sumThirdEditable = sumAttempt2NYC && sumSecondComplete && markingRound >= 3;
+          const staffSummaryActiveAttempt = getActiveMarkingAttemptNum(submissionCount, sum, firstTaskRd);
+          const studentPrepAttempt =
+            role === 'student' ? getStudentPrepAttemptNum(submissionCount, sum) : staffSummaryActiveAttempt;
+          const sumStudentFirstEditable = studentPrepAttempt === 1;
+          const sumStudentSecondEditable = studentPrepAttempt === 2;
+          const sumStudentThirdEditable = studentPrepAttempt === 3;
 
           if (trainerCanEdit) {
             if (strictReviewCycle) {
@@ -1963,7 +1977,7 @@ export const InstanceFillPage: React.FC = () => {
                 }
               }
             } else {
-              if (sumFirstEditable) {
+              if (isCurrentMarkingAttemptColumn(staffSummaryActiveAttempt, 1)) {
                 if (!rowAnswerHasContent(sum.final_attempt_1_result ?? undefined)) {
                   stepErrors['assessment-summary-final_attempt_1_result'] = 'Attempt 1 result (Competent / Not Yet Competent) is required';
                 }
@@ -1974,7 +1988,7 @@ export const InstanceFillPage: React.FC = () => {
                   stepErrors['assessment-summary-trainer_date_1'] = 'Trainer date (attempt 1) is required';
                 }
               }
-              if (sumSecondEditable) {
+              if (isCurrentMarkingAttemptColumn(staffSummaryActiveAttempt, 2)) {
                 if (!rowAnswerHasContent(sum.final_attempt_2_result ?? undefined)) {
                   stepErrors['assessment-summary-final_attempt_2_result'] = 'Attempt 2 result (Competent / Not Yet Competent) is required';
                 }
@@ -1985,7 +1999,7 @@ export const InstanceFillPage: React.FC = () => {
                   stepErrors['assessment-summary-trainer_date_2'] = 'Trainer date (attempt 2) is required';
                 }
               }
-              if (sumThirdEditable) {
+              if (isCurrentMarkingAttemptColumn(staffSummaryActiveAttempt, 3)) {
                 if (!rowAnswerHasContent(sum.final_attempt_3_result ?? undefined)) {
                   stepErrors['assessment-summary-final_attempt_3_result'] = 'Attempt 3 result (Competent / Not Yet Competent) is required';
                 }
@@ -2000,7 +2014,7 @@ export const InstanceFillPage: React.FC = () => {
           }
 
           if (role === 'student') {
-            if (sumFirstEditable) {
+            if (sumStudentFirstEditable) {
               if (!rowAnswerHasContent(sum.student_sig_1 ?? undefined)) {
                 stepErrors['assessment-summary-student_sig_1'] = 'Student signature (attempt 1) is required';
               }
@@ -2008,7 +2022,7 @@ export const InstanceFillPage: React.FC = () => {
                 stepErrors['assessment-summary-student_date_1'] = 'Student date (attempt 1) is required';
               }
             }
-            if (sumSecondEditable) {
+            if (sumStudentSecondEditable) {
               if (!rowAnswerHasContent(sum.student_sig_2 ?? undefined)) {
                 stepErrors['assessment-summary-student_sig_2'] = 'Student signature (attempt 2) is required';
               }
@@ -2016,7 +2030,7 @@ export const InstanceFillPage: React.FC = () => {
                 stepErrors['assessment-summary-student_date_2'] = 'Student date (attempt 2) is required';
               }
             }
-            if (sumThirdEditable) {
+            if (sumStudentThirdEditable) {
               if (!rowAnswerHasContent(sum.student_sig_3 ?? undefined)) {
                 stepErrors['assessment-summary-student_sig_3'] = 'Student signature (attempt 3) is required';
               }
@@ -2033,7 +2047,7 @@ export const InstanceFillPage: React.FC = () => {
         const appendixFirstCycleEditableForStep =
           !isAppendixAStepTitle || section.pdf_render_mode !== 'reasonable_adjustment'
             ? true
-            : markingRound < 2 && !secondOrThirdHasDataAppendixVal;
+            : submissionWave < 2 && !secondOrThirdHasDataAppendixVal;
 
         for (const q of section.questions) {
           if (q.type === 'instruction_block' || q.type === 'page_break') continue;
@@ -2155,7 +2169,8 @@ export const InstanceFillPage: React.FC = () => {
       answers,
       resultsData,
       assessmentSummary,
-      markingRound,
+      submissionCount,
+      submissionWave,
       trainerAssessments,
       trainerCanFinaliseReview,
       canRoleEditCurrentWorkflow,
@@ -2230,7 +2245,7 @@ export const InstanceFillPage: React.FC = () => {
         setConfirmConfig(null);
         return;
       }
-      const latestAttempt = (Math.max(1, Math.min(3, markingRound)) as 1 | 2 | 3);
+      const latestAttempt = getTrainerSubmitAttemptNum(submissionCount, assessmentSummary);
       const latestResult = getTrainerAttemptOutcome(latestAttempt);
       const hasTaskResultSections = (template?.steps ?? []).some((st) =>
         st.sections.some((s) => s.pdf_render_mode === 'task_results')
@@ -2336,7 +2351,7 @@ export const InstanceFillPage: React.FC = () => {
     id,
     role,
     workflowStatus,
-    markingRound,
+    submissionCount,
     getTrainerAttemptOutcome,
     assessmentSummary,
     validateAllStepsForTrainerSubmit,
@@ -2714,7 +2729,7 @@ export const InstanceFillPage: React.FC = () => {
                                 );
                                 /** Appendix A is first-cycle RA content; lock when resubmission (submission_count ≥ 2) or later attempts exist on task results. */
                                 const appendixFirstCycleEditable =
-                                  editable && markingRound < 2 && !secondOrThirdHasDataAppendix;
+                                  editable && submissionWave < 2 && !secondOrThirdHasDataAppendix;
                                 const key = getAnswerKey(q.id, null);
                                 const val = answers[key];
                                 if (isAppendixA) {
@@ -4018,47 +4033,19 @@ export const InstanceFillPage: React.FC = () => {
                           const minSecondAttempt = getResultsMinSecondAttemptDate(rd, assessmentSummary);
                           const minThirdAttempt = getResultsMinThirdAttemptDate(rd, assessmentSummary);
                           const minTrainerDate = maxIsoDate(rd?.first_attempt_date);
-                          const firstAttemptComplete =
-                            rowAnswerHasContent(rd?.first_attempt_satisfactory ?? undefined) && rowAnswerHasContent(rd?.first_attempt_date ?? undefined);
-                          const secondOrThirdHasData = !!(rd?.second_attempt_date || rd?.second_attempt_satisfactory || rd?.third_attempt_date || rd?.third_attempt_satisfactory);
-                          const thirdAttemptHasData = !!(rd?.third_attempt_date || rd?.third_attempt_satisfactory);
-                          const secondAttemptComplete =
-                            rowAnswerHasContent(rd?.second_attempt_satisfactory ?? undefined) && rowAnswerHasContent(rd?.second_attempt_date ?? undefined);
-                          const thirdAttemptComplete =
-                            rowAnswerHasContent(rd?.third_attempt_satisfactory ?? undefined) && rowAnswerHasContent(rd?.third_attempt_date ?? undefined);
                           const trainerCanEditResults =
                             (role === 'trainer' && canRoleEditCurrentWorkflow) ||
                             (role === 'office' && (canRoleEditCurrentWorkflow || canOfficeAdminEdit));
-                          const firstAttemptNYC = resultsAttemptOutcomeIsNYC(rd?.first_attempt_satisfactory ?? undefined);
-                          const secondAttemptNYC = resultsAttemptOutcomeIsNYC(rd?.second_attempt_satisfactory ?? undefined);
-                          // Match assessment summary: cycle 1 edits attempt 1 only; attempt 2+ only after prior NS.
-                          const secondAttemptUnlockedByResubmission = markingRound >= 2;
-                          const thirdAttemptUnlockedByResubmission = markingRound >= 3;
+                          const activeResultsAttemptNum = getActiveMarkingAttemptNum(submissionCount, assessmentSummary, rd);
                           const firstAttemptEditable =
                             adminOverride ||
-                            (trainerCanEditResults &&
-                              ((markingRound < 2 && !secondOrThirdHasData) ||
-                                (trainerCanFinaliseReview && !firstAttemptComplete)));
+                            (trainerCanEditResults && isStaffAttemptColumnEditable(activeResultsAttemptNum, 1));
                           const secondAttemptEditable =
                             adminOverride ||
-                            (trainerCanEditResults &&
-                              firstAttemptNYC &&
-                              ((firstAttemptComplete &&
-                                secondAttemptUnlockedByResubmission &&
-                                !thirdAttemptHasData) ||
-                                (trainerCanFinaliseReview &&
-                                  firstAttemptComplete &&
-                                  markingRound >= 2 &&
-                                  !secondAttemptComplete)));
+                            (trainerCanEditResults && isStaffAttemptColumnEditable(activeResultsAttemptNum, 2));
                           const thirdAttemptEditable =
                             adminOverride ||
-                            (trainerCanEditResults &&
-                              secondAttemptNYC &&
-                              ((secondAttemptComplete && thirdAttemptUnlockedByResubmission) ||
-                                (trainerCanFinaliseReview &&
-                                  secondAttemptComplete &&
-                                  markingRound >= 3 &&
-                                  !thirdAttemptComplete)));
+                            (trainerCanEditResults && isStaffAttemptColumnEditable(activeResultsAttemptNum, 3));
                           /** Trainer footer sign-off must stay editable whenever the trainer is actively reviewing. */
                           const trainerFooterEditable =
                             adminOverride ||
@@ -4068,9 +4055,10 @@ export const InstanceFillPage: React.FC = () => {
                                 thirdAttemptEditable ||
                                 (role === 'trainer' && trainerCanFinaliseReview) ||
                                 !rowAnswerHasContent(rd?.trainer_signature ?? undefined)));
-                          const firstAttemptDateEditable = firstAttemptEditable || staffCanCorrectSheetDates;
-                          const secondAttemptDateEditable = secondAttemptEditable || staffCanCorrectSheetDates;
-                          const thirdAttemptDateEditable = thirdAttemptEditable || staffCanCorrectSheetDates;
+                          /** Only current + prior attempt columns may set dates; staff date override applies to footer only. */
+                          const firstAttemptDateEditable = firstAttemptEditable;
+                          const secondAttemptDateEditable = secondAttemptEditable;
+                          const thirdAttemptDateEditable = thirdAttemptEditable;
                           const trainerFooterDateEditable = trainerFooterEditable || staffCanCorrectSheetDates;
                           const studentSuggestionSig = studentDeclSig ?? firstTaskData?.student_signature ?? null;
                           const studentNameQ = template?.steps?.flatMap((st) => st.sections).flatMap((s) => s.questions).find((q) => q.code === 'student.fullName');
@@ -4414,28 +4402,26 @@ export const InstanceFillPage: React.FC = () => {
                             minStudentDate3,
                             minTrainerDate3,
                           } = getAssessmentSummaryDateChainMins(sum);
-                          const sumFirstComplete =
-                            rowAnswerHasContent(firstTaskRd?.first_attempt_satisfactory ?? undefined) &&
-                            rowAnswerHasContent(firstTaskRd?.first_attempt_date ?? undefined);
-                          const sumSecondOrThirdHasData = !!(firstTaskRd?.second_attempt_date || firstTaskRd?.second_attempt_satisfactory || firstTaskRd?.third_attempt_date || firstTaskRd?.third_attempt_satisfactory);
-                          const sumThirdHasData = !!(firstTaskRd?.third_attempt_date || firstTaskRd?.third_attempt_satisfactory);
-                          const sumSecondComplete =
-                            rowAnswerHasContent(firstTaskRd?.second_attempt_satisfactory ?? undefined) &&
-                            rowAnswerHasContent(firstTaskRd?.second_attempt_date ?? undefined);
-                          const sumAttempt1NYC =
-                            summaryRequiresSecondAttempt(sum) ||
-                            resultsAttemptOutcomeIsNYC(firstTaskRd?.first_attempt_satisfactory ?? undefined);
-                          const sumAttempt2NYC =
-                            summaryRequiresThirdAttempt(sum) ||
-                            resultsAttemptOutcomeIsNYC(firstTaskRd?.second_attempt_satisfactory ?? undefined);
-                          const sumFirstEditable = adminOverride || (!sumSecondOrThirdHasData && markingRound < 2);
-                          const sumSecondEditable =
-                            adminOverride || (sumAttempt1NYC && sumFirstComplete && !sumThirdHasData && markingRound >= 2);
-                          const sumThirdEditable =
-                            adminOverride || (sumAttempt2NYC && sumSecondComplete && markingRound >= 3);
-                          const sumFirstDateEditable = sumFirstEditable || staffCanCorrectSheetDates;
-                          const sumSecondDateEditable = sumSecondEditable || staffCanCorrectSheetDates;
-                          const sumThirdDateEditable = sumThirdEditable || staffCanCorrectSheetDates;
+                          const staffSummaryActiveAttempt = getActiveMarkingAttemptNum(submissionCount, sum, firstTaskRd);
+                          const studentPrepAttempt = getStudentPrepAttemptNum(submissionCount, sum);
+                          const sumTrainerFirstEditable =
+                            adminOverride ||
+                            (trainerCanEdit && isStaffAttemptColumnEditable(staffSummaryActiveAttempt, 1));
+                          const sumTrainerSecondEditable =
+                            adminOverride ||
+                            (trainerCanEdit && isStaffAttemptColumnEditable(staffSummaryActiveAttempt, 2));
+                          const sumTrainerThirdEditable =
+                            adminOverride ||
+                            (trainerCanEdit && isStaffAttemptColumnEditable(staffSummaryActiveAttempt, 3));
+                          const sumStudentFirstEditable = studentPrepAttempt === 1;
+                          const sumStudentSecondEditable = studentPrepAttempt === 2;
+                          const sumStudentThirdEditable = studentPrepAttempt === 3;
+                          const sumFirstDateEditable = sumTrainerFirstEditable;
+                          const sumSecondDateEditable = sumTrainerSecondEditable;
+                          const sumThirdDateEditable = sumTrainerThirdEditable;
+                          const sumStudentFirstDateEditable = sumStudentFirstEditable;
+                          const sumStudentSecondDateEditable = sumStudentSecondEditable;
+                          const sumStudentThirdDateEditable = sumStudentThirdEditable;
                           const sumFirstAttemptChecks = getTaskResultChecks(
                             template,
                             1,
@@ -4457,12 +4443,13 @@ export const InstanceFillPage: React.FC = () => {
                             answers,
                             trainerAssessments
                           );
-                          const activeAttemptChecks = sumThirdEditable
-                            ? sumThirdAttemptChecks
-                            : sumSecondEditable
-                              ? sumSecondAttemptChecks
-                              : sumFirstAttemptChecks;
-                          const activeAttemptNum: 1 | 2 | 3 = sumThirdEditable ? 3 : sumSecondEditable ? 2 : 1;
+                          const activeAttemptChecks =
+                            staffSummaryActiveAttempt === 3
+                              ? sumThirdAttemptChecks
+                              : staffSummaryActiveAttempt === 2
+                                ? sumSecondAttemptChecks
+                                : sumFirstAttemptChecks;
+                          const activeAttemptNum: 1 | 2 | 3 = staffSummaryActiveAttempt;
                           const competentBlockers = activeAttemptChecks.filter((c) => c.status !== 'satisfactory');
                           const finalDate1 =
                             sum.trainer_date_1?.trim() ||
@@ -4617,22 +4604,22 @@ export const InstanceFillPage: React.FC = () => {
                                       <td className="border border-gray-400 bg-gray-100 font-semibold p-1.5 text-xs">Final Assessment result for this unit</td>
                                       <td className="border border-gray-400 p-1.5">
                                         <div className="flex flex-col gap-0.5">
-                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-1" checked={sum.final_attempt_1_result === 'competent'} onChange={() => trainerCanEdit && sumFirstEditable && handleAssessmentSummaryChange('final_attempt_1_result', 'competent')} disabled={!trainerCanEdit || !sumFirstEditable} className="w-3.5 h-3.5" /> Competent</label>
-                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-1" checked={sum.final_attempt_1_result === 'not_yet_competent'} onChange={() => trainerCanEdit && sumFirstEditable && handleAssessmentSummaryChange('final_attempt_1_result', 'not_yet_competent')} disabled={!trainerCanEdit || !sumFirstEditable} className="w-3.5 h-3.5" /> Not Yet Competent</label>
+                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-1" checked={sum.final_attempt_1_result === 'competent'} onChange={() => trainerCanEdit && sumTrainerFirstEditable && handleAssessmentSummaryChange('final_attempt_1_result', 'competent')} disabled={!trainerCanEdit || !sumTrainerFirstEditable} className="w-3.5 h-3.5" /> Competent</label>
+                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-1" checked={sum.final_attempt_1_result === 'not_yet_competent'} onChange={() => trainerCanEdit && sumTrainerFirstEditable && handleAssessmentSummaryChange('final_attempt_1_result', 'not_yet_competent')} disabled={!trainerCanEdit || !sumTrainerFirstEditable} className="w-3.5 h-3.5" /> Not Yet Competent</label>
                                           <span className="text-[10px] text-gray-700">Date: {formatSummaryDisplayDate(finalDate1)}</span>
                                         </div>
                                       </td>
                                       <td className="border border-gray-400 p-1.5">
                                         <div className="flex flex-col gap-0.5">
-                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-2" checked={sum.final_attempt_2_result === 'competent'} onChange={() => trainerCanEdit && sumSecondEditable && handleAssessmentSummaryChange('final_attempt_2_result', 'competent')} disabled={!trainerCanEdit || !sumSecondEditable} className="w-3.5 h-3.5" /> Competent</label>
-                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-2" checked={sum.final_attempt_2_result === 'not_yet_competent'} onChange={() => trainerCanEdit && sumSecondEditable && handleAssessmentSummaryChange('final_attempt_2_result', 'not_yet_competent')} disabled={!trainerCanEdit || !sumSecondEditable} className="w-3.5 h-3.5" /> Not Yet Competent</label>
+                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-2" checked={sum.final_attempt_2_result === 'competent'} onChange={() => trainerCanEdit && sumTrainerSecondEditable && handleAssessmentSummaryChange('final_attempt_2_result', 'competent')} disabled={!trainerCanEdit || !sumTrainerSecondEditable} className="w-3.5 h-3.5" /> Competent</label>
+                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-2" checked={sum.final_attempt_2_result === 'not_yet_competent'} onChange={() => trainerCanEdit && sumTrainerSecondEditable && handleAssessmentSummaryChange('final_attempt_2_result', 'not_yet_competent')} disabled={!trainerCanEdit || !sumTrainerSecondEditable} className="w-3.5 h-3.5" /> Not Yet Competent</label>
                                           <span className="text-[10px] text-gray-700">Date: {formatSummaryDisplayDate(finalDate2)}</span>
                                         </div>
                                       </td>
                                       <td className="border border-gray-400 p-1.5">
                                         <div className="flex flex-col gap-0.5">
-                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-3" checked={sum.final_attempt_3_result === 'competent'} onChange={() => trainerCanEdit && sumThirdEditable && handleAssessmentSummaryChange('final_attempt_3_result', 'competent')} disabled={!trainerCanEdit || !sumThirdEditable} className="w-3.5 h-3.5" /> Competent</label>
-                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-3" checked={sum.final_attempt_3_result === 'not_yet_competent'} onChange={() => trainerCanEdit && sumThirdEditable && handleAssessmentSummaryChange('final_attempt_3_result', 'not_yet_competent')} disabled={!trainerCanEdit || !sumThirdEditable} className="w-3.5 h-3.5" /> Not Yet Competent</label>
+                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-3" checked={sum.final_attempt_3_result === 'competent'} onChange={() => trainerCanEdit && sumTrainerThirdEditable && handleAssessmentSummaryChange('final_attempt_3_result', 'competent')} disabled={!trainerCanEdit || !sumTrainerThirdEditable} className="w-3.5 h-3.5" /> Competent</label>
+                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-3" checked={sum.final_attempt_3_result === 'not_yet_competent'} onChange={() => trainerCanEdit && sumTrainerThirdEditable && handleAssessmentSummaryChange('final_attempt_3_result', 'not_yet_competent')} disabled={!trainerCanEdit || !sumTrainerThirdEditable} className="w-3.5 h-3.5" /> Not Yet Competent</label>
                                           <span className="text-[10px] text-gray-700">Date: {formatSummaryDisplayDate(finalDate3)}</span>
                                         </div>
                                       </td>
@@ -4642,9 +4629,9 @@ export const InstanceFillPage: React.FC = () => {
                                       <td colSpan={3} className="border border-gray-400 p-1.5">
                                         <p className="text-[10px] text-gray-600 mb-1.5">I declare that I have conducted a fair, valid, reliable, and flexible assessment with this student, and I have provided appropriate feedback</p>
                                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 min-w-0">
-                                          <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_1 ?? null} onChange={(v) => { handleAssessmentSummaryChange('trainer_sig_1', v); const cur = String(sum.trainer_date_1 ?? '').trim(); if (!staffBypassDateConstraints && (!cur || (minTrainerDate1 && isCalendarBefore(cur, minTrainerDate1)))) handleAssessmentSummaryChange('trainer_date_1', minTrainerDate1 ?? null); }} disabled={!trainerCanEdit || !sumFirstEditable} className="mt-0.5" highlight={(role === 'trainer' && sumFirstEditable) || adminOverride} suggestionFrom={trainerRefSig} onSuggestionClick={trainerRefSig ? () => { handleAssessmentSummaryChange('trainer_sig_1', trainerRefSig); const next = staffBypassDateConstraints ? trainerRefDate : (maxIsoDate(trainerRefDate, minTrainerDate1) ?? minTrainerDate1 ?? trainerRefDate); handleAssessmentSummaryChange('trainer_date_1', next || null); } : undefined} /></div>
-                                          <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_2 ?? null} onChange={(v) => { handleAssessmentSummaryChange('trainer_sig_2', v); const cur = String(sum.trainer_date_2 ?? '').trim(); if (!staffBypassDateConstraints && (!cur || (minTrainerDate2 && isCalendarBefore(cur, minTrainerDate2)))) handleAssessmentSummaryChange('trainer_date_2', minTrainerDate2 ?? null); }} disabled={!trainerCanEdit || !sumSecondEditable} className="mt-0.5" highlight={(role === 'trainer' && sumSecondEditable) || adminOverride} suggestionFrom={sumSecondEditable ? (sum.trainer_sig_1 ?? undefined) : undefined} onSuggestionClick={sumSecondEditable && sum.trainer_sig_1 ? () => { handleAssessmentSummaryChange('trainer_sig_2', sum.trainer_sig_1); const next = staffBypassDateConstraints ? (sum.trainer_date_1 ?? sum.student_date_2 ?? null) : (maxIsoDate(sum.trainer_date_1, sum.student_date_2, minTrainerDate2) ?? minTrainerDate2 ?? sum.trainer_date_1 ?? sum.student_date_2); handleAssessmentSummaryChange('trainer_date_2', next || null); } : undefined} /></div>
-                                          <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_3 ?? null} onChange={(v) => { handleAssessmentSummaryChange('trainer_sig_3', v); const cur = String(sum.trainer_date_3 ?? '').trim(); if (!staffBypassDateConstraints && (!cur || (minTrainerDate3 && isCalendarBefore(cur, minTrainerDate3)))) handleAssessmentSummaryChange('trainer_date_3', minTrainerDate3 ?? null); }} disabled={!trainerCanEdit || !sumThirdEditable} className="mt-0.5" highlight={(role === 'trainer' && sumThirdEditable) || adminOverride} suggestionFrom={sumThirdEditable ? (sum.trainer_sig_1 ?? undefined) : undefined} onSuggestionClick={sumThirdEditable && sum.trainer_sig_1 ? () => { handleAssessmentSummaryChange('trainer_sig_3', sum.trainer_sig_1); const next = staffBypassDateConstraints ? (sum.trainer_date_2 ?? sum.student_date_3 ?? null) : (maxIsoDate(sum.trainer_date_2, sum.student_date_3, minTrainerDate3) ?? minTrainerDate3 ?? sum.trainer_date_2 ?? sum.student_date_3); handleAssessmentSummaryChange('trainer_date_3', next || null); } : undefined} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_1 ?? null} onChange={(v) => { handleAssessmentSummaryChange('trainer_sig_1', v); const cur = String(sum.trainer_date_1 ?? '').trim(); if (!staffBypassDateConstraints && (!cur || (minTrainerDate1 && isCalendarBefore(cur, minTrainerDate1)))) handleAssessmentSummaryChange('trainer_date_1', minTrainerDate1 ?? null); }} disabled={!trainerCanEdit || !sumTrainerFirstEditable} className="mt-0.5" highlight={(role === 'trainer' && sumTrainerFirstEditable) || adminOverride} suggestionFrom={trainerRefSig} onSuggestionClick={trainerRefSig ? () => { handleAssessmentSummaryChange('trainer_sig_1', trainerRefSig); const next = staffBypassDateConstraints ? trainerRefDate : (maxIsoDate(trainerRefDate, minTrainerDate1) ?? minTrainerDate1 ?? trainerRefDate); handleAssessmentSummaryChange('trainer_date_1', next || null); } : undefined} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_2 ?? null} onChange={(v) => { handleAssessmentSummaryChange('trainer_sig_2', v); const cur = String(sum.trainer_date_2 ?? '').trim(); if (!staffBypassDateConstraints && (!cur || (minTrainerDate2 && isCalendarBefore(cur, minTrainerDate2)))) handleAssessmentSummaryChange('trainer_date_2', minTrainerDate2 ?? null); }} disabled={!trainerCanEdit || !sumTrainerSecondEditable} className="mt-0.5" highlight={(role === 'trainer' && sumTrainerSecondEditable) || adminOverride} suggestionFrom={sumTrainerSecondEditable ? (sum.trainer_sig_1 ?? undefined) : undefined} onSuggestionClick={sumTrainerSecondEditable && sum.trainer_sig_1 ? () => { handleAssessmentSummaryChange('trainer_sig_2', sum.trainer_sig_1); const next = staffBypassDateConstraints ? (sum.trainer_date_1 ?? sum.student_date_2 ?? null) : (maxIsoDate(sum.trainer_date_1, sum.student_date_2, minTrainerDate2) ?? minTrainerDate2 ?? sum.trainer_date_1 ?? sum.student_date_2); handleAssessmentSummaryChange('trainer_date_2', next || null); } : undefined} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_3 ?? null} onChange={(v) => { handleAssessmentSummaryChange('trainer_sig_3', v); const cur = String(sum.trainer_date_3 ?? '').trim(); if (!staffBypassDateConstraints && (!cur || (minTrainerDate3 && isCalendarBefore(cur, minTrainerDate3)))) handleAssessmentSummaryChange('trainer_date_3', minTrainerDate3 ?? null); }} disabled={!trainerCanEdit || !sumTrainerThirdEditable} className="mt-0.5" highlight={(role === 'trainer' && sumTrainerThirdEditable) || adminOverride} suggestionFrom={sumTrainerThirdEditable ? (sum.trainer_sig_1 ?? undefined) : undefined} onSuggestionClick={sumTrainerThirdEditable && sum.trainer_sig_1 ? () => { handleAssessmentSummaryChange('trainer_sig_3', sum.trainer_sig_1); const next = staffBypassDateConstraints ? (sum.trainer_date_2 ?? sum.student_date_3 ?? null) : (maxIsoDate(sum.trainer_date_2, sum.student_date_3, minTrainerDate3) ?? minTrainerDate3 ?? sum.trainer_date_2 ?? sum.student_date_3); handleAssessmentSummaryChange('trainer_date_3', next || null); } : undefined} /></div>
                                           <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_1 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_1', pickDateWithOptionalMin(v || null, minTrainerDate1, staffBypassDateConstraints))} disabled={!trainerCanEdit || !sumFirstDateEditable} highlight={(role === 'trainer' && sumFirstDateEditable) || adminOverride} compact placement="above" className="w-full" minDate={staffBypassDateConstraints ? undefined : minTrainerDate1} /></div>
                                           <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_2 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_2', pickDateWithOptionalMin(v || null, minTrainerDate2, staffBypassDateConstraints))} disabled={!trainerCanEdit || !sumSecondDateEditable} highlight={(role === 'trainer' && sumSecondDateEditable) || adminOverride} compact placement="above" className="w-full" minDate={staffBypassDateConstraints ? undefined : minTrainerDate2} /></div>
                                           <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_3 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_3', pickDateWithOptionalMin(v || null, minTrainerDate3, staffBypassDateConstraints))} disabled={!trainerCanEdit || !sumThirdDateEditable} highlight={(role === 'trainer' && sumThirdDateEditable) || adminOverride} compact placement="above" className="w-full" minDate={staffBypassDateConstraints ? undefined : minTrainerDate3} /></div>
@@ -4656,12 +4643,12 @@ export const InstanceFillPage: React.FC = () => {
                                       <td colSpan={3} className="border border-gray-400 p-1.5">
                                         <p className="text-[10px] text-gray-600 mb-1.5">I declare that I have been assessed in this unit, and I have been advised of my result. I also am aware of my appeal rights.</p>
                                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 min-w-0">
-                                          <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_1 ?? null} onChange={(v) => { handleAssessmentSummaryChange('student_sig_1', v); const cur = String(sum.student_date_1 ?? '').trim(); if (!staffBypassDateConstraints && (!cur || (minStudentDate1 && isCalendarBefore(cur, minStudentDate1)))) handleAssessmentSummaryChange('student_date_1', minStudentDate1 ?? null); }} disabled={!studentCanEdit || !sumFirstEditable} className="mt-0.5" highlight={studentCanEdit && sumFirstEditable} suggestionFrom={studentRefSig} onSuggestionClick={studentRefSig ? () => { handleAssessmentSummaryChange('student_sig_1', studentRefSig); const next = staffBypassDateConstraints ? studentRefDate : (maxIsoDate(studentRefDate, minStudentDate1) ?? minStudentDate1 ?? studentRefDate); handleAssessmentSummaryChange('student_date_1', next || null); } : undefined} /></div>
-                                          <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_2 ?? null} onChange={(v) => { handleAssessmentSummaryChange('student_sig_2', v); const cur = String(sum.student_date_2 ?? '').trim(); if (!staffBypassDateConstraints && (!cur || (minStudentDate2 && isCalendarBefore(cur, minStudentDate2)))) handleAssessmentSummaryChange('student_date_2', minStudentDate2 ?? null); }} disabled={!studentCanEdit || !sumSecondEditable} className="mt-0.5" highlight={studentCanEdit && sumSecondEditable} suggestionFrom={sumSecondEditable ? (sum.student_sig_1 ?? undefined) : undefined} onSuggestionClick={sumSecondEditable && sum.student_sig_1 ? () => { handleAssessmentSummaryChange('student_sig_2', sum.student_sig_1); const next = staffBypassDateConstraints ? (sum.student_date_1 ?? null) : (maxIsoDate(sum.student_date_1, minStudentDate2) ?? minStudentDate2 ?? sum.student_date_1); handleAssessmentSummaryChange('student_date_2', next || null); } : undefined} /></div>
-                                          <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_3 ?? null} onChange={(v) => { handleAssessmentSummaryChange('student_sig_3', v); const cur = String(sum.student_date_3 ?? '').trim(); if (!staffBypassDateConstraints && (!cur || (minStudentDate3 && isCalendarBefore(cur, minStudentDate3)))) handleAssessmentSummaryChange('student_date_3', minStudentDate3 ?? null); }} disabled={!studentCanEdit || !sumThirdEditable} className="mt-0.5" highlight={studentCanEdit && sumThirdEditable} suggestionFrom={sumThirdEditable ? (sum.student_sig_1 ?? undefined) : undefined} onSuggestionClick={sumThirdEditable && sum.student_sig_1 ? () => { handleAssessmentSummaryChange('student_sig_3', sum.student_sig_1); const next = staffBypassDateConstraints ? (sum.student_date_2 ?? null) : (maxIsoDate(sum.student_date_2, minStudentDate3) ?? minStudentDate3 ?? sum.student_date_2); handleAssessmentSummaryChange('student_date_3', next || null); } : undefined} /></div>
-                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_1 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_1', pickDateWithOptionalMin(v || null, minStudentDate1, staffBypassDateConstraints))} disabled={!studentCanEdit && !staffCanCorrectSheetDates} highlight={studentCanEdit || staffCanCorrectSheetDates} compact placement="above" className="w-full" minDate={staffBypassDateConstraints ? undefined : minStudentDate1} /></div>
-                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_2 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_2', pickDateWithOptionalMin(v || null, minStudentDate2, staffBypassDateConstraints))} disabled={!studentCanEdit && !staffCanCorrectSheetDates} highlight={studentCanEdit || staffCanCorrectSheetDates} compact placement="above" className="w-full" minDate={staffBypassDateConstraints ? undefined : minStudentDate2} /></div>
-                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_3 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_3', pickDateWithOptionalMin(v || null, minStudentDate3, staffBypassDateConstraints))} disabled={!studentCanEdit && !staffCanCorrectSheetDates} highlight={studentCanEdit || staffCanCorrectSheetDates} compact placement="above" className="w-full" minDate={staffBypassDateConstraints ? undefined : minStudentDate3} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_1 ?? null} onChange={(v) => { handleAssessmentSummaryChange('student_sig_1', v); const cur = String(sum.student_date_1 ?? '').trim(); if (!staffBypassDateConstraints && (!cur || (minStudentDate1 && isCalendarBefore(cur, minStudentDate1)))) handleAssessmentSummaryChange('student_date_1', minStudentDate1 ?? null); }} disabled={!studentCanEdit || !sumStudentFirstEditable} className="mt-0.5" highlight={studentCanEdit && sumStudentFirstEditable} suggestionFrom={studentRefSig} onSuggestionClick={studentRefSig ? () => { handleAssessmentSummaryChange('student_sig_1', studentRefSig); const next = staffBypassDateConstraints ? studentRefDate : (maxIsoDate(studentRefDate, minStudentDate1) ?? minStudentDate1 ?? studentRefDate); handleAssessmentSummaryChange('student_date_1', next || null); } : undefined} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_2 ?? null} onChange={(v) => { handleAssessmentSummaryChange('student_sig_2', v); const cur = String(sum.student_date_2 ?? '').trim(); if (!staffBypassDateConstraints && (!cur || (minStudentDate2 && isCalendarBefore(cur, minStudentDate2)))) handleAssessmentSummaryChange('student_date_2', minStudentDate2 ?? null); }} disabled={!studentCanEdit || !sumStudentSecondEditable} className="mt-0.5" highlight={studentCanEdit && sumStudentSecondEditable} suggestionFrom={sumStudentSecondEditable ? (sum.student_sig_1 ?? undefined) : undefined} onSuggestionClick={sumStudentSecondEditable && sum.student_sig_1 ? () => { handleAssessmentSummaryChange('student_sig_2', sum.student_sig_1); const next = staffBypassDateConstraints ? (sum.student_date_1 ?? null) : (maxIsoDate(sum.student_date_1, minStudentDate2) ?? minStudentDate2 ?? sum.student_date_1); handleAssessmentSummaryChange('student_date_2', next || null); } : undefined} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_3 ?? null} onChange={(v) => { handleAssessmentSummaryChange('student_sig_3', v); const cur = String(sum.student_date_3 ?? '').trim(); if (!staffBypassDateConstraints && (!cur || (minStudentDate3 && isCalendarBefore(cur, minStudentDate3)))) handleAssessmentSummaryChange('student_date_3', minStudentDate3 ?? null); }} disabled={!studentCanEdit || !sumStudentThirdEditable} className="mt-0.5" highlight={studentCanEdit && sumStudentThirdEditable} suggestionFrom={sumStudentThirdEditable ? (sum.student_sig_1 ?? undefined) : undefined} onSuggestionClick={sumStudentThirdEditable && sum.student_sig_1 ? () => { handleAssessmentSummaryChange('student_sig_3', sum.student_sig_1); const next = staffBypassDateConstraints ? (sum.student_date_2 ?? null) : (maxIsoDate(sum.student_date_2, minStudentDate3) ?? minStudentDate3 ?? sum.student_date_2); handleAssessmentSummaryChange('student_date_3', next || null); } : undefined} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_1 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_1', pickDateWithOptionalMin(v || null, minStudentDate1, staffBypassDateConstraints))} disabled={!(studentCanEdit && sumStudentFirstDateEditable) && !(staffCanCorrectSheetDates && sumTrainerFirstEditable)} highlight={(studentCanEdit && sumStudentFirstDateEditable) || (staffCanCorrectSheetDates && sumTrainerFirstEditable)} compact placement="above" className="w-full" minDate={staffBypassDateConstraints ? undefined : minStudentDate1} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_2 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_2', pickDateWithOptionalMin(v || null, minStudentDate2, staffBypassDateConstraints))} disabled={!(studentCanEdit && sumStudentSecondDateEditable) && !(staffCanCorrectSheetDates && sumTrainerSecondEditable)} highlight={(studentCanEdit && sumStudentSecondDateEditable) || (staffCanCorrectSheetDates && sumTrainerSecondEditable)} compact placement="above" className="w-full" minDate={staffBypassDateConstraints ? undefined : minStudentDate2} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_3 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_3', pickDateWithOptionalMin(v || null, minStudentDate3, staffBypassDateConstraints))} disabled={!(studentCanEdit && sumStudentThirdDateEditable) && !(staffCanCorrectSheetDates && sumTrainerThirdEditable)} highlight={(studentCanEdit && sumStudentThirdDateEditable) || (staffCanCorrectSheetDates && sumTrainerThirdEditable)} compact placement="above" className="w-full" minDate={staffBypassDateConstraints ? undefined : minStudentDate3} /></div>
                                         </div>
                                       </td>
                                     </tr>
