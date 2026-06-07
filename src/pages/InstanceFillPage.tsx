@@ -2329,24 +2329,25 @@ export const InstanceFillPage: React.FC = () => {
     const stepData = currentStep === 1 ? null : visibleStepsForNav[currentStep - 2];
     const taskSections =
       stepData?.sections.filter((s) => s.pdf_render_mode === 'task_questions') ?? [];
+    const willSaveStepAnswers = taskSections.length > 0 && canRoleEditCurrentWorkflow;
 
-    if (taskSections.length > 0 && canRoleEditCurrentWorkflow) {
-      setStepNavSaving(true);
-      try {
+    if (willSaveStepAnswers) setStepNavSaving(true);
+    try {
+      if (willSaveStepAnswers) {
         const ok = await saveStepTaskQuestionsSequential(taskSections);
         if (!ok) {
           toast.error('Could not save answers. Please try again.');
           return;
         }
-      } finally {
-        setStepNavSaving(false);
       }
-    }
 
-    setErrors({});
-    setCurrentStep((s) => Math.min(totalSteps, s + 1));
-    formScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+      setErrors({});
+      setCurrentStep((s) => Math.min(totalSteps, s + 1));
+      formScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } finally {
+      if (willSaveStepAnswers) setStepNavSaving(false);
+    }
   }, [
     stepNavSaving,
     template,
@@ -2500,9 +2501,9 @@ export const InstanceFillPage: React.FC = () => {
                   size="sm"
                   title="Writes any answers still waiting to sync (about 300ms after you stop typing). Task result sheets already save immediately."
                   onClick={() => void handleManualSaveDraft()}
-                  disabled={manualSaveBusy}
+                  disabled={manualSaveBusy || stepNavSaving}
                 >
-                  {manualSaveBusy ? 'Saving…' : 'Autosave'}
+                  {manualSaveBusy || stepNavSaving ? 'Saving…' : 'Autosave'}
                 </Button>
               ) : null}
               <span className="text-sm font-semibold text-gray-700 capitalize">{role}</span>
@@ -2512,15 +2513,29 @@ export const InstanceFillPage: React.FC = () => {
       </header>
 
       <div className="w-full min-w-0 max-w-[100vw] px-3 sm:px-4 md:px-6 py-4 sm:py-6 box-border">
-        <div className="grid min-w-0 grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6">
+        <div className="grid min-w-0 grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6 relative">
+          {stepNavSaving && (
+            <div
+              className="absolute inset-0 z-50 flex flex-col items-center justify-center rounded-lg bg-white/80 backdrop-blur-[2px]"
+              role="status"
+              aria-live="polite"
+              aria-busy="true"
+            >
+              <Loader variant="dots" size="lg" message="Saving answers…" />
+              <p className="mt-3 text-sm text-gray-600">Please wait — the form is locked while your answers are saved.</p>
+            </div>
+          )}
           <form
             ref={formScrollRef}
             className={
               (canViewPdfPreview ? 'lg:col-span-9' : 'lg:col-span-12') +
-              ' min-w-0 space-y-6 pr-0 sm:pr-2 lg:max-h-[min(calc(100dvh-8rem),100vh)] lg:overflow-y-auto'
+              ' min-w-0 space-y-6 pr-0 sm:pr-2 lg:max-h-[min(calc(100dvh-8rem),100vh)] lg:overflow-y-auto' +
+              (stepNavSaving ? ' pointer-events-none' : '')
             }
+            aria-busy={stepNavSaving}
             onSubmit={(e) => e.preventDefault()}
           >
+            <fieldset disabled={stepNavSaving} className="min-w-0 space-y-6 border-0 p-0 m-0 disabled:opacity-60">
             <Card>
               <Stepper steps={steps} currentStep={currentStep} />
             </Card>
@@ -4941,7 +4956,7 @@ export const InstanceFillPage: React.FC = () => {
                   setErrors({});
                   setCurrentStep((s) => Math.max(1, s - 1));
                 }}
-                disabled={currentStep <= 1}
+                disabled={currentStep <= 1 || stepNavSaving}
               >
                 Back
               </Button>
@@ -4961,12 +4976,12 @@ export const InstanceFillPage: React.FC = () => {
                 )}
               </Button>
               {currentStep >= steps.length && role === 'student' && workflowStatus === 'draft' && (
-                <Button variant="primary" className="w-full sm:w-auto shrink-0" onClick={handleFinalSubmitByRole} disabled={workflowSubmitting}>
+                <Button variant="primary" className="w-full sm:w-auto shrink-0" onClick={handleFinalSubmitByRole} disabled={workflowSubmitting || stepNavSaving}>
                   Final Submit
                 </Button>
               )}
               {currentStep >= steps.length && role === 'trainer' && trainerCanFinaliseReview && (
-                <Button variant="primary" className="w-full sm:w-auto shrink-0" onClick={handleFinalSubmitByRole} disabled={workflowSubmitting}>
+                <Button variant="primary" className="w-full sm:w-auto shrink-0" onClick={handleFinalSubmitByRole} disabled={workflowSubmitting || stepNavSaving}>
                   Trainer Checked (Submit)
                 </Button>
               )}
@@ -4987,15 +5002,16 @@ export const InstanceFillPage: React.FC = () => {
                 </Button>
               )}
               {currentStep >= steps.length && role === 'office' && (workflowStatus === 'waiting_office' || isAdminEditMode) && (
-                <Button variant="primary" className="w-full sm:w-auto shrink-0" onClick={handleFinalSubmitByRole} disabled={workflowSubmitting}>
+                <Button variant="primary" className="w-full sm:w-auto shrink-0" onClick={handleFinalSubmitByRole} disabled={workflowSubmitting || stepNavSaving}>
                   Office Checked
                 </Button>
               )}
             </div>
+            </fieldset>
           </form>
 
           {canViewPdfPreview && (
-            <div className="min-w-0 lg:col-span-3">
+            <div className={`min-w-0 lg:col-span-3${stepNavSaving ? ' pointer-events-none opacity-60' : ''}`}>
               <div className="lg:sticky lg:top-3">
                 <Card>
                   <h3 className="font-bold text-[var(--text)] mb-4">PDF Preview</h3>
