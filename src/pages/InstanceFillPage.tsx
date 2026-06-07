@@ -342,6 +342,31 @@ function rowAnswerHasContent(val: string | number | boolean | Record<string, unk
   return String(val).trim() !== '';
 }
 
+function resultsAttemptOutcomeIsNYC(val: string | null | undefined): boolean {
+  return String(val ?? '').trim() === 'ns';
+}
+
+/** Attempt 2+ on a results sheet only apply after a prior Not Satisfactory (NS). */
+function resultsSheetRequiresSecondAttempt(
+  rd: import('../lib/formEngine').ResultsDataEntry | null | undefined,
+): boolean {
+  return resultsAttemptOutcomeIsNYC(rd?.first_attempt_satisfactory ?? undefined);
+}
+
+function resultsSheetRequiresThirdAttempt(
+  rd: import('../lib/formEngine').ResultsDataEntry | null | undefined,
+): boolean {
+  return resultsSheetRequiresSecondAttempt(rd) && resultsAttemptOutcomeIsNYC(rd?.second_attempt_satisfactory ?? undefined);
+}
+
+function summaryRequiresSecondAttempt(sum: import('../lib/formEngine').AssessmentSummaryDataEntry): boolean {
+  return sum.final_attempt_1_result === 'not_yet_competent';
+}
+
+function summaryRequiresThirdAttempt(sum: import('../lib/formEngine').AssessmentSummaryDataEntry): boolean {
+  return summaryRequiresSecondAttempt(sum) && sum.final_attempt_2_result === 'not_yet_competent';
+}
+
 type GridColumnType = 'question' | 'answer';
 
 function normalizeGridColumnType(raw: unknown): GridColumnType {
@@ -1750,7 +1775,11 @@ export const InstanceFillPage: React.FC = () => {
                   stepErrors[`task-results-${section.id}-first_attempt_date`] =
                     'First attempt date is required on every task result sheet';
                 }
-              } else if (resubmissionCycle >= 2 && !secondAttemptComplete) {
+              } else if (
+                resultsSheetRequiresSecondAttempt(rd) &&
+                resubmissionCycle >= 2 &&
+                !secondAttemptComplete
+              ) {
                 if (!rowAnswerHasContent(rd?.second_attempt_satisfactory ?? undefined)) {
                   stepErrors[`task-results-${section.id}-second_attempt_satisfactory`] =
                     'Second attempt outcome (S/NS) is required (complete attempt 1 first, then attempt 2)';
@@ -1759,7 +1788,11 @@ export const InstanceFillPage: React.FC = () => {
                   stepErrors[`task-results-${section.id}-second_attempt_date`] =
                     'Second attempt date is required (complete attempt 1 first, then attempt 2)';
                 }
-              } else if (resubmissionCycle >= 3 && !thirdAttemptComplete) {
+              } else if (
+                resultsSheetRequiresThirdAttempt(rd) &&
+                resubmissionCycle >= 3 &&
+                !thirdAttemptComplete
+              ) {
                 if (!rowAnswerHasContent(rd?.third_attempt_satisfactory ?? undefined)) {
                   stepErrors[`task-results-${section.id}-third_attempt_satisfactory`] =
                     'Third attempt outcome (S/NS) is required';
@@ -1769,16 +1802,19 @@ export const InstanceFillPage: React.FC = () => {
                 }
               }
             } else {
+              const firstAttemptNYC = resultsAttemptOutcomeIsNYC(rd?.first_attempt_satisfactory ?? undefined);
+              const secondAttemptNYC = resultsAttemptOutcomeIsNYC(rd?.second_attempt_satisfactory ?? undefined);
               const firstAttemptEditable = trainerCanEdit && markingRound < 2 && !secondOrThirdHasData;
               const secondAttemptUnlockedByResubmission = markingRound >= 2;
               const thirdAttemptUnlockedByResubmission = markingRound >= 3;
               const secondAttemptEditable =
                 trainerCanEdit &&
+                firstAttemptNYC &&
                 firstAttemptComplete &&
                 secondAttemptUnlockedByResubmission &&
                 !thirdAttemptHasData;
               const thirdAttemptEditable =
-                trainerCanEdit && secondAttemptComplete && thirdAttemptUnlockedByResubmission;
+                trainerCanEdit && secondAttemptNYC && secondAttemptComplete && thirdAttemptUnlockedByResubmission;
 
               if (firstAttemptEditable) {
                 if (!rowAnswerHasContent(rd?.first_attempt_satisfactory ?? undefined)) {
@@ -1860,8 +1896,14 @@ export const InstanceFillPage: React.FC = () => {
             rowAnswerHasContent(firstTaskRd?.second_attempt_date ?? undefined);
 
           const sumFirstEditable = !sumSecondOrThirdHasData && markingRound < 2;
-          const sumSecondEditable = sumFirstComplete && !sumThirdHasData && markingRound >= 2;
-          const sumThirdEditable = sumSecondComplete && markingRound >= 3;
+          const sumAttempt1NYC =
+            summaryRequiresSecondAttempt(sum) ||
+            resultsAttemptOutcomeIsNYC(firstTaskRd?.first_attempt_satisfactory ?? undefined);
+          const sumAttempt2NYC =
+            summaryRequiresThirdAttempt(sum) ||
+            resultsAttemptOutcomeIsNYC(firstTaskRd?.second_attempt_satisfactory ?? undefined);
+          const sumSecondEditable = sumAttempt1NYC && sumFirstComplete && !sumThirdHasData && markingRound >= 2;
+          const sumThirdEditable = sumAttempt2NYC && sumSecondComplete && markingRound >= 3;
 
           if (trainerCanEdit) {
             if (strictReviewCycle) {
@@ -1889,7 +1931,11 @@ export const InstanceFillPage: React.FC = () => {
                 if (!rowAnswerHasContent(sum.trainer_date_1 ?? undefined)) {
                   stepErrors['assessment-summary-trainer_date_1'] = 'Assessment summary: trainer date (attempt 1) is required';
                 }
-              } else if (resubmissionCycle >= 2 && !sumTrainerAttempt2Complete) {
+              } else if (
+                summaryRequiresSecondAttempt(sum) &&
+                resubmissionCycle >= 2 &&
+                !sumTrainerAttempt2Complete
+              ) {
                 if (!rowAnswerHasContent(sum.final_attempt_2_result ?? undefined)) {
                   stepErrors['assessment-summary-final_attempt_2_result'] =
                     'Assessment summary: attempt 2 result (Competent / Not Yet Competent) is required';
@@ -1900,7 +1946,11 @@ export const InstanceFillPage: React.FC = () => {
                 if (!rowAnswerHasContent(sum.trainer_date_2 ?? undefined)) {
                   stepErrors['assessment-summary-trainer_date_2'] = 'Assessment summary: trainer date (attempt 2) is required';
                 }
-              } else if (resubmissionCycle >= 3 && !sumTrainerAttempt3Complete) {
+              } else if (
+                summaryRequiresThirdAttempt(sum) &&
+                resubmissionCycle >= 3 &&
+                !sumTrainerAttempt3Complete
+              ) {
                 if (!rowAnswerHasContent(sum.final_attempt_3_result ?? undefined)) {
                   stepErrors['assessment-summary-final_attempt_3_result'] =
                     'Assessment summary: attempt 3 result (Competent / Not Yet Competent) is required';
@@ -3946,7 +3996,6 @@ export const InstanceFillPage: React.FC = () => {
                       ) : section.pdf_render_mode === 'task_results' ? (
                         (() => {
                           const rd = resultsData[section.id];
-                          const trainerCanEdit = role === 'trainer' || role === 'office';
                           const adminOverride = canOfficeAdminEdit;
                           const studentCanEdit =
                             role === 'student' || role === 'office' || (role === 'trainer' && canRoleEditCurrentWorkflow);
@@ -3975,22 +4024,50 @@ export const InstanceFillPage: React.FC = () => {
                           const thirdAttemptHasData = !!(rd?.third_attempt_date || rd?.third_attempt_satisfactory);
                           const secondAttemptComplete =
                             rowAnswerHasContent(rd?.second_attempt_satisfactory ?? undefined) && rowAnswerHasContent(rd?.second_attempt_date ?? undefined);
-                          // Match assessment summary: cycle 1 edits attempt 1 only; cycle 2+ locks attempt 1 and edits attempt 2, etc.
-                          const firstAttemptEditable =
-                            adminOverride || (trainerCanEdit && markingRound < 2 && !secondOrThirdHasData);
+                          const thirdAttemptComplete =
+                            rowAnswerHasContent(rd?.third_attempt_satisfactory ?? undefined) && rowAnswerHasContent(rd?.third_attempt_date ?? undefined);
+                          const trainerCanEditResults =
+                            (role === 'trainer' && canRoleEditCurrentWorkflow) ||
+                            (role === 'office' && (canRoleEditCurrentWorkflow || canOfficeAdminEdit));
+                          const firstAttemptNYC = resultsAttemptOutcomeIsNYC(rd?.first_attempt_satisfactory ?? undefined);
+                          const secondAttemptNYC = resultsAttemptOutcomeIsNYC(rd?.second_attempt_satisfactory ?? undefined);
+                          // Match assessment summary: cycle 1 edits attempt 1 only; attempt 2+ only after prior NS.
                           const secondAttemptUnlockedByResubmission = markingRound >= 2;
                           const thirdAttemptUnlockedByResubmission = markingRound >= 3;
+                          const firstAttemptEditable =
+                            adminOverride ||
+                            (trainerCanEditResults &&
+                              ((markingRound < 2 && !secondOrThirdHasData) ||
+                                (trainerCanFinaliseReview && !firstAttemptComplete)));
                           const secondAttemptEditable =
                             adminOverride ||
-                            (trainerCanEdit &&
-                              firstAttemptComplete &&
-                              secondAttemptUnlockedByResubmission &&
-                              !thirdAttemptHasData);
+                            (trainerCanEditResults &&
+                              firstAttemptNYC &&
+                              ((firstAttemptComplete &&
+                                secondAttemptUnlockedByResubmission &&
+                                !thirdAttemptHasData) ||
+                                (trainerCanFinaliseReview &&
+                                  firstAttemptComplete &&
+                                  markingRound >= 2 &&
+                                  !secondAttemptComplete)));
                           const thirdAttemptEditable =
                             adminOverride ||
-                            (trainerCanEdit && secondAttemptComplete && thirdAttemptUnlockedByResubmission);
-                          /** Footer trainer sign-off belongs to the first assessment cycle; lock when attempt 1 column is locked. */
-                          const trainerFooterEditable = adminOverride || (trainerCanEdit && firstAttemptEditable);
+                            (trainerCanEditResults &&
+                              secondAttemptNYC &&
+                              ((secondAttemptComplete && thirdAttemptUnlockedByResubmission) ||
+                                (trainerCanFinaliseReview &&
+                                  secondAttemptComplete &&
+                                  markingRound >= 3 &&
+                                  !thirdAttemptComplete)));
+                          /** Trainer footer sign-off must stay editable whenever the trainer is actively reviewing. */
+                          const trainerFooterEditable =
+                            adminOverride ||
+                            (trainerCanEditResults &&
+                              (firstAttemptEditable ||
+                                secondAttemptEditable ||
+                                thirdAttemptEditable ||
+                                (role === 'trainer' && trainerCanFinaliseReview) ||
+                                !rowAnswerHasContent(rd?.trainer_signature ?? undefined)));
                           const firstAttemptDateEditable = firstAttemptEditable || staffCanCorrectSheetDates;
                           const secondAttemptDateEditable = secondAttemptEditable || staffCanCorrectSheetDates;
                           const thirdAttemptDateEditable = thirdAttemptEditable || staffCanCorrectSheetDates;
@@ -4345,9 +4422,17 @@ export const InstanceFillPage: React.FC = () => {
                           const sumSecondComplete =
                             rowAnswerHasContent(firstTaskRd?.second_attempt_satisfactory ?? undefined) &&
                             rowAnswerHasContent(firstTaskRd?.second_attempt_date ?? undefined);
+                          const sumAttempt1NYC =
+                            summaryRequiresSecondAttempt(sum) ||
+                            resultsAttemptOutcomeIsNYC(firstTaskRd?.first_attempt_satisfactory ?? undefined);
+                          const sumAttempt2NYC =
+                            summaryRequiresThirdAttempt(sum) ||
+                            resultsAttemptOutcomeIsNYC(firstTaskRd?.second_attempt_satisfactory ?? undefined);
                           const sumFirstEditable = adminOverride || (!sumSecondOrThirdHasData && markingRound < 2);
-                          const sumSecondEditable = adminOverride || (sumFirstComplete && !sumThirdHasData && markingRound >= 2);
-                          const sumThirdEditable = adminOverride || (sumSecondComplete && markingRound >= 3);
+                          const sumSecondEditable =
+                            adminOverride || (sumAttempt1NYC && sumFirstComplete && !sumThirdHasData && markingRound >= 2);
+                          const sumThirdEditable =
+                            adminOverride || (sumAttempt2NYC && sumSecondComplete && markingRound >= 3);
                           const sumFirstDateEditable = sumFirstEditable || staffCanCorrectSheetDates;
                           const sumSecondDateEditable = sumSecondEditable || staffCanCorrectSheetDates;
                           const sumThirdDateEditable = sumThirdEditable || staffCanCorrectSheetDates;

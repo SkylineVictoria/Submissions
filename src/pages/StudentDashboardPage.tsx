@@ -67,6 +67,7 @@ function WorkflowProgressColumns({
     submissionCount,
     results: attemptResults,
     terminalDidNotAttempt: terminalFailed,
+    role_context: row.role_context,
   });
   const adminDot = getAdminOfficeDotTone({ ...stageInput, terminalDidNotAttempt: terminalFailed });
 

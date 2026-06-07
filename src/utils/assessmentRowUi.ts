@@ -282,6 +282,37 @@ export function getAssessmentOutcomeDisplay(input: {
   return { label: 'In progress', className: 'text-gray-700', subtext: null, subtextClassName: '' };
 }
 
+function getSubmittedAttemptCount(input: {
+  submissionCount?: number | null;
+  submittedAt?: string | null;
+}): number {
+  return Math.min(
+    3,
+    Math.max(0, Number(input.submissionCount ?? 0) || (String(input.submittedAt ?? '').trim() ? 1 : 0)),
+  );
+}
+
+function formatAwaitingTrainerText(attemptNum: number): string {
+  if (attemptNum >= 3) return 'Submitted 3rd attempt — awaiting trainer';
+  if (attemptNum >= 2) return 'Submitted 2nd attempt — awaiting trainer';
+  return 'Submitted 1st attempt — awaiting trainer';
+}
+
+/** Highest submitted attempt still with the trainer (unmarked or marked NYC, not yet sent back). */
+export function getAwaitingTrainerAttemptNumber(input: {
+  submissionCount?: number | null;
+  submittedAt?: string | null;
+  attemptResults?: AttemptResult[] | null;
+}): number | null {
+  const submitted = getSubmittedAttemptCount(input);
+  if (submitted <= 0) return null;
+  const r = (input.attemptResults ?? []).slice(0, 3);
+  for (let i = submitted - 1; i >= 0; i--) {
+    if (r[i] === null || r[i] === 'not_yet_competent') return i + 1;
+  }
+  return submitted;
+}
+
 export function getStudentAttemptDoneText(input: {
   submissionCount?: number | null;
   submittedAt?: string | null;
@@ -289,9 +320,9 @@ export function getStudentAttemptDoneText(input: {
   status?: string | null;
   role_context?: string | null;
 }): string | null {
-  const r = (input.attemptResults ?? []).slice(0, 3);
   const status = String(input.status ?? '').trim();
   const rc = String(input.role_context ?? '').trim();
+  const r = (input.attemptResults ?? []).slice(0, 3);
 
   if (status === 'locked') return null;
 
@@ -300,35 +331,15 @@ export function getStudentAttemptDoneText(input: {
 
   if (rc === 'office') return null;
 
-  const submitted = Math.min(
-    3,
-    Math.max(0, Number(input.submissionCount ?? 0) || (String(input.submittedAt ?? '').trim() ? 1 : 0))
-  );
+  // Student resubmitting after NYC — use getTrainerAttemptFailedText ("Second Attempt Required", etc.).
+  if (rc === 'student' && status === 'draft') return null;
 
-  const awaitingTrainerMark =
-    rc === 'trainer' || (submitted > 0 && rc !== 'student' && rc !== 'office');
-
-  if (r.some((x) => x === 'not_yet_competent') && awaitingTrainerMark) {
-    if (submitted >= 3) return 'Submitted 3rd attempt — awaiting trainer';
-    if (submitted >= 2) return 'Submitted 2nd attempt — awaiting trainer';
-    if (submitted >= 1) return 'Submitted 1st attempt — awaiting trainer';
+  if (rc === 'trainer') {
+    const awaiting = getAwaitingTrainerAttemptNumber(input);
+    return awaiting != null ? formatAwaitingTrainerText(awaiting) : null;
   }
 
-  if (r.some((x) => x === 'not_yet_competent')) return null;
-
-  if (awaitingTrainerMark) {
-    if (submitted >= 3) return 'Submitted 3rd attempt — awaiting trainer';
-    if (submitted >= 2) return 'Submitted 2nd attempt — awaiting trainer';
-    if (submitted >= 1) return 'Submitted 1st attempt — awaiting trainer';
-  }
-
-  const fallback = getAttemptDoneText(input.attemptResults);
-  if (rc === 'trainer' || rc === '') {
-    if (fallback === 'First Attempt Done') return 'Submitted 1st attempt — awaiting trainer';
-    if (fallback === 'Second Attempt Done') return 'Submitted 2nd attempt — awaiting trainer';
-    if (fallback === 'Third Attempt Done') return 'Submitted 3rd attempt — awaiting trainer';
-  }
-  return fallback;
+  return getAttemptDoneText(input.attemptResults);
 }
 
 export function getTrainerAttemptFailedText(
@@ -406,6 +417,10 @@ function isWaitingTrainerMark(r: AttemptResult[], submitted: number, slotIndex: 
  */
 function computeStudentNextYellowIndex(r: AttemptResult[], submitted: number): number | null {
   if (r.some((x) => x === 'competent')) return null;
+  // Submitted attempt not yet marked — do not show yellow on a later attempt slot.
+  for (let s = 0; s < submitted; s++) {
+    if (r[s] === null) return null;
+  }
   for (let i = 0; i < 3; i++) {
     if (r[i] === 'competent') return null;
     if (r[i] === 'not_yet_competent') continue;
@@ -450,6 +465,7 @@ export function computeAttemptTones(input: {
   results: AttemptResult[];
   /** When all three windows were missed — show all attempt dots red. */
   terminalDidNotAttempt?: boolean;
+  role_context?: string | null;
 }): { student: AttemptDotTone[]; trainer: AttemptDotTone[] } {
   if (input.terminalDidNotAttempt) {
     return { student: [...ALL_ATTEMPTS_FAILED_TONES], trainer: [...ALL_ATTEMPTS_FAILED_TONES] };
@@ -457,8 +473,10 @@ export function computeAttemptTones(input: {
 
   const submitted = Math.min(3, Math.max(0, Number(input.submissionCount) || 0));
   const r = [...input.results, null, null, null].slice(0, 3) as AttemptResult[];
+  const rc = String(input.role_context ?? '').trim();
 
-  const studentNextYellow = computeStudentNextYellowIndex(r, submitted);
+  // Next-attempt yellow only when the instance is back with the student — not while trainer is reviewing.
+  const studentNextYellow = rc === 'trainer' ? null : computeStudentNextYellowIndex(r, submitted);
 
   const student: AttemptDotTone[] = [0, 1, 2].map((i) => {
     if (r[i] === 'competent') return 'green';
