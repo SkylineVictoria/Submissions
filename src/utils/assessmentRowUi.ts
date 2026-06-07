@@ -2,6 +2,8 @@ const MEL_TZ = 'Australia/Melbourne';
 
 export type AttemptResult = 'competent' | 'not_yet_competent' | null;
 
+export type AttemptDotTone = 'green' | 'red' | 'yellow' | 'gray';
+
 export type AssessmentRowUiState =
   | { kind: 'future'; disabled: true; reason: string; rowClassName: string; outcomeLabel?: never; outcomeClassName?: never }
   | { kind: 'in_progress'; disabled: false; rowClassName: string; outcomeLabel?: never; outcomeClassName?: never }
@@ -15,8 +17,24 @@ export type RowWindowInput = {
   start_date?: string | null;
   end_date?: string | null;
   did_not_attempt?: boolean | null;
+  no_attempt_rollovers?: number | null;
   status?: string | null;
 };
+
+/** All three submission windows missed — terminal failure (no competent path). */
+export function isDidNotAttemptAnyFailure(input: {
+  didNotAttempt?: boolean | null;
+  noAttemptRollovers?: number | null;
+}): boolean {
+  const rollovers = Math.max(0, Number(input.noAttemptRollovers ?? 0) || 0);
+  return Boolean(input.didNotAttempt ?? false) && rollovers >= 2;
+}
+
+/** Strong red row when the student exhausted all attempts without a successful submission path. */
+export const TERMINAL_DID_NOT_ATTEMPT_ROW_CLASS =
+  'bg-red-100 text-red-950 border-l-4 border-red-600 opacity-95 cursor-not-allowed';
+
+export const ALL_ATTEMPTS_FAILED_TONES: AttemptDotTone[] = ['red', 'red', 'red'];
 
 export function melDateString(d: Date = new Date()): string {
   const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: MEL_TZ, year: 'numeric', month: '2-digit', day: '2-digit' });
@@ -106,10 +124,26 @@ export function computeRowUi(input: {
   const start = String(input.row.start_date ?? '').trim();
   const end = String(input.row.end_date ?? '').trim();
   const didNotAttempt = Boolean(input.row.did_not_attempt ?? false);
+  const missedAllWindows = isDidNotAttemptAnyFailure({
+    didNotAttempt: didNotAttempt,
+    noAttemptRollovers: input.row.no_attempt_rollovers,
+  });
 
   const r = (input.attemptResults ?? []).slice(0, 3);
   const anyCompetent = r.some((x) => x === 'competent');
   const anyNYC = r.some((x) => x === 'not_yet_competent');
+
+  // Terminal missed-all-windows overrides summary NYC/auto-sync — student failed, all attempts gone.
+  if (missedAllWindows || didNotAttempt) {
+    return {
+      kind: 'did_not_attempt',
+      disabled: true,
+      reason: missedAllWindows ? "Didn't attempt any" : 'Did not attempt',
+      rowClassName: TERMINAL_DID_NOT_ATTEMPT_ROW_CLASS,
+      outcomeLabel: missedAllWindows ? "Didn't attempt any" : 'Did not attempt',
+      outcomeClassName: 'text-red-800 font-semibold',
+    };
+  }
 
   // Outcome takes precedence over window state.
   if (anyCompetent) {
@@ -141,17 +175,6 @@ export function computeRowUi(input: {
       rowClassName: 'bg-red-50/70 hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors',
       outcomeLabel: 'Competency Not Achieved',
       outcomeClassName: 'text-red-800',
-    };
-  }
-
-  if (didNotAttempt) {
-    return {
-      kind: 'did_not_attempt',
-      disabled: true,
-      reason: 'Did not attempt',
-      rowClassName: 'bg-red-50/70 text-red-900/90 opacity-90 cursor-not-allowed',
-      outcomeLabel: 'Did not attempt',
-      outcomeClassName: 'text-gray-800',
     };
   }
 
@@ -328,9 +351,10 @@ export function getMissedAttemptWindowText(input: {
   noAttemptRollovers?: number | null;
   didNotAttempt?: boolean | null;
 }): string | null {
+  if (isDidNotAttemptAnyFailure(input)) return "Didn't attempt any";
+
   const rollovers = Math.max(0, Number(input.noAttemptRollovers ?? 0) || 0);
   const finalMiss = Boolean(input.didNotAttempt ?? false);
-  if (finalMiss && rollovers >= 2) return "Didn't attempt any";
 
   // rollovers: 0 = none missed, 1 = missed 1st window, 2 = missed 1st+2nd windows
   // didNotAttempt: final (3rd) window missed as well.
@@ -371,8 +395,6 @@ export function maskCompetentWhileAwaitingTrainer(
   return triple.map((x) => (x === 'competent' ? null : x));
 }
 
-export type AttemptDotTone = 'green' | 'red' | 'yellow' | 'gray';
-
 function isWaitingTrainerMark(r: AttemptResult[], submitted: number, slotIndex: number): boolean {
   if (r[slotIndex] !== null) return false;
   return submitted >= slotIndex + 1;
@@ -401,17 +423,38 @@ export function getAdminOfficeDotTone(input: {
   status?: string | null;
   role_context?: string | null;
   attemptResults: AttemptResult[];
+  terminalDidNotAttempt?: boolean;
 }): AttemptDotTone {
+  if (input.terminalDidNotAttempt) return 'red';
   const { adminState } = computeWorkflowStageChecks(input);
   if (adminState === 'done') return 'green';
   if (adminState === 'pending') return 'yellow';
   return 'gray';
 }
 
+/** Progress column styling when all three attempt windows were missed. */
+export function isTerminalFailureProgressRow(row: {
+  did_not_attempt?: boolean | null;
+  no_attempt_rollovers?: number | null;
+}): boolean {
+  return (
+    isDidNotAttemptAnyFailure({
+      didNotAttempt: row.did_not_attempt,
+      noAttemptRollovers: row.no_attempt_rollovers,
+    }) || Boolean(row.did_not_attempt)
+  );
+}
+
 export function computeAttemptTones(input: {
   submissionCount: number;
   results: AttemptResult[];
+  /** When all three windows were missed — show all attempt dots red. */
+  terminalDidNotAttempt?: boolean;
 }): { student: AttemptDotTone[]; trainer: AttemptDotTone[] } {
+  if (input.terminalDidNotAttempt) {
+    return { student: [...ALL_ATTEMPTS_FAILED_TONES], trainer: [...ALL_ATTEMPTS_FAILED_TONES] };
+  }
+
   const submitted = Math.min(3, Math.max(0, Number(input.submissionCount) || 0));
   const r = [...input.results, null, null, null].slice(0, 3) as AttemptResult[];
 

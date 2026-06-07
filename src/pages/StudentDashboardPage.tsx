@@ -17,6 +17,7 @@ import {
   computeAttemptTones,
   computeWorkflowStageChecks,
   getAdminOfficeDotTone,
+  isTerminalFailureProgressRow,
   getAssessmentOutcomeDisplay,
   maskCompetentWhileAwaitingTrainer,
   type WorkflowStageState,
@@ -59,16 +60,31 @@ function WorkflowProgressColumns({
   attemptResults: AttemptResult[];
   submissionCount: number;
 }) {
+  const terminalFailed = isTerminalFailureProgressRow(row as unknown as { did_not_attempt?: boolean | null; no_attempt_rollovers?: number | null });
   const stageInput = { status: row.status, role_context: row.role_context, attemptResults };
   const { studentDone, trainerDone, adminState } = computeWorkflowStageChecks(stageInput);
-  const tones = computeAttemptTones({ submissionCount, results: attemptResults });
-  const adminDot = getAdminOfficeDotTone(stageInput);
+  const tones = computeAttemptTones({
+    submissionCount,
+    results: attemptResults,
+    terminalDidNotAttempt: terminalFailed,
+  });
+  const adminDot = getAdminOfficeDotTone({ ...stageInput, terminalDidNotAttempt: terminalFailed });
 
   const StageItem = ({ label, state }: { label: string; state: WorkflowStageState }) => {
-    const iconClass =
-      state === 'done' ? 'text-emerald-600' : state === 'pending' ? 'text-amber-500' : 'text-gray-300';
-    const textClass =
-      state === 'done' ? 'text-emerald-700 font-medium' : state === 'pending' ? 'text-amber-700 font-medium' : 'text-gray-500';
+    const iconClass = terminalFailed
+      ? 'text-red-600'
+      : state === 'done'
+        ? 'text-emerald-600'
+        : state === 'pending'
+          ? 'text-amber-500'
+          : 'text-gray-300';
+    const textClass = terminalFailed
+      ? 'text-red-700 font-semibold'
+      : state === 'done'
+        ? 'text-emerald-700 font-medium'
+        : state === 'pending'
+          ? 'text-amber-700 font-medium'
+          : 'text-gray-500';
     return (
       <div className="inline-flex items-center gap-1.5 text-xs whitespace-nowrap">
         <CheckCircle className={`w-4 h-4 shrink-0 ${iconClass}`} />
@@ -77,21 +93,25 @@ function WorkflowProgressColumns({
     );
   };
 
+  const studentStageState: WorkflowStageState = terminalFailed ? 'idle' : studentDone ? 'done' : 'idle';
+  const trainerStageState: WorkflowStageState = terminalFailed ? 'idle' : trainerDone ? 'done' : 'idle';
+  const adminStageState: WorkflowStageState = terminalFailed ? 'idle' : adminState;
+
   return (
     <div className="flex items-start gap-6">
       <div className="flex flex-col gap-1 items-start min-w-[4.5rem]">
-        <StageItem label="Student" state={studentDone ? 'done' : 'idle'} />
+        <StageItem label="Student" state={studentStageState} />
         <AttemptDots tones={tones.student} titlePrefix="Student" />
       </div>
       <div className="flex flex-col gap-1 items-start min-w-[4.5rem]">
-        <StageItem label="Trainer" state={trainerDone ? 'done' : 'idle'} />
+        <StageItem label="Trainer" state={trainerStageState} />
         <AttemptDots tones={tones.trainer} titlePrefix="Trainer" />
       </div>
       <div className="flex flex-col gap-1 items-start min-w-[4.5rem]">
-        <StageItem label="Office" state={adminState} />
+        <StageItem label="Office" state={adminStageState} />
         <SingleDot
           tone={adminDot}
-          title={adminDot === 'green' ? 'Office finalised' : adminDot === 'yellow' ? 'Awaiting office' : 'Office not started'}
+          title={terminalFailed ? 'Failed — no attempts' : adminDot === 'green' ? 'Office finalised' : adminDot === 'yellow' ? 'Awaiting office' : 'Office not started'}
         />
       </div>
     </div>
@@ -515,7 +535,12 @@ export const StudentDashboardPage: React.FC = () => {
                             didNotAttempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
                           });
                           const ui = computeRowUi({
-                            row: { ...row, did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null, status: row.status },
+                            row: {
+                              ...row,
+                              did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
+                              no_attempt_rollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
+                              status: row.status,
+                            },
                             attemptResults,
                           });
                           const win = withinInstanceAccessWindow(row, 'student');

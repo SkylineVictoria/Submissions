@@ -38,6 +38,8 @@ import {
   getMissedAttemptWindowText,
   getStudentAttemptDoneText,
   getTrainerAttemptFailedText,
+  isDidNotAttemptAnyFailure,
+  TERMINAL_DID_NOT_ATTEMPT_ROW_CLASS,
   maskCompetentWhileAwaitingTrainer,
   withinInstanceAccessWindow,
   type AttemptResult,
@@ -130,6 +132,8 @@ const getExportStatusText = (row: SubmittedInstanceRow, rawAttemptResults: Attem
       start_date: row.start_date,
       end_date: row.end_date,
       did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
+      no_attempt_rollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
+      status: row.status,
     },
     attemptResults: masked,
     ignoreEndDateForAccess: accessRole !== 'student',
@@ -165,11 +169,17 @@ const getDirectoryRowClass = (row: SubmittedInstanceRow, trainerHighlightCourseI
   // Match dashboards:
   // - Open window => yellow
   // - Completed => green
-  // - Missed all (did_not_attempt) => red
+  // - Missed all (did_not_attempt) => strong red
   // - Otherwise keep neutral gray but hover with theme
   let base: string;
   const didNotAttempt = (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null;
-  if (row.status === 'locked' && !didNotAttempt) {
+  const noAttemptRollovers = (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null;
+  if (
+    isDidNotAttemptAnyFailure({ didNotAttempt, noAttemptRollovers }) ||
+    Boolean(didNotAttempt)
+  ) {
+    base = TERMINAL_DID_NOT_ATTEMPT_ROW_CLASS;
+  } else if (row.status === 'locked' && !didNotAttempt) {
     base = 'bg-emerald-50/70 hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors';
   } else {
     const ui = computeRowUi({
