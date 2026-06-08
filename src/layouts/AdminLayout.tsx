@@ -60,13 +60,13 @@ export const AdminLayout: React.FC = () => {
       ]
     : [
         { to: '/admin/overview', label: 'Dashboard', icon: <LayoutDashboard className="w-5 h-5 shrink-0" />, end: true },
+        { to: '/admin/reports/assessments', label: 'Reports', icon: <BarChart3 className="w-5 h-5 shrink-0" />, end: true },
         { to: '/admin/forms', label: 'Forms', icon: <FileText className="w-5 h-5 shrink-0" />, end: true },
         { to: '/admin/students', label: 'Students', icon: <Users className="w-5 h-5 shrink-0" />, end: true },
         { to: '/admin/batches', label: 'Batches', icon: <Layers className="w-5 h-5 shrink-0" />, end: true },
         { to: '/admin/courses', label: 'Courses', icon: <GraduationCap className="w-5 h-5 shrink-0" />, end: true },
         { to: '/admin/users', label: 'Users', icon: <UserRoundCheck className="w-5 h-5 shrink-0" />, end: true },
         { to: '/admin/assessments', label: 'Assessments', icon: <ClipboardCheck className="w-5 h-5 shrink-0" />, end: true },
-        { to: '/admin/reports/assessments', label: 'Reports', icon: <BarChart3 className="w-5 h-5 shrink-0" />, end: true },
         ...(canViewFinanceReports(user)
           ? [{ to: '/admin/reports/finance', label: 'Finance Reports', icon: <DollarSign className="w-5 h-5 shrink-0" />, end: true as const }]
           : []),
