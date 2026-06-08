@@ -14,6 +14,7 @@ import {
   Menu,
   BookOpen,
   DollarSign,
+  BarChart3,
 } from 'lucide-react';
 import { cn } from '../components/utils/cn';
 import { useAuth } from '../contexts/AuthContext';
@@ -65,6 +66,7 @@ export const AdminLayout: React.FC = () => {
         { to: '/admin/courses', label: 'Courses', icon: <GraduationCap className="w-5 h-5 shrink-0" />, end: true },
         { to: '/admin/users', label: 'Users', icon: <UserRoundCheck className="w-5 h-5 shrink-0" />, end: true },
         { to: '/admin/assessments', label: 'Assessments', icon: <ClipboardCheck className="w-5 h-5 shrink-0" />, end: true },
+        { to: '/admin/reports/assessments', label: 'Reports', icon: <BarChart3 className="w-5 h-5 shrink-0" />, end: true },
         ...(canViewFinanceReports(user)
           ? [{ to: '/admin/reports/finance', label: 'Finance Reports', icon: <DollarSign className="w-5 h-5 shrink-0" />, end: true as const }]
           : []),

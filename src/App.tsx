@@ -24,6 +24,9 @@ const AdminAssessmentsPage = lazy(() => import('./pages/AdminAssessmentsPage').t
 const AdminFinanceReportsPage = lazy(() =>
   import('./pages/AdminFinanceReportsPage').then((m) => ({ default: m.AdminFinanceReportsPage }))
 );
+const AdminAssessmentReportsPage = lazy(() =>
+  import('./pages/AdminAssessmentReportsPage').then((m) => ({ default: m.AdminAssessmentReportsPage }))
+);
 const AdminUsersPage = lazy(() => import('./pages/AdminUsersPage').then(m => ({ default: m.AdminUsersPage })));
 const AdminBatchesPage = lazy(() => import('./pages/AdminBatchesPage').then(m => ({ default: m.AdminBatchesPage })));
 const AdminBatchUnitDatesPage = lazy(() =>
@@ -125,6 +128,14 @@ function App() {
                   <FinanceReportsRoute>
                     <AdminFinanceReportsPage />
                   </FinanceReportsRoute>
+                </AdminOnlyRoute>
+              }
+            />
+            <Route
+              path="reports/assessments"
+              element={
+                <AdminOnlyRoute>
+                  <AdminAssessmentReportsPage />
                 </AdminOnlyRoute>
               }
             />

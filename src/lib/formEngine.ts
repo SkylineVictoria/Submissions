@@ -2978,7 +2978,8 @@ export async function listSubmittedInstancesPaged(
   activeOnIso?: string | null,
   workflowStatus?: AssessmentDirectoryWorkflowFilter | null,
   startFromIso?: string | null,
-  startToIso?: string | null
+  startToIso?: string | null,
+  batchId?: number | null
 ): Promise<PaginatedResult<SubmittedInstanceRow>> {
   const active =
     activeOnIso && /^\d{4}-\d{2}-\d{2}$/.test(String(activeOnIso).trim()) ? String(activeOnIso).trim() : null;
@@ -3000,6 +3001,7 @@ export async function listSubmittedInstancesPaged(
     p_start_to: startTo,
     p_sort_key: sort?.key ?? 'created',
     p_sort_dir: sort?.dir ?? 'desc',
+    p_batch_id: Number.isFinite(Number(batchId)) && Number(batchId) > 0 ? Number(batchId) : null,
   });
   if (error) {
     console.error('skyline_list_submitted_instances_paged rpc error', error);
