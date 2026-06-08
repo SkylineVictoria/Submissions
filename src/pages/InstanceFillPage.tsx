@@ -639,6 +639,8 @@ export const InstanceFillPage: React.FC = () => {
   const [didNotAttempt, setDidNotAttempt] = useState(false);
   const [instanceLegacyStatus, setInstanceLegacyStatus] = useState<string>('draft');
   const [instanceRoleContext, setInstanceRoleContext] = useState<FormRole>('student');
+  /** Set after a successful Final Submit so the thank-you screen shows immediately (local workflow state can lag). */
+  const [showPostSubmitThankYou, setShowPostSubmitThankYou] = useState(false);
 
   const staffBypassDateConstraints = useMemo(
     () => canStaffBypassDateOrderConstraints(role, isAdminEditMode),
@@ -2222,6 +2224,9 @@ export const InstanceFillPage: React.FC = () => {
         }
         await revokeRoleAccessTokens(id, 'student');
         setWorkflowStatus('waiting_trainer');
+        setInstanceRoleContext('trainer');
+        setSubmissionCount((prev) => (prev <= 0 ? 1 : Math.min(Math.max(prev, 1) + 1, 3)));
+        setShowPostSubmitThankYou(true);
         toast.success('Submitted successfully. Waiting for trainer checking.');
         void (async () => {
           const ctx = await getInstanceWorkflowNotificationContext(id);
@@ -2267,6 +2272,8 @@ export const InstanceFillPage: React.FC = () => {
             await updateInstanceWorkflowStatus(id, 'draft');
             await updateInstanceRole(id, 'student');
             setWorkflowStatus('draft');
+            setInstanceRoleContext('student');
+            setShowPostSubmitThankYou(true);
             toast.success(`Not Yet Competent. Attempt ${latestAttempt} complete. Resubmission opened until ${newEnd} (23:59 Melbourne).`);
             void (async () => {
               const ctx = await getInstanceWorkflowNotificationContext(id);
@@ -2289,6 +2296,8 @@ export const InstanceFillPage: React.FC = () => {
         await updateInstanceWorkflowStatus(id, 'failed');
         setWorkflowStatus('failed');
         await updateInstanceRole(id, 'office');
+        setInstanceRoleContext('office');
+        setShowPostSubmitThankYou(true);
         toast.error('Not Yet Competent after 3 attempts. Instance is now Failed.');
         void (async () => {
           const ctx = await getInstanceWorkflowNotificationContext(id);
@@ -2309,6 +2318,8 @@ export const InstanceFillPage: React.FC = () => {
       await updateInstanceWorkflowStatus(id, 'waiting_office');
       setWorkflowStatus('waiting_office');
       await updateInstanceRole(id, 'office');
+      setInstanceRoleContext('office');
+      setShowPostSubmitThankYou(true);
       toast.success('Submitted successfully. Waiting for office checking.');
       void (async () => {
         const ctx = await getInstanceWorkflowNotificationContext(id);
@@ -2328,6 +2339,7 @@ export const InstanceFillPage: React.FC = () => {
     if (role === 'office' && (workflowStatus === 'waiting_office' || isAdminEditMode)) {
       await updateInstanceWorkflowStatus(id, 'completed');
       setWorkflowStatus('completed');
+      setShowPostSubmitThankYou(true);
       toast.success('Office check complete. Form is now completed.');
       void (async () => {
         const ctx = await getInstanceWorkflowNotificationContext(id);
@@ -2456,7 +2468,8 @@ export const InstanceFillPage: React.FC = () => {
 
   const showSubmittedPage =
     !isAdminEditMode &&
-    ((role === 'student' && studentHasSubmitted && workflowStatus !== 'draft') ||
+    (showPostSubmitThankYou ||
+      (role === 'student' && studentHasSubmitted && workflowStatus !== 'draft') ||
       (role === 'trainer' &&
         (workflowStatus === 'completed' ||
           workflowStatus === 'failed' ||
@@ -2465,10 +2478,21 @@ export const InstanceFillPage: React.FC = () => {
   const canViewPdfPreview = role === 'office';
 
   const submittedTitle = 'Thank you';
-  const submittedMessage =
-    role === 'student'
-      ? 'Your assessment has been submitted. Editing is now locked and downloading is disabled.'
-      : 'Your trainer checking has been submitted. Editing is now locked and downloading is disabled.';
+  const submittedMessage = (() => {
+    if (role === 'student') {
+      return 'Your assessment has been submitted. Editing is now locked and downloading is disabled.';
+    }
+    if (role === 'trainer' && workflowStatus === 'draft') {
+      return 'Your review has been submitted. The student has been notified and may resubmit for the next attempt.';
+    }
+    if (role === 'trainer' && workflowStatus === 'failed') {
+      return 'This assessment is closed after 3 attempts. Editing is now locked.';
+    }
+    if (role === 'office') {
+      return 'Office checking is complete. This assessment is now finalised.';
+    }
+    return 'Your trainer checking has been submitted. Editing is now locked and downloading is disabled.';
+  })();
 
   if (showStudentDidNotAttemptPage) {
     return (
