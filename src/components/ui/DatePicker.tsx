@@ -9,6 +9,31 @@ import { cn } from '../utils/cn';
 const DISPLAY_FORMAT = 'dd-MM-yyyy';
 const ISO_FORMAT = 'yyyy-MM-dd';
 
+/** Parse ISO or dd-MM-yyyy (and slash variant) into a local Date for the calendar. */
+function parseCalendarDateInput(raw: string | undefined): Date | undefined {
+  const t = String(raw ?? '').trim();
+  if (!t) return undefined;
+  if (/^\d{4}-\d{2}-\d{2}T/.test(t)) {
+    const d = parse(t.slice(0, 10), ISO_FORMAT, new Date());
+    return isValid(d) ? d : undefined;
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) {
+    const d = parse(t, ISO_FORMAT, new Date());
+    return isValid(d) ? d : undefined;
+  }
+  if (/^\d{2}-\d{2}-\d{4}$/.test(t)) {
+    const [dd, mm, yyyy] = t.split('-');
+    const d = parse(`${yyyy}-${mm}-${dd}`, ISO_FORMAT, new Date());
+    return isValid(d) ? d : undefined;
+  }
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(t)) {
+    const [dd, mm, yyyy] = t.split('/');
+    const d = parse(`${yyyy}-${mm}-${dd}`, ISO_FORMAT, new Date());
+    return isValid(d) ? d : undefined;
+  }
+  return undefined;
+}
+
 interface DatePickerProps {
   value?: string;
   onChange: (value: string) => void;
@@ -64,14 +89,15 @@ export const DatePicker: React.FC<DatePickerProps> = ({
   const inputRef = useRef<HTMLInputElement>(null);
   const [popoverStyle, setPopoverStyle] = useState<React.CSSProperties>({});
 
-  const parsedDate = value ? parse(value, ISO_FORMAT, new Date()) : undefined;
+  const parsedDate = value ? parseCalendarDateInput(value) : undefined;
   const isValidDate = parsedDate && isValid(parsedDate);
   const [activeMonth, setActiveMonth] = useState<Date>(() =>
     isValidDate ? (parsedDate as Date) : new Date()
   );
   const today = new Date();
-  const minDateObj = minDate && isValid(parse(minDate, ISO_FORMAT, new Date())) ? parse(minDate, ISO_FORMAT, new Date()) : undefined;
-  const maxDateObj = maxDate && isValid(parse(maxDate, ISO_FORMAT, new Date())) ? parse(maxDate, ISO_FORMAT, new Date()) : undefined;
+  today.setHours(0, 0, 0, 0);
+  const minDateObj = parseCalendarDateInput(minDate);
+  const maxDateObj = parseCalendarDateInput(maxDate);
 
   const monthStart = (d: Date) => new Date(d.getFullYear(), d.getMonth(), 1);
   const addMonths = (d: Date, delta: number) => new Date(d.getFullYear(), d.getMonth() + delta, 1);
@@ -94,8 +120,8 @@ export const DatePicker: React.FC<DatePickerProps> = ({
     !(disableFuture && nextMonthCandidate > monthStart(today));
 
   useEffect(() => {
-    if (value && isValid(parse(value, ISO_FORMAT, new Date()))) {
-      const d = parse(value, ISO_FORMAT, new Date());
+    const d = value ? parseCalendarDateInput(value) : undefined;
+    if (d && isValid(d)) {
       setInputValue(format(d, DISPLAY_FORMAT));
       setActiveMonth(d);
     } else {

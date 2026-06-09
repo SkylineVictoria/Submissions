@@ -188,11 +188,13 @@ function maxIsoDate(...vals: (string | null | undefined)[]): string | undefined 
  * - Attempt 3 results date must be ≥ assessment summary Trainer2 date (and ≥ Attempt 2 results date).
  */
 function getResultsMinFirstAttemptDate(
-  sum: import('../lib/formEngine').AssessmentSummaryDataEntry | null | undefined,
+  _sum: import('../lib/formEngine').AssessmentSummaryDataEntry | null | undefined,
   /** yyyy-MM-dd from `student.declarationSignature` (normalized); enforced even before the summary is filled. */
   studentDeclarationIso?: string | undefined,
 ): string | undefined {
-  return maxIsoDate(studentDeclarationIso, sum?.student_date_1 ?? undefined);
+  // Use the live declaration field only — summary student_date_1 can be stale or auto-filled later
+  // and must not block attempt-1 dates that are on/after the student's first-page declaration.
+  return studentDeclarationIso || undefined;
 }
 
 function getResultsMinSecondAttemptDate(
@@ -938,7 +940,7 @@ export const InstanceFillPage: React.FC = () => {
           const minFirst = getResultsMinFirstAttemptDate(assessmentSummary, studentDeclarationDateMinIso);
           if (minFirst && isCalendarBefore(normalized, minFirst)) {
             rejectReason =
-              'First attempt date must be on or after the student declaration date (and on or after attempt 1 student date on the assessment summary when set).';
+              'First attempt date must be on or after the student declaration date.';
             return prev;
           }
         }
@@ -2283,8 +2285,14 @@ export const InstanceFillPage: React.FC = () => {
               .map((s) => s.id);
             const firstRd = trIds[0] ? resultsData[trIds[0]] : null;
             const firstAttempt = firstRd?.first_attempt_date;
-            if (firstAttempt && String(firstAttempt).trim() && isCalendarBefore(String(val), String(firstAttempt))) {
-              stepErrors[`q-${q.id}`] = 'Date of Evaluation cannot be before the first attempt date.';
+            const minEval = maxIsoDate(
+              studentDeclarationDateMinIso,
+              firstAttempt && String(firstAttempt).trim()
+                ? normalizeCalendarDateToIso(String(firstAttempt)) ?? undefined
+                : undefined,
+            );
+            if (minEval && isCalendarBefore(String(val), minEval)) {
+              stepErrors[`q-${q.id}`] = 'Date of Evaluation cannot be before the student declaration date or first attempt date.';
             }
           }
         }
@@ -4976,11 +4984,13 @@ export const InstanceFillPage: React.FC = () => {
                           const firstTaskRdForEvalDate = taskResultSectionIdsForEval[0]
                             ? resultsData[taskResultSectionIdsForEval[0]]
                             : null;
-                          const minEvaluationDateIso =
+                          const minEvaluationDateIso = maxIsoDate(
+                            studentDeclarationDateMinIso,
                             firstTaskRdForEvalDate?.first_attempt_date != null &&
-                            String(firstTaskRdForEvalDate.first_attempt_date).trim()
+                              String(firstTaskRdForEvalDate.first_attempt_date).trim()
                               ? normalizeCalendarDateToIso(String(firstTaskRdForEvalDate.first_attempt_date)) ?? undefined
-                              : undefined;
+                              : undefined,
+                          );
                           const re = (q.role_editability as Record<string, boolean>) || {};
                           const isQualUnitField = q.code === 'qualification.code' || q.code === 'qualification.name' || q.code === 'unit.code' || q.code === 'unit.name';
                           const isEvalUnitName = q.code === 'evaluation.unitName';
