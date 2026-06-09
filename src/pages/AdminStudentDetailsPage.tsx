@@ -701,7 +701,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
   const viewerCanLoginAsStudent = viewerIsSuperadmin || Boolean(user?.can_login_as_student);
 
   const loginAsStudent = async () => {
-    if (!viewerIsSuperadmin || !student || !Number.isFinite(sid) || sid <= 0) return;
+    if (!viewerCanLoginAsStudent || !student || !Number.isFinite(sid) || sid <= 0) return;
     // Store student dashboard session. Keep staff session intact (opens in new tab).
     sessionStorage.setItem(
       STUDENT_DASHBOARD_AUTH_STORAGE_KEY,
