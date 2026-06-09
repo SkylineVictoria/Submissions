@@ -401,134 +401,121 @@ export async function updateInstanceAdminReferenceNote(
   return { ok: true };
 }
 
-export async function fetchTemplateForInstance(instanceId: number): Promise<FormTemplate | null> {
-  const instance = await fetchInstance(instanceId);
-  if (!instance) return null;
+export type FetchTemplateOptions = {
+  allowInactiveForAdmin?: boolean;
+  /** Skip lazy task-section migration on instance fill (forms are already provisioned). */
+  skipEnsureTaskSections?: boolean;
+};
 
-  const form = await fetchForm(instance.form_id);
+const TEMPLATE_IN_CHUNK = 200;
+
+function groupByNumericKey<T>(rows: T[], key: keyof T): Map<number, T[]> {
+  const map = new Map<number, T[]>();
+  for (const row of rows) {
+    const id = Number(row[key]);
+    if (!Number.isFinite(id) || id <= 0) continue;
+    const bucket = map.get(id);
+    if (bucket) bucket.push(row);
+    else map.set(id, [row]);
+  }
+  return map;
+}
+
+async function fetchRowsInNumericChunks<T>(
+  table: 'skyline_form_questions' | 'skyline_form_question_options' | 'skyline_form_question_rows',
+  column: 'section_id' | 'question_id' | 'id',
+  ids: number[],
+  orderColumn?: 'sort_order',
+): Promise<T[]> {
+  if (ids.length === 0) return [];
+  const all: T[] = [];
+  for (let i = 0; i < ids.length; i += TEMPLATE_IN_CHUNK) {
+    const chunk = ids.slice(i, i + TEMPLATE_IN_CHUNK);
+    let query = supabase.from(table).select('*').in(column, chunk);
+    if (orderColumn) query = query.order(orderColumn, { ascending: true });
+    const { data, error } = await query;
+    if (error) console.error(`fetchRowsInNumericChunks ${table}.${column} error`, error);
+    if (data) all.push(...(data as T[]));
+  }
+  if (orderColumn) {
+    all.sort((a, b) => Number((a as { sort_order?: number }).sort_order ?? 0) - Number((b as { sort_order?: number }).sort_order ?? 0));
+  }
+  return all;
+}
+
+/** Batched template load — a handful of queries instead of per-question round trips. */
+export async function fetchTemplateForForm(
+  formId: number,
+  options?: FetchTemplateOptions,
+): Promise<FormTemplate | null> {
+  const form = await fetchForm(formId, { allowInactiveForAdmin: options?.allowInactiveForAdmin });
   if (!form) return null;
 
-  await ensureTaskSectionsForForm(instance.form_id);
-  const steps = await fetchFormSteps(instance.form_id);
-  const stepsWithSections: FormStepWithSections[] = [];
-
-  for (const step of steps) {
-    const { data: sections } = await supabase
-      .from('skyline_form_sections')
-      .select('*')
-      .eq('step_id', step.id)
-      .order('sort_order', { ascending: true });
-    const sectionsList = (sections as FormSection[]) || [];
-
-    const sectionsWithQuestions: FormSectionWithQuestions[] = [];
-    for (const section of sectionsList) {
-      const sec = section as FormSection & { assessment_task_row_id?: number | null };
-      let taskRow: FormQuestionRow | null = null;
-      if (sec.assessment_task_row_id) {
-        const { data: row } = await supabase
-          .from('skyline_form_question_rows')
-          .select('*')
-          .eq('id', sec.assessment_task_row_id)
-          .single();
-        taskRow = (row as FormQuestionRow) || null;
-      }
-
-      const { data: questions } = await supabase
-        .from('skyline_form_questions')
-        .select('*')
-        .eq('section_id', section.id)
-        .order('sort_order', { ascending: true });
-      const questionsList = (questions as FormQuestion[]) || [];
-
-      const questionsWithExtras: FormQuestionWithOptionsAndRows[] = [];
-      for (const q of questionsList) {
-        const { data: options } = await supabase
-          .from('skyline_form_question_options')
-          .select('*')
-          .eq('question_id', q.id)
-          .order('sort_order', { ascending: true });
-        const { data: rows } = await supabase
-          .from('skyline_form_question_rows')
-          .select('*')
-          .eq('question_id', q.id)
-          .order('sort_order', { ascending: true });
-        questionsWithExtras.push({
-          ...q,
-          options: (options as FormQuestionOption[]) || [],
-          rows: (rows as FormQuestionRow[]) || [],
-        });
-      }
-      sectionsWithQuestions.push({ ...section, questions: questionsWithExtras, taskRow: taskRow ?? undefined });
-    }
-    stepsWithSections.push({ ...step, sections: sectionsWithQuestions });
+  if (!options?.skipEnsureTaskSections) {
+    await ensureTaskSectionsForForm(formId);
   }
+
+  const steps = await fetchFormSteps(formId);
+  if (steps.length === 0) return { form, steps: [] };
+
+  const stepIds = steps.map((s) => s.id);
+  const { data: sectionsRaw, error: secErr } = await supabase
+    .from('skyline_form_sections')
+    .select('*')
+    .in('step_id', stepIds)
+    .order('sort_order', { ascending: true });
+  if (secErr) console.error('fetchTemplateForForm sections error', secErr);
+  const sectionsList = (sectionsRaw as FormSection[]) || [];
+
+  const sectionIds = sectionsList.map((s) => s.id);
+  const taskRowIds = [
+    ...new Set(
+      sectionsList
+        .map((s) => (s as FormSection & { assessment_task_row_id?: number | null }).assessment_task_row_id)
+        .filter((id): id is number => id != null && Number.isFinite(id) && id > 0),
+    ),
+  ];
+
+  const [questionsList, taskRowsList] = await Promise.all([
+    fetchRowsInNumericChunks<FormQuestion>('skyline_form_questions', 'section_id', sectionIds, 'sort_order'),
+    fetchRowsInNumericChunks<FormQuestionRow>('skyline_form_question_rows', 'id', taskRowIds),
+  ]);
+
+  const questionIds = questionsList.map((q) => q.id);
+  const [optionsListResolved, questionRowsListResolved] = await Promise.all([
+    fetchRowsInNumericChunks<FormQuestionOption>('skyline_form_question_options', 'question_id', questionIds, 'sort_order'),
+    fetchRowsInNumericChunks<FormQuestionRow>('skyline_form_question_rows', 'question_id', questionIds, 'sort_order'),
+  ]);
+
+  const sectionsByStep = groupByNumericKey(sectionsList, 'step_id');
+  const questionsBySection = groupByNumericKey(questionsList, 'section_id');
+  const optionsByQuestion = groupByNumericKey(optionsListResolved, 'question_id');
+  const rowsByQuestion = groupByNumericKey(questionRowsListResolved, 'question_id');
+  const taskRowById = new Map(taskRowsList.map((r) => [r.id, r]));
+
+  const stepsWithSections: FormStepWithSections[] = steps.map((step) => {
+    const stepSections = (sectionsByStep.get(step.id) ?? []).slice().sort((a, b) => a.sort_order - b.sort_order);
+    const sectionsWithQuestions: FormSectionWithQuestions[] = stepSections.map((section) => {
+      const sec = section as FormSection & { assessment_task_row_id?: number | null };
+      const taskRow = sec.assessment_task_row_id ? taskRowById.get(sec.assessment_task_row_id) ?? null : null;
+      const sectionQuestions = (questionsBySection.get(section.id) ?? []).slice().sort((a, b) => a.sort_order - b.sort_order);
+      const questionsWithExtras: FormQuestionWithOptionsAndRows[] = sectionQuestions.map((q) => ({
+        ...q,
+        options: (optionsByQuestion.get(q.id) ?? []).slice().sort((a, b) => a.sort_order - b.sort_order),
+        rows: (rowsByQuestion.get(q.id) ?? []).slice().sort((a, b) => a.sort_order - b.sort_order),
+      }));
+      return { ...section, questions: questionsWithExtras, taskRow: taskRow ?? undefined };
+    });
+    return { ...step, sections: sectionsWithQuestions };
+  });
 
   return { form, steps: stepsWithSections };
 }
 
-export async function fetchTemplateForForm(
-  formId: number,
-  options?: { allowInactiveForAdmin?: boolean }
-): Promise<FormTemplate | null> {
-  const form = await fetchForm(formId, options);
-  if (!form) return null;
-
-  await ensureTaskSectionsForForm(formId);
-  const steps = await fetchFormSteps(formId);
-  const stepsWithSections: FormStepWithSections[] = [];
-
-  for (const step of steps) {
-    const { data: sections } = await supabase
-      .from('skyline_form_sections')
-      .select('*')
-      .eq('step_id', step.id)
-      .order('sort_order', { ascending: true });
-    const sectionsList = (sections as FormSection[]) || [];
-
-    const sectionsWithQuestions: FormSectionWithQuestions[] = [];
-    for (const section of sectionsList) {
-      const sec = section as FormSection & { assessment_task_row_id?: number | null };
-      let taskRow: FormQuestionRow | null = null;
-      if (sec.assessment_task_row_id) {
-        const { data: row } = await supabase
-          .from('skyline_form_question_rows')
-          .select('*')
-          .eq('id', sec.assessment_task_row_id)
-          .single();
-        taskRow = (row as FormQuestionRow) || null;
-      }
-
-      const { data: questions } = await supabase
-        .from('skyline_form_questions')
-        .select('*')
-        .eq('section_id', section.id)
-        .order('sort_order', { ascending: true });
-      const questionsList = (questions as FormQuestion[]) || [];
-
-      const questionsWithExtras: FormQuestionWithOptionsAndRows[] = [];
-      for (const q of questionsList) {
-        const { data: options } = await supabase
-          .from('skyline_form_question_options')
-          .select('*')
-          .eq('question_id', q.id)
-          .order('sort_order', { ascending: true });
-        const { data: rows } = await supabase
-          .from('skyline_form_question_rows')
-          .select('*')
-          .eq('question_id', q.id)
-          .order('sort_order', { ascending: true });
-        questionsWithExtras.push({
-          ...q,
-          options: (options as FormQuestionOption[]) || [],
-          rows: (rows as FormQuestionRow[]) || [],
-        });
-      }
-      sectionsWithQuestions.push({ ...section, questions: questionsWithExtras, taskRow: taskRow ?? undefined });
-    }
-    stepsWithSections.push({ ...step, sections: sectionsWithQuestions });
-  }
-
-  return { form, steps: stepsWithSections };
+export async function fetchTemplateForInstance(instanceId: number): Promise<FormTemplate | null> {
+  const instance = await fetchInstance(instanceId);
+  if (!instance) return null;
+  return fetchTemplateForForm(instance.form_id, { skipEnsureTaskSections: true });
 }
 
 export async function fetchAnswersForInstance(instanceId: number): Promise<FormAnswer[]> {

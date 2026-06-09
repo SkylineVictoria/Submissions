@@ -33,7 +33,7 @@ import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { Check, Loader2 } from 'lucide-react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import {
-  fetchTemplateForInstance,
+  fetchTemplateForForm,
   fetchAnswersForInstance,
   fetchInstance,
   saveAnswer,
@@ -773,7 +773,10 @@ export const InstanceFillPage: React.FC = () => {
       setLoading(false);
       return;
     }
-    const access = await validateInstanceAccessToken(id, accessToken);
+    const [access, inst] = await Promise.all([
+      validateInstanceAccessToken(id, accessToken),
+      fetchInstance(id),
+    ]);
     if (!access.valid || !access.role_context) {
       setAccessDenied(access.reason || 'Invalid secure access link.');
       setLoading(false);
@@ -781,10 +784,10 @@ export const InstanceFillPage: React.FC = () => {
     }
     const tokenRole = access.role_context as FormRole;
     setRole(tokenRole);
-    const [tpl, ans, inst, assessments, rowAssessments, officeData, resultsDataRes, summaryData] = await Promise.all([
-      fetchTemplateForInstance(id),
+    const formId = inst && Number.isFinite(Number(inst.form_id)) ? Number(inst.form_id) : null;
+    const [tpl, ans, assessments, rowAssessments, officeData, resultsDataRes, summaryData] = await Promise.all([
+      formId ? fetchTemplateForForm(formId, { skipEnsureTaskSections: true }) : Promise.resolve(null),
       fetchAnswersForInstance(id),
-      fetchInstance(id),
       fetchTrainerAssessments(id).catch(() => ({})),
       fetchTrainerRowAssessments(id).catch(() => ({})),
       fetchResultsOffice(id).catch(() => ({})),
