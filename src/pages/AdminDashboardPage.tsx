@@ -9,7 +9,7 @@ import { DatePicker } from '../components/ui/DatePicker';
 import { Loader } from '../components/ui/Loader';
 import { toast } from '../utils/toast';
 import { AdminListPagination } from '../components/admin/AdminListPagination';
-import { getAdminDashboardStatsV2, listAdminDashboardInstancesPaged, listBatches, type AdminDashboardStatsV2, type SubmittedInstanceRow, type Batch } from '../lib/formEngine';
+import { getAdminDashboardStatsV2, getOrIssueInstanceAccessLink, listAdminDashboardInstancesPaged, listBatches, type AdminDashboardStatsV2, type SubmittedInstanceRow, type Batch } from '../lib/formEngine';
 
 const ZONE = 'Australia/Melbourne';
 
@@ -189,6 +189,24 @@ export const AdminDashboardPage: React.FC = () => {
     if (r.role_context === 'trainer') return 'Awaiting trainer';
     if (r.role_context === 'office') return 'Awaiting office';
     return 'Awaiting student';
+  };
+
+  const handleOpenAssessment = async (row: SubmittedInstanceRow) => {
+    const url = await getOrIssueInstanceAccessLink(row.id, 'office');
+    if (!url) {
+      toast.error('Failed to open secure link');
+      return;
+    }
+    const nextUrl = (() => {
+      try {
+        const u = new URL(url, window.location.origin);
+        u.searchParams.set('admin', '1');
+        return u.toString();
+      } catch {
+        return url;
+      }
+    })();
+    window.open(nextUrl, '_blank');
   };
 
   if (loading) return <Loader fullPage variant="dots" size="lg" message="Loading dashboard…" />;
@@ -448,16 +466,8 @@ export const AdminDashboardPage: React.FC = () => {
                       <tr
                         key={r.id}
                         className="border-b border-gray-100 hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 cursor-pointer transition-colors"
-                        onClick={() => {
-                          const sid = r.student_id;
-                          const fid = r.form_id;
-                          if (sid && Number.isFinite(sid) && fid && Number.isFinite(Number(fid))) {
-                            navigate(`/admin/students/${sid}?formId=${fid}`);
-                          } else {
-                            navigate('/admin/assessments');
-                          }
-                        }}
-                        title="Open this student’s assessment record"
+                        onClick={() => void handleOpenAssessment(r)}
+                        title="Open assessment (admin edit mode)"
                       >
                         <td className="py-2.5 px-3">
                           <div className="font-semibold text-gray-900 break-words">{r.student_name || '—'}</div>

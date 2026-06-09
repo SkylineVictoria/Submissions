@@ -16,7 +16,6 @@ import { SelectAsync } from '../components/ui/SelectAsync';
 import { Select } from '../components/ui/Select';
 import {
   computeRowUi,
-  melDateString,
   getStudentAttemptDoneText,
   getTrainerAttemptFailedText,
   getMissedAttemptWindowText,
@@ -680,26 +679,22 @@ export const AdminStudentDetailsPage: React.FC = () => {
   };
 
   const handleOpen = async (row: SubmittedInstanceRow) => {
-    const role = row.role_context === 'trainer' ? 'trainer' : row.role_context === 'office' ? 'office' : 'student';
-    if (role === 'student') {
-      const todayMel = melDateString();
-      const start = String((getEffectiveStart(row) || row.start_date) ?? '').trim();
-      const end = String((getEffectiveEnd(row) || row.end_date) ?? '').trim();
-      if (start && todayMel < start) {
-        toast.error(`Available from ${formatDDMMYYYY(start)}`);
-        return;
-      }
-      if (end && todayMel > end) {
-        toast.error(`Expired on ${formatDDMMYYYY(end)} (23:59 AEDT)`);
-        return;
-      }
-    }
-    const url = await getOrIssueInstanceAccessLink(row.id, role);
+    // Match Assessment directory: admin opens with office token + admin edit mode (all fields unlocked).
+    const url = await getOrIssueInstanceAccessLink(row.id, 'office');
     if (!url) {
       toast.error('Failed to open secure link');
       return;
     }
-    window.open(url, '_blank');
+    const nextUrl = (() => {
+      try {
+        const u = new URL(url, window.location.origin);
+        u.searchParams.set('admin', '1');
+        return u.toString();
+      } catch {
+        return url;
+      }
+    })();
+    window.open(nextUrl, '_blank');
   };
 
   const canDeleteStudent = !!student && viewerIsSuperadmin;
@@ -1262,14 +1257,9 @@ export const AdminStudentDetailsPage: React.FC = () => {
                                   />
                                   <button
                                     type="button"
-                                    className="rounded-lg border border-[var(--border)] bg-white p-4 text-left hover:bg-[var(--brand)]/10 focus-visible:bg-[var(--brand)]/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white"
+                                    className="rounded-lg border border-[var(--border)] bg-white p-4 text-left hover:bg-[var(--brand)]/10 focus-visible:bg-[var(--brand)]/10 transition-colors"
                                     onClick={() => void handleOpen(row)}
-                                    disabled={studentOpenDisabled}
-                                    title={
-                                      studentOpenDisabled
-                                        ? win.reason || 'Outside the student access window'
-                                        : 'Open assessment'
-                                    }
+                                    title="Open assessment (admin edit mode)"
                                   >
                                     <div className="text-sm font-semibold text-[var(--text)]">Assessment</div>
                                     <div className="mt-1 text-xs text-gray-600 break-words">{row.form_name || '—'}</div>
