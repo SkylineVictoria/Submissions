@@ -19,7 +19,15 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { supabase } from '../lib/supabase';
-import { fetchForm, fetchFormSteps, updateForm, ensureTaskSectionsForForm, formNameExists } from '../lib/formEngine';
+import {
+  fetchForm,
+  updateForm,
+  ensureTaskSectionsForForm,
+  formNameExists,
+  fetchFormBuilderTree,
+  fetchSectionQuestionsForBuilder,
+  type FormBuilderStep,
+} from '../lib/formEngine';
 import { uploadFormCoverImage, uploadRowImage, uploadQuestionImage } from '../lib/storage';
 import type { Form, FormStep, FormSection, FormQuestion, FormQuestionOption, FormQuestionRow, Json } from '../types/database';
 import { Card } from '../components/ui/Card';
@@ -198,9 +206,7 @@ function isPrebuiltQuestion(question: FormQuestion): boolean {
   return ['student.', 'trainer.', 'qualification.', 'unit.', 'assessment.', 'reasonable_adjustment.'].some((p) => code.startsWith(p));
 }
 
-interface StepWithSections extends FormStep {
-  sections: (FormSection & { questions: FormQuestion[] })[];
-}
+type StepWithSections = FormBuilderStep;
 
 function SortableStepItem({
   step,
@@ -669,7 +675,7 @@ export const AdminFormBuilderPage: React.FC = () => {
         if (!cancelled) setAssessmentTaskRows((data as AssessmentTaskRow[]) || []);
       });
     return () => { cancelled = true; };
-  }, [assessmentTasksGridQuestionId, steps]);
+  }, [assessmentTasksGridQuestionId]);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -741,29 +747,14 @@ export const AdminFormBuilderPage: React.FC = () => {
 
   const loadData = useCallback(async () => {
     if (!formId) return;
-    await ensureTaskSectionsForForm(Number(formId));
-    const f = await fetchForm(Number(formId), { allowInactiveForAdmin: true });
+    const fid = Number(formId);
+    await ensureTaskSectionsForForm(fid);
+    const [f, stepsWithSections] = await Promise.all([
+      fetchForm(fid, { allowInactiveForAdmin: true }),
+      fetchFormBuilderTree(fid),
+    ]);
     setForm(f || null);
     if (f) lastSavedFormNameRef.current = f.name || '';
-    const stepList = await fetchFormSteps(Number(formId));
-    const stepsWithSections: StepWithSections[] = [];
-    for (const s of stepList) {
-      const { data: secs } = await supabase
-        .from('skyline_form_sections')
-        .select('*')
-        .eq('step_id', s.id)
-        .order('sort_order');
-      const sectionsWithQs: (FormSection & { questions: FormQuestion[] })[] = [];
-      for (const sec of secs || []) {
-        const { data: qs } = await supabase
-          .from('skyline_form_questions')
-          .select('*')
-          .eq('section_id', sec.id)
-          .order('sort_order');
-        sectionsWithQs.push({ ...sec, questions: qs || [] });
-      }
-      stepsWithSections.push({ ...s, sections: sectionsWithQs });
-    }
     setSteps(stepsWithSections);
     if (stepsWithSections.length > 0 && !selectedStepId) setSelectedStepId(stepsWithSections[0].id);
     setLoading(false);
@@ -919,20 +910,8 @@ export const AdminFormBuilderPage: React.FC = () => {
   };
 
   const refreshSectionInState = useCallback(async (sectionId: number) => {
-    const { data: qs } = await supabase.from('skyline_form_questions').select('*').eq('section_id', sectionId).order('sort_order');
-    if (!qs || qs.length === 0) return;
-    const questionIds = (qs as FormQuestion[]).map((q) => q.id);
-    const [optsRes, rowsRes] = await Promise.all([
-      supabase.from('skyline_form_question_options').select('*').in('question_id', questionIds).order('sort_order'),
-      supabase.from('skyline_form_question_rows').select('*').in('question_id', questionIds).order('sort_order'),
-    ]);
-    const opts = (optsRes.data as FormQuestionOption[]) || [];
-    const rows = (rowsRes.data as FormQuestionRow[]) || [];
-    const questionsWithExtras: (FormQuestion & { options?: FormQuestionOption[]; rows?: FormQuestionRow[] })[] = (qs as FormQuestion[]).map((q) => ({
-      ...q,
-      options: opts.filter((o) => o.question_id === q.id),
-      rows: rows.filter((r) => r.question_id === q.id),
-    }));
+    const questionsWithExtras = await fetchSectionQuestionsForBuilder(sectionId);
+    if (questionsWithExtras.length === 0) return;
     setSteps((prev) =>
       prev.map((s) => ({
         ...s,

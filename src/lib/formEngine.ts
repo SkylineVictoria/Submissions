@@ -518,6 +518,73 @@ export async function fetchTemplateForInstance(instanceId: number): Promise<Form
   return fetchTemplateForForm(instance.form_id, { skipEnsureTaskSections: true });
 }
 
+/** Form builder tree — steps, sections, and questions only (no options/rows). */
+export type FormBuilderStep = FormStep & {
+  sections: (FormSection & { questions: FormQuestion[] })[];
+};
+
+export async function fetchFormBuilderTree(formId: number): Promise<FormBuilderStep[]> {
+  const steps = await fetchFormSteps(formId);
+  if (steps.length === 0) return [];
+
+  const stepIds = steps.map((s) => s.id);
+  const { data: sectionsRaw, error: secErr } = await supabase
+    .from('skyline_form_sections')
+    .select('*')
+    .in('step_id', stepIds)
+    .order('sort_order', { ascending: true });
+  if (secErr) console.error('fetchFormBuilderTree sections error', secErr);
+  const sectionsList = (sectionsRaw as FormSection[]) || [];
+
+  const sectionIds = sectionsList.map((s) => s.id);
+  const questionsList = await fetchRowsInNumericChunks<FormQuestion>(
+    'skyline_form_questions',
+    'section_id',
+    sectionIds,
+    'sort_order',
+  );
+
+  const sectionsByStep = groupByNumericKey(sectionsList, 'step_id');
+  const questionsBySection = groupByNumericKey(questionsList, 'section_id');
+
+  return steps.map((step) => {
+    const stepSections = (sectionsByStep.get(step.id) ?? []).slice().sort((a, b) => a.sort_order - b.sort_order);
+    const sectionsWithQuestions = stepSections.map((section) => ({
+      ...section,
+      questions: (questionsBySection.get(section.id) ?? []).slice().sort((a, b) => a.sort_order - b.sort_order),
+    }));
+    return { ...step, sections: sectionsWithQuestions };
+  });
+}
+
+/** Load one builder section with options and rows (batched). */
+export async function fetchSectionQuestionsForBuilder(
+  sectionId: number,
+): Promise<(FormQuestion & { options: FormQuestionOption[]; rows: FormQuestionRow[] })[]> {
+  const { data: qs, error } = await supabase
+    .from('skyline_form_questions')
+    .select('*')
+    .eq('section_id', sectionId)
+    .order('sort_order', { ascending: true });
+  if (error) console.error('fetchSectionQuestionsForBuilder error', error);
+  if (!qs || qs.length === 0) return [];
+
+  const questionIds = (qs as FormQuestion[]).map((q) => q.id);
+  const [optionsList, rowsList] = await Promise.all([
+    fetchRowsInNumericChunks<FormQuestionOption>('skyline_form_question_options', 'question_id', questionIds, 'sort_order'),
+    fetchRowsInNumericChunks<FormQuestionRow>('skyline_form_question_rows', 'question_id', questionIds, 'sort_order'),
+  ]);
+
+  const optionsByQuestion = groupByNumericKey(optionsList, 'question_id');
+  const rowsByQuestion = groupByNumericKey(rowsList, 'question_id');
+
+  return (qs as FormQuestion[]).map((q) => ({
+    ...q,
+    options: optionsByQuestion.get(q.id) ?? [],
+    rows: rowsByQuestion.get(q.id) ?? [],
+  }));
+}
+
 export async function fetchAnswersForInstance(instanceId: number): Promise<FormAnswer[]> {
   const { data, error } = await supabase
     .from('skyline_form_answers')
