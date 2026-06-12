@@ -139,7 +139,8 @@ export async function runPdfJob<T>(meta: PdfJobMeta, fn: (page: Page) => Promise
 export async function preparePageForPrint(page: Page): Promise<void> {
   await page.waitForSelector('#pdf-ready', { state: 'attached', timeout: 10_000 }).catch(() => undefined);
   // Do not use `async` here — tsx/esbuild injects __name helpers that break in the browser.
-  await page.evaluate(() =>
+  const imageWaitMs = 20_000;
+  await page.evaluate((timeoutMs) =>
     Promise.all(
       Array.from(document.images).map(
         (img) =>
@@ -148,14 +149,46 @@ export async function preparePageForPrint(page: Page): Promise<void> {
               resolve();
               return;
             }
-            const done = () => resolve();
-            img.addEventListener('load', done, { once: true });
-            img.addEventListener('error', done, { once: true });
-            if (img.complete) done();
+            let settled = false;
+            const done = () => {
+              if (settled) return;
+              settled = true;
+              resolve();
+            };
+            const timer = setTimeout(done, timeoutMs);
+            img.addEventListener(
+              'load',
+              () => {
+                clearTimeout(timer);
+                done();
+              },
+              { once: true }
+            );
+            img.addEventListener(
+              'error',
+              () => {
+                clearTimeout(timer);
+                done();
+              },
+              { once: true }
+            );
+            if (img.complete) {
+              clearTimeout(timer);
+              done();
+            }
           })
       )
-    )
+    ),
+    imageWaitMs
   );
+  const broken = await page.evaluate(() =>
+    Array.from(document.images)
+      .filter((img) => img.src && img.naturalWidth === 0)
+      .map((img) => img.src.slice(0, 160))
+  );
+  if (broken.length > 0) {
+    console.warn(`[PDF] ${broken.length} image(s) did not load (PDF will still generate):`, broken);
+  }
   await page.evaluate(() => document.fonts.ready);
   await page.evaluate(() => {
     document.getElementById('pdf-ready')?.setAttribute('data-print-ready', '1');

@@ -5,7 +5,7 @@ import express, { type Response } from 'express';
 import { createClient } from '@supabase/supabase-js';
 import { createPdfJobId } from './pdfBrowser.js';
 import { logMemory } from './pdfMemory.js';
-import { pdfImageSrc, finalizePdfHtml, MAX_BULK_PDF_EXPORT } from './pdfConstants.js';
+import { pdfImageSrc, escapeImgSrc, finalizePdfHtml, MAX_BULK_PDF_EXPORT } from './pdfConstants.js';
 import { resolveSlitLogoDataUrls } from './logoUrls.js';
 import {
   renderHtmlToPdfBuffer,
@@ -290,6 +290,11 @@ function escapeHtmlAttr(s: string): string {
   return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 }
 
+function gridRowImgHtml(imageUrl: string | null | undefined): string {
+  if (!imageUrl) return '';
+  return `<img src="${escapeImgSrc(imageUrl, 'grid-row-image')}" class="signature-img" alt="" loading="eager" />`;
+}
+
 function formatShortLongAnswerCellHtml(val: string | number | Record<string, unknown> | undefined): string {
   if (val != null && typeof val === 'object' && !Array.isArray(val)) {
     const o = val as Record<string, unknown>;
@@ -297,10 +302,10 @@ function formatShortLongAnswerCellHtml(val: string | number | Record<string, unk
       const t = labelToHtml(String(o.text ?? ''));
       const u =
         typeof o.answerImageUrl === 'string' && o.answerImageUrl.trim()
-          ? pdfImageSrc(o.answerImageUrl.trim(), 'answer-image')
+          ? escapeImgSrc(o.answerImageUrl, 'answer-image')
           : '';
       const img = u
-        ? `<div style="margin-top:8px"><img src="${escapeHtmlAttr(u)}" alt="" style="max-width:100%;max-height:280px;object-fit:contain;border:1px solid #ddd;border-radius:4px"/></div>`
+        ? `<div style="margin-top:8px"><img src="${u}" class="answer-image" alt="" style="max-width:100%;max-height:280px;object-fit:contain;border:1px solid #ddd;border-radius:4px" loading="eager"/></div>`
         : '';
       return (t ? `<div style="white-space:pre-line">${t}</div>` : '') + img;
     }
@@ -1365,14 +1370,14 @@ function buildHtml(data: {
             const val = answers.get(key) as Record<string, string> | undefined;
             html += '<tr>';
             if (isSplit) {
-              html += `<td class="col-question">${row.row_image_url ? `<img src="${row.row_image_url}" class="signature-img" alt="" /><br/>${row.row_label}` : row.row_label}</td>`;
+              html += `<td class="col-question">${row.row_image_url ? `${gridRowImgHtml(row.row_image_url)}<br/>${row.row_label}` : row.row_label}</td>`;
             } else if (isNoImage) {
               if (noImageIncludeBaseColumns) {
                 html += `<td class="col-question">${row.row_label}</td>`;
                 html += `<td class="col-question">${row.row_help || '—'}</td>`;
               }
             } else {
-              html += `<td class="col-question">${row.row_image_url ? `<img src="${row.row_image_url}" class="signature-img" alt="" /><br/>${row.row_label}` : row.row_label}</td>`;
+              html += `<td class="col-question">${row.row_image_url ? `${gridRowImgHtml(row.row_image_url)}<br/>${row.row_label}` : row.row_label}</td>`;
             }
             for (let i = 0; i < cols.length; i++) {
               const colType = columnsMeta[i]?.type === 'question' ? 'question' : 'answer';
@@ -1516,7 +1521,7 @@ function buildHtml(data: {
             const imgStyle = fullWidth
               ? 'max-width:100%;width:100%;height:auto;max-height:520px;object-fit:contain;border:1px solid #e5e7eb;border-radius:6px;display:block;margin:0 auto;'
               : 'max-width:100%;height:auto;max-height:280px;object-fit:contain;border:1px solid #e5e7eb;border-radius:6px;';
-            const img = `<img src="${imageUrl.replace(/"/g, '&quot;')}" alt="" style="${imgStyle}" />`;
+            const img = `<img src="${escapeImgSrc(imageUrl, 'instruction-image')}" alt="" loading="eager" style="${imgStyle}" />`;
             if (fullWidth || layout === 'above') {
               return `<div>${img}<div style="margin-top:10px">${contentHtml}</div></div>`;
             }
@@ -1602,7 +1607,7 @@ function buildHtml(data: {
             const imgStyle = fullWidth
               ? 'max-width:100%;width:100%;height:auto;max-height:520px;object-fit:contain;border:1px solid #e5e7eb;border-radius:6px;display:block;margin:0 auto;'
               : 'max-width:100%;height:auto;max-height:280px;object-fit:contain;border:1px solid #e5e7eb;border-radius:6px;';
-            const img = `<img src="${imageUrl.replace(/"/g, '&quot;')}" alt="" style="${imgStyle}" />`;
+            const img = `<img src="${escapeImgSrc(imageUrl, 'instruction-image')}" alt="" loading="eager" style="${imgStyle}" />`;
             if (fullWidth || layout === 'above') {
               return `<div>${img}<div style="margin-top:10px">${contentHtml}</div></div>`;
             }
@@ -1762,14 +1767,14 @@ function buildHtml(data: {
                 const rowNo = rowSat === 'no';
                 html += '<tr>';
                 if (isSplit) {
-                  html += `<td class="value-cell col-question">${r.row_image_url ? `<img src="${r.row_image_url}" class="signature-img" alt="" /><br/>${r.row_label}` : r.row_label}</td>`;
+                  html += `<td class="value-cell col-question">${r.row_image_url ? `${gridRowImgHtml(r.row_image_url)}<br/>${r.row_label}` : r.row_label}</td>`;
                 } else if (isNoImage) {
                   if (noImageIncludeBaseColumns) {
                     html += `<td class="label-cell col-question">${r.row_label}</td>`;
                     html += `<td class="value-cell col-question">${r.row_help || '—'}</td>`;
                   }
                 } else {
-                  html += `<td class="label-cell col-question">${r.row_image_url ? `<img src="${r.row_image_url}" class="signature-img" alt="" /><br/>${r.row_label}` : r.row_label}</td>`;
+                  html += `<td class="label-cell col-question">${r.row_image_url ? `${gridRowImgHtml(r.row_image_url)}<br/>${r.row_label}` : r.row_label}</td>`;
                 }
                 for (let ci = 0; ci < cols.length; ci++) {
                   const colType = columnsMeta[ci]?.type === 'question' ? 'question' : 'answer';
@@ -1812,7 +1817,7 @@ function buildHtml(data: {
                 const blockFull = (block as { imageFullWidth?: boolean }).imageFullWidth === true;
                 const blockLayout = blockFull ? 'above' : ((block as { imageLayout?: string }).imageLayout || (isImageOnly ? 'above' : 'side_by_side'));
                 const blockPct = Math.max(20, Math.min(80, (block as { imageWidthPercent?: number }).imageWidthPercent || 50));
-                const imgTag = blockImgUrl ? `<img src="${blockImgUrl}" alt="" style="max-width:100%;${blockFull ? 'width:100%;display:block;margin:0 auto;' : ''}max-height:${blockFull ? 520 : 280}px;object-fit:contain;border:1px solid #ddd;border-radius:4px" />` : '';
+                const imgTag = blockImgUrl ? `<img src="${escapeImgSrc(blockImgUrl, 'content-block-image')}" alt="" loading="eager" style="max-width:100%;${blockFull ? 'width:100%;display:block;margin:0 auto;' : ''}max-height:${blockFull ? 520 : 280}px;object-fit:contain;border:1px solid #ddd;border-radius:4px" />` : '';
                 let innerHtml = '';
                 if (!imgTag) innerHtml = `<div class="task-q-additional-instruction">${blockContent || ''}</div>`;
                 else if (blockLayout === 'above') innerHtml = `<div style="margin-bottom:8px">${imgTag}</div><div class="task-q-additional-instruction">${blockContent || ''}</div>`;
@@ -1832,7 +1837,7 @@ function buildHtml(data: {
                   const cqImgUrl = cqPm?.imageUrl as string | undefined;
                   const cqLayout = (cqPm?.imageLayout as string) || 'side_by_side';
                   const cqPct = Math.max(20, Math.min(80, (cqPm?.imageWidthPercent as number) || 50));
-                  const cqImgTag = cqImgUrl ? `<img src="${cqImgUrl}" alt="" style="max-width:100%;max-height:280px;object-fit:contain;border:1px solid #ddd;border-radius:4px" />` : '';
+                  const cqImgTag = cqImgUrl ? `<img src="${escapeImgSrc(cqImgUrl, 'nested-question-image')}" alt="" loading="eager" style="max-width:100%;max-height:280px;object-fit:contain;border:1px solid #ddd;border-radius:4px" />` : '';
                   const cqDisp = taskQNumById.get(cq.id);
                   const cqNumPrefix = cqDisp != null ? `<span class="task-q-num-inline" style="margin-right:6px">Q${cqDisp}:</span>` : '';
                   let labelHtml = `<div class="task-q-question-label">${cqNumPrefix}${labelToHtml(cq.label)}</div>`;
@@ -1883,10 +1888,10 @@ function buildHtml(data: {
                     const rowYes = rowSat === 'yes';
                     const rowNo = rowSat === 'no';
                     html += '<tr>';
-                    if (cIsSplit) html += `<td class="value-cell col-question">${r.row_image_url ? `<img src="${r.row_image_url}" class="signature-img" alt="" /><br/>${r.row_label}` : r.row_label}</td>`;
+                    if (cIsSplit) html += `<td class="value-cell col-question">${r.row_image_url ? `${gridRowImgHtml(r.row_image_url)}<br/>${r.row_label}` : r.row_label}</td>`;
                     else if (cIsNoImage && cNoImageIncludeBaseColumns) { html += `<td class="label-cell col-question">${r.row_label}</td>`;
                       html += `<td class="value-cell col-question">${r.row_help || '—'}</td>`;
-                    } else if (!cIsNoImage) html += `<td class="label-cell col-question">${r.row_image_url ? `<img src="${r.row_image_url}" class="signature-img" alt="" /><br/>${r.row_label}` : r.row_label}</td>`;
+                    } else if (!cIsNoImage) html += `<td class="label-cell col-question">${r.row_image_url ? `${gridRowImgHtml(r.row_image_url)}<br/>${r.row_label}` : r.row_label}</td>`;
                     for (let ci = 0; ci < cCols.length; ci++) {
                       const colType = cColumnsMeta[ci]?.type === 'question' ? 'question' : 'answer';
                       const questionCell = cIsNoImage && !cNoImageIncludeBaseColumns && ci === cFirstQuestionColIndex ? (r.row_label || r.row_help || '—') : (r.row_help || '—');
@@ -1920,7 +1925,7 @@ function buildHtml(data: {
           const qLayout = qFull ? 'above' : ((pmTop?.imageLayout as string) || 'side_by_side');
           const qPct = Math.max(20, Math.min(80, (pmTop?.imageWidthPercent as number) || 50));
           if (qImgUrl) {
-            const qImgTag = `<img src="${qImgUrl}" alt="" style="max-width:100%;${qFull ? 'width:100%;display:block;margin:0 auto;' : ''}max-height:${qFull ? 520 : 280}px;object-fit:contain;border:1px solid #ddd;border-radius:4px" />`;
+            const qImgTag = `<img src="${escapeImgSrc(qImgUrl, 'question-image')}" alt="" loading="eager" style="max-width:100%;${qFull ? 'width:100%;display:block;margin:0 auto;' : ''}max-height:${qFull ? 520 : 280}px;object-fit:contain;border:1px solid #ddd;border-radius:4px" />`;
             if (qLayout === 'above') labelCellContent = `<div style="margin-bottom:8px">${qImgTag}</div>${labelCellContent}`;
             else if (qLayout === 'below') labelCellContent += `<div style="margin-top:8px">${qImgTag}</div>`;
             else labelCellContent = `<div style="display:flex;gap:16px;align-items:flex-start"><div style="flex:1;min-width:0">${labelCellContent}</div><div style="width:${qPct}%;flex-shrink:0">${qImgTag}</div></div>`;
@@ -1969,14 +1974,14 @@ function buildHtml(data: {
               const val = answers.get(key) as Record<string, string> | undefined;
               html += '<tr>';
               if (isSplit) {
-                html += `<td class="value-cell col-question">${row.row_image_url ? `<img src="${row.row_image_url}" class="signature-img" alt="" /><br/>${row.row_label}` : row.row_label}</td>`;
+                html += `<td class="value-cell col-question">${row.row_image_url ? `${gridRowImgHtml(row.row_image_url)}<br/>${row.row_label}` : row.row_label}</td>`;
               } else if (isNoImage) {
                 if (noImageIncludeBaseColumns) {
                   html += `<td class="label-cell col-question">${row.row_label}</td>`;
                   html += `<td class="value-cell col-question">${row.row_help || '—'}</td>`;
                 }
               } else {
-                html += `<td class="label-cell col-question">${row.row_image_url ? `<img src="${row.row_image_url}" class="signature-img" alt="" /><br/>${row.row_label}` : row.row_label}</td>`;
+                html += `<td class="label-cell col-question">${row.row_image_url ? `${gridRowImgHtml(row.row_image_url)}<br/>${row.row_label}` : row.row_label}</td>`;
               }
               for (let i = 0; i < cols.length; i++) {
                 const colType = columnsMeta[i]?.type === 'question' ? 'question' : 'answer';
@@ -2018,7 +2023,7 @@ function buildHtml(data: {
               const blockFull = (block as { imageFullWidth?: boolean }).imageFullWidth === true;
               const blockLayout = blockFull ? 'above' : ((block as { imageLayout?: string }).imageLayout || (isImageOnly ? 'above' : 'side_by_side'));
               const blockPct = Math.max(20, Math.min(80, (block as { imageWidthPercent?: number }).imageWidthPercent || 50));
-              const imgTag = blockImgUrl ? `<img src="${blockImgUrl}" alt="" style="max-width:100%;${blockFull ? 'width:100%;display:block;margin:0 auto;' : ''}max-height:${blockFull ? 520 : 280}px;object-fit:contain;border:1px solid #ddd;border-radius:4px" />` : '';
+              const imgTag = blockImgUrl ? `<img src="${escapeImgSrc(blockImgUrl, 'content-block-image')}" alt="" loading="eager" style="max-width:100%;${blockFull ? 'width:100%;display:block;margin:0 auto;' : ''}max-height:${blockFull ? 520 : 280}px;object-fit:contain;border:1px solid #ddd;border-radius:4px" />` : '';
               let innerHtml = '';
               if (!imgTag) innerHtml = `<div class="task-q-additional-instruction">${blockContent || ''}</div>`;
               else if (blockLayout === 'above') innerHtml = `<div style="margin-bottom:8px">${imgTag}</div><div class="task-q-additional-instruction">${blockContent || ''}</div>`;
@@ -2040,7 +2045,7 @@ function buildHtml(data: {
                 const cqImgUrl = cqPm?.imageUrl as string | undefined;
                 const cqLayout = (cqPm?.imageLayout as string) || 'side_by_side';
                 const cqPct = Math.max(20, Math.min(80, (cqPm?.imageWidthPercent as number) || 50));
-                const cqImgTag = cqImgUrl ? `<img src="${cqImgUrl}" alt="" style="max-width:100%;max-height:280px;object-fit:contain;border:1px solid #ddd;border-radius:4px" />` : '';
+                const cqImgTag = cqImgUrl ? `<img src="${escapeImgSrc(cqImgUrl, 'nested-question-image')}" alt="" loading="eager" style="max-width:100%;max-height:280px;object-fit:contain;border:1px solid #ddd;border-radius:4px" />` : '';
                 const cqDispA1 = taskQNumById.get(cq.id);
                 const cqNumPrefixA1 = cqDispA1 != null ? `<span class="task-q-num-inline" style="margin-right:6px">Q${cqDispA1}:</span>` : '';
                 let labelHtml = `<div class="task-q-question-label">${cqNumPrefixA1}${labelToHtml(cq.label)}</div>`;
@@ -2086,14 +2091,14 @@ function buildHtml(data: {
                 const val = answers.get(key) as Record<string, string> | undefined;
                 html += '<tr>';
                 if (cIsSplit) {
-                  html += `<td class="value-cell col-question">${row.row_image_url ? `<img src="${row.row_image_url}" class="signature-img" alt="" /><br/>${row.row_label}` : row.row_label}</td>`;
+                  html += `<td class="value-cell col-question">${row.row_image_url ? `${gridRowImgHtml(row.row_image_url)}<br/>${row.row_label}` : row.row_label}</td>`;
                 } else if (cIsNoImage) {
                   if (cNoImageIncludeBaseColumns) {
                     html += `<td class="label-cell col-question">${row.row_label}</td>`;
                     html += `<td class="value-cell col-question">${row.row_help || '—'}</td>`;
                   }
                 } else {
-                  html += `<td class="label-cell col-question">${row.row_image_url ? `<img src="${row.row_image_url}" class="signature-img" alt="" /><br/>${row.row_label}` : row.row_label}</td>`;
+                  html += `<td class="label-cell col-question">${row.row_image_url ? `${gridRowImgHtml(row.row_image_url)}<br/>${row.row_label}` : row.row_label}</td>`;
                 }
                 for (let i = 0; i < cCols.length; i++) {
                   const colType = cColumnsMeta[i]?.type === 'question' ? 'question' : 'answer';

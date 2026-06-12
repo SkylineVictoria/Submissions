@@ -3,6 +3,7 @@ import fs from 'fs';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { renderAppendixAMatrixHtml } from './appendixAMatrixData.js';
 import { renderTaskQuestionInstructionHtml } from './instructionBlocksHtml.js';
+import { escapeImgSrc, pdfImageSrc } from './pdfConstants.js';
 
 export interface FormAnswer {
   question_id: number;
@@ -58,9 +59,16 @@ export interface FormQuestionOption {
 /** Renders signature value: image (data:...) as img, plain text as red italic span */
 function renderSignatureHtml(val: string | null | undefined): string {
   if (!val) return '';
-  if (val.startsWith('data:')) return '<img src="' + val.replace(/"/g, '&quot;') + '" alt="Signature" style="max-height:36px;max-width:140px" />';
+  if (val.startsWith('data:')) {
+    return `<img src="${escapeImgSrc(pdfImageSrc(val.replace(/\s+/g, ''), 'signature'), 'signature')}" alt="Signature" class="signature-img" style="max-height:36px;max-width:140px" loading="eager" />`;
+  }
   const escaped = String(val).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   return '<span style="color:#dc2626;font-style:italic;font-family:serif">' + escaped + '</span>';
+}
+
+function gridRowImgHtml(imageUrl: string | null | undefined): string {
+  if (!imageUrl) return '';
+  return `<img src="${escapeImgSrc(imageUrl, 'grid-row-image')}" class="signature-img" alt="" loading="eager" />`;
 }
 
 /** Escapes HTML and converts newlines to <br> so line breaks in question labels display correctly in PDF */
@@ -85,9 +93,12 @@ function formatShortLongAnswerCellHtml(val: string | number | Record<string, unk
     const o = val as Record<string, unknown>;
     if ('text' in o || 'answerImageUrl' in o) {
       const t = labelToHtml(String(o.text ?? ''));
-      const u = typeof o.answerImageUrl === 'string' && o.answerImageUrl.trim() ? o.answerImageUrl : '';
+      const u =
+        typeof o.answerImageUrl === 'string' && o.answerImageUrl.trim()
+          ? escapeImgSrc(o.answerImageUrl, 'answer-image')
+          : '';
       const img = u
-        ? `<div style="margin-top:8px"><img src="${escapeHtmlAttr(u)}" alt="" style="max-width:100%;max-height:280px;object-fit:contain;border:1px solid #ddd;border-radius:4px"/></div>`
+        ? `<div style="margin-top:8px"><img src="${u}" class="answer-image" alt="" loading="eager" style="max-width:100%;max-height:280px;object-fit:contain;border:1px solid #ddd;border-radius:4px"/></div>`
         : '';
       return (t ? `<div style="white-space:pre-line">${t}</div>` : '') + img;
     }
@@ -915,12 +926,12 @@ export function buildHtml(data: {
             const val = answers.get(key) as Record<string, string> | undefined;
             html += '<tr>';
             if (isSplit) {
-              html += `<td>${row.row_image_url ? `<img src="${row.row_image_url}" class="signature-img" alt="" /><br/>${row.row_label}` : row.row_label}</td>`;
+              html += `<td>${row.row_image_url ? `${gridRowImgHtml(row.row_image_url)}<br/>${row.row_label}` : row.row_label}</td>`;
             } else if (isNoImage) {
               html += `<td>${row.row_label}</td>`;
               html += `<td>${row.row_help || '—'}</td>`;
             } else {
-              html += `<td>${row.row_image_url ? `<img src="${row.row_image_url}" class="signature-img" alt="" /><br/>${row.row_label}` : row.row_label}</td>`;
+              html += `<td>${row.row_image_url ? `${gridRowImgHtml(row.row_image_url)}<br/>${row.row_label}` : row.row_label}</td>`;
             }
             for (let i = 0; i < cols.length; i++) {
               const colType = columnTypes[i] === 'question' ? 'question' : 'answer';
@@ -983,7 +994,7 @@ export function buildHtml(data: {
         const renderInstructionImage = (block: Record<string, unknown>) => {
           const imageUrl = String(block.imageUrl || '').trim();
           if (!imageUrl) return '';
-          const img = `<img src="${imageUrl.replace(/"/g, '&quot;')}" alt="" style="max-width:100%;height:auto;object-fit:contain;border:1px solid #e5e7eb;border-radius:6px;" />`;
+          const img = `<img src="${escapeImgSrc(imageUrl, 'instruction-image')}" alt="" loading="eager" style="max-width:100%;height:auto;object-fit:contain;border:1px solid #e5e7eb;border-radius:6px;" />`;
           return `<div style="margin:10px 0 8px 0">${img}</div>`;
         };
         if (instr) {
@@ -1049,7 +1060,7 @@ export function buildHtml(data: {
           const renderInstructionImage = (block: Record<string, unknown>) => {
             const imageUrl = String(block.imageUrl || '').trim();
             if (!imageUrl) return '';
-            const img = `<img src="${imageUrl.replace(/"/g, '&quot;')}" alt="" style="max-width:100%;height:auto;object-fit:contain;border:1px solid #e5e7eb;border-radius:6px;" />`;
+            const img = `<img src="${escapeImgSrc(imageUrl, 'instruction-image')}" alt="" loading="eager" style="max-width:100%;height:auto;object-fit:contain;border:1px solid #e5e7eb;border-radius:6px;" />`;
             return `<div style="margin:10px 0 8px 0">${img}</div>`;
           };
 
@@ -1196,12 +1207,12 @@ export function buildHtml(data: {
               const val = answers.get(key) as Record<string, string> | undefined;
               html += '<tr>';
               if (isSplit) {
-                html += `<td class="value-cell">${row.row_image_url ? `<img src="${row.row_image_url}" class="signature-img" alt="" /><br/>${row.row_label}` : row.row_label}</td>`;
+                html += `<td class="value-cell">${row.row_image_url ? `${gridRowImgHtml(row.row_image_url)}<br/>${row.row_label}` : row.row_label}</td>`;
               } else if (isNoImage) {
                 html += `<td class="label-cell">${row.row_label}</td>`;
                 html += `<td class="value-cell">${row.row_help || '—'}</td>`;
               } else {
-                html += `<td class="label-cell">${row.row_image_url ? `<img src="${row.row_image_url}" class="signature-img" alt="" /><br/>${row.row_label}` : row.row_label}</td>`;
+                html += `<td class="label-cell">${row.row_image_url ? `${gridRowImgHtml(row.row_image_url)}<br/>${row.row_label}` : row.row_label}</td>`;
               }
               const columnTypes = (pm.columnTypes as string[]) || cols.map(() => 'answer');
               for (let i = 0; i < cols.length; i++) {
@@ -1242,7 +1253,7 @@ export function buildHtml(data: {
               const blockLayout = blockFull ? 'above' : ((block as { imageLayout?: string }).imageLayout || (isImageBlock ? 'above' : 'side_by_side'));
               const blockPct = Math.max(20, Math.min(80, (block as { imageWidthPercent?: number }).imageWidthPercent || 50));
               const imgTag = blockImgUrl
-                ? `<img src="${blockImgUrl}" alt="" style="max-width:100%;${blockFull ? 'width:100%;display:block;margin:0 auto;' : ''}max-height:${blockFull ? 520 : 280}px;object-fit:contain;border:1px solid #ddd;border-radius:4px" />`
+                ? `<img src="${escapeImgSrc(blockImgUrl, 'content-block-image')}" alt="" loading="eager" style="max-width:100%;${blockFull ? 'width:100%;display:block;margin:0 auto;' : ''}max-height:${blockFull ? 520 : 280}px;object-fit:contain;border:1px solid #ddd;border-radius:4px" />`
                 : '';
               let innerHtml = '';
               if (!imgTag) innerHtml = `<div class="task-q-additional-instruction">${textOnly}</div>`;
@@ -1290,12 +1301,12 @@ export function buildHtml(data: {
                 const val = answers.get(key) as Record<string, string> | undefined;
                 html += '<tr>';
                 if (cIsSplit) {
-                  html += `<td class="value-cell">${row.row_image_url ? `<img src="${row.row_image_url}" class="signature-img" alt="" /><br/>${row.row_label}` : row.row_label}</td>`;
+                  html += `<td class="value-cell">${row.row_image_url ? `${gridRowImgHtml(row.row_image_url)}<br/>${row.row_label}` : row.row_label}</td>`;
                 } else if (cIsNoImage) {
                   html += `<td class="label-cell">${row.row_label}</td>`;
                   html += `<td class="value-cell">${row.row_help || '—'}</td>`;
                 } else {
-                  html += `<td class="label-cell">${row.row_image_url ? `<img src="${row.row_image_url}" class="signature-img" alt="" /><br/>${row.row_label}` : row.row_label}</td>`;
+                  html += `<td class="label-cell">${row.row_image_url ? `${gridRowImgHtml(row.row_image_url)}<br/>${row.row_label}` : row.row_label}</td>`;
                 }
                 const cColumnTypes = (cqPm.columnTypes as string[]) || cCols.map(() => 'answer');
                 for (let i = 0; i < cCols.length; i++) {

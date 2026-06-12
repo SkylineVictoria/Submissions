@@ -19,6 +19,14 @@ export const PDF_PRINT_CSS = `
       max-height: 60px;
       object-fit: contain;
     }
+    .answer-image,
+    .task-q-question-label-cell img,
+    .task-q-answer-cell img,
+    .task-q-content-block img {
+      max-width: 100%;
+      max-height: 280px;
+      object-fit: contain;
+    }
     @media print {
       * {
         animation: none !important;
@@ -38,15 +46,31 @@ export const DEFAULT_PAGE_PDF_OPTIONS = {
   timeout: PDF_RENDER_TIMEOUT_MS,
 };
 
+function escapeHtmlAttr(s: string): string {
+  return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
+
+/** Normalize image src (trim; strip line breaks from data URLs). */
+export function normalizeImageSrc(url: string): string {
+  const u = String(url || '').trim();
+  if (!u) return '';
+  return u.startsWith('data:') ? u.replace(/\s+/g, '') : u;
+}
+
 /** Warn when inline images bloat HTML (signatures/photos as base64). */
 export function pdfImageSrc(url: string, context: string): string {
-  const u = String(url || '').trim();
+  const u = normalizeImageSrc(url);
   if (u.startsWith('data:') && u.length > 400_000) {
     console.warn(
       `[PDF] large base64 image (~${Math.round(u.length / 1024)}KB) in ${context} — prefer storage URLs`
     );
   }
   return u;
+}
+
+/** Safe `src` attribute value for PDF HTML img tags (https or data URLs). */
+export function escapeImgSrc(url: string, context = 'image'): string {
+  return escapeHtmlAttr(pdfImageSrc(url, context));
 }
 
 /** Inject print CSS and #pdf-ready marker for Playwright (never use networkidle). */

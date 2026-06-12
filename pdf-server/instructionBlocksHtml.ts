@@ -1,3 +1,5 @@
+import { escapeImgSrc } from './pdfConstants.js';
+
 type InstructionBlockRow = { heading?: string; content?: string; cells?: string[] };
 type InstructionBlock = {
   id?: string;
@@ -22,7 +24,7 @@ function wrapInstructionContentWithImage(contentHtml: string, block: Record<stri
   const imgStyle = fullWidth
     ? 'max-width:100%;width:100%;height:auto;max-height:520px;object-fit:contain;border:1px solid #e5e7eb;border-radius:6px;display:block;margin:0 auto;'
     : 'max-width:100%;height:auto;max-height:280px;object-fit:contain;border:1px solid #e5e7eb;border-radius:6px;';
-  const img = `<img src="${imageUrl.replace(/"/g, '&quot;')}" alt="" style="${imgStyle}" />`;
+  const img = `<img src="${escapeImgSrc(imageUrl, 'instruction-block-image')}" alt="" loading="eager" style="${imgStyle}" />`;
   if (fullWidth || layout === 'above') {
     return `<div>${img}<div style="margin-top:10px">${contentHtml}</div></div>`;
   }
