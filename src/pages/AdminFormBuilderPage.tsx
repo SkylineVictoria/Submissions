@@ -43,6 +43,7 @@ import { SectionInstructionsEditor } from '../components/form-fill/SectionInstru
 import { AdditionalInstructionsEditor } from '../components/form-fill/AdditionalInstructionsEditor';
 import { QuestionInstructionEditor } from '../components/form-fill/QuestionInstructionEditor';
 import { getQuestionInstructionListLabel } from '../utils/questionInstructionLabel';
+import { getTaskQuestionDisplayNumbers } from '../lib/taskQuestionsNumbering';
 import { TableLayoutSelect } from '../components/form-fill/TableLayoutSelect';
 import { cn } from '../components/utils/cn';
 
@@ -529,6 +530,8 @@ function SortableQuestionItem({
   onMenuToggle,
   menuRef,
   isInstruction = false,
+  questionDisplayNumber,
+  numberedQuestionTotal,
 }: {
   question: FormQuestion;
   index: number;
@@ -542,7 +545,13 @@ function SortableQuestionItem({
   onMenuToggle: () => void;
   menuRef: React.RefObject<HTMLDivElement | null>;
   isInstruction?: boolean;
+  /** When set (task_questions), instructions/page_breaks do not consume a Q number. */
+  questionDisplayNumber?: number;
+  numberedQuestionTotal?: number;
 }) {
+  const listNumber = questionDisplayNumber ?? index + 1;
+  const listTotal = numberedQuestionTotal ?? totalCount;
+  const isPageBreak = question.type === 'page_break';
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: `question-${question.id}` });
 
   const style = {
@@ -571,11 +580,18 @@ function SortableQuestionItem({
       >
         <GripVertical className="w-4 h-4 text-gray-500" />
       </button>
-      <div className="flex-1 min-w-0 truncate" title={isInstruction ? 'Instruction' : `Question ${index + 1} of ${totalCount}`}>
+      <div
+        className="flex-1 min-w-0 truncate"
+        title={isInstruction ? 'Instruction' : isPageBreak ? 'Page break' : `Question ${listNumber} of ${listTotal}`}
+      >
         {isInstruction ? (
           <span className="text-amber-800">Instruction: {getQuestionInstructionListLabel(question)}</span>
+        ) : isPageBreak ? (
+          <span className="text-gray-500 italic">Page break</span>
+        ) : questionDisplayNumber != null ? (
+          <>{questionDisplayNumber}. {question.label || question.type}</>
         ) : (
-          <>{index + 1}. {question.label || question.type}</>
+          <>{listNumber}. {question.label || question.type}</>
         )}
       </div>
       <div ref={menuRef} className="relative shrink-0">
@@ -1931,6 +1947,9 @@ export const AdminFormBuilderPage: React.FC = () => {
                 <DndContext sensors={questionSensors} collisionDetection={closestCenter} onDragEnd={handleQuestionsDragEnd}>
                   {(() => {
                     const visibleQuestions = selectedSection.questions.filter((q) => !(q.pdf_meta as Record<string, unknown>)?.isAdditionalBlockOf);
+                    const isTaskQuestions = selectedSection.pdf_render_mode === 'task_questions';
+                    const taskQNumbers = isTaskQuestions ? getTaskQuestionDisplayNumbers(visibleQuestions) : null;
+                    const numberedTotal = taskQNumbers ? taskQNumbers.size : visibleQuestions.length;
                     return (
                   <SortableContext items={visibleQuestions.map((q) => `question-${q.id}`)} strategy={verticalListSortingStrategy}>
                     <div className="space-y-1">
@@ -1940,6 +1959,8 @@ export const AdminFormBuilderPage: React.FC = () => {
                           question={q}
                           index={idx}
                           totalCount={visibleQuestions.length}
+                          questionDisplayNumber={taskQNumbers?.get(q.id)}
+                          numberedQuestionTotal={isTaskQuestions ? numberedTotal : undefined}
                           isSelected={editingQuestionId === q.id}
                           onSelect={() => setEditingQuestionId(q.id)}
                           onRemove={() => removeQuestion(q.id)}
@@ -1948,7 +1969,7 @@ export const AdminFormBuilderPage: React.FC = () => {
                           menuOpen={openQuestionMenuId === q.id}
                           onMenuToggle={() => setOpenQuestionMenuId(openQuestionMenuId === q.id ? null : q.id)}
                           menuRef={questionMenuRef}
-                          isInstruction={selectedSection.pdf_render_mode === 'task_questions' && q.type === 'instruction_block'}
+                          isInstruction={isTaskQuestions && q.type === 'instruction_block'}
                         />
                       ))}
                     </div>

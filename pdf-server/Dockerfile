@@ -13,11 +13,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install deps and build
 COPY package*.json tsconfig.json ./
 # Keep this list in sync with local pdf-server sources
-COPY index.ts htmlGenerator.ts appendixAMatrixData.ts inductionHtml.ts instructionBlocksHtml.ts ./
+COPY index.ts htmlGenerator.ts appendixAMatrixData.ts inductionHtml.ts instructionBlocksHtml.ts pdfBrowser.ts pdfMemory.ts pdfConstants.ts pdfRender.ts logoUrls.ts ./
 COPY public/ ./public/
 RUN npm ci && npm run build
 
 EXPOSE 3001
 ENV PORT=3001
+# Leave headroom for Chromium inside 512MB containers; use Standard 2GB+ plan for large forms.
+ENV NODE_OPTIONS=--max-old-space-size=256
 
 CMD ["node", "dist/index.js"]

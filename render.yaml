@@ -1,5 +1,7 @@
 # Render Blueprint - PDF Server
 # Deploy: New → Blueprint → Connect repo → select this file
+#
+# PDF generation uses Playwright/Chromium (~300MB+). Queue + browser reuse help on 512MB Starter.
 services:
   - type: web
     name: signflow-pdf
@@ -10,3 +12,5 @@ services:
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=256

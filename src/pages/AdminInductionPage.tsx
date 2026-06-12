@@ -259,13 +259,18 @@ export const AdminInductionPage: React.FC = () => {
     }
     const selected = submissionsList.filter((s) => selectedSubmissionIds.has(s.id));
     if (selected.length === 0) return;
+    const MAX_BULK_PDF = 25;
+    if (selected.length > MAX_BULK_PDF) {
+      toast.error(`Select at most ${MAX_BULK_PDF} submissions per export.`);
+      return;
+    }
     setBulkDownloading(true);
     try {
       for (const sub of selected) {
         // eslint-disable-next-line no-await-in-loop
         await downloadSubmissionPdfNoToast(sub, token);
         // eslint-disable-next-line no-await-in-loop
-        await new Promise((r) => setTimeout(r, 250));
+        await new Promise((r) => setTimeout(r, 800));
       }
       toast.success(`Downloading ${selected.length} PDF${selected.length === 1 ? '' : 's'}…`);
     } catch (err) {

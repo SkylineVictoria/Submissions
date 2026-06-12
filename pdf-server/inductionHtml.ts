@@ -2,45 +2,10 @@
  * Induction pack HTML for Playwright PDF — crest + logo-text in document flow per page;
  * margins are uniform (no Playwright header/footer templates — inner footers live in HTML).
  */
-import path from 'path';
-import fs from 'fs';
+import { resolveSlitLogoDataUrls, resolveSlitLogoUrls } from './logoUrls.js';
+import { finalizePdfHtml } from './pdfConstants.js';
 
-export function resolveSlitLogoDataUrls(baseDir: string): { crestImg: string; textImg: string } {
-  let crestImg = '';
-  let textImg = '';
-  const resolveLogoPath = (filename: string) => {
-    const dirs = [path.join(baseDir, 'public'), path.join(baseDir, '..', 'public')];
-    for (const dir of dirs) {
-      const p = path.join(dir, filename);
-      if (fs.existsSync(p)) return p;
-    }
-    return null;
-  };
-  try {
-    const crestPath =
-      resolveLogoPath('logo-crest.png') ??
-      resolveLogoPath('logo.png') ??
-      resolveLogoPath('logo.jpeg') ??
-      resolveLogoPath('logo.jpg');
-    if (crestPath) {
-      const buf = fs.readFileSync(crestPath);
-      const mime = crestPath.endsWith('.png') ? 'png' : 'jpeg';
-      crestImg = `data:image/${mime};base64,${buf.toString('base64')}`;
-    } else {
-      crestImg = `data:image/svg+xml,${encodeURIComponent(
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 100"><text x="10" y="55" font-family="Arial,sans-serif" font-size="28" font-weight="bold" fill="#f97316">SKYLINE</text></svg>'
-      )}`;
-    }
-    const textPath = resolveLogoPath('logo-text.png');
-    if (textPath) {
-      const buf = fs.readFileSync(textPath);
-      textImg = `data:image/png;base64,${buf.toString('base64')}`;
-    }
-  } catch {
-    /* ignore */
-  }
-  return { crestImg, textImg };
-}
+export { resolveSlitLogoDataUrls, resolveSlitLogoUrls };
 
 /** Same layout as buildHtml headerHtml in index.ts (Playwright header template). */
 export function buildSlitPdfHeaderHtml(crestImg: string, textImg: string): string {
@@ -724,8 +689,9 @@ export function buildInductionPdfHtml(input: {
     </div>
     <div class="induction-inner-footer"><span>Induction instructions</span><span>Page 4 of 4</span></div>
   </div>
+<div id="pdf-ready" aria-hidden="true"></div>
 </body>
 </html>`;
 
-  return { html };
+  return { html: finalizePdfHtml(html) };
 }

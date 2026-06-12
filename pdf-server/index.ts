@@ -1,15 +1,22 @@
 import path from 'path';
-import fs from 'fs';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { config } from 'dotenv';
 import express, { type Response } from 'express';
 import { createClient } from '@supabase/supabase-js';
-import { chromium } from 'playwright';
-import { PDFDocument } from 'pdf-lib';
+import { createPdfJobId } from './pdfBrowser.js';
+import { logMemory } from './pdfMemory.js';
+import { pdfImageSrc, finalizePdfHtml, MAX_BULK_PDF_EXPORT } from './pdfConstants.js';
+import { resolveSlitLogoUrls, resolveLogoPath } from './logoUrls.js';
+import {
+  renderHtmlToPdfBuffer,
+  renderCoverAndRestPdf,
+  mergeCoverRestPdf,
+  pdfJobForInstance,
+} from './pdfRender.js';
 // Note: NodeNext ESM requires explicit .js extensions in source imports.
 // TypeScript will resolve these to the corresponding .ts files at build time.
 import { renderAppendixAMatrixHtml } from './appendixAMatrixData.js';
-import { buildInductionPdfHtml, resolveSlitLogoDataUrls } from './inductionHtml.js';
+import { buildInductionPdfHtml } from './inductionHtml.js';
 import { renderTaskQuestionInstructionHtml } from './instructionBlocksHtml.js';
 
 // Load .env from project root (parent of pdf-server)
@@ -52,11 +59,13 @@ app.get('/health', (_req, res) => {
 app.get('/pdf/induction/:token', async (req, res) => {
   const token = String(req.params.token || '').trim();
   const download = req.query.download === '1';
+  const jobId = createPdfJobId('induction');
   if (!token) {
     res.status(400).send('Invalid token');
     return;
   }
 
+  logMemory(`${jobId} request-start`);
   try {
     const { data: row, error } = await supabase
       .from('skyline_inductions')
@@ -69,7 +78,7 @@ app.get('/pdf/induction/:token', async (req, res) => {
       return;
     }
 
-    const { crestImg, textImg } = resolveSlitLogoDataUrls(__dirname);
+    const { crestImg, textImg } = resolveSlitLogoUrls(__dirname);
     const { html } = buildInductionPdfHtml({
       title: String((row as { title: string }).title),
       startAt: String((row as { start_at: string }).start_at),
@@ -78,7 +87,14 @@ app.get('/pdf/induction/:token', async (req, res) => {
       textImg,
     });
 
-    const pdf = await renderInductionHtmlToPdfBuffer(html);
+    const pdf = await renderHtmlToPdfBuffer(
+      { jobId, label: `induction-template-${token.slice(0, 8)}` },
+      html,
+      {
+        margin: { top: '12mm', right: '15mm', bottom: '12mm', left: '15mm' },
+        preferCSSPageSize: false,
+      }
+    );
     const safeTitle = String((row as { title: string }).title || 'induction')
       .replace(/[/\\:*?"<>|]/g, '_')
       .replace(/\s+/g, ' ')
@@ -88,46 +104,12 @@ app.get('/pdf/induction/:token', async (req, res) => {
       res.setHeader('Content-Disposition', `attachment; filename="${safeTitle || 'skyline-induction'}.pdf"`);
     }
     sendInductionPdfResponse(res, pdf);
+    logMemory(`${jobId} response-sent`);
   } catch (err) {
     console.error('Induction PDF error:', err);
     res.status(500).send('Failed to generate induction PDF');
   }
 });
-
-async function renderInductionHtmlToPdfBuffer(html: string): Promise<Uint8Array> {
-  const browser = await chromium.launch();
-  try {
-    const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: 'networkidle' });
-    await page.waitForLoadState('domcontentloaded');
-    await page.evaluate(() => {
-      return Promise.all(
-        Array.from(document.images).map(
-          (img) =>
-            new Promise<void>((resolve) => {
-              if (img.complete) resolve();
-              else {
-                img.onload = () => resolve();
-                img.onerror = () => resolve();
-              }
-            })
-        )
-      );
-    });
-    await page.evaluate(() => document.fonts.ready);
-
-    return await page.pdf({
-      format: 'A4',
-      printBackground: true,
-      preferCSSPageSize: false,
-      margin: { top: '12mm', right: '15mm', bottom: '12mm', left: '15mm' },
-      displayHeaderFooter: false,
-      scale: 1,
-    });
-  } finally {
-    await browser.close();
-  }
-}
 
 function sendInductionPdfResponse(res: Response, pdf: Uint8Array): void {
   res.setHeader('Content-Type', 'application/pdf');
@@ -156,20 +138,35 @@ function inductionFilledPdfFilename(payload: Record<string, unknown>): string {
   return `${base} induction form.pdf`;
 }
 
-/** Filled induction pack from submitted JSON (admin export). Body: { payload }. */
+/** Filled induction pack from submitted JSON (admin export). Body: { payload } or { payloads: [] } (max ${MAX_BULK_PDF_EXPORT}). */
 app.post('/pdf/induction/:token/filled', async (req, res) => {
   const token = String(req.params.token || '').trim();
+  const jobId = createPdfJobId('induction-filled');
   if (!token) {
     res.status(400).send('Invalid token');
     return;
   }
-  const body = req.body as { payload?: unknown } | null;
+  const body = req.body as { payload?: unknown; payloads?: unknown[] } | null;
+  const bulkPayloads = Array.isArray(body?.payloads) ? body!.payloads : null;
+  if (bulkPayloads) {
+    if (bulkPayloads.length === 0) {
+      res.status(400).send('No payloads provided');
+      return;
+    }
+    if (bulkPayloads.length > MAX_BULK_PDF_EXPORT) {
+      res.status(400).send(`Too many PDFs requested (max ${MAX_BULK_PDF_EXPORT}). Select fewer submissions.`);
+      return;
+    }
+    res.status(400).send('Bulk ZIP export is not supported. Request one payload per POST; the client should download sequentially.');
+    return;
+  }
   const payload = body?.payload;
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     res.status(400).send('Missing or invalid payload object');
     return;
   }
 
+  logMemory(`${jobId} request-start`);
   try {
     const { data: row, error } = await supabase
       .from('skyline_inductions')
@@ -182,7 +179,7 @@ app.post('/pdf/induction/:token/filled', async (req, res) => {
       return;
     }
 
-    const { crestImg, textImg } = resolveSlitLogoDataUrls(__dirname);
+    const { crestImg, textImg } = resolveSlitLogoUrls(__dirname);
     const { html } = buildInductionPdfHtml({
       title: String((row as { title: string }).title),
       startAt: String((row as { start_at: string }).start_at),
@@ -192,11 +189,19 @@ app.post('/pdf/induction/:token/filled', async (req, res) => {
       formPayload: payload as Record<string, unknown>,
     });
 
-    const pdf = await renderInductionHtmlToPdfBuffer(html);
+    const pdf = await renderHtmlToPdfBuffer(
+      { jobId, label: `induction-filled-${token.slice(0, 8)}` },
+      html,
+      {
+        margin: { top: '12mm', right: '15mm', bottom: '12mm', left: '15mm' },
+        preferCSSPageSize: false,
+      }
+    );
     const pl = payload as Record<string, unknown>;
     const filename = inductionFilledPdfFilename(pl).replace(/"/g, "'");
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     sendInductionPdfResponse(res, pdf);
+    logMemory(`${jobId} response-sent`);
   } catch (err) {
     console.error('Induction filled PDF error:', err);
     res.status(500).send('Failed to generate filled induction PDF');
@@ -266,8 +271,8 @@ function renderSignatureHtml(val: string | null | undefined | Record<string, unk
   if (!s) return '';
   if (s.startsWith('data:')) {
     // Strip whitespace/newlines - they break img src in HTML and prevent PDF rendering
-    const clean = s.replace(/\s+/g, '');
-    return '<img src="' + clean.replace(/"/g, '&quot;') + '" alt="Signature" style="max-height:36px;max-width:140px" loading="eager" />';
+    const clean = pdfImageSrc(s.replace(/\s+/g, ''), 'signature');
+    return '<img src="' + clean.replace(/"/g, '&quot;') + '" alt="Signature" class="signature-img" style="max-height:36px;max-width:140px" loading="eager" />';
   }
   const escaped = s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   return '<span style="color:#dc2626;font-style:italic;font-family:serif">' + escaped + '</span>';
@@ -290,7 +295,10 @@ function formatShortLongAnswerCellHtml(val: string | number | Record<string, unk
     const o = val as Record<string, unknown>;
     if ('text' in o || 'answerImageUrl' in o) {
       const t = labelToHtml(String(o.text ?? ''));
-      const u = typeof o.answerImageUrl === 'string' && o.answerImageUrl.trim() ? o.answerImageUrl : '';
+      const u =
+        typeof o.answerImageUrl === 'string' && o.answerImageUrl.trim()
+          ? pdfImageSrc(o.answerImageUrl.trim(), 'answer-image')
+          : '';
       const img = u
         ? `<div style="margin-top:8px"><img src="${escapeHtmlAttr(u)}" alt="" style="max-width:100%;max-height:280px;object-fit:contain;border:1px solid #ddd;border-radius:4px"/></div>`
         : '';
@@ -588,38 +596,17 @@ function buildHtml(data: {
     }
     if (orderedTaskRowIds.length > 0) break;
   }
-  // Header images: crest (shield logo) and text logo
+  // Header images: prefer file:// URLs (smaller HTML than base64) when logos exist on disk
   let crestImg = form.header_asset_url || '';
   let textImg = '';
-  const resolveLogoPath = (filename: string) => {
-    const dirs = [
-      path.join(__dirname, 'public'),           // pdf-server/public (for standalone deploy)
-      path.join(__dirname, '..', 'public'),     // project root public (for local/monorepo)
-    ];
-    for (const dir of dirs) {
-      const p = path.join(dir, filename);
-      if (fs.existsSync(p)) return p;
-    }
-    return null;
-  };
-  try {
-    if (!crestImg) {
-      const crestPath = resolveLogoPath('logo-crest.png') ?? resolveLogoPath('logo.png') ?? resolveLogoPath('logo.jpeg') ?? resolveLogoPath('logo.jpg');
-      if (crestPath) {
-        const buf = fs.readFileSync(crestPath);
-        const mime = crestPath.endsWith('.png') ? 'png' : 'jpeg';
-        crestImg = `data:image/${mime};base64,${buf.toString('base64')}`;
-      } else {
-        // Fallback: minimal SVG logo when no image files (e.g. on Render/Railway deploy)
-        crestImg = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 100"><text x="10" y="55" font-family="Arial,sans-serif" font-size="28" font-weight="bold" fill="#f97316">SKYLINE</text></svg>')}`;
-      }
-    }
-    const textPath = resolveLogoPath('logo-text.png');
-    if (textPath) {
-      const buf = fs.readFileSync(textPath);
-      textImg = `data:image/png;base64,${buf.toString('base64')}`;
-    }
-  } catch (_e) {}
+  if (!crestImg) {
+    const logos = resolveSlitLogoUrls(__dirname);
+    crestImg = logos.crestImg;
+    textImg = logos.textImg;
+  } else {
+    const textPath = resolveLogoPath(__dirname, 'logo-text.png');
+    if (textPath) textImg = pathToFileURL(textPath).href;
+  }
 
   let html = `
 <!DOCTYPE html>
@@ -2566,11 +2553,12 @@ function buildHtml(data: {
 
   html += `
   </div>
+<div id="pdf-ready" aria-hidden="true"></div>
 </body>
 </html>`;
 
   const version = form.version || '1';
-  return { html, unitCode, version, headerHtml };
+  return { html: finalizePdfHtml(html), unitCode, version, headerHtml };
 }
 
 function splitCoverAndRestHtml(fullHtml: string): { coverHtml: string; restHtml: string } {
@@ -2613,6 +2601,8 @@ app.get('/pdf/:instanceId', async (req, res) => {
     return;
   }
 
+  const job = pdfJobForInstance(instanceId, 'instance');
+  logMemory(`${job.jobId} request-start`);
   try {
     const template = await getTemplateForInstance(instanceId);
     if (!template) {
@@ -2787,82 +2777,9 @@ app.get('/pdf/:instanceId', async (req, res) => {
       </div>
     `;
 
-    const browser = await chromium.launch();
-    const page = await browser.newPage();
     const { coverHtml, restHtml } = splitCoverAndRestHtml(html);
-    await page.setContent(coverHtml, { waitUntil: 'networkidle' });
-    await page.waitForLoadState('domcontentloaded');
-    await page.evaluate(() => {
-      return Promise.all(
-        Array.from(document.images).map(
-          (img) =>
-            new Promise<void>((resolve) => {
-              if (img.complete) resolve();
-              else {
-                img.onload = () => resolve();
-                img.onerror = () => resolve();
-              }
-            })
-        )
-      );
-    });
-    await page.evaluate(() => document.fonts.ready);
-
-    // Cover page (page 1): no footer - hide version, unit code, page number
-    const coverPdf = await page.pdf({
-      format: 'A4',
-      printBackground: true,
-      preferCSSPageSize: true,
-      margin: { top: 0, right: 0, bottom: 0, left: 0 },
-      displayHeaderFooter: false,
-    });
-
-    let pdf: Buffer;
-    await page.setContent(restHtml, { waitUntil: 'networkidle' });
-    await page.waitForLoadState('domcontentloaded');
-    await page.evaluate(() => {
-      return Promise.all(
-        Array.from(document.images).map(
-          (img) =>
-            new Promise<void>((resolve) => {
-              if (img.complete) resolve();
-              else {
-                img.onload = () => resolve();
-                img.onerror = () => resolve();
-              }
-            })
-        )
-      );
-    });
-    await page.evaluate(() => document.fonts.ready);
-    const restPdf = await page.pdf({
-      format: 'A4',
-      printBackground: true,
-      preferCSSPageSize: true,
-      margin: { top: '190px', right: '15mm', bottom: '70px', left: '15mm' },
-      displayHeaderFooter: true,
-      headerTemplate: headerHtml,
-      footerTemplate: footerHtml,
-    });
-
-    await browser.close();
-
-    // Merge: cover (no footer) + rest (with footer)
-    const mergedPdf = await PDFDocument.create();
-    const coverDoc = await PDFDocument.load(coverPdf);
-    const [coverPage] = await mergedPdf.copyPages(coverDoc, [0]);
-    mergedPdf.addPage(coverPage);
-
-    const restDoc = await PDFDocument.load(restPdf);
-    const restPageCount = restDoc.getPageCount();
-    if (restPageCount > 0) {
-      for (let i = 0; i < restPageCount; i++) {
-        const [p] = await mergedPdf.copyPages(restDoc, [i]);
-        mergedPdf.addPage(p);
-      }
-    }
-
-    pdf = Buffer.from(await mergedPdf.save());
+    const { coverPdf, restPdf } = await renderCoverAndRestPdf(job, coverHtml, restHtml, headerHtml, footerHtml);
+    const pdf = await mergeCoverRestPdf(coverPdf, restPdf);
 
     let pdfFilename = `form-${instanceId}.pdf`;
     if (download) {
@@ -2896,6 +2813,7 @@ app.get('/pdf/:instanceId', async (req, res) => {
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
     res.send(pdf);
+    logMemory(`${job.jobId} response-sent`);
   } catch (err) {
     console.error('PDF generation error:', err);
     res.status(500).send('Failed to generate PDF');
@@ -2911,6 +2829,8 @@ app.get('/pdf/preview/form/:formId', async (req, res) => {
     return;
   }
 
+  const job = pdfJobForInstance(formId, 'preview');
+  logMemory(`${job.jobId} request-start`);
   try {
     const template = await getTemplateForForm(formId);
     if (!template) {
@@ -2956,80 +2876,9 @@ app.get('/pdf/preview/form/:formId', async (req, res) => {
       </div>
     `;
 
-    const browser = await chromium.launch();
-    const page = await browser.newPage();
     const { coverHtml, restHtml } = splitCoverAndRestHtml(html);
-    await page.setContent(coverHtml, { waitUntil: 'networkidle' });
-    await page.waitForLoadState('domcontentloaded');
-    await page.evaluate(() => {
-      return Promise.all(
-        Array.from(document.images).map(
-          (img) =>
-            new Promise<void>((resolve) => {
-              if (img.complete) resolve();
-              else {
-                img.onload = () => resolve();
-                img.onerror = () => resolve();
-              }
-            })
-        )
-      );
-    });
-    await page.evaluate(() => document.fonts.ready);
-
-    const coverPdf = await page.pdf({
-      format: 'A4',
-      printBackground: true,
-      preferCSSPageSize: true,
-      margin: { top: 0, right: 0, bottom: 0, left: 0 },
-      displayHeaderFooter: false,
-    });
-
-    let pdf: Buffer;
-    await page.setContent(restHtml, { waitUntil: 'networkidle' });
-    await page.waitForLoadState('domcontentloaded');
-    await page.evaluate(() => {
-      return Promise.all(
-        Array.from(document.images).map(
-          (img) =>
-            new Promise<void>((resolve) => {
-              if (img.complete) resolve();
-              else {
-                img.onload = () => resolve();
-                img.onerror = () => resolve();
-              }
-            })
-        )
-      );
-    });
-    await page.evaluate(() => document.fonts.ready);
-    const restPdf = await page.pdf({
-      format: 'A4',
-      printBackground: true,
-      preferCSSPageSize: true,
-      margin: { top: '190px', right: '15mm', bottom: '70px', left: '15mm' },
-      displayHeaderFooter: true,
-      headerTemplate: headerHtml,
-      footerTemplate: footerHtml,
-    });
-
-    await browser.close();
-
-    const mergedPdf = await PDFDocument.create();
-    const coverDoc = await PDFDocument.load(coverPdf);
-    const [coverPage] = await mergedPdf.copyPages(coverDoc, [0]);
-    mergedPdf.addPage(coverPage);
-
-    const restDoc = await PDFDocument.load(restPdf);
-    const restPageCount = restDoc.getPageCount();
-    if (restPageCount > 0) {
-      for (let i = 0; i < restPageCount; i++) {
-        const [p] = await mergedPdf.copyPages(restDoc, [i]);
-        mergedPdf.addPage(p);
-      }
-    }
-
-    pdf = Buffer.from(await mergedPdf.save());
+    const { coverPdf, restPdf } = await renderCoverAndRestPdf(job, coverHtml, restHtml, headerHtml, footerHtml);
+    const pdf = await mergeCoverRestPdf(coverPdf, restPdf);
 
     if (download) {
       const safeName = String(form.name || 'form-preview').replace(/[/\\:*?"<>|]/g, '_').trim();
@@ -3041,6 +2890,7 @@ app.get('/pdf/preview/form/:formId', async (req, res) => {
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
     res.send(pdf);
+    logMemory(`${job.jobId} response-sent`);
   } catch (err) {
     console.error('PDF preview generation error:', err);
     res.status(500).send('Failed to generate preview PDF');
