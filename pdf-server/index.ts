@@ -1,12 +1,12 @@
 import path from 'path';
-import { fileURLToPath, pathToFileURL } from 'url';
+import { fileURLToPath } from 'url';
 import { config } from 'dotenv';
 import express, { type Response } from 'express';
 import { createClient } from '@supabase/supabase-js';
 import { createPdfJobId } from './pdfBrowser.js';
 import { logMemory } from './pdfMemory.js';
 import { pdfImageSrc, finalizePdfHtml, MAX_BULK_PDF_EXPORT } from './pdfConstants.js';
-import { resolveSlitLogoUrls, resolveLogoPath } from './logoUrls.js';
+import { resolveSlitLogoDataUrls } from './logoUrls.js';
 import {
   renderHtmlToPdfBuffer,
   renderCoverAndRestPdf,
@@ -78,7 +78,7 @@ app.get('/pdf/induction/:token', async (req, res) => {
       return;
     }
 
-    const { crestImg, textImg } = resolveSlitLogoUrls(__dirname);
+    const { crestImg, textImg } = resolveSlitLogoDataUrls(__dirname);
     const { html } = buildInductionPdfHtml({
       title: String((row as { title: string }).title),
       startAt: String((row as { start_at: string }).start_at),
@@ -179,7 +179,7 @@ app.post('/pdf/induction/:token/filled', async (req, res) => {
       return;
     }
 
-    const { crestImg, textImg } = resolveSlitLogoUrls(__dirname);
+    const { crestImg, textImg } = resolveSlitLogoDataUrls(__dirname);
     const { html } = buildInductionPdfHtml({
       title: String((row as { title: string }).title),
       startAt: String((row as { start_at: string }).start_at),
@@ -596,16 +596,12 @@ function buildHtml(data: {
     }
     if (orderedTaskRowIds.length > 0) break;
   }
-  // Header images: prefer file:// URLs (smaller HTML than base64) when logos exist on disk
+  // Header images: data URLs for Playwright header/footer templates; https for custom crest
   let crestImg = form.header_asset_url || '';
-  let textImg = '';
+  const defaultLogos = resolveSlitLogoDataUrls(__dirname);
+  let textImg = defaultLogos.textImg;
   if (!crestImg) {
-    const logos = resolveSlitLogoUrls(__dirname);
-    crestImg = logos.crestImg;
-    textImg = logos.textImg;
-  } else {
-    const textPath = resolveLogoPath(__dirname, 'logo-text.png');
-    if (textPath) textImg = pathToFileURL(textPath).href;
+    crestImg = defaultLogos.crestImg;
   }
 
   let html = `

@@ -138,20 +138,24 @@ export async function runPdfJob<T>(meta: PdfJobMeta, fn: (page: Page) => Promise
 /** Wait for #pdf-ready, images, and fonts — do not use networkidle. */
 export async function preparePageForPrint(page: Page): Promise<void> {
   await page.waitForSelector('#pdf-ready', { state: 'attached', timeout: 10_000 }).catch(() => undefined);
-  await page.evaluate(() => {
-    return Promise.all(
+  // Do not use `async` here — tsx/esbuild injects __name helpers that break in the browser.
+  await page.evaluate(() =>
+    Promise.all(
       Array.from(document.images).map(
         (img) =>
           new Promise<void>((resolve) => {
-            if (img.complete) resolve();
-            else {
-              img.onload = () => resolve();
-              img.onerror = () => resolve();
+            if (img.complete && img.naturalWidth > 0) {
+              resolve();
+              return;
             }
+            const done = () => resolve();
+            img.addEventListener('load', done, { once: true });
+            img.addEventListener('error', done, { once: true });
+            if (img.complete) done();
           })
       )
-    );
-  });
+    )
+  );
   await page.evaluate(() => document.fonts.ready);
   await page.evaluate(() => {
     document.getElementById('pdf-ready')?.setAttribute('data-print-ready', '1');

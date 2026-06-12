@@ -26,7 +26,7 @@ async function loadPageAndPdf(
   const readyHtml = finalizePdfHtml(html);
   logMemory(`${jobId} before-setContent`);
   await page.setContent(readyHtml, {
-    waitUntil: 'domcontentloaded',
+    waitUntil: 'load',
     timeout: PDF_PAGE_LOAD_TIMEOUT_MS,
   });
   logMemory(`${jobId} after-setContent`);
