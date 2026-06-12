@@ -58,6 +58,14 @@ export const FinanceLedgerTable: React.FC<Props> = ({ rows }) => {
   const pageRows = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
   const rangeLabel = formatPaginationRange(safePage, pageSize, filtered.length);
 
+  const toggleSort = (key: SortKey) => {
+    setSort((prev) => {
+      if (prev.key !== key) return { key, dir: 'asc' };
+      return { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' };
+    });
+    setPage(1);
+  };
+
   const exportCsv = () => {
     const header = [
       'Student Name',
@@ -146,17 +154,17 @@ export const FinanceLedgerTable: React.FC<Props> = ({ rows }) => {
         <table className="min-w-full divide-y divide-gray-200 text-sm">
           <thead className="bg-gray-50">
             <tr>
-              <SortableTh label="Student Name" sortKey="studentName" sort={sort} onSort={setSort} />
-              <SortableTh label="Email" sortKey="email" sort={sort} onSort={setSort} />
-              <SortableTh label="Ledger Date" sortKey="ledgerDate" sort={sort} onSort={setSort} />
-              <SortableTh label="Entry Date" sortKey="entryDateTime" sort={sort} onSort={setSort} />
-              <SortableTh label="Type" sortKey="entryType" sort={sort} onSort={setSort} />
-              <SortableTh label="Reference" sortKey="reference" sort={sort} onSort={setSort} />
-              <SortableTh label="Related Invoice" sortKey="relatedInvoiceNo" sort={sort} onSort={setSort} />
-              <SortableTh label="Payment Method" sortKey="paymentMethod" sort={sort} onSort={setSort} />
-              <SortableTh label="Debit" sortKey="debit" sort={sort} onSort={setSort} align="right" />
-              <SortableTh label="Credit" sortKey="credit" sort={sort} onSort={setSort} align="right" />
-              <SortableTh label="Balance" sortKey="balance" sort={sort} onSort={setSort} align="right" />
+              <SortableTh label="Student Name" className="px-4 py-3" active={sort.key === 'studentName'} direction={sort.dir} onToggle={() => toggleSort('studentName')} />
+              <SortableTh label="Email" className="px-4 py-3" active={sort.key === 'email'} direction={sort.dir} onToggle={() => toggleSort('email')} />
+              <SortableTh label="Ledger Date" className="px-4 py-3" active={sort.key === 'ledgerDate'} direction={sort.dir} onToggle={() => toggleSort('ledgerDate')} />
+              <SortableTh label="Entry Date" className="px-4 py-3" active={sort.key === 'entryDateTime'} direction={sort.dir} onToggle={() => toggleSort('entryDateTime')} />
+              <SortableTh label="Type" className="px-4 py-3" active={sort.key === 'entryType'} direction={sort.dir} onToggle={() => toggleSort('entryType')} />
+              <SortableTh label="Reference" className="px-4 py-3" active={sort.key === 'reference'} direction={sort.dir} onToggle={() => toggleSort('reference')} />
+              <SortableTh label="Related Invoice" className="px-4 py-3" active={sort.key === 'relatedInvoiceNo'} direction={sort.dir} onToggle={() => toggleSort('relatedInvoiceNo')} />
+              <SortableTh label="Payment Method" className="px-4 py-3" active={sort.key === 'paymentMethod'} direction={sort.dir} onToggle={() => toggleSort('paymentMethod')} />
+              <SortableTh label="Debit" className="px-4 py-3" active={sort.key === 'debit'} direction={sort.dir} onToggle={() => toggleSort('debit')} align="right" />
+              <SortableTh label="Credit" className="px-4 py-3" active={sort.key === 'credit'} direction={sort.dir} onToggle={() => toggleSort('credit')} align="right" />
+              <SortableTh label="Balance" className="px-4 py-3" active={sort.key === 'balance'} direction={sort.dir} onToggle={() => toggleSort('balance')} align="right" />
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100 bg-white">

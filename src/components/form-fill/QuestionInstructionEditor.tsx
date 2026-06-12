@@ -37,7 +37,7 @@ export function QuestionInstructionEditor({
   const handleSave = async (data: TaskInstructionsData) => {
     const pm = { ...((question.pdf_meta as Record<string, unknown>) || {}), instructions: data };
     const label = getQuestionInstructionListLabel({ ...question, pdf_meta: pm });
-    const updates = { pdf_meta: pm as Json, label };
+    const updates: Partial<FormQuestion> = { pdf_meta: pm as unknown as Json, label };
     await supabase.from('skyline_form_questions').update(updates).eq('id', question.id);
     onSaved(updates);
     closeModal();

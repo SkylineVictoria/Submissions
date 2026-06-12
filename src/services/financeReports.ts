@@ -41,16 +41,6 @@ export function clampFinanceDateRange(dateFrom: string, dateTo: string): { dateF
   return { dateFrom: clampedFrom, dateTo: toIso, clamped: true };
 }
 
-function defaultFinanceDateRangePicker(): { dateFrom: string; dateTo: string } {
-  const to = new Date();
-  const from = new Date(to);
-  from.setUTCDate(from.getUTCDate() - FINANCE_MAX_DATE_RANGE_DAYS);
-  return {
-    dateFrom: isoDateToPicker(from.toISOString().slice(0, 10)),
-    dateTo: isoDateToPicker(to.toISOString().slice(0, 10)),
-  };
-}
-
 function mapEdgeFunctionError(message: string, action: 'load' | 'sync'): string {
   const raw = String(message ?? '').trim();
   if (/failed to send a request to the edge function/i.test(raw)) {
