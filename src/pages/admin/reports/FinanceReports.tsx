@@ -13,6 +13,7 @@ import { FinanceReportsKpiCards } from '../../../components/finance/FinanceRepor
 import { FinanceReportsReconciliation } from '../../../components/finance/FinanceReportsReconciliation';
 import { FinanceReportsCharts } from '../../../components/finance/FinanceReportsCharts';
 import { FinanceReportsTable } from '../../../components/finance/FinanceReportsTable';
+import { FinanceReportsDebugPanel } from '../../../components/finance/FinanceReportsDebugPanel';
 import {
   callAxcelerateFinanceReports,
   getDefaultFinanceFilters,
@@ -31,7 +32,6 @@ import type {
   FinanceReportsFilters,
   FinanceReportsSummary,
   FinanceReportRow,
-  FinanceReportDateType,
   FinanceReportStatusFilter,
 } from '../../../types/financeReports';
 
@@ -43,11 +43,8 @@ const STATUS_OPTIONS: { value: FinanceReportStatusFilter; label: string }[] = [
   { value: 'cancelled', label: 'Cancelled' },
 ];
 
-const DATE_TYPE_OPTIONS: { value: FinanceReportDateType; label: string }[] = [
-  { value: 'invoice_date', label: 'Invoice Date' },
-  { value: 'due_date', label: 'Due Date' },
-  { value: 'last_payment_date', label: 'Payment Date' },
-];
+const FILTER_HELPER_TEXT =
+  'Invoice Directory filtered by payment date — showing invoices with payments received in the selected date range.';
 
 export const FinanceReportsPage: React.FC = () => {
   const { user } = useAuth();
@@ -61,7 +58,12 @@ export const FinanceReportsPage: React.FC = () => {
     const marker = readFinanceSyncInProgress();
     return Boolean(marker && !isFinanceSyncMarkerStale(marker.startedAt));
   });
-  const [syncProgress, setSyncProgress] = useState<{ processed: number; total: number } | null>(null);
+  const [syncProgress, setSyncProgress] = useState<{
+    processed: number;
+    total: number;
+    syncedPayments: number;
+    matchedPaymentCount: number;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [summary, setSummary] = useState<FinanceReportsSummary | null>(null);
   const [rows, setRows] = useState<FinanceReportRow[]>([]);
@@ -70,13 +72,7 @@ export const FinanceReportsPage: React.FC = () => {
   const [noDataSynced, setNoDataSynced] = useState(false);
 
   const fetchReports = useCallback((activeFilters: FinanceReportsFilters) => {
-    return callAxcelerateFinanceReports({
-      dateFrom: toIsoDate(activeFilters.dateFrom),
-      dateTo: toIsoDate(activeFilters.dateTo),
-      dateType: activeFilters.dateType,
-      status: activeFilters.status,
-      studentSearch: activeFilters.studentSearch,
-    });
+    return callAxcelerateFinanceReports(activeFilters);
   }, []);
 
   const applyReportResult = useCallback((res: Awaited<ReturnType<typeof fetchReports>>) => {
@@ -173,7 +169,11 @@ export const FinanceReportsPage: React.FC = () => {
     syncRunRef.current = true;
     setSyncProgress(null);
     try {
-      const syncRes = await syncAxcelerateFinance(undefined, (p) => setSyncProgress(p));
+      const syncRes = await syncAxcelerateFinance(undefined, (p) => setSyncProgress(p), {
+        runTransactionsReportFirst: false,
+        dateFrom: toIsoDate(filters.dateFrom),
+        dateTo: toIsoDate(filters.dateTo),
+      });
       if (!syncRes.success) {
         toast.error(syncRes.message);
         setError(syncRes.message);
@@ -182,8 +182,12 @@ export const FinanceReportsPage: React.FC = () => {
         return;
       }
       const errCount = syncRes.errors?.length ?? 0;
+      const alloc = syncRes.allocationBackfill;
+      const allocNote = alloc
+        ? ` Allocations: ${alloc.allocationsCreated} (${alloc.paidInvoicesWithPaymentDate}/${alloc.paidInvoicesTotal} paid invoices with dates).`
+        : '';
       toast.success(
-        `Synced ${syncRes.insertedOrUpdated} invoice${syncRes.insertedOrUpdated !== 1 ? 's' : ''} from ${syncRes.syncedContacts} contact${syncRes.syncedContacts !== 1 ? 's' : ''}.${errCount ? ` ${errCount} warning(s).` : ''}`
+        `Synced ${syncRes.syncedContacts}/${syncRes.totalContacts ?? syncRes.syncedContacts} contacts, ${syncRes.insertedOrUpdated} invoice${syncRes.insertedOrUpdated !== 1 ? 's' : ''}, ledger rows: ${syncRes.ledgerRowsUpserted ?? 0}, payments matched: ${syncRes.matchedPaymentCount ?? 0}.${allocNote}${errCount ? ` ${errCount} warning(s).` : ''}`
       );
       if (errCount > 0) console.warn('Finance sync warnings', syncRes.errors);
       await load({ silent: true });
@@ -203,27 +207,19 @@ export const FinanceReportsPage: React.FC = () => {
   };
 
   const lastSyncedLabel = formatSyncTimestamp(financeDebug?.lastSyncedAt);
-  const dateHelperText =
-    filters.dateType === 'due_date'
-      ? 'Filtering by due date. Leave dates blank to include all synced invoices.'
-      : filters.dateType === 'last_payment_date'
-        ? 'Filtering by payment received date. Only invoices with a synced payment date are included.'
-        : 'Filtering by invoice date. Leave dates blank to include all synced invoices.';
-
-  const paymentDateEmptyState =
-    filters.dateType === 'last_payment_date' &&
-    !loading &&
-    !error &&
-    !noDataSynced &&
-    rows.length === 0 &&
-    (financeDebug?.paymentCount ?? 0) === 0;
 
   const syncButtonLabel =
     syncing && syncProgress && syncProgress.total > 0
-      ? `Syncing… (${syncProgress.processed}/${syncProgress.total})`
+      ? `Syncing… ${syncProgress.processed}/${syncProgress.total}, payments matched: ${syncProgress.matchedPaymentCount}`
       : syncing
         ? 'Syncing…'
         : 'Sync Now';
+
+  const showMissingPaymentDateWarning =
+    !loading &&
+    !error &&
+    !noDataSynced &&
+    (financeDebug?.paidInvoicesMissingPaymentDate ?? 0) > 0;
 
   return (
     <div className="min-h-screen bg-[var(--bg)]">
@@ -239,10 +235,10 @@ export const FinanceReportsPage: React.FC = () => {
                   <h1 className="text-2xl font-bold text-[var(--text)]">Finance Reports</h1>
                 </div>
                 <p className="mt-1 max-w-3xl text-sm text-gray-600">
-                  Reports load from synced Supabase data.
+                  Invoice Directory for admin reconciliation — filtered by payment date.
                   {isSuperadmin
                     ? ' Use Sync Now for an immediate pull from aXcelerate; otherwise data refreshes automatically each morning.'
-                    : ' Invoice data is refreshed automatically each morning (Australia/Melbourne).'}
+                    : ' Data refreshes automatically each morning (Australia/Melbourne).'}
                 </p>
                 <p className="mt-1 text-xs text-gray-500">Last sync: {lastSyncedLabel}</p>
               </div>
@@ -263,18 +259,10 @@ export const FinanceReportsPage: React.FC = () => {
             <Card>
               <div className="space-y-4">
                 <div className="flex flex-wrap items-end gap-3">
-                  <div className="w-full min-w-0 sm:w-[11rem]">
-                    <Select
-                      label="Date type"
-                      value={filters.dateType}
-                      onChange={(v) => setFilters((f) => ({ ...f, dateType: v as FinanceReportDateType }))}
-                      options={DATE_TYPE_OPTIONS}
-                    />
-                  </div>
                   <div className="w-full min-w-0 sm:w-auto">
                     <div className="flex flex-wrap items-end gap-3">
                       <div className="w-full min-w-0 sm:w-[11rem]">
-                        <div className="mb-1 text-xs font-medium text-gray-600">Date from</div>
+                        <div className="mb-1 text-xs font-medium text-gray-600">Payment date from</div>
                         <DatePicker
                           value={filters.dateFrom}
                           onChange={(v) => setFilters((f) => ({ ...f, dateFrom: v || '' }))}
@@ -284,7 +272,7 @@ export const FinanceReportsPage: React.FC = () => {
                         />
                       </div>
                       <div className="w-full min-w-0 sm:w-[11rem]">
-                        <div className="mb-1 text-xs font-medium text-gray-600">Date to</div>
+                        <div className="mb-1 text-xs font-medium text-gray-600">Payment date to</div>
                         <DatePicker
                           value={filters.dateTo}
                           onChange={(v) => setFilters((f) => ({ ...f, dateTo: v || '' }))}
@@ -294,7 +282,7 @@ export const FinanceReportsPage: React.FC = () => {
                         />
                       </div>
                     </div>
-                    <p className="mt-1.5 text-xs text-gray-500">{dateHelperText}</p>
+                    <p className="mt-1.5 text-xs text-gray-500">{FILTER_HELPER_TEXT}</p>
                   </div>
                   <div className="w-full min-w-0 sm:w-[10rem] sm:flex-shrink-0">
                     <Select
@@ -338,7 +326,7 @@ export const FinanceReportsPage: React.FC = () => {
               <Card className="border-red-200 bg-red-50 p-4">
                 <p className="text-sm font-medium text-red-800">{error}</p>
                 <p className="mt-1 text-xs text-red-700">
-                  Check Edge Function secrets and try Sync Now if no data has been loaded yet.
+                  Sync runs in small batches (max 1 year of payments). If sync was interrupted, click Sync Now again to continue.
                 </p>
                 <Button type="button" variant="outline" size="sm" className="mt-3" onClick={() => void load()}>
                   Retry
@@ -361,25 +349,22 @@ export const FinanceReportsPage: React.FC = () => {
               </Card>
             ) : null}
 
-            {paymentDateEmptyState ? (
-              <Card className="border-amber-200 bg-amber-50 p-6 text-center">
-                <p className="text-sm font-medium text-amber-900">
-                  No payment-date records found. Run payment sync or verify aXcelerate payment endpoint access.
-                </p>
-                {isSuperadmin ? (
-                  <Button type="button" className="mt-4" onClick={() => void handleSyncNow()} disabled={syncing} aria-busy={syncing}>
-                    {syncButtonLabel}
-                  </Button>
-                ) : null}
-              </Card>
-            ) : null}
-
-            {summary && charts && !noDataSynced && !paymentDateEmptyState ? (
+            {summary && charts && !noDataSynced ? (
               <>
+                {showMissingPaymentDateWarning ? (
+                  <Card className="border-amber-200 bg-amber-50 p-4">
+                    <p className="text-sm text-amber-900">
+                      {financeDebug?.paidInvoicesMissingPaymentDate} paid invoice
+                      {(financeDebug?.paidInvoicesMissingPaymentDate ?? 0) !== 1 ? 's' : ''} in this view are missing a matched payment date.
+                      Check payment sync or transaction matching.
+                    </p>
+                  </Card>
+                ) : null}
                 <FinanceReportsKpiCards summary={summary} />
                 <FinanceReportsReconciliation summary={summary} />
                 <FinanceReportsCharts charts={charts} />
                 <FinanceReportsTable rows={rows} />
+                <FinanceReportsDebugPanel debug={financeDebug} isSuperadmin={isSuperadmin} />
               </>
             ) : !error && !noDataSynced ? (
               <div className="flex justify-center py-16">

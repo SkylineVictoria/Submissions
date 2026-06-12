@@ -2,6 +2,13 @@
 
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2';
+import { backfillInvoicePaymentAllocations } from './paymentAllocations.ts';
+import {
+  emptyLedgerAggregate,
+  mergeLedgerAggregate,
+  syncContactLedger,
+  type LedgerEndpointState,
+} from './ledgerSync.ts';
 
 type FinanceSyncSupabase = SupabaseClient;
 
@@ -11,9 +18,12 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const DEFAULT_CONTACT_LIMIT = 12;
-const MAX_CONTACT_LIMIT = 25;
-const CONTACT_REQUEST_DELAY_MS = 280;
+const DEFAULT_CONTACT_LIMIT = 5;
+const MAX_CONTACT_LIMIT = 8;
+const CONTACT_REQUEST_DELAY_MS = 180;
+const MAX_SYNC_DATE_RANGE_DAYS = 365;
+const MAX_TX_DETAIL_FETCHES_PER_CONTACT = 12;
+const PAYMENT_MAX_PAGES_BATCH = 8;
 
 const PAYMENT_ENDPOINT_CANDIDATES = [
   '/accounting/transaction/',
@@ -24,10 +34,18 @@ const PAYMENT_ENDPOINT_CANDIDATES = [
 const PAYMENT_UNAVAILABLE_WARNING =
   'Payment date endpoint not available. Invoice paid status is synced, but actual payment date/time is unavailable.';
 
+const PAYMENT_PAGE_LIMIT = 100;
+const PAYMENT_MAX_PAGES = 50;
+
 type SyncRequestBody = {
   contactID?: string | number;
   offset?: number;
   limit?: number;
+  syncMode?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  /** When true, sync invoices only (skip per-contact payment pagination). */
+  invoicesOnly?: boolean;
 };
 
 type AxInvoiceRow = {
@@ -56,14 +74,19 @@ type AxInvoiceRow = {
 
 type AxPaymentRow = {
   payment_id: string;
+  transaction_id: string | null;
   invoice_id: number | null;
   invoice_number: string | null;
   contact_id: number | null;
   student_name: string | null;
   payment_date: string | null;
+  transaction_date: string | null;
   payment_amount: number;
   payment_method: string | null;
+  transaction_type: string | null;
   reference: string | null;
+  unapplied_amount: number;
+  user_full_name: string | null;
   raw_json: Record<string, unknown>;
 };
 
@@ -80,6 +103,25 @@ type SyncContactResult = {
   paymentsUpserted: number;
   matchedPayments: number;
   unmatchedPayments: number;
+  paymentsWithDate: number;
+  paymentsWithoutDate: number;
+  sampleRawKeys: string[];
+  sampleDateValues: Record<string, string>;
+  paymentPagesFetched: number;
+  paymentRawRecordsFetched: number;
+  paymentUniqueRecordsFetched: number;
+  paymentDuplicateRecordsSkipped: number;
+  hadPaymentRecords: boolean;
+  sampleFetchUrls: string[];
+};
+
+type PaymentFetchResult = {
+  records: Record<string, unknown>[];
+  pagesFetched: number;
+  rawRecordsFetched: number;
+  uniqueRecordsFetched: number;
+  duplicateRecordsSkipped: number;
+  sampleFetchUrls: string[];
 };
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -107,13 +149,159 @@ function pickField(row: Record<string, unknown>, ...keys: string[]): string {
     map.set(key.replace(/[.\s_]/g, '').toLowerCase(), value);
   }
   for (const key of keys) {
-    const variants = [key, key.toLowerCase(), key.replace(/[.\s_]/g, '').toLowerCase()];
+    const variants = [
+      key,
+      key.toLowerCase(),
+      key.replace(/[.\s_]/g, '').toLowerCase(),
+      key.replace(/\s+/g, '').toLowerCase(),
+    ];
     for (const k of variants) {
       const v = map.get(k);
       if (v != null && String(v).trim() !== '') return String(v).trim();
     }
   }
   return '';
+}
+
+const PAYMENT_DATE_FIELD_KEYS = [
+  'TRANSDATE',
+  'transdate',
+  'TRANSACTIONDATE',
+  'transactiondate',
+  'PAYMENTDATE',
+  'paymentdate',
+  'DATERECEIVED',
+  'datereceived',
+  'RECEIPTDATE',
+  'receiptdate',
+  'DATE',
+  'date',
+] as const;
+
+const TRANSACTION_ID_FIELD_KEYS = [
+  'TRANSACTIONID',
+  'transactionid',
+  'PAYMENTID',
+  'paymentid',
+  'RECEIPTID',
+  'receiptid',
+  'ID',
+  'id',
+] as const;
+
+const TRANSACTION_TYPE_FIELD_KEYS = [
+  'TRANSACTIONTYPE',
+  'transactiontype',
+  'TYPE',
+  'type',
+] as const;
+
+const PAYMENT_METHOD_FIELD_KEYS = [
+  'PAYMENTMETHOD',
+  'paymentmethod',
+  'METHOD',
+  'method',
+  'PAYMENTTYPE',
+  'paymenttype',
+] as const;
+
+const USER_FULL_NAME_FIELD_KEYS = [
+  'USERFULLNAME',
+  'User Full Name',
+  'userfullname',
+  'CREATEDBY',
+  'createdby',
+  'STAFFNAME',
+  'staffname',
+] as const;
+
+const UNAPPLIED_AMOUNT_FIELD_KEYS = [
+  'UNAPPLIEDAMOUNT',
+  'unappliedamount',
+  'UNASSIGNEDAMOUNT',
+  'unassignedamount',
+] as const;
+
+const PAYMENT_AMOUNT_FIELD_KEYS = [
+  'SIGNEDAMOUNT',
+  'signedamount',
+  'AMOUNT',
+  'amount',
+  'PAYMENTAMOUNT',
+  'paymentamount',
+  'TRANSACTIONAMOUNT',
+  'transactionamount',
+  'RECEIPTAMOUNT',
+  'receiptamount',
+] as const;
+
+function extractPaymentDateIso(raw: Record<string, unknown>): string | null {
+  const paymentDateRaw = pickField(raw, ...PAYMENT_DATE_FIELD_KEYS);
+  return parseIsoDateTime(paymentDateRaw);
+}
+
+function extractTransactionId(raw: Record<string, unknown>): string | null {
+  const id = pickField(raw, ...TRANSACTION_ID_FIELD_KEYS);
+  return id || null;
+}
+
+function extractPaymentAmount(raw: Record<string, unknown>): number {
+  return Math.abs(parseNumber(pickField(raw, ...PAYMENT_AMOUNT_FIELD_KEYS)));
+}
+
+function isIsoDate(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(value ?? '').trim());
+}
+
+function clampSyncDateRange(
+  dateFrom: string,
+  dateTo: string
+): { dateFrom: string; dateTo: string; clamped: boolean } {
+  const from = dateFrom.trim();
+  const to = dateTo.trim();
+  if (!from || !to || !isIsoDate(from) || !isIsoDate(to)) {
+    return { dateFrom: from, dateTo: to, clamped: false };
+  }
+  const fromMs = Date.parse(`${from}T00:00:00Z`);
+  const toMs = Date.parse(`${to}T23:59:59Z`);
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) {
+    return { dateFrom: from, dateTo: to, clamped: false };
+  }
+  const maxSpanMs = MAX_SYNC_DATE_RANGE_DAYS * 24 * 60 * 60 * 1000;
+  if (toMs - fromMs <= maxSpanMs) {
+    return { dateFrom: from, dateTo: to, clamped: false };
+  }
+  const clampedFromMs = toMs - maxSpanMs;
+  const clampedFrom = new Date(clampedFromMs).toISOString().slice(0, 10);
+  return { dateFrom: clampedFrom, dateTo: to, clamped: true };
+}
+
+function defaultSyncDateRange(): { dateFrom: string; dateTo: string } {
+  const to = new Date();
+  const from = new Date(to);
+  from.setUTCDate(from.getUTCDate() - MAX_SYNC_DATE_RANGE_DAYS);
+  return { dateFrom: from.toISOString().slice(0, 10), dateTo: to.toISOString().slice(0, 10) };
+}
+
+function paymentRecordDay(record: Record<string, unknown>): string | null {
+  const iso = extractPaymentDateIso(record);
+  return iso ? iso.slice(0, 10) : null;
+}
+
+function isPaymentRecordInRange(
+  record: Record<string, unknown>,
+  dateFrom: string,
+  dateTo: string
+): boolean {
+  const day = paymentRecordDay(record);
+  if (!day) return true;
+  if (dateFrom && day < dateFrom) return false;
+  if (dateTo && day > dateTo) return false;
+  return true;
+}
+
+function recordHasPaymentDateOnList(record: Record<string, unknown>): boolean {
+  return Boolean(extractPaymentDateIso(record));
 }
 
 function parseIsoDate(value: string): string | null {
@@ -238,6 +426,199 @@ function isMoneyReceivedTransaction(raw: Record<string, unknown>): boolean {
   return type.includes('money received') || type.includes('payment') || type.includes('receipt');
 }
 
+function paymentRecordDedupeKey(record: Record<string, unknown>): string {
+  const txId = pickField(record, 'TRANSACTIONID', 'transactionid', 'PAYMENTID', 'paymentid', 'RECEIPTID', 'receiptid', 'ID');
+  if (txId) return `tx:${txId}`;
+  const contactId = pickField(record, 'CONTACTID', 'contactID', 'contactid');
+  const date = pickField(record, ...PAYMENT_DATE_FIELD_KEYS);
+  const amount = pickField(record, ...PAYMENT_AMOUNT_FIELD_KEYS);
+  const ref = pickField(record, 'REFERENCE', 'REF', 'reference');
+  return `fallback:${contactId}:${date}:${amount}:${ref}`;
+}
+
+function sanitizeFetchUrlForDebug(baseUrl: string, path: string): string {
+  return `${baseUrl}${path.startsWith('/') ? path : `/${path}`}`.replace(/apitoken=[^&]+/gi, 'apitoken=***');
+}
+
+async function fetchPaymentPage(
+  baseUrl: string,
+  apiToken: string,
+  wsToken: string,
+  path: string
+): Promise<{ ok: boolean; payload: unknown }> {
+  const { ok, payload } = await axFetch(baseUrl, path, apiToken, wsToken);
+  return { ok, payload };
+}
+
+async function fetchAllPaymentRecordsForContact(
+  baseUrl: string,
+  apiToken: string,
+  wsToken: string,
+  contactId: number,
+  endpointPath: string,
+  maxPages = PAYMENT_MAX_PAGES
+): Promise<PaymentFetchResult> {
+  const sampleFetchUrls: string[] = [];
+
+  const pagingStrategies: Array<(pageIndex: number) => string> = [
+    (pageIndex) => {
+      const offset = pageIndex * PAYMENT_PAGE_LIMIT;
+      return `${endpointPath}?contactID=${contactId}&offset=${offset}&limit=${PAYMENT_PAGE_LIMIT}`;
+    },
+    (pageIndex) => {
+      const start = pageIndex * PAYMENT_PAGE_LIMIT;
+      return `${endpointPath}?contactID=${contactId}&start=${start}&length=${PAYMENT_PAGE_LIMIT}`;
+    },
+    (pageIndex) => {
+      const page = pageIndex + 1;
+      return `${endpointPath}?contactID=${contactId}&page=${page}&pageSize=${PAYMENT_PAGE_LIMIT}`;
+    },
+  ];
+
+  let best: PaymentFetchResult = {
+    records: [],
+    pagesFetched: 0,
+    rawRecordsFetched: 0,
+    uniqueRecordsFetched: 0,
+    duplicateRecordsSkipped: 0,
+    sampleFetchUrls,
+  };
+
+  for (const buildPath of pagingStrategies) {
+    const seen = new Set<string>();
+    const strategyRecords: Record<string, unknown>[] = [];
+    let pagesFetched = 0;
+    let rawRecordsFetched = 0;
+    let duplicateRecordsSkipped = 0;
+    let stalePageDetected = false;
+
+    for (let pageIndex = 0; pageIndex < maxPages; pageIndex++) {
+      const path = buildPath(pageIndex);
+      if (sampleFetchUrls.length < 5) sampleFetchUrls.push(sanitizeFetchUrlForDebug(baseUrl, path));
+      const { ok, payload } = await fetchPaymentPage(baseUrl, apiToken, wsToken, path);
+      if (!ok) break;
+      const batch = parseRecordList(payload);
+      pagesFetched += 1;
+      rawRecordsFetched += batch.length;
+
+      const uniqueBefore = seen.size;
+      for (const record of batch) {
+        const key = paymentRecordDedupeKey(record);
+        if (seen.has(key)) duplicateRecordsSkipped += 1;
+        else {
+          seen.add(key);
+          strategyRecords.push(record);
+        }
+      }
+
+      if (pageIndex > 0 && batch.length > 0 && seen.size === uniqueBefore) {
+        stalePageDetected = true;
+        break;
+      }
+
+      if (batch.length === 0) break;
+      if (batch.length < PAYMENT_PAGE_LIMIT) break;
+      await sleep(80);
+    }
+
+    if (strategyRecords.length === 0 || stalePageDetected) continue;
+
+    const candidate: PaymentFetchResult = {
+      records: strategyRecords,
+      pagesFetched,
+      rawRecordsFetched,
+      uniqueRecordsFetched: strategyRecords.length,
+      duplicateRecordsSkipped,
+      sampleFetchUrls,
+    };
+
+    if (candidate.uniqueRecordsFetched > best.uniqueRecordsFetched) {
+      best = candidate;
+    }
+
+    if (pagesFetched > 1 || candidate.uniqueRecordsFetched >= PAYMENT_PAGE_LIMIT) {
+      break;
+    }
+  }
+
+  if (best.records.length > 0) return best;
+
+  const path = `${endpointPath}?contactID=${contactId}`;
+  if (sampleFetchUrls.length < 5) sampleFetchUrls.push(sanitizeFetchUrlForDebug(baseUrl, path));
+  const { ok, payload } = await fetchPaymentPage(baseUrl, apiToken, wsToken, path);
+  if (!ok) return best;
+
+  const batch = parseRecordList(payload);
+  const seen = new Set<string>();
+  const records: Record<string, unknown>[] = [];
+  let duplicateRecordsSkipped = 0;
+  for (const record of batch) {
+    const key = paymentRecordDedupeKey(record);
+    if (seen.has(key)) duplicateRecordsSkipped += 1;
+    else {
+      seen.add(key);
+      records.push(record);
+    }
+  }
+
+  return {
+    records,
+    pagesFetched: 1,
+    rawRecordsFetched: batch.length,
+    uniqueRecordsFetched: records.length,
+    duplicateRecordsSkipped,
+    sampleFetchUrls,
+  };
+}
+
+async function tryFetchGlobalTransactionsByDateRange(
+  baseUrl: string,
+  apiToken: string,
+  wsToken: string,
+  dateFrom: string,
+  dateTo: string
+): Promise<{ records: Record<string, unknown>[]; endpointUsed: string | null; sampleFetchUrls: string[] }> {
+  const dateParamSets = [
+    `dateFrom=${dateFrom}&dateTo=${dateTo}`,
+    `startDate=${dateFrom}&endDate=${dateTo}`,
+    `fromDate=${dateFrom}&toDate=${dateTo}`,
+  ];
+
+  for (const endpointPath of PAYMENT_ENDPOINT_CANDIDATES) {
+    for (const params of dateParamSets) {
+      const seen = new Set<string>();
+      const all: Record<string, unknown>[] = [];
+      const sampleFetchUrls: string[] = [];
+      let gotAny = false;
+
+      for (let pageIndex = 0; pageIndex < PAYMENT_MAX_PAGES; pageIndex++) {
+        const offset = pageIndex * PAYMENT_PAGE_LIMIT;
+        const path = `${endpointPath}?${params}&offset=${offset}&limit=${PAYMENT_PAGE_LIMIT}`;
+        if (sampleFetchUrls.length < 5) sampleFetchUrls.push(sanitizeFetchUrlForDebug(baseUrl, path));
+        const { ok, payload } = await fetchPaymentPage(baseUrl, apiToken, wsToken, path);
+        if (!ok) break;
+        const batch = parseRecordList(payload);
+        if (batch.length === 0 && pageIndex === 0) break;
+        gotAny = gotAny || batch.length > 0;
+        for (const record of batch) {
+          const key = paymentRecordDedupeKey(record);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          all.push(record);
+        }
+        if (batch.length < PAYMENT_PAGE_LIMIT) break;
+        await sleep(80);
+      }
+
+      if (gotAny && all.length > 0) {
+        return { records: all, endpointUsed: `${endpointPath}?${params}`, sampleFetchUrls };
+      }
+    }
+  }
+
+  return { records: [], endpointUsed: null, sampleFetchUrls: [] };
+}
+
 async function fetchTransactionDetail(
   baseUrl: string,
   apiToken: string,
@@ -282,6 +663,49 @@ function matchPaymentByAmount(paymentAmount: number, invoices: AxInvoiceRow[]): 
   return candidates.length === 1 ? candidates[0] : null;
 }
 
+function buildPaymentRow(
+  raw: Record<string, unknown>,
+  contactId: number,
+  hint: { name?: string; email?: string } | undefined,
+  matchedInvoice: AxInvoiceRow | null,
+  endpointPath: string,
+  overrides?: {
+    paymentId?: string;
+    invoiceId?: number | null;
+    amount?: number;
+  }
+): AxPaymentRow {
+  const transactionDate = extractPaymentDateIso(raw);
+  const transactionId = extractTransactionId(raw);
+  const paymentAmount = overrides?.amount ?? extractPaymentAmount(raw);
+  const paymentId =
+    overrides?.paymentId ||
+    transactionId ||
+    `${endpointPath}:${contactId}:${matchedInvoice?.invoice_id ?? overrides?.invoiceId ?? 'unmatched'}:${transactionDate ?? 'nodate'}:${paymentAmount}`;
+
+  return {
+    payment_id: paymentId,
+    transaction_id: transactionId,
+    invoice_id: overrides?.invoiceId ?? matchedInvoice?.invoice_id ?? null,
+    invoice_number:
+      matchedInvoice?.invoice_number ?? (pickField(raw, 'INVOICENR', 'INVOICENO', 'INVOICENUMBER') || null),
+    contact_id: contactId,
+    student_name: matchedInvoice?.student_name ?? hint?.name ?? null,
+    payment_date: transactionDate,
+    transaction_date: transactionDate,
+    payment_amount: paymentAmount,
+    payment_method: pickField(raw, ...PAYMENT_METHOD_FIELD_KEYS) || null,
+    transaction_type: pickField(raw, ...TRANSACTION_TYPE_FIELD_KEYS) || null,
+    reference: pickField(raw, 'REFERENCE', 'REF', 'DESCRIPTION', 'DETAILS', 'reference') || null,
+    unapplied_amount: parseNumber(pickField(raw, ...UNAPPLIED_AMOUNT_FIELD_KEYS)),
+    user_full_name: pickField(raw, ...USER_FULL_NAME_FIELD_KEYS) || null,
+    raw_json: {
+      ...raw,
+      _endpoint: endpointPath,
+      ...(overrides?.invoiceId != null ? { _fragmentInvoiceId: overrides.invoiceId } : {}),
+    },
+  };
+}
 function buildPaymentsFromTransaction(
   raw: Record<string, unknown>,
   contactId: number,
@@ -291,50 +715,25 @@ function buildPaymentsFromTransaction(
   endpointPath: string
 ): AxPaymentRow[] {
   const fragments = parsePaymentFragments(raw);
-  const paymentDateRaw = pickField(
-    raw,
-    'TRANSDATE',
-    'PAYMENTDATE',
-    'TRANSACTIONDATE',
-    'DATERECEIVED',
-    'RECEIPTDATE',
-    'DATE',
-    'transdate',
-    'paymentdate',
-    'transactiondate'
-  );
-  const paymentDate = parseIsoDateTime(paymentDateRaw);
-  const paymentIdBase = pickField(raw, 'TRANSACTIONID', 'PAYMENTID', 'RECEIPTID', 'ID', 'transactionid');
-  const paymentMethod =
-    pickField(raw, 'PAYMENTMETHOD', 'METHOD', 'PAYMENTTYPE', 'paymentmethod', 'method', 'paymenttype') || null;
-  const reference = pickField(raw, 'REFERENCE', 'REF', 'DESCRIPTION', 'DETAILS', 'reference') || null;
-  const defaultAmount = parseNumber(
-    pickField(raw, 'AMOUNT', 'PAYMENTAMOUNT', 'TRANSACTIONAMOUNT', 'RECEIPTAMOUNT', 'amount', 'paymentamount')
-  );
+  const transactionId = extractTransactionId(raw);
+  const defaultAmount = extractPaymentAmount(raw);
 
   if (fragments.length > 0) {
     return fragments.map((frag) => {
       const matched = lookup.byId.get(frag.invoiceId) ?? null;
       const amount = frag.amount > 0 ? frag.amount : defaultAmount;
-      return {
-        payment_id: `${paymentIdBase || 'tx'}:${frag.fragmentId}`,
-        invoice_id: frag.invoiceId,
-        invoice_number: matched?.invoice_number ?? null,
-        contact_id: contactId,
-        student_name: matched?.student_name ?? hint?.name ?? null,
-        payment_date: paymentDate,
-        payment_amount: amount,
-        payment_method: paymentMethod,
-        reference,
-        raw_json: { ...raw, _endpoint: endpointPath, _fragmentInvoiceId: frag.invoiceId },
-      };
+      return buildPaymentRow(raw, contactId, hint, matched, endpointPath, {
+        paymentId: `${transactionId || 'tx'}:${frag.fragmentId}`,
+        invoiceId: frag.invoiceId,
+        amount,
+      });
     });
   }
 
   const matched =
     matchPaymentToInvoice(raw, lookup) ?? matchPaymentByAmount(defaultAmount, invoices);
-  const normalized = normalizePayment(raw, contactId, hint, matched, endpointPath);
-  return normalized ? [normalized] : [];
+  const row = buildPaymentRow(raw, contactId, hint, matched, endpointPath);
+  return row.payment_amount > 0 || row.invoice_id || transactionId ? [row] : [];
 }
 
 function normalizeInvoice(raw: Record<string, unknown>, contactHint?: { name?: string; email?: string }): AxInvoiceRow | null {
@@ -447,60 +846,6 @@ function matchPaymentToInvoice(
   return null;
 }
 
-function normalizePayment(
-  raw: Record<string, unknown>,
-  contactId: number,
-  hint: { name?: string; email?: string } | undefined,
-  matchedInvoice: AxInvoiceRow | null,
-  endpointPath: string
-): AxPaymentRow | null {
-  const paymentIdRaw = pickField(
-    raw,
-    'TRANSACTIONID',
-    'PAYMENTID',
-    'RECEIPTID',
-    'ID',
-    'transactionid',
-    'paymentid',
-    'receiptid'
-  );
-  const paymentDateRaw = pickField(
-    raw,
-    'TRANSDATE',
-    'PAYMENTDATE',
-    'TRANSACTIONDATE',
-    'DATERECEIVED',
-    'RECEIPTDATE',
-    'DATE',
-    'transdate',
-    'paymentdate',
-    'transactiondate'
-  );
-  const paymentDate = parseIsoDateTime(paymentDateRaw);
-  const paymentAmount = parseNumber(
-    pickField(raw, 'AMOUNT', 'PAYMENTAMOUNT', 'TRANSACTIONAMOUNT', 'RECEIPTAMOUNT', 'amount', 'paymentamount')
-  );
-
-  const paymentId =
-    paymentIdRaw ||
-    `${endpointPath}:${contactId}:${matchedInvoice?.invoice_id ?? 'unmatched'}:${paymentDate ?? 'nodate'}:${paymentAmount}`;
-
-  return {
-    payment_id: paymentId,
-    invoice_id: matchedInvoice?.invoice_id ?? null,
-    invoice_number:
-      matchedInvoice?.invoice_number ?? (pickField(raw, 'INVOICENR', 'INVOICENO', 'INVOICENUMBER') || null),
-    contact_id: contactId,
-    student_name: matchedInvoice?.student_name ?? hint?.name ?? null,
-    payment_date: paymentDate,
-    payment_amount: paymentAmount,
-    payment_method:
-      pickField(raw, 'PAYMENTMETHOD', 'METHOD', 'PAYMENTTYPE', 'paymentmethod', 'method', 'paymenttype') || null,
-    reference: pickField(raw, 'REFERENCE', 'REF', 'DESCRIPTION', 'DETAILS', 'reference') || null,
-    raw_json: { ...raw, _endpoint: endpointPath },
-  };
-}
-
 type PaymentAggregate = {
   first: string;
   last: string;
@@ -510,12 +855,16 @@ type PaymentAggregate = {
   latestDate: string;
 };
 
+function paymentEffectiveDate(p: AxPaymentRow): string {
+  return p.transaction_date ?? p.payment_date ?? '';
+}
+
 function aggregatePaymentsByInvoice(payments: AxPaymentRow[]): Map<number, PaymentAggregate> {
   const map = new Map<number, PaymentAggregate>();
   for (const p of payments) {
     if (!p.invoice_id) continue;
     const existing = map.get(p.invoice_id);
-    const date = p.payment_date ?? '';
+    const date = paymentEffectiveDate(p);
     if (!existing) {
       map.set(p.invoice_id, {
         first: date,
@@ -549,7 +898,8 @@ function applyPaymentAggregates(invoices: AxInvoiceRow[], aggregates: Map<number
       last_payment_date: agg.last || null,
       payment_count: agg.count,
       payment_method: agg.latestMethod,
-      paid_amount: agg.sum > 0 ? agg.sum : inv.paid_amount,
+      // Keep invoice endpoint paid_amount — do not overwrite with transaction sum.
+      paid_amount: inv.paid_amount,
     };
   });
 }
@@ -605,8 +955,15 @@ async function resolvePaymentEndpoint(
 
 async function fetchContactIdsFromSupabase(
   supabase: FinanceSyncSupabase
-): Promise<Map<number, { name?: string; email?: string }>> {
+): Promise<{
+  map: Map<number, { name?: string; email?: string }>;
+  totalContactIdsFromStudents: number;
+  totalContactIdsFromInvoices: number;
+  totalUniqueContactIdsToSync: number;
+}> {
   const map = new Map<number, { name?: string; email?: string }>();
+  let totalContactIdsFromStudents = 0;
+  let totalContactIdsFromInvoices = 0;
 
   const { data: students } = await supabase
     .from('skyline_students')
@@ -617,6 +974,7 @@ async function fetchContactIdsFromSupabase(
     const sid = String((row as { student_id?: string | null }).student_id ?? '').trim();
     const n = Number(sid);
     if (!Number.isFinite(n) || n <= 0) continue;
+    totalContactIdsFromStudents += 1;
     map.set(n, {
       name: String((row as { name?: string }).name ?? '').trim() || undefined,
       email: String((row as { email?: string }).email ?? '').trim() || undefined,
@@ -628,6 +986,7 @@ async function fetchContactIdsFromSupabase(
     const cid = Number((row as { contact_id?: number | null }).contact_id ?? 0);
     if (!Number.isFinite(cid) || cid <= 0) continue;
     if (!map.has(cid)) {
+      totalContactIdsFromInvoices += 1;
       map.set(cid, {
         name: String((row as { student_name?: string }).student_name ?? '').trim() || undefined,
         email: String((row as { email?: string }).email ?? '').trim() || undefined,
@@ -635,7 +994,145 @@ async function fetchContactIdsFromSupabase(
     }
   }
 
-  return map;
+  const { data: paymentContacts } = await supabase
+    .from('ax_invoice_payments')
+    .select('contact_id, student_name')
+    .not('contact_id', 'is', null);
+
+  for (const row of paymentContacts ?? []) {
+    const cid = Number((row as { contact_id?: number | null }).contact_id ?? 0);
+    if (!Number.isFinite(cid) || cid <= 0) continue;
+    if (!map.has(cid)) {
+      totalContactIdsFromInvoices += 1;
+      map.set(cid, {
+        name: String((row as { student_name?: string }).student_name ?? '').trim() || undefined,
+      });
+    }
+  }
+
+  return {
+    map,
+    totalContactIdsFromStudents,
+    totalContactIdsFromInvoices,
+    totalUniqueContactIdsToSync: map.size,
+  };
+}
+
+async function loadCachedInvoicesForContact(
+  supabase: FinanceSyncSupabase,
+  contactId: number
+): Promise<AxInvoiceRow[]> {
+  const { data } = await supabase
+    .from('ax_invoices')
+    .select(
+      'invoice_id, invoice_number, contact_id, student_name, email, invoice_date, due_date, invoice_amount, paid_amount, balance, is_paid, is_void, is_cancelled, are_items_locked, course_name, agent_name, last_payment_date, first_payment_date, payment_count, payment_method, raw_json'
+    )
+    .eq('contact_id', contactId);
+
+  return (data ?? []).map((row) => ({
+    invoice_id: Number((row as { invoice_id: number }).invoice_id),
+    invoice_number: (row as { invoice_number?: string | null }).invoice_number ?? null,
+    contact_id: contactId,
+    student_name: (row as { student_name?: string | null }).student_name ?? null,
+    email: (row as { email?: string | null }).email ?? null,
+    invoice_date: (row as { invoice_date?: string | null }).invoice_date ?? null,
+    due_date: (row as { due_date?: string | null }).due_date ?? null,
+    invoice_amount: parseNumber((row as { invoice_amount?: number }).invoice_amount),
+    paid_amount: parseNumber((row as { paid_amount?: number }).paid_amount),
+    balance: parseNumber((row as { balance?: number }).balance),
+    is_paid: Boolean((row as { is_paid?: boolean }).is_paid),
+    is_void: Boolean((row as { is_void?: boolean }).is_void),
+    is_cancelled: Boolean((row as { is_cancelled?: boolean }).is_cancelled),
+    are_items_locked: Boolean((row as { are_items_locked?: boolean }).are_items_locked),
+    course_name: (row as { course_name?: string | null }).course_name ?? null,
+    agent_name: (row as { agent_name?: string | null }).agent_name ?? null,
+    last_payment_date: (row as { last_payment_date?: string | null }).last_payment_date ?? null,
+    first_payment_date: (row as { first_payment_date?: string | null }).first_payment_date ?? null,
+    payment_count: Number((row as { payment_count?: number }).payment_count ?? 0) || 0,
+    payment_method: (row as { payment_method?: string | null }).payment_method ?? null,
+    raw_json: ((row as { raw_json?: Record<string, unknown> }).raw_json ?? {}) as Record<string, unknown>,
+  }));
+}
+
+async function processPaymentRecordsForContact(
+  paymentRecords: Record<string, unknown>[],
+  contactId: number,
+  hint: { name?: string; email?: string } | undefined,
+  lookup: { byId: Map<number, AxInvoiceRow>; byNumber: Map<string, AxInvoiceRow> },
+  invoiceRowsForMatch: AxInvoiceRow[],
+  endpointPath: string,
+  baseUrl: string,
+  apiToken: string,
+  wsToken: string
+): Promise<{
+  paymentRows: AxPaymentRow[];
+  matchedPayments: number;
+  unmatchedPayments: number;
+  paymentsWithDate: number;
+  paymentsWithoutDate: number;
+  sampleRawKeys: string[];
+  sampleDateValues: Record<string, string>;
+}> {
+  const paymentRows: AxPaymentRow[] = [];
+  let matchedPayments = 0;
+  let unmatchedPayments = 0;
+  let paymentsWithDate = 0;
+  let paymentsWithoutDate = 0;
+  let sampleRawKeys: string[] = [];
+  const sampleDateValues: Record<string, string> = {};
+
+  let detailFetches = 0;
+
+  for (const record of paymentRecords) {
+    if (!isMoneyReceivedTransaction(record)) continue;
+
+    let enriched = record;
+    if (parsePaymentFragments(record).length === 0 && !recordHasPaymentDateOnList(record)) {
+      const txId = pickField(record, 'TRANSACTIONID', 'transactionid');
+      if (txId && detailFetches < MAX_TX_DETAIL_FETCHES_PER_CONTACT) {
+        const detail = await fetchTransactionDetail(baseUrl, apiToken, wsToken, contactId, txId, endpointPath);
+        if (detail) enriched = { ...record, ...detail };
+        detailFetches += 1;
+        await sleep(80);
+      }
+    }
+
+    const rows = buildPaymentsFromTransaction(
+      enriched,
+      contactId,
+      hint,
+      lookup,
+      invoiceRowsForMatch,
+      endpointPath
+    );
+    for (const row of rows) {
+      paymentRows.push(row);
+      if (row.invoice_id) matchedPayments += 1;
+      else unmatchedPayments += 1;
+      const effectiveDate = paymentEffectiveDate(row);
+      if (effectiveDate) paymentsWithDate += 1;
+      else paymentsWithoutDate += 1;
+      if (sampleRawKeys.length === 0 && row.raw_json) {
+        sampleRawKeys = Object.keys(row.raw_json).slice(0, 40);
+        for (const key of PAYMENT_DATE_FIELD_KEYS) {
+          const val = row.raw_json[key];
+          if (val != null && String(val).trim() !== '') {
+            sampleDateValues[key] = String(val);
+          }
+        }
+      }
+    }
+  }
+
+  return {
+    paymentRows,
+    matchedPayments,
+    unmatchedPayments,
+    paymentsWithDate,
+    paymentsWithoutDate,
+    sampleRawKeys,
+    sampleDateValues,
+  };
 }
 
 async function syncContactInvoices(
@@ -646,7 +1143,8 @@ async function syncContactInvoices(
   contactId: number,
   hint: { name?: string; email?: string } | undefined,
   errors: string[],
-  paymentEndpointState: PaymentEndpointState
+  paymentEndpointState: PaymentEndpointState,
+  options?: { invoicesOnly?: boolean; paymentDateFrom?: string; paymentDateTo?: string }
 ): Promise<{ result: SyncContactResult; paymentEndpointState: PaymentEndpointState }> {
   const empty: SyncContactResult = {
     invoices: 0,
@@ -655,6 +1153,16 @@ async function syncContactInvoices(
     paymentsUpserted: 0,
     matchedPayments: 0,
     unmatchedPayments: 0,
+    paymentsWithDate: 0,
+    paymentsWithoutDate: 0,
+    sampleRawKeys: [],
+    sampleDateValues: {},
+    paymentPagesFetched: 0,
+    paymentRawRecordsFetched: 0,
+    paymentUniqueRecordsFetched: 0,
+    paymentDuplicateRecordsSkipped: 0,
+    hadPaymentRecords: false,
+    sampleFetchUrls: [],
   };
 
   const { ok, status, payload } = await axFetch(
@@ -676,63 +1184,103 @@ async function syncContactInvoices(
     if (normalized) upsertRows.push(normalized);
   }
 
-  if (upsertRows.length === 0) {
-    return { result: { ...empty, invoices: invoiceRecords.length }, paymentEndpointState };
-  }
+  const cachedInvoices = upsertRows.length === 0 ? await loadCachedInvoicesForContact(supabase, contactId) : [];
+  const invoiceRowsForMatch = upsertRows.length > 0 ? upsertRows : cachedInvoices;
 
   const endpointState = await resolvePaymentEndpoint(baseUrl, apiToken, wsToken, contactId, paymentEndpointState);
-  const lookup = buildInvoiceLookup(upsertRows);
-  const paymentRows: AxPaymentRow[] = [];
+  const lookup = buildInvoiceLookup(invoiceRowsForMatch);
+  let paymentRows: AxPaymentRow[] = [];
   let matchedPayments = 0;
   let unmatchedPayments = 0;
+  let paymentsWithDate = 0;
+  let paymentsWithoutDate = 0;
+  let sampleRawKeys: string[] = [];
+  const sampleDateValues: Record<string, string> = {};
+  let paymentPagesFetched = 0;
+  let paymentRawRecordsFetched = 0;
+  let paymentUniqueRecordsFetched = 0;
+  let paymentDuplicateRecordsSkipped = 0;
+  let hadPaymentRecords = false;
+  let contactSampleFetchUrls: string[] = [];
 
-  if (endpointState.path) {
-    const paymentFetch = await axFetch(
+  if (endpointState.path && !options?.invoicesOnly) {
+    const paymentFetchResult = await fetchAllPaymentRecordsForContact(
       baseUrl,
-      `${endpointState.path}?contactID=${contactId}`,
       apiToken,
-      wsToken
+      wsToken,
+      contactId,
+      endpointState.path,
+      PAYMENT_MAX_PAGES_BATCH
     );
-
-    if (paymentFetch.ok) {
-      const paymentRecords = parseRecordList(paymentFetch.payload);
-      for (const record of paymentRecords) {
-        if (!isMoneyReceivedTransaction(record)) continue;
-
-        let enriched = record;
-        if (parsePaymentFragments(record).length === 0) {
-          const txId = pickField(record, 'TRANSACTIONID', 'transactionid');
-          if (txId) {
-            const detail = await fetchTransactionDetail(
-              baseUrl,
-              apiToken,
-              wsToken,
-              contactId,
-              txId,
-              endpointState.path
-            );
-            if (detail) enriched = { ...record, ...detail };
-            await sleep(120);
-          }
-        }
-
-        const rows = buildPaymentsFromTransaction(
-          enriched,
-          contactId,
-          hint,
-          lookup,
-          upsertRows,
-          endpointState.path
-        );
-        for (const row of rows) {
-          paymentRows.push(row);
-          if (row.invoice_id) matchedPayments += 1;
-          else unmatchedPayments += 1;
-        }
-      }
-    } else {
-      errors.push(`contact ${contactId}: payment fetch failed (${paymentFetch.status})`);
+    let paymentRecords = paymentFetchResult.records;
+    if (options?.paymentDateFrom || options?.paymentDateTo) {
+      paymentRecords = paymentRecords.filter((record) =>
+        isPaymentRecordInRange(record, options.paymentDateFrom ?? '', options.paymentDateTo ?? '')
+      );
     }
+    paymentPagesFetched = paymentFetchResult.pagesFetched;
+    paymentRawRecordsFetched = paymentFetchResult.rawRecordsFetched;
+    paymentUniqueRecordsFetched = paymentFetchResult.uniqueRecordsFetched;
+    paymentDuplicateRecordsSkipped = paymentFetchResult.duplicateRecordsSkipped;
+    hadPaymentRecords = paymentFetchResult.records.length > 0;
+    contactSampleFetchUrls = paymentFetchResult.sampleFetchUrls;
+
+    if (paymentRecords.length > 0) {
+      const processed = await processPaymentRecordsForContact(
+        paymentRecords,
+        contactId,
+        hint,
+        lookup,
+        invoiceRowsForMatch,
+        endpointState.path,
+        baseUrl,
+        apiToken,
+        wsToken
+      );
+      paymentRows = processed.paymentRows;
+      matchedPayments = processed.matchedPayments;
+      unmatchedPayments = processed.unmatchedPayments;
+      paymentsWithDate = processed.paymentsWithDate;
+      paymentsWithoutDate = processed.paymentsWithoutDate;
+      sampleRawKeys = processed.sampleRawKeys;
+      Object.assign(sampleDateValues, processed.sampleDateValues);
+    }
+  }
+
+  if (upsertRows.length === 0) {
+    if (paymentRows.length > 0) {
+      let paymentsUpserted = 0;
+      const { error: paymentUpsertError } = await supabase.from('ax_invoice_payments').upsert(paymentRows, {
+        onConflict: 'payment_id',
+      });
+      if (paymentUpsertError) {
+        errors.push(`contact ${contactId}: payment upsert failed (${paymentUpsertError.message})`);
+      } else {
+        paymentsUpserted = paymentRows.length;
+      }
+      return {
+        result: {
+          ...empty,
+          invoices: invoiceRecords.length,
+          payments: paymentRows.length,
+          paymentsUpserted,
+          matchedPayments,
+          unmatchedPayments,
+          paymentsWithDate,
+          paymentsWithoutDate,
+          sampleRawKeys,
+          sampleDateValues,
+          paymentPagesFetched,
+          paymentRawRecordsFetched,
+          paymentUniqueRecordsFetched,
+          paymentDuplicateRecordsSkipped,
+          hadPaymentRecords,
+          sampleFetchUrls: contactSampleFetchUrls,
+        },
+        paymentEndpointState: endpointState,
+      };
+    }
+    return { result: { ...empty, invoices: invoiceRecords.length }, paymentEndpointState: endpointState };
   }
 
   const aggregates = aggregatePaymentsByInvoice(paymentRows);
@@ -767,6 +1315,16 @@ async function syncContactInvoices(
       paymentsUpserted,
       matchedPayments,
       unmatchedPayments,
+      paymentsWithDate,
+      paymentsWithoutDate,
+      sampleRawKeys,
+      sampleDateValues,
+      paymentPagesFetched,
+      paymentRawRecordsFetched,
+      paymentUniqueRecordsFetched,
+      paymentDuplicateRecordsSkipped,
+      hadPaymentRecords,
+      sampleFetchUrls: contactSampleFetchUrls,
     },
     paymentEndpointState: endpointState,
   };
@@ -814,7 +1372,171 @@ Deno.serve(async (req) => {
   let syncedPayments = 0;
   let matchedPaymentCount = 0;
   let unmatchedPaymentCount = 0;
+  let paymentsWithDateCount = 0;
+  let paymentsWithoutDateCount = 0;
+  let samplePaymentRawKeys: string[] = [];
+  let samplePaymentDateValues: Record<string, string> = {};
+  let paymentPagesFetched = 0;
+  let paymentRawRecordsFetched = 0;
+  let paymentUniqueRecordsFetched = 0;
+  let paymentDuplicateRecordsSkipped = 0;
+  let contactsWithPaymentRecords = 0;
+  let contactsWithoutPaymentRecords = 0;
+  const samplePaymentFetchUrlsWithoutTokens: string[] = [];
+  let totalContactIdsFromStudents = 0;
+  let totalContactIdsFromInvoices = 0;
+  let totalUniqueContactIdsToSync = 0;
   let paymentEndpointState: PaymentEndpointState = { path: null, checked: false, warning: null };
+
+  const syncMode = String(body.syncMode ?? '').trim().toLowerCase();
+  let syncDateFrom = typeof body.dateFrom === 'string' ? body.dateFrom.trim() : '';
+  let syncDateTo = typeof body.dateTo === 'string' ? body.dateTo.trim() : '';
+  const invoicesOnly = body.invoicesOnly === true || String(body.invoicesOnly ?? '').toLowerCase() === 'true';
+
+  if (syncDateFrom && syncDateTo && isIsoDate(syncDateFrom) && isIsoDate(syncDateTo)) {
+    const clamped = clampSyncDateRange(syncDateFrom, syncDateTo);
+    syncDateFrom = clamped.dateFrom;
+    syncDateTo = clamped.dateTo;
+    if (clamped.clamped) {
+      errors.push(`Date range capped to ${MAX_SYNC_DATE_RANGE_DAYS} days (1 year max).`);
+    }
+  }
+
+  const defaultRange = defaultSyncDateRange();
+  const paymentDateFrom = syncDateFrom || defaultRange.dateFrom;
+  const paymentDateTo = syncDateTo || defaultRange.dateTo;
+
+  if (syncMode === 'allocations_backfill') {
+    const backfill = await backfillInvoicePaymentAllocations(supabase);
+    if (backfill.errors.length) errors.push(...backfill.errors);
+    return jsonResponse({
+      success: backfill.success,
+      syncMode: 'allocations_backfill',
+      allocationBackfill: backfill.stats,
+      syncedContacts: 0,
+      syncedInvoices: 0,
+      insertedOrUpdated: 0,
+      syncedPayments: 0,
+      matchedPaymentCount: 0,
+      unmatchedPaymentCount: 0,
+      errors,
+      hasMore: false,
+      nextOffset: null,
+    });
+  }
+
+  if (syncMode === 'transactions_report' && syncDateFrom && syncDateTo) {
+    const globalFetch = await tryFetchGlobalTransactionsByDateRange(
+      baseUrl,
+      apiToken,
+      wsToken,
+      syncDateFrom,
+      syncDateTo
+    );
+    if (globalFetch.sampleFetchUrls.length > 0) {
+      samplePaymentFetchUrlsWithoutTokens.push(...globalFetch.sampleFetchUrls.slice(0, 5));
+    }
+
+    if (globalFetch.records.length > 0 && globalFetch.endpointUsed) {
+      paymentEndpointState = { path: globalFetch.endpointUsed.split('?')[0], checked: true, warning: null };
+      paymentRawRecordsFetched = globalFetch.records.length;
+      paymentUniqueRecordsFetched = globalFetch.records.length;
+      paymentPagesFetched = 1;
+
+      const { data: allCachedInvoices } = await supabase.from('ax_invoices').select('*');
+      const cachedRows = (allCachedInvoices ?? []).map((row) => ({
+        invoice_id: Number((row as { invoice_id: number }).invoice_id),
+        invoice_number: (row as { invoice_number?: string | null }).invoice_number ?? null,
+        contact_id: Number((row as { contact_id?: number | null }).contact_id ?? 0) || null,
+        student_name: (row as { student_name?: string | null }).student_name ?? null,
+        email: (row as { email?: string | null }).email ?? null,
+        invoice_date: (row as { invoice_date?: string | null }).invoice_date ?? null,
+        due_date: (row as { due_date?: string | null }).due_date ?? null,
+        invoice_amount: parseNumber((row as { invoice_amount?: number }).invoice_amount),
+        paid_amount: parseNumber((row as { paid_amount?: number }).paid_amount),
+        balance: parseNumber((row as { balance?: number }).balance),
+        is_paid: Boolean((row as { is_paid?: boolean }).is_paid),
+        is_void: Boolean((row as { is_void?: boolean }).is_void),
+        is_cancelled: Boolean((row as { is_cancelled?: boolean }).is_cancelled),
+        are_items_locked: Boolean((row as { are_items_locked?: boolean }).are_items_locked),
+        course_name: (row as { course_name?: string | null }).course_name ?? null,
+        agent_name: (row as { agent_name?: string | null }).agent_name ?? null,
+        last_payment_date: null,
+        first_payment_date: null,
+        payment_count: 0,
+        payment_method: null,
+        raw_json: ((row as { raw_json?: Record<string, unknown> }).raw_json ?? {}) as Record<string, unknown>,
+      })) as AxInvoiceRow[];
+
+      const lookup = buildInvoiceLookup(cachedRows);
+      const allPaymentRows: AxPaymentRow[] = [];
+
+      for (const record of globalFetch.records) {
+        if (!isMoneyReceivedTransaction(record)) continue;
+        const contactIdRaw = pickField(record, 'CONTACTID', 'contactID', 'contactid');
+        const contactId = Number(contactIdRaw);
+        if (!Number.isFinite(contactId) || contactId <= 0) continue;
+        const rows = buildPaymentsFromTransaction(
+          record,
+          contactId,
+          undefined,
+          lookup,
+          cachedRows,
+          globalFetch.endpointUsed.split('?')[0]
+        );
+        allPaymentRows.push(...rows);
+      }
+
+      if (allPaymentRows.length > 0) {
+        const { error: paymentUpsertError } = await supabase.from('ax_invoice_payments').upsert(allPaymentRows, {
+          onConflict: 'payment_id',
+        });
+        if (paymentUpsertError) {
+          errors.push(`global transactions sync: payment upsert failed (${paymentUpsertError.message})`);
+        } else {
+          syncedPayments = allPaymentRows.length;
+          matchedPaymentCount = allPaymentRows.filter((r) => r.invoice_id).length;
+          unmatchedPaymentCount = allPaymentRows.length - matchedPaymentCount;
+          paymentsWithDateCount = allPaymentRows.filter((r) => paymentEffectiveDate(r)).length;
+          paymentsWithoutDateCount = allPaymentRows.length - paymentsWithDateCount;
+        }
+      }
+
+      const globalBackfill = await backfillInvoicePaymentAllocations(supabase);
+      if (globalBackfill.errors.length) errors.push(...globalBackfill.errors);
+
+      return jsonResponse({
+        success: true,
+        syncMode: 'transactions_report',
+        globalTransactionEndpointUsed: globalFetch.endpointUsed,
+        allocationBackfill: globalBackfill.stats,
+        syncedContacts: 0,
+        syncedInvoices: 0,
+        insertedOrUpdated: 0,
+        syncedPayments,
+        matchedPaymentCount,
+        unmatchedPaymentCount,
+        paymentsWithDateCount,
+        paymentsWithoutDateCount,
+        paymentPagesFetched,
+        paymentRawRecordsFetched,
+        paymentUniqueRecordsFetched,
+        paymentDuplicateRecordsSkipped,
+        contactsWithPaymentRecords: globalFetch.records.length > 0 ? 1 : 0,
+        contactsWithoutPaymentRecords: globalFetch.records.length > 0 ? 0 : 1,
+        samplePaymentFetchUrlsWithoutTokens,
+        paymentEndpointUsed: paymentEndpointState.path,
+        paymentEndpointWarning: null,
+        errors,
+        hasMore: false,
+        nextOffset: null,
+      });
+    }
+
+    errors.push(
+      `Global transactions_report sync for ${syncDateFrom}..${syncDateTo} returned no records; falling back to per-contact sync may be incomplete.`
+    );
+  }
 
   const singleContactRaw = body.contactID != null ? String(body.contactID).trim() : '';
   const singleContactId = singleContactRaw ? Number(singleContactRaw) : NaN;
@@ -827,8 +1549,13 @@ Deno.serve(async (req) => {
 
   if (Number.isFinite(singleContactId) && singleContactId > 0) {
     contactMap.set(singleContactId, {});
+    totalUniqueContactIdsToSync = 1;
   } else {
-    contactMap = await fetchContactIdsFromSupabase(supabase);
+    const contactStats = await fetchContactIdsFromSupabase(supabase);
+    contactMap = contactStats.map;
+    totalContactIdsFromStudents = contactStats.totalContactIdsFromStudents;
+    totalContactIdsFromInvoices = contactStats.totalContactIdsFromInvoices;
+    totalUniqueContactIdsToSync = contactStats.totalUniqueContactIdsToSync;
   }
 
   const allContactIds = [...contactMap.keys()].sort((a, b) => a - b);
@@ -837,6 +1564,9 @@ Deno.serve(async (req) => {
     Number.isFinite(singleContactId) && singleContactId > 0
       ? [singleContactId]
       : allContactIds.slice(offset, offset + limit);
+
+  let ledgerEndpointState: LedgerEndpointState = { path: null, checked: false, warning: null };
+  const ledgerAggregate = emptyLedgerAggregate(null);
 
   for (let i = 0; i < batchIds.length; i++) {
     const contactId = batchIds[i];
@@ -849,7 +1579,13 @@ Deno.serve(async (req) => {
       contactId,
       hint,
       errors,
-      paymentEndpointState
+      paymentEndpointState,
+      invoicesOnly
+        ? { invoicesOnly: true }
+        : {
+            paymentDateFrom,
+            paymentDateTo,
+          }
     );
     paymentEndpointState = nextState;
     syncedInvoices += result.invoices;
@@ -857,6 +1593,36 @@ Deno.serve(async (req) => {
     syncedPayments += result.paymentsUpserted;
     matchedPaymentCount += result.matchedPayments;
     unmatchedPaymentCount += result.unmatchedPayments;
+    paymentsWithDateCount += result.paymentsWithDate;
+    paymentsWithoutDateCount += result.paymentsWithoutDate;
+    if (samplePaymentRawKeys.length === 0 && result.sampleRawKeys.length > 0) {
+      samplePaymentRawKeys = result.sampleRawKeys;
+      samplePaymentDateValues = result.sampleDateValues;
+    }
+    paymentPagesFetched += result.paymentPagesFetched;
+    paymentRawRecordsFetched += result.paymentRawRecordsFetched;
+    paymentUniqueRecordsFetched += result.paymentUniqueRecordsFetched;
+    paymentDuplicateRecordsSkipped += result.paymentDuplicateRecordsSkipped;
+    if (result.hadPaymentRecords) contactsWithPaymentRecords += 1;
+    else contactsWithoutPaymentRecords += 1;
+    for (const url of result.sampleFetchUrls) {
+      if (samplePaymentFetchUrlsWithoutTokens.length < 5 && !samplePaymentFetchUrlsWithoutTokens.includes(url)) {
+        samplePaymentFetchUrlsWithoutTokens.push(url);
+      }
+    }
+
+    const axFetchForLedger = (path: string) => axFetch(baseUrl, path, apiToken, wsToken);
+    const { result: ledgerResult, endpointState: nextLedgerState } = await syncContactLedger(
+      axFetchForLedger,
+      supabase,
+      contactId,
+      hint,
+      errors,
+      ledgerEndpointState
+    );
+    ledgerEndpointState = nextLedgerState;
+    mergeLedgerAggregate(ledgerAggregate, ledgerResult, ledgerEndpointState.path);
+
     if (i < batchIds.length - 1) {
       await sleep(CONTACT_REQUEST_DELAY_MS);
     }
@@ -865,10 +1631,23 @@ Deno.serve(async (req) => {
   if (paymentEndpointState.warning && !errors.includes(paymentEndpointState.warning)) {
     errors.push(paymentEndpointState.warning);
   }
+  if (ledgerEndpointState.warning && ledgerAggregate.ledgerRowsFetched === 0) {
+    ledgerAggregate.ledgerEndpointWarning = ledgerEndpointState.warning;
+    if (ledgerEndpointState.warning && !errors.includes(ledgerEndpointState.warning)) {
+      errors.push(ledgerEndpointState.warning);
+    }
+  }
 
   const isSingle = Number.isFinite(singleContactId) && singleContactId > 0;
   const nextOffset = offset + batchIds.length;
   const hasMore = !isSingle && nextOffset < totalContacts;
+
+  let allocationBackfill = null;
+  if (!hasMore) {
+    const backfill = await backfillInvoicePaymentAllocations(supabase);
+    allocationBackfill = backfill.stats;
+    if (backfill.errors.length) errors.push(...backfill.errors);
+  }
 
   return jsonResponse({
     success: true,
@@ -878,8 +1657,34 @@ Deno.serve(async (req) => {
     syncedPayments,
     matchedPaymentCount,
     unmatchedPaymentCount,
+    paymentsWithDateCount,
+    paymentsWithoutDateCount,
+    allocationBackfill,
     paymentEndpointUsed: paymentEndpointState.path,
     paymentEndpointWarning: paymentEndpointState.warning,
+    samplePaymentRawKeys,
+    samplePaymentDateValues,
+    paymentPagesFetched,
+    paymentRawRecordsFetched,
+    paymentUniqueRecordsFetched,
+    paymentDuplicateRecordsSkipped,
+    contactsWithPaymentRecords,
+    contactsWithoutPaymentRecords,
+    samplePaymentFetchUrlsWithoutTokens,
+    totalContactIdsFromStudents,
+    totalContactIdsFromInvoices,
+    totalUniqueContactIdsToSync,
+    ledgerEndpointUsed: ledgerAggregate.ledgerEndpointUsed,
+    ledgerEndpointWarning: ledgerAggregate.ledgerEndpointWarning,
+    ledgerContactsSynced: ledgerAggregate.ledgerContactsSynced,
+    ledgerRowsFetched: ledgerAggregate.ledgerRowsFetched,
+    ledgerRowsUpserted: ledgerAggregate.ledgerRowsUpserted,
+    ledgerRowsWithRelatedInvoice: ledgerAggregate.ledgerRowsWithRelatedInvoice,
+    ledgerRowsWithoutRelatedInvoice: ledgerAggregate.ledgerRowsWithoutRelatedInvoice,
+    ledgerRowsLinkedToInvoice: ledgerAggregate.ledgerRowsLinkedToInvoice,
+    ledgerRowsUnlinkedToInvoice: ledgerAggregate.ledgerRowsUnlinkedToInvoice,
+    sampleLedgerRows: ledgerAggregate.sampleLedgerRows,
+    sampleLedgerRawKeys: ledgerAggregate.sampleLedgerRawKeys,
     errors,
     offset,
     limit,

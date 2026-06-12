@@ -10,6 +10,7 @@ import { PDFDocument } from 'pdf-lib';
 // TypeScript will resolve these to the corresponding .ts files at build time.
 import { renderAppendixAMatrixHtml } from './appendixAMatrixData.js';
 import { buildInductionPdfHtml, resolveSlitLogoDataUrls } from './inductionHtml.js';
+import { renderTaskQuestionInstructionHtml } from './instructionBlocksHtml.js';
 
 // Load .env from project root (parent of pdf-server)
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1710,9 +1711,10 @@ function buildHtml(data: {
         html += `<div class="task-questions-header">${taskHeaderTitle}</div>`;
         html += `<div class="task-questions-subheader">Provide your response to each question in the box below.</div>`;
         headerNum++;
-        const renderableQs = questions.filter(
-          (q) => q.question.type !== 'instruction_block' && !((q.question.pdf_meta as Record<string, unknown>)?.isAdditionalBlockOf)
+        const orderedQs = questions.filter(
+          (q) => !((q.question.pdf_meta as Record<string, unknown>)?.isAdditionalBlockOf)
         );
+        const renderableQs = orderedQs.filter((q) => q.question.type !== 'instruction_block');
         const taskQNumById = new Map<number, number>();
         let qnAcc = 0;
         for (const rq of renderableQs) {
@@ -1720,12 +1722,15 @@ function buildHtml(data: {
           qnAcc++;
           taskQNumById.set(rq.question.id, qnAcc);
         }
-        let qNum = 0;
-        for (let i = 0; i < renderableQs.length; i++) {
-          const { question, rows } = renderableQs[i];
+        for (let i = 0; i < orderedQs.length; i++) {
+          const { question, rows } = orderedQs[i];
+          if (question.type === 'instruction_block') {
+            html += renderTaskQuestionInstructionHtml(question, normalizeNbspProse, labelToHtml);
+            continue;
+          }
           if (question.type === 'page_break') continue;
-          const nextIsPageBreak = renderableQs[i + 1]?.question.type === 'page_break';
-          qNum++;
+          const nextIsPageBreak = orderedQs[i + 1]?.question.type === 'page_break';
+          const qNum = taskQNumById.get(question.id) ?? 0;
           const sat = trainerAssessments.get(question.id);
           const satYes = sat === 'yes';
           const satNo = sat === 'no';

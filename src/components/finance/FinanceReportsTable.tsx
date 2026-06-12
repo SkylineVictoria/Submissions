@@ -1,12 +1,12 @@
 import React, { useMemo, useState } from 'react';
-import { Download, Mail } from 'lucide-react';
+import { AlertTriangle, Download, Mail } from 'lucide-react';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 import { AdminListPagination } from '../admin/AdminListPagination';
 import { SortableTh } from '../admin/SortableTh';
 import type { SortDirection } from '../admin/SortableTh';
-import { formatAud, formatFinanceDate, formatPaymentDateTime, exportFinanceRowsToCsv } from '../../services/financeReports';
+import { formatAud, formatFinanceDate, formatPaginationRange, formatPaymentDateTime, exportFinanceRowsToCsv } from '../../services/financeReports';
 import type { FinanceReportRow } from '../../types/financeReports';
 import { toast } from '../../utils/toast';
 
@@ -16,7 +16,7 @@ type SortKey =
   | 'invoiceNo'
   | 'invoiceDate'
   | 'dueDate'
-  | 'lastPaymentDate'
+  | 'paymentDate'
   | 'paymentMethod'
   | 'invoiceAmount'
   | 'paidAmount'
@@ -27,7 +27,7 @@ type Props = {
   rows: FinanceReportRow[];
 };
 
-const PAGE_SIZE = 20;
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
 const statusClass: Record<string, string> = {
   Paid: 'bg-emerald-50 text-emerald-800 border-emerald-200',
@@ -41,6 +41,7 @@ export const FinanceReportsTable: React.FC<Props> = ({ rows }) => {
   const [tableSearch, setTableSearch] = useState('');
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDirection }>({ key: 'invoiceDate', dir: 'desc' });
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
 
   const filtered = useMemo(() => {
@@ -62,8 +63,32 @@ export const FinanceReportsTable: React.FC<Props> = ({ rows }) => {
     });
   }, [rows, tableSearch, sort]);
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const pageRows = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const pageRows = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
+  const rangeLabel = formatPaginationRange(safePage, pageSize, filtered.length);
+
+  const renderPaymentDate = (row: FinanceReportRow) => {
+    if (row.paymentDateMissing) {
+      return (
+        <span className="inline-flex items-center gap-1 font-medium text-amber-700">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          Payment date missing
+        </span>
+      );
+    }
+    const effectiveDate = row.paymentDate ?? row.lastPaymentDate;
+    if (effectiveDate) return formatPaymentDateTime(effectiveDate);
+    if (row.status === 'Paid' || row.status === 'Partially Paid') {
+      return (
+        <span className="inline-flex items-center gap-1 font-medium text-amber-700">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          Payment date missing
+        </span>
+      );
+    }
+    return '—';
+  };
 
   const toggleSort = (key: SortKey) => {
     setSort((prev) => {
@@ -141,13 +166,19 @@ export const FinanceReportsTable: React.FC<Props> = ({ rows }) => {
       <AdminListPagination
         placement="top"
         totalItems={filtered.length}
-        pageSize={PAGE_SIZE}
-        currentPage={page}
+        pageSize={pageSize}
+        currentPage={safePage}
         totalPages={totalPages}
         onPrev={() => setPage((p) => Math.max(1, p - 1))}
         onNext={() => setPage((p) => Math.min(totalPages, p + 1))}
         onGoToPage={setPage}
         itemLabel="invoices"
+        rangeLabel={rangeLabel}
+        pageSizeOptions={PAGE_SIZE_OPTIONS}
+        onPageSizeChange={(n) => {
+          setPageSize(n);
+          setPage(1);
+        }}
       />
 
       <div className="overflow-x-auto">
@@ -167,7 +198,7 @@ export const FinanceReportsTable: React.FC<Props> = ({ rows }) => {
               <SortableTh label="Invoice No" className="py-3 pr-3" active={sort.key === 'invoiceNo'} direction={sort.dir} onToggle={() => toggleSort('invoiceNo')} />
               <SortableTh label="Invoice Date" className="py-3 pr-3" active={sort.key === 'invoiceDate'} direction={sort.dir} onToggle={() => toggleSort('invoiceDate')} />
               <SortableTh label="Due Date" className="py-3 pr-3" active={sort.key === 'dueDate'} direction={sort.dir} onToggle={() => toggleSort('dueDate')} />
-              <SortableTh label="Payment Date" className="py-3 pr-3" active={sort.key === 'lastPaymentDate'} direction={sort.dir} onToggle={() => toggleSort('lastPaymentDate')} />
+              <SortableTh label="Payment Date" className="py-3 pr-3" active={sort.key === 'paymentDate'} direction={sort.dir} onToggle={() => toggleSort('paymentDate')} />
               <SortableTh label="Payment Method" className="py-3 pr-3" active={sort.key === 'paymentMethod'} direction={sort.dir} onToggle={() => toggleSort('paymentMethod')} />
               <SortableTh label="Invoice Amount" className="py-3 pr-3 text-right" active={sort.key === 'invoiceAmount'} direction={sort.dir} onToggle={() => toggleSort('invoiceAmount')} />
               <SortableTh label="Paid Amount" className="py-3 pr-3 text-right" active={sort.key === 'paidAmount'} direction={sort.dir} onToggle={() => toggleSort('paidAmount')} />
@@ -201,11 +232,7 @@ export const FinanceReportsTable: React.FC<Props> = ({ rows }) => {
                     <td className="py-3 pr-3 font-mono text-xs">{row.invoiceNo || '—'}</td>
                     <td className="py-3 pr-3 text-gray-700">{formatFinanceDate(row.invoiceDate)}</td>
                     <td className="py-3 pr-3 text-gray-700">{formatFinanceDate(row.dueDate)}</td>
-                    <td className="py-3 pr-3 text-gray-700">
-                      {row.status === 'Paid' || row.paidAmount > 0
-                        ? formatPaymentDateTime(row.lastPaymentDate)
-                        : '—'}
-                    </td>
+                    <td className="py-3 pr-3 text-gray-700">{renderPaymentDate(row)}</td>
                     <td className="py-3 pr-3 text-gray-700">{row.paymentMethod || '—'}</td>
                     <td className="py-3 pr-3 text-right tabular-nums">{formatAud(row.invoiceAmount)}</td>
                     <td className="py-3 pr-3 text-right tabular-nums text-emerald-700">{formatAud(row.paidAmount)}</td>
@@ -237,13 +264,19 @@ export const FinanceReportsTable: React.FC<Props> = ({ rows }) => {
       <AdminListPagination
         placement="bottom"
         totalItems={filtered.length}
-        pageSize={PAGE_SIZE}
-        currentPage={page}
+        pageSize={pageSize}
+        currentPage={safePage}
         totalPages={totalPages}
         onPrev={() => setPage((p) => Math.max(1, p - 1))}
         onNext={() => setPage((p) => Math.min(totalPages, p + 1))}
         onGoToPage={setPage}
         itemLabel="invoices"
+        rangeLabel={rangeLabel}
+        pageSizeOptions={PAGE_SIZE_OPTIONS}
+        onPageSizeChange={(n) => {
+          setPageSize(n);
+          setPage(1);
+        }}
       />
     </Card>
   );

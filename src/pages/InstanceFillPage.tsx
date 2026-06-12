@@ -1,34 +1,4 @@
-export function normalizeRichTextForPage(html?: string): string {
-  if (!html) return '';
-
-  if (typeof window === 'undefined') {
-    return html
-      .replace(/&nbsp;/gi, ' ')
-      .replace(/\u00A0/g, ' ')
-      .replace(/\u00AD/g, '');
-  }
-
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(html, 'text/html');
-  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
-
-  const textNodes: Node[] = [];
-  let current: Node | null = walker.nextNode();
-
-  while (current) {
-    textNodes.push(current);
-    current = walker.nextNode();
-  }
-
-  textNodes.forEach((node) => {
-    node.textContent = (node.textContent || '')
-      .replace(/\u00A0/g, ' ')
-      .replace(/\u00AD/g, '');
-  });
-
-  return doc.body.innerHTML;
-}
-
+import { normalizeRichTextForPage } from '../utils/richText';
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { Check, Loader2 } from 'lucide-react';
 import { useParams, useSearchParams } from 'react-router-dom';
@@ -75,6 +45,8 @@ import { Button } from '../components/ui/Button';
 import { Stepper } from '../components/ui/Stepper';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import { QuestionRenderer } from '../components/form-fill/QuestionRenderer';
+import { TaskInstructionsBlocksDisplay } from '../components/form-fill/TaskInstructionsBlocksDisplay';
+import { getQuestionInstructionsData } from '../utils/questionInstructionLabel';
 import { SectionLikertTable } from '../components/form-fill/SectionLikertTable';
 import { SignatureField } from '../components/form-fill/SignatureField';
 import { AppendixAMatrixForm } from '../components/form-fill/AppendixAMatrixForm';
@@ -3589,8 +3561,20 @@ export const InstanceFillPage: React.FC = () => {
                                 </div>
                                 <div className="p-4 space-y-6">
                                   {section.questions
-                                    .filter((q) => q.type !== 'instruction_block' && q.type !== 'page_break' && !(q.pdf_meta as Record<string, unknown>)?.isAdditionalBlockOf && isRoleVisible((q.role_visibility as Record<string, boolean>) || {}, role))
+                                    .filter((q) => q.type !== 'page_break' && !(q.pdf_meta as Record<string, unknown>)?.isAdditionalBlockOf && isRoleVisible((q.role_visibility as Record<string, boolean>) || {}, role))
                                     .map((q) => {
+                                      if (q.type === 'instruction_block') {
+                                        const instr = getQuestionInstructionsData(q.pdf_meta);
+                                        return (
+                                          <div key={q.id}>
+                                            {instr ? (
+                                              <TaskInstructionsBlocksDisplay instructions={instr} />
+                                            ) : (
+                                              <QuestionRenderer question={q} value={null} onChange={() => {}} disabled />
+                                            )}
+                                          </div>
+                                        );
+                                      }
                                       const re = (q.role_editability as Record<string, boolean>) || {};
                                       const baseEditable = isQuestionEditableForRole(re) && canRoleEditCurrentWorkflow;
                                       const editable = baseEditable && !isQuestionReadOnlyByTrainer(q.id);
@@ -3946,8 +3930,22 @@ export const InstanceFillPage: React.FC = () => {
                               </thead>
                               <tbody>
                                 {section.questions
-                                  .filter((q) => q.type !== 'instruction_block' && q.type !== 'page_break' && !(q.pdf_meta as Record<string, unknown>)?.isAdditionalBlockOf && isRoleVisible((q.role_visibility as Record<string, boolean>) || {}, role))
+                                  .filter((q) => q.type !== 'page_break' && !(q.pdf_meta as Record<string, unknown>)?.isAdditionalBlockOf && isRoleVisible((q.role_visibility as Record<string, boolean>) || {}, role))
                                   .map((q, qIdx) => {
+                                    if (q.type === 'instruction_block') {
+                                      const instr = getQuestionInstructionsData(q.pdf_meta);
+                                      return (
+                                        <tr key={q.id} className="bg-white">
+                                          <td colSpan={2} className="p-4 border border-gray-300 align-top">
+                                            {instr ? (
+                                              <TaskInstructionsBlocksDisplay instructions={instr} />
+                                            ) : (
+                                              <QuestionRenderer question={q} value={null} onChange={() => {}} disabled />
+                                            )}
+                                          </td>
+                                        </tr>
+                                      );
+                                    }
                                     const re = (q.role_editability as Record<string, boolean>) || {};
                                     const baseEditable = isQuestionEditableForRole(re) && canRoleEditCurrentWorkflow;
                                     const editable = baseEditable && !isQuestionReadOnlyByTrainer(q.id);

@@ -41,6 +41,8 @@ import { Checkbox } from '../components/ui/Checkbox';
 import { TaskInstructionsModal, type TaskInstructionsData } from '../components/form-fill/TaskInstructionsModal';
 import { SectionInstructionsEditor } from '../components/form-fill/SectionInstructionsEditor';
 import { AdditionalInstructionsEditor } from '../components/form-fill/AdditionalInstructionsEditor';
+import { QuestionInstructionEditor } from '../components/form-fill/QuestionInstructionEditor';
+import { getQuestionInstructionListLabel } from '../utils/questionInstructionLabel';
 import { TableLayoutSelect } from '../components/form-fill/TableLayoutSelect';
 import { cn } from '../components/utils/cn';
 
@@ -526,6 +528,7 @@ function SortableQuestionItem({
   menuOpen,
   onMenuToggle,
   menuRef,
+  isInstruction = false,
 }: {
   question: FormQuestion;
   index: number;
@@ -538,6 +541,7 @@ function SortableQuestionItem({
   menuOpen: boolean;
   onMenuToggle: () => void;
   menuRef: React.RefObject<HTMLDivElement | null>;
+  isInstruction?: boolean;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: `question-${question.id}` });
 
@@ -567,8 +571,12 @@ function SortableQuestionItem({
       >
         <GripVertical className="w-4 h-4 text-gray-500" />
       </button>
-      <div className="flex-1 min-w-0 truncate" title={`Question ${index + 1} of ${totalCount}`}>
-        {index + 1}. {question.label || question.type}
+      <div className="flex-1 min-w-0 truncate" title={isInstruction ? 'Instruction' : `Question ${index + 1} of ${totalCount}`}>
+        {isInstruction ? (
+          <span className="text-amber-800">Instruction: {getQuestionInstructionListLabel(question)}</span>
+        ) : (
+          <>{index + 1}. {question.label || question.type}</>
+        )}
       </div>
       <div ref={menuRef} className="relative shrink-0">
         <button
@@ -628,6 +636,7 @@ export const AdminFormBuilderPage: React.FC = () => {
   const [selectedStepId, setSelectedStepId] = useState<number | null>(null);
   const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);
   const [editingQuestionId, setEditingQuestionId] = useState<number | null>(null);
+  const [autoOpenInstructionQuestionId, setAutoOpenInstructionQuestionId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [previewing, setPreviewing] = useState(false);
   const [coverUploading, setCoverUploading] = useState(false);
@@ -1344,6 +1353,35 @@ export const AdminFormBuilderPage: React.FC = () => {
     }
   };
 
+  const addQuestionInstruction = async () => {
+    if (!selectedSectionId) return;
+    const { data } = await supabase
+      .from('skyline_form_questions')
+      .insert({
+        section_id: selectedSectionId,
+        type: 'instruction_block',
+        label: 'Instruction',
+        sort_order: selectedSection?.questions.length || 0,
+        pdf_meta: { instructions: {} },
+      })
+      .select('*')
+      .single();
+    if (data) {
+      setSteps((prev) =>
+        prev.map((s) => ({
+          ...s,
+          sections: s.sections.map((sec) =>
+            sec.id === selectedSectionId
+              ? { ...sec, questions: [...sec.questions, data] }
+              : sec
+          ),
+        }))
+      );
+      setEditingQuestionId(data.id);
+      setAutoOpenInstructionQuestionId(data.id);
+    }
+  };
+
   const duplicateQuestion = async (questionId: number) => {
     if (!selectedSectionId || !selectedSection) return;
     const q = selectedSection.questions.find((x) => x.id === questionId);
@@ -1816,14 +1854,26 @@ export const AdminFormBuilderPage: React.FC = () => {
                             : 'Questions'}
               </h2>
               {(selectedSection?.pdf_render_mode === 'task_questions' || (!['task_instructions', 'additional_instructions', 'task_questions', 'task_written_evidence_checklist', 'task_marking_checklist', 'task_results', 'assessment_summary'].includes(selectedSection?.pdf_render_mode || '') && selectedSection?.title !== 'Assessment Summary Sheet')) && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={addQuestion}
-                  disabled={!selectedSectionId}
-                >
-                  + Add
-                </Button>
+                <div className="flex items-center gap-1">
+                  {selectedSection?.pdf_render_mode === 'task_questions' && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={addQuestionInstruction}
+                      disabled={!selectedSectionId}
+                    >
+                      + Add Instruction
+                    </Button>
+                  )}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={addQuestion}
+                    disabled={!selectedSectionId}
+                  >
+                    + Add
+                  </Button>
+                </div>
               )}
             </div>
             {selectedSection ? (
@@ -1861,6 +1911,7 @@ export const AdminFormBuilderPage: React.FC = () => {
                           menuOpen={openQuestionMenuId === q.id}
                           onMenuToggle={() => setOpenQuestionMenuId(openQuestionMenuId === q.id ? null : q.id)}
                           menuRef={questionMenuRef}
+                          isInstruction={selectedSection.pdf_render_mode === 'task_questions' && q.type === 'instruction_block'}
                         />
                       ))}
                     </div>
@@ -1897,6 +1948,7 @@ export const AdminFormBuilderPage: React.FC = () => {
                           menuOpen={openQuestionMenuId === q.id}
                           onMenuToggle={() => setOpenQuestionMenuId(openQuestionMenuId === q.id ? null : q.id)}
                           menuRef={questionMenuRef}
+                          isInstruction={selectedSection.pdf_render_mode === 'task_questions' && q.type === 'instruction_block'}
                         />
                       ))}
                     </div>
@@ -1921,6 +1973,32 @@ export const AdminFormBuilderPage: React.FC = () => {
             ) : editingQuestionId && selectedSection ? (() => {
               const q = selectedSection.questions.find((x) => x.id === editingQuestionId);
               if (!q) return null;
+              if (selectedSection.pdf_render_mode === 'task_questions' && q.type === 'instruction_block') {
+                return (
+                  <QuestionInstructionEditor
+                    question={q}
+                    sectionId={selectedSection.id}
+                    autoOpen={autoOpenInstructionQuestionId === q.id}
+                    onAutoOpenHandled={() => setAutoOpenInstructionQuestionId(null)}
+                    onSaved={(updates) => {
+                      setAutoOpenInstructionQuestionId(null);
+                      setSteps((prev) =>
+                        prev.map((s) => ({
+                          ...s,
+                          sections: s.sections.map((sec) =>
+                            sec.id === selectedSection.id
+                              ? {
+                                  ...sec,
+                                  questions: sec.questions.map((x) => (x.id === q.id ? { ...x, ...updates } : x)),
+                                }
+                              : sec
+                          ),
+                        }))
+                      );
+                    }}
+                  />
+                );
+              }
               const rv = (q.role_visibility as Record<string, boolean>) || {};
               const re = (q.role_editability as Record<string, boolean>) || {};
               const pm = (q.pdf_meta as Record<string, unknown>) || {};
@@ -2679,7 +2757,11 @@ export const AdminFormBuilderPage: React.FC = () => {
                 </p>
               </Card>
             ) : selectedSection && !editingQuestionId ? (
-              <p className="text-sm text-gray-500">Select a question to edit, or click + Add to create one</p>
+              <p className="text-sm text-gray-500">
+                {selectedSection.pdf_render_mode === 'task_questions'
+                  ? 'Select a question or instruction to edit, or click + Add / + Add Instruction'
+                  : 'Select a question to edit, or click + Add to create one'}
+              </p>
             ) : !selectedSection ? (
               <p className="text-sm text-gray-500">Select a section</p>
             ) : null}

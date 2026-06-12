@@ -14,6 +14,10 @@ export type AdminListPaginationProps = {
   onGoToPage: (page: number) => void;
   itemLabel: string;
   placement: 'top' | 'bottom';
+  /** e.g. "Showing 1 to 10 of 52 payment transactions" */
+  rangeLabel?: string;
+  pageSizeOptions?: number[];
+  onPageSizeChange?: (size: number) => void;
 };
 
 /** Above this, use number + Go instead of a very long native &lt;select&gt;. */
@@ -40,6 +44,11 @@ function JumpToPage({
     setJumpInput(String(currentPage));
   }, [currentPage]);
 
+  const selectOptions = useMemo(
+    () => pageOptions.map((p) => ({ value: String(p), label: String(p) })),
+    [pageOptions]
+  );
+
   const apply = () => {
     const n = parseInt(String(jumpInput).trim(), 10);
     if (!Number.isFinite(n)) return;
@@ -49,11 +58,6 @@ function JumpToPage({
   };
 
   if (totalPages <= 1) return null;
-
-  const selectOptions = useMemo(
-    () => pageOptions.map((p) => ({ value: String(p), label: String(p) })),
-    [pageOptions]
-  );
 
   if (totalPages <= PAGE_SELECT_MAX) {
     return (
@@ -118,13 +122,36 @@ export function AdminListPagination({
   onGoToPage,
   itemLabel,
   placement,
+  rangeLabel,
+  pageSizeOptions,
+  onPageSizeChange,
 }: AdminListPaginationProps) {
   if (totalItems <= 0) return null;
 
-  const summary = `${totalItems} ${itemLabel}`;
-  const pagedLabel = `Page ${currentPage} of ${totalPages} (${totalItems} ${itemLabel})`;
+  const summary = rangeLabel ?? `${totalItems} ${itemLabel}`;
+  const pagedLabel = rangeLabel ?? `Page ${currentPage} of ${totalPages} (${totalItems} ${itemLabel})`;
 
-  if (totalItems <= pageSize) {
+  const pageSizeControl =
+    pageSizeOptions && pageSizeOptions.length > 0 && onPageSizeChange ? (
+      <div className="inline-flex shrink-0 items-center gap-2">
+        <span className="whitespace-nowrap text-sm font-medium text-gray-700">Rows</span>
+        <div className="w-[4.75rem] shrink-0">
+          <Select
+            compact
+            attachDropdown="trigger"
+            value={String(pageSize)}
+            onChange={(v) => {
+              const n = Number(v);
+              if (Number.isFinite(n) && n > 0) onPageSizeChange(n);
+            }}
+            options={pageSizeOptions.map((n) => ({ value: String(n), label: String(n) }))}
+            className="w-full"
+          />
+        </div>
+      </div>
+    ) : null;
+
+  if (totalItems <= pageSize && !pageSizeControl) {
     if (placement === 'top') {
       return <div className="mb-3 text-center text-xs text-gray-600 lg:hidden">{summary}</div>;
     }
@@ -138,6 +165,7 @@ export function AdminListPagination({
       <div className="mb-3 rounded-lg border border-[var(--border)] bg-gray-50/90 p-3 lg:hidden">
         <div className="mb-2 text-center text-xs text-gray-600">{pagedLabel}</div>
         <div className="flex flex-wrap items-center justify-center gap-2">
+          {pageSizeControl}
           <Button type="button" variant="outline" size="sm" onClick={onPrev} disabled={currentPage <= 1} className="min-h-10 min-w-[6.5rem] shrink-0">
             Previous
           </Button>
@@ -154,6 +182,7 @@ export function AdminListPagination({
     <div className="mt-4 hidden flex-col gap-3 border-t border-[var(--border)] pt-4 lg:flex lg:flex-row lg:items-center lg:justify-between lg:gap-4">
       <div className="min-w-0 text-xs text-gray-500 lg:text-left">{pagedLabel}</div>
       <div className="flex flex-wrap items-center justify-end gap-2">
+        {pageSizeControl}
         {jump}
         <Button type="button" variant="outline" size="sm" onClick={onPrev} disabled={currentPage <= 1} className="min-h-10 shrink-0 px-4">
           Previous

@@ -4,8 +4,6 @@ import {
   Pie,
   Cell,
   ResponsiveContainer,
-  LineChart,
-  Line,
   BarChart,
   Bar,
   XAxis,
@@ -35,22 +33,44 @@ const chartTooltipStyle = {
   fontSize: 12,
 };
 
+function MonthlyBarChart({
+  data,
+  dataKey,
+  name,
+  fill,
+  emptyMessage,
+}: {
+  data: { month: string; [key: string]: string | number }[];
+  dataKey: string;
+  name: string;
+  fill: string;
+  emptyMessage: string;
+}) {
+  if (data.length === 0) {
+    return <p className="py-12 text-center text-sm text-gray-500">{emptyMessage}</p>;
+  }
+  return (
+    <div className="h-64 w-full">
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={data}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+          <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+          <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} />
+          <Tooltip contentStyle={chartTooltipStyle} formatter={(value) => formatAud(Number(value) || 0)} />
+          <Legend />
+          <Bar dataKey={dataKey} name={name} fill={fill} radius={[4, 4, 0, 0]} />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
 export const FinanceReportsCharts: React.FC<Props> = ({ charts }) => {
   const pieData = charts.statusBreakdown.filter((d) => d.value > 0);
-  const trendData =
-    charts.paymentDatesAvailable && charts.monthlyPaymentTrend.length > 0
-      ? charts.monthlyPaymentTrend.map((p) => ({
-          month: p.month,
-          invoiced: charts.monthlyCollectionTrend.find((m) => m.month === p.month)?.invoiced ?? 0,
-          collected: p.collected,
-        }))
-      : charts.monthlyCollectionTrend;
-  const hasTrend = trendData.length > 0;
-  const hasOutstanding = charts.outstandingByDueMonth.length > 0;
 
   return (
-    <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
-      <Card className="p-4 lg:col-span-1">
+    <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
+      <Card className="p-4">
         <h3 className="mb-3 text-sm font-semibold text-[var(--text)]">Invoice Status</h3>
         {pieData.length === 0 ? (
           <p className="py-12 text-center text-sm text-gray-500">No data for chart</p>
@@ -71,50 +91,40 @@ export const FinanceReportsCharts: React.FC<Props> = ({ charts }) => {
         )}
       </Card>
 
-      <Card className="p-4 lg:col-span-1 xl:col-span-1">
-        <h3 className="mb-3 text-sm font-semibold text-[var(--text)]">Monthly Collection Trend</h3>
-        {charts.collectionTrendWarning ? (
-          <p className="mb-3 text-xs text-amber-700">{charts.collectionTrendWarning}</p>
+      <Card className="p-4">
+        <h3 className="mb-3 text-sm font-semibold text-[var(--text)]">Paid by Payment Date</h3>
+        {charts.paymentTrendWarning ? (
+          <p className="mb-3 text-xs text-amber-700">{charts.paymentTrendWarning}</p>
         ) : null}
-        {!hasTrend ? (
-          <p className="py-12 text-center text-sm text-gray-500">No data for chart</p>
-        ) : (
-          <div className="h-64 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={trendData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} />
-                <Tooltip
-                  contentStyle={chartTooltipStyle}
-                  formatter={(value) => formatAud(Number(value) || 0)}
-                />
-                <Legend />
-                <Line type="monotone" dataKey="collected" name="Collected" stroke="#10b981" strokeWidth={2} dot={false} />
-                <Line type="monotone" dataKey="invoiced" name="Invoiced" stroke="#f97316" strokeWidth={2} dot={false} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        )}
+        <MonthlyBarChart
+          data={charts.monthlyByPaymentDate}
+          dataKey="amount"
+          name="Paid amount"
+          fill="#10b981"
+          emptyMessage="No payment dates in filtered invoices"
+        />
       </Card>
 
-      <Card className="p-4 lg:col-span-2 xl:col-span-1">
-        <h3 className="mb-3 text-sm font-semibold text-[var(--text)]">Outstanding by Due Month</h3>
-        {!hasOutstanding ? (
-          <p className="py-12 text-center text-sm text-gray-500">No outstanding balances</p>
-        ) : (
-          <div className="h-64 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={charts.outstandingByDueMonth}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} />
-                <Tooltip contentStyle={chartTooltipStyle} formatter={(value) => formatAud(Number(value) || 0)} />
-                <Bar dataKey="outstanding" name="Outstanding" fill="#ea580c" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        )}
+      <Card className="p-4">
+        <h3 className="mb-3 text-sm font-semibold text-[var(--text)]">Invoiced by Invoice Date</h3>
+        <MonthlyBarChart
+          data={charts.monthlyByInvoiceDate}
+          dataKey="amount"
+          name="Invoiced amount"
+          fill="#f97316"
+          emptyMessage="No invoice dates in filtered rows"
+        />
+      </Card>
+
+      <Card className="p-4">
+        <h3 className="mb-3 text-sm font-semibold text-[var(--text)]">Outstanding by Due Date</h3>
+        <MonthlyBarChart
+          data={charts.outstandingByDueMonth}
+          dataKey="outstanding"
+          name="Outstanding"
+          fill="#ea580c"
+          emptyMessage="No outstanding balances"
+        />
       </Card>
     </div>
   );

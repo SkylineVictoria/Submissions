@@ -22,7 +22,11 @@ const currencyItems: {
 ];
 
 export const FinanceReportsKpiCards: React.FC<Props> = ({ summary }) => (
-  <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+  <div className="space-y-3">
+    {summary.summaryNote ? (
+      <p className="text-sm text-gray-600">{summary.summaryNote}</p>
+    ) : null}
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
     {currencyItems.map((item) => (
       <Card key={item.key} className="p-4">
         <div className="flex items-start gap-1.5">
@@ -59,5 +63,6 @@ export const FinanceReportsKpiCards: React.FC<Props> = ({ summary }) => (
         )}
       </div>
     </Card>
+    </div>
   </div>
 );

@@ -2,6 +2,7 @@ import path from 'path';
 import fs from 'fs';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { renderAppendixAMatrixHtml } from './appendixAMatrixData.js';
+import { renderTaskQuestionInstructionHtml } from './instructionBlocksHtml.js';
 
 export interface FormAnswer {
   question_id: number;
@@ -68,6 +69,10 @@ function labelToHtml(s: string | null | undefined): string {
   const str = String(s);
   const escaped = str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   return escaped.replace(/\n/g, '<br>');
+}
+
+function normalizeNbspProse(s: string): string {
+  return String(s || '').replace(/&nbsp;/gi, ' ').replace(/\u00A0/g, ' ');
 }
 
 function escapeHtmlAttr(s: string): string {
@@ -1124,15 +1129,26 @@ export function buildHtml(data: {
         html += `<div class="task-questions-header">${taskHeaderTitle}</div>`;
         html += `<div class="task-questions-subheader">Provide your response to each question in the box below.</div>`;
         headerNum++;
-        const renderableQs = questions.filter(
-          (q) => q.question.type !== 'instruction_block' && !((q.question.pdf_meta as Record<string, unknown>)?.isAdditionalBlockOf)
+        const orderedQs = questions.filter(
+          (q) => !((q.question.pdf_meta as Record<string, unknown>)?.isAdditionalBlockOf)
         );
-        let qNum = 0;
-        for (let i = 0; i < renderableQs.length; i++) {
-          const { question, rows } = renderableQs[i];
+        const renderableQs = orderedQs.filter((q) => q.question.type !== 'instruction_block');
+        const taskQNumById = new Map<number, number>();
+        let qnAcc = 0;
+        for (const rq of renderableQs) {
+          if (rq.question.type === 'page_break') continue;
+          qnAcc++;
+          taskQNumById.set(rq.question.id, qnAcc);
+        }
+        for (let i = 0; i < orderedQs.length; i++) {
+          const { question, rows } = orderedQs[i];
+          if (question.type === 'instruction_block') {
+            html += renderTaskQuestionInstructionHtml(question, normalizeNbspProse, labelToHtml);
+            continue;
+          }
           if (question.type === 'page_break') continue;
-          const nextIsPageBreak = renderableQs[i + 1]?.question.type === 'page_break';
-          qNum++;
+          const nextIsPageBreak = orderedQs[i + 1]?.question.type === 'page_break';
+          const qNum = taskQNumById.get(question.id) ?? 0;
           const sat = trainerAssessments.get(question.id);
           const satYes = sat === 'yes';
           const satNo = sat === 'no';
