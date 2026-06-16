@@ -2,25 +2,18 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Link2, Wallet } from 'lucide-react';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
-import { Modal } from '../ui/Modal';
-import { Select } from '../ui/Select';
 import { Loader } from '../ui/Loader';
 import { toast } from '../../utils/toast';
 import {
-  assignPaymentPlanToStudent,
   listPaymentPlanSummaries,
   listStudentPaymentPlansForStudent,
 } from '../../services/paymentPlans';
-import type { PaymentPlanSummary, StudentPaymentPlanSummary } from '../../types/paymentPlans';
+import type { PaymentPlanSummary, StudentPaymentPlanContext, StudentPaymentPlanSummary } from '../../types/paymentPlans';
 import { formatCurrencyAud } from '../../lib/paymentPlanCalculations';
 import { PaymentPlanEditorModal } from './PaymentPlanEditorModal';
 import { StudentAssignmentInstallmentsModal } from './StudentAssignmentInstallmentsModal';
 
-export interface StudentPaymentPlanContext {
-  id: number;
-  name: string;
-  email: string;
-}
+import { AssignPaymentPlanModal } from './AssignPaymentPlanModal';
 
 interface StudentPaymentPlansSectionProps {
   student: StudentPaymentPlanContext;
@@ -34,9 +27,6 @@ export const StudentPaymentPlansSection: React.FC<StudentPaymentPlansSectionProp
   const [loading, setLoading] = useState(true);
   const [assignments, setAssignments] = useState<StudentPaymentPlanSummary[]>([]);
   const [assignOpen, setAssignOpen] = useState(false);
-  const [assignLoading, setAssignLoading] = useState(false);
-  const [planOptions, setPlanOptions] = useState<PaymentPlanSummary[]>([]);
-  const [assignPlanId, setAssignPlanId] = useState('');
   const [editorPlan, setEditorPlan] = useState<PaymentPlanSummary | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [viewAssignment, setViewAssignment] = useState<StudentPaymentPlanSummary | null>(null);
@@ -57,39 +47,7 @@ export const StudentPaymentPlansSection: React.FC<StudentPaymentPlansSectionProp
     void load();
   }, [load]);
 
-  const openAssign = async () => {
-    setAssignPlanId('');
-    setAssignOpen(true);
-    setAssignLoading(true);
-    try {
-      const plans = await listPaymentPlanSummaries();
-      setPlanOptions(plans);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to load plans');
-      setPlanOptions([]);
-    } finally {
-      setAssignLoading(false);
-    }
-  };
-
-  const handleAssign = async () => {
-    const planId = Number(assignPlanId);
-    if (!Number.isFinite(planId) || planId <= 0) {
-      toast.error('Select a payment plan.');
-      return;
-    }
-    setAssignLoading(true);
-    try {
-      await assignPaymentPlanToStudent(planId, student.id, userId);
-      toast.success('Payment plan assigned');
-      setAssignOpen(false);
-      void load();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to assign plan');
-    } finally {
-      setAssignLoading(false);
-    }
-  };
+  const openAssign = () => setAssignOpen(true);
 
   const openPlanEditor = async (assignment: StudentPaymentPlanSummary) => {
     const plans = await listPaymentPlanSummaries();
@@ -111,7 +69,7 @@ export const StudentPaymentPlansSection: React.FC<StudentPaymentPlansSectionProp
           Shared plan templates assigned to this student (same plan can apply to many students).
         </p>
         <div className="flex flex-wrap gap-2 mb-3">
-          <Button variant="outline" size="sm" onClick={() => void openAssign()}>
+          <Button variant="outline" size="sm" onClick={openAssign}>
             <Link2 className="h-3.5 w-3.5 mr-1 inline" />
             Assign plan
           </Button>
@@ -152,37 +110,13 @@ export const StudentPaymentPlansSection: React.FC<StudentPaymentPlansSectionProp
         )}
       </Card>
 
-      <Modal isOpen={assignOpen} onClose={() => setAssignOpen(false)} title="Assign payment plan" size="md">
-        <div className="space-y-4">
-          <p className="text-sm text-gray-600">
-            Assign a reusable payment plan template to <strong>{student.name}</strong>.
-          </p>
-          {assignLoading && planOptions.length === 0 ? (
-            <Loader message="Loading plans…" />
-          ) : (
-            <Select
-              label="Payment plan template"
-              value={assignPlanId}
-              onChange={setAssignPlanId}
-              options={[
-                { value: '', label: 'Select a plan…' },
-                ...planOptions.map((p) => ({
-                  value: String(p.id),
-                  label: `${p.plan_name} — ${formatCurrencyAud(p.total_amount, p.currency)} (${p.assigned_student_count} students)`,
-                })),
-              ]}
-            />
-          )}
-          <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setAssignOpen(false)}>
-              Cancel
-            </Button>
-            <Button variant="primary" onClick={() => void handleAssign()} disabled={assignLoading || !assignPlanId}>
-              Assign
-            </Button>
-          </div>
-        </div>
-      </Modal>
+      <AssignPaymentPlanModal
+        isOpen={assignOpen}
+        onClose={() => setAssignOpen(false)}
+        onAssigned={() => void load()}
+        userId={userId}
+        student={student}
+      />
 
       <PaymentPlanEditorModal
         isOpen={editorOpen}

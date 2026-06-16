@@ -130,5 +130,35 @@ export const CALCULATION_MODE_OPTIONS: { value: PaymentPlanCalculationMode; labe
   { value: 'custom', label: 'Custom editable installments' },
 ];
 
+/** Minimal student context for payment plan assignment UI. */
+export interface StudentPaymentPlanContext {
+  id: number;
+  name: string;
+  email: string;
+}
+
+/** Editable row while assigning a plan to a student. */
+export interface AssignInstallmentDraft {
+  installment_number: number;
+  due_date: string;
+  amount: string;
+  waived: boolean;
+  notes: string;
+  record_payment: boolean;
+  paid_amount: string;
+  payment_date: string;
+}
+
+/** Payload sent to assign-with-installments RPC. */
+export interface AssignInstallmentInput {
+  installment_number: number;
+  due_date: string;
+  amount: number;
+  status: PaymentPlanInstallmentStatus;
+  paid_amount: number;
+  payment_date: string | null;
+  notes: string | null;
+}
+
 /** @deprecated Use PaymentPlanTemplateInstallment for template rows. */
 export type PaymentPlanInstallment = StudentPaymentPlanInstallment & { payment_plan_id?: number };

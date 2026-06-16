@@ -1,5 +1,6 @@
 import { supabase } from '../lib/supabase';
 import type {
+  AssignInstallmentInput,
   PaymentPlanFormValues,
   PaymentPlanSummary,
   PaymentPlanTemplateInstallment,
@@ -234,6 +235,24 @@ export async function assignPaymentPlanToStudent(
     p_student_id: studentId,
     p_start_date: startDate ? pickerToIsoDate(startDate) : null,
     p_assigned_by: assignedBy,
+  });
+  if (error) throw new Error(error.message);
+  return Number(data);
+}
+
+export async function assignPaymentPlanWithInstallments(
+  planId: number,
+  studentId: number,
+  assignedBy: number,
+  startDate: string,
+  installments: AssignInstallmentInput[]
+): Promise<number> {
+  const { data, error } = await supabase.rpc('skyline_assign_payment_plan_student_with_installments', {
+    p_plan_id: planId,
+    p_student_id: studentId,
+    p_start_date: pickerToIsoDate(startDate),
+    p_assigned_by: assignedBy,
+    p_installments: installments,
   });
   if (error) throw new Error(error.message);
   return Number(data);

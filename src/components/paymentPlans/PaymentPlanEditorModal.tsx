@@ -5,11 +5,9 @@ import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 import { Select } from '../ui/Select';
 import { DatePicker } from '../ui/DatePicker';
-import { SelectAsync } from '../ui/SelectAsync';
 import { Card } from '../ui/Card';
 import { Loader } from '../ui/Loader';
 import { toast } from '../../utils/toast';
-import { listStudentsPaged } from '../../lib/formEngine';
 import {
   addMonthsIso,
   calculateEqualInstallments,
@@ -24,7 +22,6 @@ import {
   sumInstallmentAmounts,
 } from '../../lib/paymentPlanCalculations';
 import {
-  assignPaymentPlanToStudent,
   confirmPaymentPlan,
   createPaymentPlan,
   fetchTemplateInstallments,
@@ -49,6 +46,7 @@ import {
   type EditableTemplateInstallmentRow,
 } from './PaymentPlanInstallmentsTable';
 import { StudentAssignmentInstallmentsModal } from './StudentAssignmentInstallmentsModal';
+import { AssignPaymentPlanModal } from './AssignPaymentPlanModal';
 
 function defaultFormValues(): PaymentPlanFormValues {
   return {
@@ -104,8 +102,7 @@ export const PaymentPlanEditorModal: React.FC<PaymentPlanEditorModalProps> = ({
   const [initialTotal, setInitialTotal] = useState('');
   const [installments, setInstallments] = useState<EditableTemplateInstallmentRow[]>([]);
   const [assignments, setAssignments] = useState<StudentPaymentPlanSummary[]>([]);
-  const [assignStudentId, setAssignStudentId] = useState('');
-  const [assignStudentLabel, setAssignStudentLabel] = useState('');
+  const [assignModalOpen, setAssignModalOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [planId, setPlanId] = useState<number | null>(plan?.id ?? null);
@@ -150,8 +147,6 @@ export const PaymentPlanEditorModal: React.FC<PaymentPlanEditorModalProps> = ({
       setInitialTotal('');
       setInstallments([]);
       setAssignments([]);
-      setAssignStudentId('');
-      setAssignStudentLabel('');
     }
   }, [isOpen, plan, loadTemplateInstallments, loadAssignments]);
 
@@ -183,13 +178,34 @@ export const PaymentPlanEditorModal: React.FC<PaymentPlanEditorModalProps> = ({
     }
   }, [form, totalAmount]);
 
-  const loadStudentOptions = useCallback(async (page: number, search: string) => {
-    const res = await listStudentsPaged(page, 20, search || undefined, 'active');
+  const assignPlanSnapshot = useMemo((): PaymentPlanSummary | null => {
+    if (planId == null) return null;
+    const count = Number.parseInt(form.installment_count, 10);
     return {
-      options: res.data.map((s) => ({ value: String(s.id), label: `${s.name} (${s.email})` })),
-      hasMore: res.page * res.pageSize < res.total,
+      id: planId,
+      plan_name: form.plan_name,
+      total_amount: totalAmount,
+      currency: form.currency || 'AUD',
+      installment_count: Number.isFinite(count) ? count : 0,
+      start_date: pickerToIsoDate(form.start_date),
+      calculation_mode: form.calculation_mode,
+      regular_monthly_amount:
+        form.calculation_mode === 'uneven' ? parseAmountInput(form.regular_monthly_amount) : null,
+      notes: form.notes.trim() || null,
+      status: plan?.status ?? 'draft',
+      confirmed_at: plan?.confirmed_at ?? null,
+      confirmed_by: plan?.confirmed_by ?? null,
+      created_by: plan?.created_by ?? null,
+      created_at: plan?.created_at ?? '',
+      updated_at: plan?.updated_at ?? '',
+      assigned_student_count: assignments.length,
+      installment_row_count: installments.length,
+      installment_total: installmentSum,
+      total_paid: plan?.total_paid ?? 0,
+      paid_count: plan?.paid_count ?? 0,
+      pending_count: plan?.pending_count ?? 0,
     };
-  }, []);
+  }, [planId, form, totalAmount, plan, assignments.length, installments.length, installmentSum]);
 
   const patchForm = (patch: Partial<PaymentPlanFormValues>) => {
     setForm((prev) => ({ ...prev, ...patch }));
@@ -319,26 +335,12 @@ export const PaymentPlanEditorModal: React.FC<PaymentPlanEditorModalProps> = ({
     );
   };
 
-  const handleAssignStudent = () => {
-    const studentId = Number(assignStudentId);
-    if (!Number.isFinite(studentId) || studentId <= 0) {
-      toast.error('Select a student to assign.');
+  const handleOpenAssignModal = () => {
+    if (planId == null && isNew) {
+      toast.error('Save the payment plan before assigning students.');
       return;
     }
-    openConfirm(
-      'assign_student',
-      async () => {
-        let id = planId;
-        if (id == null) id = await ensurePlanSaved();
-        await assignPaymentPlanToStudent(id, studentId, userId, form.start_date);
-        setAssignStudentId('');
-        setAssignStudentLabel('');
-        await loadAssignments(id);
-        toast.success('Student assigned to payment plan');
-        onSaved();
-      },
-      assignStudentLabel || `Student ID ${studentId}`
-    );
+    setAssignModalOpen(true);
   };
 
   const handleUnassign = (row: StudentPaymentPlanSummary) => {
@@ -559,24 +561,8 @@ export const PaymentPlanEditorModal: React.FC<PaymentPlanEditorModalProps> = ({
                   </h3>
                 </div>
                 <div className="flex flex-wrap gap-2 items-end">
-                  <div className="min-w-[240px] flex-1">
-                    <SelectAsync
-                      label="Add student"
-                      value={assignStudentId}
-                      selectedLabel={assignStudentLabel}
-                      onChange={(v) => {
-                        setAssignStudentId(v);
-                        void loadStudentOptions(1, '').then((res) => {
-                          const hit = res.options.find((o) => o.value === v);
-                          setAssignStudentLabel(hit?.label ?? '');
-                        });
-                      }}
-                      loadOptions={loadStudentOptions}
-                      attachDropdown="trigger"
-                    />
-                  </div>
-                  <Button variant="secondary" size="sm" onClick={handleAssignStudent} disabled={!assignStudentId}>
-                    Assign to plan
+                  <Button variant="secondary" size="sm" onClick={handleOpenAssignModal} disabled={planId == null}>
+                    Assign student
                   </Button>
                 </div>
                 {assignments.length === 0 ? (
@@ -655,6 +641,17 @@ export const PaymentPlanEditorModal: React.FC<PaymentPlanEditorModalProps> = ({
         assignment={viewAssignment}
         onClose={() => setViewAssignment(null)}
         onSaved={onSaved}
+      />
+
+      <AssignPaymentPlanModal
+        isOpen={assignModalOpen}
+        onClose={() => setAssignModalOpen(false)}
+        onAssigned={() => {
+          if (planId != null) void loadAssignments(planId);
+          onSaved();
+        }}
+        userId={userId}
+        fixedPlan={assignPlanSnapshot}
       />
     </>
   );

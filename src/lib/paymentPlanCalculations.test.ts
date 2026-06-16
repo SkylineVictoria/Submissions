@@ -1,10 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import {
+  buildAssignmentScheduleFromPlan,
   calculateEqualInstallments,
   calculateUnevenInstallments,
   installmentSumMatchesTotal,
   roundCurrency,
   sumInstallmentAmounts,
+  assignDraftToInput,
+  previewToAssignDraft,
+  validateAssignInstallmentDrafts,
+  shiftIsoDateByDays,
 } from './paymentPlanCalculations';
 
 describe('calculateEqualInstallments', () => {
@@ -40,5 +45,87 @@ describe('installmentSumMatchesTotal', () => {
     expect(installmentSumMatchesTotal(999.99, 1000)).toBe(false);
     expect(installmentSumMatchesTotal(1000, 1000)).toBe(true);
     expect(installmentSumMatchesTotal(roundCurrency(333.33 + 333.33 + 333.34), 1000)).toBe(true);
+  });
+});
+
+describe('buildAssignmentScheduleFromPlan', () => {
+  it('offsets template due dates from assignment start', () => {
+    const rows = buildAssignmentScheduleFromPlan(
+      {
+        total_amount: 1200,
+        installment_count: 3,
+        start_date: '2026-01-01',
+        calculation_mode: 'equal',
+        regular_monthly_amount: null,
+      },
+      '2026-02-15',
+      [
+        { installment_number: 1, due_date: '2026-01-01', amount: 400 },
+        { installment_number: 2, due_date: '2026-02-01', amount: 400 },
+        { installment_number: 3, due_date: '2026-03-01', amount: 400 },
+      ]
+    );
+    const offset = 45;
+    expect(rows[0].due_date).toBe('2026-02-15');
+    expect(rows[1].due_date).toBe(shiftIsoDateByDays('2026-02-01', offset));
+    expect(rows[2].due_date).toBe(shiftIsoDateByDays('2026-03-01', offset));
+  });
+
+  it('generates equal installments when template is empty', () => {
+    const rows = buildAssignmentScheduleFromPlan(
+      {
+        total_amount: 900,
+        installment_count: 3,
+        start_date: '2026-01-01',
+        calculation_mode: 'equal',
+        regular_monthly_amount: null,
+      },
+      '2026-06-01',
+      []
+    );
+    expect(rows).toHaveLength(3);
+    expect(sumInstallmentAmounts(rows.map((r) => r.amount))).toBe(900);
+  });
+});
+
+describe('assignDraftToInput', () => {
+  it('marks first installment paid when recording full payment', () => {
+    const draft = previewToAssignDraft(
+      { installment_number: 1, due_date: '2026-06-01', amount: 500 },
+      true
+    );
+    const input = assignDraftToInput({
+      ...draft,
+      record_payment: true,
+      paid_amount: '500',
+      payment_date: '01-06-2026',
+    });
+    expect(input.status).toBe('paid');
+    expect(input.paid_amount).toBe(500);
+    expect(input.payment_date).toBe('2026-06-01');
+  });
+
+  it('waives installment with zero amount', () => {
+    const draft = previewToAssignDraft(
+      { installment_number: 2, due_date: '2026-07-01', amount: 300 },
+      false
+    );
+    const input = assignDraftToInput({ ...draft, waived: true, notes: 'Scholarship' });
+    expect(input.status).toBe('waived');
+    expect(input.amount).toBe(0);
+    expect(input.notes).toBe('Scholarship');
+  });
+});
+
+describe('validateAssignInstallmentDrafts', () => {
+  it('rejects paid amount above installment amount', () => {
+    const draft = previewToAssignDraft(
+      { installment_number: 1, due_date: '2026-06-01', amount: 200 },
+      true
+    );
+    const err = validateAssignInstallmentDrafts([
+      { ...draft, record_payment: true, paid_amount: '250', payment_date: '01-06-2026' },
+    ]);
+    expect(err).toMatch(/cannot exceed/i);
   });
 });
