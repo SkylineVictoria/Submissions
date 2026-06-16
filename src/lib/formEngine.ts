@@ -1879,6 +1879,21 @@ export function canViewFinanceReports(
   return false;
 }
 
+/** Payment Plans: admin and superadmin only (not office/trainers). */
+export function canManagePaymentPlans(
+  user: Pick<AppUser, 'role'> | null | undefined
+): boolean {
+  if (!user) return false;
+  return user.role === 'admin' || user.role === 'superadmin';
+}
+
+/** Finance nav section: payment plans and/or finance reports. */
+export function canAccessFinanceNav(
+  user: Pick<AppUser, 'role' | 'can_view_finance_reports'> | null | undefined
+): boolean {
+  return canManagePaymentPlans(user) || canViewFinanceReports(user);
+}
+
 const AUTH_STORAGE_KEY = 'skyline_auth_user';
 export const STUDENT_DASHBOARD_AUTH_STORAGE_KEY = 'signflow_student_dashboard_auth_v1';
 /** Tab-scoped superadmin "view as" another staff user (sessionStorage; does not replace localStorage login). */

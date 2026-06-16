@@ -9,6 +9,7 @@ import { ProtectedRoute } from './components/ProtectedRoute';
 import { AdminOnlyRoute } from './components/AdminOnlyRoute';
 import { SuperAdminOnlyRoute } from './components/SuperAdminOnlyRoute';
 import { FinanceReportsRoute } from './components/FinanceReportsRoute';
+import { PaymentPlansRoute } from './components/PaymentPlansRoute';
 import type { Toast } from './components/ui/Toast';
 
 // Layouts
@@ -23,6 +24,9 @@ const AdminStudentDetailsPage = lazy(() => import('./pages/AdminStudentDetailsPa
 const AdminAssessmentsPage = lazy(() => import('./pages/AdminAssessmentsPage').then(m => ({ default: m.AdminAssessmentsPage })));
 const AdminFinanceReportsPage = lazy(() =>
   import('./pages/AdminFinanceReportsPage').then((m) => ({ default: m.AdminFinanceReportsPage }))
+);
+const AdminPaymentPlansPage = lazy(() =>
+  import('./pages/AdminPaymentPlansPage').then((m) => ({ default: m.AdminPaymentPlansPage }))
 );
 const AdminAssessmentReportsPage = lazy(() =>
   import('./pages/AdminAssessmentReportsPage').then((m) => ({ default: m.AdminAssessmentReportsPage }))
@@ -122,7 +126,17 @@ function App() {
             <Route path="trainers" element={<Navigate to="/admin/users" replace />} />
             <Route path="assessments" element={<AdminOnlyRoute><AdminAssessmentsPage /></AdminOnlyRoute>} />
             <Route
-              path="reports/finance"
+              path="finance/payment-plans"
+              element={
+                <AdminOnlyRoute>
+                  <PaymentPlansRoute>
+                    <AdminPaymentPlansPage />
+                  </PaymentPlansRoute>
+                </AdminOnlyRoute>
+              }
+            />
+            <Route
+              path="finance/reports"
               element={
                 <AdminOnlyRoute>
                   <FinanceReportsRoute>
@@ -131,6 +145,7 @@ function App() {
                 </AdminOnlyRoute>
               }
             />
+            <Route path="reports/finance" element={<Navigate to="/admin/finance/reports" replace />} />
             <Route
               path="reports/assessments"
               element={

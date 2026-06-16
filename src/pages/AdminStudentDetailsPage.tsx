@@ -30,6 +30,8 @@ import {
   type AttemptResult,
   type AttemptDotTone,
 } from '../utils/assessmentRowUi';
+import { canManagePaymentPlans } from '../lib/formEngine';
+import { StudentPaymentPlansSection } from '../components/paymentPlans/StudentPaymentPlansSection';
 import {
   allowStudentResubmission,
   extendInstanceAccessTokensToDate,
@@ -188,6 +190,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useAuth();
   const viewerIsSuperadmin = user?.role === 'superadmin';
+  const viewerCanManagePaymentPlans = canManagePaymentPlans(user);
   const sid = Number(studentId);
   /** One request loads all assessments for this student (typical max ~34). */
   const ASSESSMENTS_FETCH_SIZE = 80;
@@ -851,6 +854,17 @@ export const AdminStudentDetailsPage: React.FC = () => {
                   ) : null}
                 </div>
               </Card>
+
+              {viewerCanManagePaymentPlans && user ? (
+                <StudentPaymentPlansSection
+                  student={{
+                    id: student.id,
+                    name: [student.first_name, student.last_name].filter(Boolean).join(' ') || student.name,
+                    email: student.email,
+                  }}
+                  userId={user.id}
+                />
+              ) : null}
             </div>
 
             <div className="min-w-0 flex-1">

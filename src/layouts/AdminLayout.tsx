@@ -7,6 +7,7 @@ import {
   ClipboardCheck,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   Layers,
   LayoutDashboard,
   User,
@@ -23,7 +24,7 @@ import { toast } from '../utils/toast';
 import { NotificationBell } from '../components/NotificationBell';
 import { UserMenu } from '../components/UserMenu';
 import { ensureFcmToken } from '../services/pushNotificationService';
-import { canViewFinanceReports } from '../lib/formEngine';
+import { canAccessFinanceNav, canManagePaymentPlans, canViewFinanceReports } from '../lib/formEngine';
 
 const SIDEBAR_WIDTH_EXPANDED = 220;
 const SIDEBAR_WIDTH_COLLAPSED = 64;
@@ -37,10 +38,20 @@ export const AdminLayout: React.FC = () => {
   const location = useLocation();
   const isMdUp = useMediaQuery('(min-width: 768px)');
   const width = sidebarCollapsed ? SIDEBAR_WIDTH_COLLAPSED : SIDEBAR_WIDTH_EXPANDED;
+  const [financeNavOpen, setFinanceNavOpen] = useState(() =>
+    location.pathname.startsWith('/admin/finance')
+  );
+
   const isTrainer = user?.role === 'trainer';
 
   useEffect(() => {
     setMobileNavOpen(false);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (location.pathname.startsWith('/admin/finance')) {
+      setFinanceNavOpen(true);
+    }
   }, [location.pathname]);
 
   useEffect(() => {
@@ -67,12 +78,19 @@ export const AdminLayout: React.FC = () => {
         { to: '/admin/courses', label: 'Courses', icon: <GraduationCap className="w-5 h-5 shrink-0" />, end: true },
         { to: '/admin/users', label: 'Users', icon: <UserRoundCheck className="w-5 h-5 shrink-0" />, end: true },
         { to: '/admin/assessments', label: 'Assessments', icon: <ClipboardCheck className="w-5 h-5 shrink-0" />, end: true },
-        ...(canViewFinanceReports(user)
-          ? [{ to: '/admin/reports/finance', label: 'Finance Reports', icon: <DollarSign className="w-5 h-5 shrink-0" />, end: true as const }]
-          : []),
       ];
-  const navItems = [
-    ...baseNavItems,
+  const financeChildren = [
+    ...(canManagePaymentPlans(user)
+      ? [{ to: '/admin/finance/payment-plans', label: 'Payment Plan' }]
+      : []),
+    ...(canViewFinanceReports(user)
+      ? [{ to: '/admin/finance/reports', label: 'Finance Reports' }]
+      : []),
+  ];
+  const showFinanceNav = !isTrainer && canAccessFinanceNav(user) && financeChildren.length > 0;
+  const financeSectionActive = location.pathname.startsWith('/admin/finance');
+
+  const tailNavItems = [
     { to: '/admin/profile', label: 'My Profile', icon: <User className="w-5 h-5 shrink-0" />, end: true },
     ...(user?.role === 'admin' || user?.role === 'office' || user?.role === 'superadmin'
       ? [{ to: '/admin/enrollment', label: 'Enrollment', icon: <GraduationCap className="w-5 h-5 shrink-0" />, end: true }]
@@ -171,7 +189,79 @@ export const AdminLayout: React.FC = () => {
         {/* Scroll only the link list; keep logout pinned to the drawer bottom (flex min-height bugs on mobile). */}
         <nav className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <ul className="min-h-0 flex-1 space-y-0.5 overflow-x-hidden overflow-y-auto px-2 py-4">
-            {navItems.map((item) => (
+            {baseNavItems.map((item) => (
+              <li key={item.to}>
+                <NavLink
+                  to={item.to}
+                  end={item.end}
+                  className={({ isActive }) =>
+                    cn(
+                      'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
+                      isActive ? 'bg-[#f97316]/10 text-[#ea580c]' : 'text-gray-700 hover:bg-gray-100'
+                    )
+                  }
+                >
+                  {item.icon}
+                  {showSidebarLabels && <span className="min-w-0">{item.label}</span>}
+                </NavLink>
+              </li>
+            ))}
+            {showFinanceNav ? (
+              <li>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isMdUp && sidebarCollapsed) {
+                      setSidebarCollapsed(false);
+                      setFinanceNavOpen(true);
+                      return;
+                    }
+                    setFinanceNavOpen((o) => !o);
+                  }}
+                  className={cn(
+                    'flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
+                    financeSectionActive
+                      ? 'bg-[#f97316]/10 text-[#ea580c]'
+                      : 'text-gray-700 hover:bg-gray-100'
+                  )}
+                  aria-expanded={financeNavOpen}
+                >
+                  <DollarSign className="w-5 h-5 shrink-0" />
+                  {showSidebarLabels ? (
+                    <>
+                      <span className="min-w-0 flex-1 text-left">Finance</span>
+                      <ChevronDown
+                        className={cn(
+                          'h-4 w-4 shrink-0 transition-transform',
+                          financeNavOpen ? 'rotate-180' : ''
+                        )}
+                      />
+                    </>
+                  ) : null}
+                </button>
+                {financeNavOpen && showSidebarLabels ? (
+                  <ul className="mt-0.5 space-y-0.5 border-l border-[var(--border)] ml-5 pl-2">
+                    {financeChildren.map((child) => (
+                      <li key={child.to}>
+                        <NavLink
+                          to={child.to}
+                          end
+                          className={({ isActive }) =>
+                            cn(
+                              'flex items-center rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+                              isActive ? 'bg-[#f97316]/10 text-[#ea580c]' : 'text-gray-700 hover:bg-gray-100'
+                            )
+                          }
+                        >
+                          {child.label}
+                        </NavLink>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </li>
+            ) : null}
+            {tailNavItems.map((item) => (
               <li key={item.to}>
                 <NavLink
                   to={item.to}
