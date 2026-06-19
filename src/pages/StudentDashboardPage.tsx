@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { LayoutDashboard, RefreshCw, Search, Mail, Phone, CheckCircle, ChevronDown } from 'lucide-react';
-import { listStudentAssessmentsPaged, issueInstanceAccessLink, fetchAssessmentSummaries } from '../lib/formEngine';
+import { listStudentAssessmentsPaged, issueInstanceAccessLink, fetchAssessmentSummaries, listStudentCourseEnrollments, type StudentCourseEnrollment } from '../lib/formEngine';
 import type { Student, SubmittedInstanceRow } from '../lib/formEngine';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -26,8 +26,12 @@ import {
   type AttemptDotTone,
 } from '../utils/assessmentRowUi';
 import { FormDocumentsPanel } from '../components/documents/FormDocumentsPanel';
+import { NotificationBell } from '../components/NotificationBell';
+import { NotificationAcknowledgmentGate } from '../components/NotificationAcknowledgmentGate';
 import { STUDENT_DASHBOARD_AUTH_STORAGE_KEY } from '../lib/formEngine';
 import { cn } from '../components/utils/cn';
+import { StudentQualificationsPanel } from '../components/students/StudentQualificationsPanel';
+import { groupAssessmentsByCourse } from '../lib/studentCourseEnrollment';
 import {
   rowMatchesTrainerHighlightCourse,
   TRAINER_HIGHLIGHT_ROW_EXTRA_CLASS,
@@ -165,7 +169,7 @@ export const StudentDashboardPage: React.FC = () => {
   const [studentId, setStudentId] = useState<number | null>(null);
   const [studentEmail, setStudentEmail] = useState<string>('');
   const [student, setStudent] = useState<Student | null>(null);
-  const [studentCourses, setStudentCourses] = useState<Array<{ id: number; name: string; qualification_code: string | null; enrolled_at?: string }>>([]);
+  const [studentCourses, setStudentCourses] = useState<StudentCourseEnrollment[]>([]);
   const [studentLoading, setStudentLoading] = useState(false);
 
   const [rows, setRows] = useState<SubmittedInstanceRow[]>([]);
@@ -194,10 +198,10 @@ export const StudentDashboardPage: React.FC = () => {
   }, []);
 
   const loadRows = useCallback(
-    async (search: string, opts?: { silent?: boolean }) => {
+    async (opts?: { silent?: boolean }) => {
       if (!studentId) return;
       if (!opts?.silent) setLoading(true);
-      const res = await listStudentAssessmentsPaged(studentId, 1, PAGE_SIZE, search.trim() || undefined);
+      const res = await listStudentAssessmentsPaged(studentId, 1, PAGE_SIZE);
       setRows(res.data);
       setLoading(false);
     },
@@ -257,31 +261,7 @@ export const StudentDashboardPage: React.FC = () => {
       };
       setStudent(st);
 
-      const { data: scRows } = await supabase
-        .from('skyline_student_courses')
-        .select('created_at, course_id, skyline_courses(id, name, qualification_code)')
-        .eq('student_id', studentId)
-        .eq('status', 'active')
-        .order('created_at', { ascending: false });
-      const courseList = (
-        (scRows as
-          | Array<{
-              created_at?: string;
-              skyline_courses: { id: number; name: string; qualification_code: string | null } | null;
-            }>
-          | null) || []
-      )
-        .map((r) => {
-          const c = r.skyline_courses;
-          if (!c) return null;
-          return {
-            id: c.id,
-            name: c.name,
-            qualification_code: c.qualification_code,
-            enrolled_at: String(r.created_at ?? ''),
-          };
-        })
-        .filter((c): c is { id: number; name: string; qualification_code: string | null; enrolled_at: string } => !!c);
+      const courseList = await listStudentCourseEnrollments(studentId);
       setStudentCourses(courseList);
     } catch (e) {
       console.error('StudentDashboardPage load profile error', e);
@@ -294,9 +274,8 @@ export const StudentDashboardPage: React.FC = () => {
 
   useEffect(() => {
     if (!studentId) return;
-    const t = setTimeout(() => void loadRows(searchTerm), 250);
-    return () => clearTimeout(t);
-  }, [studentId, searchTerm, loadRows]);
+    void loadRows();
+  }, [studentId, loadRows]);
 
   useEffect(() => {
     if (!studentId) {
@@ -307,13 +286,19 @@ export const StudentDashboardPage: React.FC = () => {
     void loadStudentProfile();
   }, [studentId, loadStudentProfile]);
 
-  useEffect(() => {
-  }, [searchTerm, studentId]);
+  const filterCourseRows = useCallback(
+    (courseRows: SubmittedInstanceRow[]) => {
+      const q = searchTerm.trim().toLowerCase();
+      if (!q) return courseRows;
+      return courseRows.filter((r) => String(r.form_name ?? '').toLowerCase().includes(q));
+    },
+    [searchTerm]
+  );
 
   const handleRefresh = async () => {
     if (!studentId) return;
     setRefreshing(true);
-    await loadRows(searchTerm, { silent: true });
+    await Promise.all([loadRows({ silent: true }), loadStudentProfile()]);
     setRefreshing(false);
     toast.success('Refreshed');
   };
@@ -332,6 +317,226 @@ export const StudentDashboardPage: React.FC = () => {
     window.open(url, '_blank');
   };
 
+  const renderCourseAssessments = (_course: StudentCourseEnrollment, courseRows: SubmittedInstanceRow[]) => {
+    const filteredRows = filterCourseRows(courseRows);
+    return (
+      <>
+        <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+          <p className="text-sm text-gray-600">
+            {filteredRows.length} unit{filteredRows.length === 1 ? '' : 's'}
+            {searchTerm.trim() ? ` matching “${searchTerm.trim()}”` : ''}
+          </p>
+          <div className="relative w-full sm:w-[320px]">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+            <Input
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Search unit or status…"
+              className="!pl-10 w-full"
+            />
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="py-10">
+            <Loader variant="dots" size="lg" message="Loading assessments..." />
+          </div>
+        ) : courseRows.length === 0 ? (
+          <p className="text-sm text-gray-500">No assessments for this course yet.</p>
+        ) : filteredRows.length === 0 ? (
+          <p className="text-sm text-gray-500">No assessments match your search.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-[940px] w-full text-sm border border-[var(--border)] rounded-lg overflow-hidden">
+              <thead className="bg-gray-50 text-gray-700">
+                <tr>
+                  <th className="text-left px-3 py-2 font-semibold border-b border-[var(--border)] w-[300px]">Unit</th>
+                  <th className="hidden md:table-cell text-left px-3 py-2 font-semibold border-b border-[var(--border)] w-[100px] whitespace-nowrap">Start</th>
+                  <th className="hidden md:table-cell text-left px-3 py-2 font-semibold border-b border-[var(--border)] w-[100px] whitespace-nowrap">End</th>
+                  <th className="text-left px-3 py-2 font-semibold border-b border-[var(--border)] min-w-[220px]">Progress</th>
+                  <th className="text-left px-3 py-2 font-semibold border-b border-[var(--border)] min-w-[220px]">Comments</th>
+                  <th className="text-right px-3 py-2 font-semibold border-b border-[var(--border)] whitespace-nowrap">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredRows.map((row) => {
+                  const sum = attemptSummaryByInstanceId[row.id] ?? null;
+                  const rawAttemptResults: AttemptResult[] = [
+                    sum?.final_attempt_1_result ?? null,
+                    sum?.final_attempt_2_result ?? null,
+                    sum?.final_attempt_3_result ?? null,
+                  ];
+                  const attemptResults = maskCompetentWhileAwaitingTrainer(row, rawAttemptResults);
+                  const displaySum = sum
+                    ? {
+                        ...sum,
+                        final_attempt_1_result: attemptResults[0] ?? null,
+                        final_attempt_2_result: attemptResults[1] ?? null,
+                        final_attempt_3_result: attemptResults[2] ?? null,
+                      }
+                    : null;
+                  const attemptDoneText = getStudentAttemptDoneText({
+                    submissionCount: Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0),
+                    submittedAt: row.submitted_at ?? null,
+                    attemptResults: rawAttemptResults,
+                    status: row.status,
+                    role_context: row.role_context,
+                  });
+                  const trainerAttemptFailedText = getTrainerAttemptFailedText(rawAttemptResults, row);
+                  const missedAttemptText = getMissedAttemptWindowText({
+                    noAttemptRollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
+                    didNotAttempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
+                  });
+                  const ui = computeRowUi({
+                    row: {
+                      ...row,
+                      did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
+                      no_attempt_rollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
+                      status: row.status,
+                      role_context: row.role_context,
+                    },
+                    attemptResults,
+                    submissionCount: Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0),
+                    submittedAt: row.submitted_at ?? null,
+                  });
+                  const win = withinInstanceAccessWindow(row, 'student');
+                  const disabled = ui.disabled || !win.ok;
+                  const trainerHighlightExtra = rowMatchesTrainerHighlightCourse(row, trainerHighlightCourseId)
+                    ? TRAINER_HIGHLIGHT_ROW_EXTRA_CLASS
+                    : '';
+                  return (
+                    <React.Fragment key={row.id}>
+                      <tr
+                        className={cn(ui.rowClassName, 'cursor-pointer', trainerHighlightExtra)}
+                        onClick={() => setExpandedId((prev) => (prev === row.id ? null : row.id))}
+                        title="Click to expand"
+                      >
+                        <td className="px-3 py-2 border-b border-[var(--border)] align-top">
+                          <div className="font-medium text-[var(--text)] break-words whitespace-normal">{row.form_name}</div>
+                          <div className="text-xs text-gray-500">Version {row.form_version ?? '1.0.0'}</div>
+                          <div className="md:hidden mt-1 text-xs text-gray-600 tabular-nums flex flex-wrap gap-x-3 gap-y-0.5">
+                            <span>
+                              <span className="text-gray-500">Start</span> {formatDDMMYYYY(row.start_date)}
+                            </span>
+                            <span>
+                              <span className="text-gray-500">End</span> {formatDDMMYYYY(row.end_date)}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="hidden md:table-cell px-3 py-2 border-b border-[var(--border)] text-gray-700 whitespace-nowrap tabular-nums align-top">
+                          {formatDDMMYYYY(row.start_date)}
+                        </td>
+                        <td className="hidden md:table-cell px-3 py-2 border-b border-[var(--border)] text-gray-700 whitespace-nowrap tabular-nums align-top">
+                          {formatDDMMYYYY(row.end_date)}
+                        </td>
+                        <td className="px-3 py-2 border-b border-[var(--border)] min-w-[220px]">
+                          <WorkflowProgressColumns
+                            row={row}
+                            attemptResults={attemptResults}
+                            submissionCount={Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0)}
+                          />
+                        </td>
+                        <td className="px-3 py-2 border-b border-[var(--border)] align-top min-w-[220px]">
+                          {(() => {
+                            const outcomeDisplay =
+                              ui.kind === 'past_not_competent' || ui.kind === 'past_competent'
+                                ? {
+                                    label: ui.outcomeLabel ?? '',
+                                    className: ui.outcomeClassName ?? '',
+                                    subtext: ui.kind === 'past_competent' && row.status !== 'locked' ? 'Office' : null,
+                                    subtextClassName: 'text-[11px] font-medium text-amber-700',
+                                  }
+                                : getOutcomeLabel(displaySum, row);
+                            const outcomeClass = outcomeDisplay.className;
+                            const outcomeLabel = outcomeDisplay.label;
+                            const comments: Array<{ text: string; className: string }> = [];
+                            const missedAll = missedAttemptText === "Didn't attempt any";
+                            if (missedAll) {
+                              comments.push({ text: "Didn't attempt any", className: 'text-[11px] font-medium text-red-700' });
+                            } else {
+                              comments.push({ text: outcomeLabel, className: `text-xs font-medium ${outcomeClass}` });
+                              if (outcomeDisplay.subtext) {
+                                comments.push({ text: outcomeDisplay.subtext, className: outcomeDisplay.subtextClassName });
+                              }
+                              if (trainerAttemptFailedText) {
+                                comments.push({ text: trainerAttemptFailedText, className: 'text-[11px] font-medium text-red-700' });
+                              }
+                              if (attemptDoneText) comments.push({ text: attemptDoneText, className: 'text-[11px] text-gray-600' });
+                              if (ui.kind === 'in_progress' && missedAttemptText) {
+                                comments.push({ text: missedAttemptText, className: 'text-[11px] font-medium text-amber-700' });
+                              }
+                            }
+                            if (disabled && (ui.kind === 'future' || ui.kind === 'expired')) {
+                              comments.push({ text: ui.reason, className: 'text-xs text-amber-700' });
+                            } else if (!win.ok) {
+                              comments.push({ text: win.reason || '', className: 'text-xs text-amber-700' });
+                            }
+                            return (
+                              <div className="flex flex-col gap-1">
+                                {comments
+                                  .filter((c) => c.text.trim().length > 0)
+                                  .map((c, idx) => (
+                                    <div key={`${row.id}-comment-${idx}`} className={c.className}>
+                                      {c.text}
+                                    </div>
+                                  ))}
+                              </div>
+                            );
+                          })()}
+                        </td>
+                        <td className="px-3 py-2 border-b border-[var(--border)] text-right align-top">
+                          <div className="inline-flex w-full justify-end">
+                            <ChevronDown
+                              className={cn('h-4 w-4 text-gray-400 transition-transform', expandedId === row.id && 'rotate-180')}
+                              aria-hidden="true"
+                            />
+                          </div>
+                        </td>
+                      </tr>
+                      {expandedId === row.id ? (
+                        <tr className={cn(ui.rowClassName, trainerHighlightExtra)}>
+                          <td className="px-3 py-3 border-b border-[var(--border)]" colSpan={6} onClick={(e) => e.stopPropagation()}>
+                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                              <FormDocumentsPanel
+                                formId={Number(row.form_id)}
+                                formName={String(row.form_name ?? 'Assessment')}
+                                canUpload={false}
+                                showTrainerSection={false}
+                              />
+                              <button
+                                type="button"
+                                className="rounded-lg border border-[var(--border)] bg-white p-4 text-left hover:bg-[var(--brand)]/10 focus-visible:bg-[var(--brand)]/10 transition-colors disabled:opacity-50"
+                                onClick={() => void handleOpen(row)}
+                                disabled={disabled}
+                                title="Open assessment"
+                              >
+                                <div className="text-sm font-semibold text-[var(--text)]">Assessment</div>
+                                <div className="mt-1 text-xs text-gray-600 break-words">{row.form_name}</div>
+                                <div className="mt-3 inline-flex items-center rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700">
+                                  Open
+                                </div>
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ) : null}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </>
+    );
+  };
+
+  const unassignedAssessments = useMemo(() => {
+    if (studentCourses.length === 0) return rows;
+    const grouped = groupAssessmentsByCourse(rows, studentCourses);
+    return grouped.get('unassigned') ?? [];
+  }, [rows, studentCourses]);
+
   const logout = () => {
     sessionStorage.removeItem(STORAGE_KEY);
     setStudentId(null);
@@ -346,6 +551,11 @@ export const StudentDashboardPage: React.FC = () => {
     if (!studentId) return null;
     return (
       <div className="flex flex-wrap items-center justify-end gap-2">
+        <NotificationBell
+          userId={studentId}
+          assessmentStudentId={studentId}
+          viewAllHref=""
+        />
         <Button variant="outline" size="sm" onClick={handleRefresh} disabled={refreshing}>
           <RefreshCw className={`w-4 h-4 mr-2 inline ${refreshing ? 'animate-spin' : ''}`} />
           Refresh
@@ -357,7 +567,7 @@ export const StudentDashboardPage: React.FC = () => {
     );
   }, [studentId, refreshing, handleRefresh]);
 
-  return (
+  const dashboardBody = (
     <div className="min-h-screen bg-[var(--bg)]">
       <div className="w-full px-4 md:px-6 lg:px-8 py-6 space-y-4">
         <Card>
@@ -430,23 +640,6 @@ export const StudentDashboardPage: React.FC = () => {
 
                     <div className="border-t border-gray-100 pt-3 space-y-2 text-sm">
                       <div className="flex items-start justify-between gap-3">
-                        <span className="text-gray-500">Courses</span>
-                        <div className="text-right text-gray-800">
-                          {studentCourses.length === 0 ? (
-                            '—'
-                          ) : (
-                            <div className="space-y-2">
-                              {studentCourses.map((c) => (
-                                <div key={c.id} className="break-words">
-                                  {c.qualification_code ? `${c.qualification_code} — ` : ''}
-                                  {c.name}
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                      <div className="flex items-start justify-between gap-3">
                         <span className="text-gray-500">Batch</span>
                         <span className="text-gray-800 text-right break-words">{student.batch_name ?? '—'}</span>
                       </div>
@@ -462,237 +655,55 @@ export const StudentDashboardPage: React.FC = () => {
 
             <div className="min-w-0 flex-1">
               <Card>
-                <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between mb-4">
-                  <div>
-                    <h2 className="text-lg font-bold text-[var(--text)]">My assessments</h2>
-                    <p className="text-sm text-gray-600 mt-1">Open is enabled only during the allowed date window (end date is 23:59 AEDT).</p>
-                  </div>
-                  <div className="relative w-full md:w-[320px]">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-                    <Input
-                      value={searchTerm}
-                      onChange={(e) => setSearchTerm(e.target.value)}
-                      placeholder="Search unit or status…"
-                      className="!pl-10 w-full"
-                    />
-                  </div>
+                <div className="mb-4">
+                  <h2 className="text-lg font-bold text-[var(--text)]">Qualifications</h2>
+                  <p className="text-sm text-gray-600 mt-1 mb-3">
+                    Expand a course to view and open your assessments. Open is enabled only during the allowed date window (end date is 23:59 AEDT).
+                  </p>
+                  <StudentQualificationsPanel
+                    variant="student"
+                    enrollments={studentCourses}
+                    assessments={rows}
+                    summaries={attemptSummaryByInstanceId}
+                    loading={studentLoading || loading}
+                    renderExpandedContent={renderCourseAssessments}
+                  />
                 </div>
 
-                {loading ? (
-                  <div className="py-12">
-                    <Loader variant="dots" size="lg" message="Loading assessments..." />
+                {unassignedAssessments.length > 0 ? (
+                  <div className="border-t border-[var(--border)] pt-4">
+                    <h3 className="text-sm font-semibold text-[var(--text)] mb-3">Other assessments</h3>
+                    {renderCourseAssessments(
+                      {
+                        course_id: 0,
+                        name: 'Other',
+                        qualification_code: null,
+                        enrolled_at: '',
+                        start_date: null,
+                        end_date: null,
+                        enrollment_status: 'in_progress',
+                        completed_at: null,
+                        intake_label: null,
+                        link_status: 'active',
+                      },
+                      unassignedAssessments
+                    )}
                   </div>
-                ) : rows.length === 0 ? (
-                  <div className="py-12 text-center text-sm text-gray-500">No assessments found.</div>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="min-w-[940px] w-full text-sm border border-[var(--border)] rounded-lg overflow-hidden">
-                      <thead className="bg-gray-50 text-gray-700">
-                        <tr>
-                          <th className="text-left px-3 py-2 font-semibold border-b border-[var(--border)] w-[300px]">
-                            Unit
-                          </th>
-                          <th className="hidden md:table-cell text-left px-3 py-2 font-semibold border-b border-[var(--border)] w-[100px] whitespace-nowrap">
-                            Start
-                          </th>
-                          <th className="hidden md:table-cell text-left px-3 py-2 font-semibold border-b border-[var(--border)] w-[100px] whitespace-nowrap">
-                            End
-                          </th>
-                          <th className="text-left px-3 py-2 font-semibold border-b border-[var(--border)] min-w-[220px]">
-                            Progress
-                          </th>
-                          <th className="text-left px-3 py-2 font-semibold border-b border-[var(--border)] min-w-[220px]">
-                            Comments
-                          </th>
-                          <th className="text-right px-3 py-2 font-semibold border-b border-[var(--border)] whitespace-nowrap">
-                            Action
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {rows.map((row) => {
-                          const sum = attemptSummaryByInstanceId[row.id] ?? null;
-                          const rawAttemptResults: AttemptResult[] = [
-                            sum?.final_attempt_1_result ?? null,
-                            sum?.final_attempt_2_result ?? null,
-                            sum?.final_attempt_3_result ?? null,
-                          ];
-                          const attemptResults = maskCompetentWhileAwaitingTrainer(row, rawAttemptResults);
-                          const displaySum = sum
-                            ? {
-                                ...sum,
-                                final_attempt_1_result: attemptResults[0] ?? null,
-                                final_attempt_2_result: attemptResults[1] ?? null,
-                                final_attempt_3_result: attemptResults[2] ?? null,
-                              }
-                            : null;
-                          const attemptDoneText = getStudentAttemptDoneText({
-                            submissionCount: Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0),
-                            submittedAt: row.submitted_at ?? null,
-                            attemptResults: rawAttemptResults,
-                            status: row.status,
-                            role_context: row.role_context,
-                          });
-                          const trainerAttemptFailedText = getTrainerAttemptFailedText(rawAttemptResults, row);
-                          const missedAttemptText = getMissedAttemptWindowText({
-                            noAttemptRollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
-                            didNotAttempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
-                          });
-                          const ui = computeRowUi({
-                            row: {
-                              ...row,
-                              did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
-                              no_attempt_rollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
-                              status: row.status,
-                              role_context: row.role_context,
-                            },
-                            attemptResults,
-                            submissionCount: Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0),
-                            submittedAt: row.submitted_at ?? null,
-                          });
-                          const win = withinInstanceAccessWindow(row, 'student');
-                          const disabled = ui.disabled || !win.ok;
-                          const trainerHighlightExtra = rowMatchesTrainerHighlightCourse(row, trainerHighlightCourseId)
-                            ? TRAINER_HIGHLIGHT_ROW_EXTRA_CLASS
-                            : '';
-                          return (
-                            <React.Fragment key={row.id}>
-                            <tr
-                              className={cn(ui.rowClassName, 'cursor-pointer', trainerHighlightExtra)}
-                              onClick={() => setExpandedId((prev) => (prev === row.id ? null : row.id))}
-                              title="Click to expand"
-                            >
-                              <td className="px-3 py-2 border-b border-[var(--border)] align-top">
-                                <div className="font-medium text-[var(--text)] break-words whitespace-normal">{row.form_name}</div>
-                                <div className="text-xs text-gray-500">Version {row.form_version ?? '1.0.0'}</div>
-                                <div className="md:hidden mt-1 text-xs text-gray-600 tabular-nums flex flex-wrap gap-x-3 gap-y-0.5">
-                                  <span>
-                                    <span className="text-gray-500">Start</span> {formatDDMMYYYY(row.start_date)}
-                                  </span>
-                                  <span>
-                                    <span className="text-gray-500">End</span> {formatDDMMYYYY(row.end_date)}
-                                  </span>
-                                </div>
-                              </td>
-                              <td
-                                className="hidden md:table-cell px-3 py-2 border-b border-[var(--border)] text-gray-700 whitespace-nowrap tabular-nums align-top"
-                              >
-                                {formatDDMMYYYY(row.start_date)}
-                              </td>
-                              <td
-                                className="hidden md:table-cell px-3 py-2 border-b border-[var(--border)] text-gray-700 whitespace-nowrap tabular-nums align-top"
-                              >
-                                {formatDDMMYYYY(row.end_date)}
-                              </td>
-                              <td className="px-3 py-2 border-b border-[var(--border)] min-w-[220px]">
-                                <WorkflowProgressColumns
-                                  row={row}
-                                  attemptResults={attemptResults}
-                                  submissionCount={Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0)}
-                                />
-                              </td>
-                              <td className="px-3 py-2 border-b border-[var(--border)] align-top min-w-[220px]">
-                                {(() => {
-                                    const outcomeDisplay =
-                                      ui.kind === 'past_not_competent' || ui.kind === 'past_competent'
-                                        ? {
-                                            label: ui.outcomeLabel ?? '',
-                                            className: ui.outcomeClassName ?? '',
-                                            subtext:
-                                              ui.kind === 'past_competent' && row.status !== 'locked' ? 'Office' : null,
-                                            subtextClassName: 'text-[11px] font-medium text-amber-700',
-                                          }
-                                        : getOutcomeLabel(displaySum, row);
-                                    const outcomeClass = outcomeDisplay.className;
-                                    const outcomeLabel = outcomeDisplay.label;
-                                    const comments: Array<{ text: string; className: string }> = [];
-                                    const missedAll = missedAttemptText === "Didn't attempt any";
-                                    if (missedAll) {
-                                      comments.push({ text: "Didn't attempt any", className: 'text-[11px] font-medium text-red-700' });
-                                    } else {
-                                      comments.push({ text: outcomeLabel, className: `text-xs font-medium ${outcomeClass}` });
-                                      if (outcomeDisplay.subtext) {
-                                        comments.push({ text: outcomeDisplay.subtext, className: outcomeDisplay.subtextClassName });
-                                      }
-                                    if (trainerAttemptFailedText) {
-                                      comments.push({ text: trainerAttemptFailedText, className: 'text-[11px] font-medium text-red-700' });
-                                    }
-                                    if (attemptDoneText) comments.push({ text: attemptDoneText, className: 'text-[11px] text-gray-600' });
-                                    if (ui.kind === 'in_progress' && missedAttemptText) {
-                                      comments.push({ text: missedAttemptText, className: 'text-[11px] font-medium text-amber-700' });
-                                    }
-                                  }
-                                  if (disabled && (ui.kind === 'future' || ui.kind === 'expired')) {
-                                    comments.push({ text: ui.reason, className: 'text-xs text-amber-700' });
-                                  } else if (!win.ok) {
-                                    comments.push({ text: win.reason || '', className: 'text-xs text-amber-700' });
-                                  }
-                                  return (
-                                    <div className="flex flex-col gap-1">
-                                      {comments
-                                        .filter((c) => c.text.trim().length > 0)
-                                        .map((c, idx) => (
-                                          <div key={`${row.id}-comment-${idx}`} className={c.className}>
-                                            {c.text}
-                                          </div>
-                                        ))}
-                                    </div>
-                                  );
-                                })()}
-                              </td>
-                              <td className="px-3 py-2 border-b border-[var(--border)] text-right align-top">
-                                <div className="inline-flex w-full justify-end">
-                                  <ChevronDown
-                                    className={cn(
-                                      'h-4 w-4 text-gray-400 transition-transform',
-                                      expandedId === row.id && 'rotate-180'
-                                    )}
-                                    aria-hidden="true"
-                                  />
-                                </div>
-                              </td>
-                            </tr>
-                            {expandedId === row.id ? (
-                              <tr className={cn(ui.rowClassName, trainerHighlightExtra)}>
-                                <td className="px-3 py-3 border-b border-[var(--border)]" colSpan={6} onClick={(e) => e.stopPropagation()}>
-                                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                                    <FormDocumentsPanel
-                                      formId={Number(row.form_id)}
-                                      formName={String(row.form_name ?? 'Assessment')}
-                                      canUpload={false}
-                                      showTrainerSection={false}
-                                    />
-                                    <button
-                                      type="button"
-                                      className="rounded-lg border border-[var(--border)] bg-white p-4 text-left hover:bg-[var(--brand)]/10 focus-visible:bg-[var(--brand)]/10 transition-colors"
-                                      onClick={() => void handleOpen(row)}
-                                      disabled={disabled}
-                                      title="Open assessment"
-                                    >
-                                      <div className="text-sm font-semibold text-[var(--text)]">Assessment</div>
-                                      <div className="mt-1 text-xs text-gray-600 break-words">{row.form_name}</div>
-                                      <div className="mt-3 inline-flex items-center rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700">
-                                        Open
-                                      </div>
-                                    </button>
-                                  </div>
-                                </td>
-                              </tr>
-                            ) : null}
-                            </React.Fragment>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-
+                ) : null}
               </Card>
             </div>
           </div>
         )}
       </div>
     </div>
+  );
+
+  if (!studentId) return dashboardBody;
+
+  return (
+    <NotificationAcknowledgmentGate userId={studentId} studentId={studentId}>
+      {dashboardBody}
+    </NotificationAcknowledgmentGate>
   );
 };
 

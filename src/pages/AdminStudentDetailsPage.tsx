@@ -46,7 +46,10 @@ import {
   upsertStudentAssessmentsForForms,
   getFormsForCourse,
   deleteStudentSuperadmin,
+  listStudentCourseEnrollments,
+  type StudentCourseEnrollment,
 } from '../lib/formEngine';
+import { StudentQualificationsPanel } from '../components/students/StudentQualificationsPanel';
 import type { Student, SubmittedInstanceRow } from '../lib/formEngine';
 import { STUDENT_DASHBOARD_AUTH_STORAGE_KEY } from '../lib/formEngine';
 import { FormDocumentsPanel } from '../components/documents/FormDocumentsPanel';
@@ -197,9 +200,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
 
   const [loading, setLoading] = useState(true);
   const [student, setStudent] = useState<Student | null>(null);
-  const [courses, setCourses] = useState<
-    Array<{ id: number; name: string; qualification_code: string | null; enrolled_at?: string }>
-  >([]);
+  const [enrollments, setEnrollments] = useState<StudentCourseEnrollment[]>([]);
   const [assessments, setAssessments] = useState<SubmittedInstanceRow[]>([]);
   const [assessmentsLoading, setAssessmentsLoading] = useState(false);
   const [attemptSummaryByInstanceId, setAttemptSummaryByInstanceId] = useState<
@@ -257,6 +258,17 @@ export const AdminStudentDetailsPage: React.FC = () => {
     return name || student.email || 'Student';
   }, [student]);
 
+  const courses = useMemo(
+    () =>
+      enrollments.map((e) => ({
+        id: e.course_id,
+        name: e.name,
+        qualification_code: e.qualification_code,
+        enrolled_at: e.enrolled_at,
+      })),
+    [enrollments]
+  );
+
   const loadAssessments = useCallback(async () => {
     if (!Number.isFinite(sid) || sid <= 0) return;
     setAssessmentsLoading(true);
@@ -264,6 +276,13 @@ export const AdminStudentDetailsPage: React.FC = () => {
     setAssessments(res.data);
     setAssessmentsLoading(false);
   }, [sid]);
+
+  const reloadStudentData = useCallback(async () => {
+    if (!Number.isFinite(sid) || sid <= 0) return;
+    const rows = await listStudentCourseEnrollments(sid);
+    setEnrollments(rows);
+    await loadAssessments();
+  }, [sid, loadAssessments]);
 
   useEffect(() => {
     if (assessments.length === 0) {
@@ -400,35 +419,11 @@ export const AdminStudentDetailsPage: React.FC = () => {
 
         const st = fallbackStudent;
 
-        const { data: scRows } = await supabase
-          .from('skyline_student_courses')
-          .select('created_at, course_id, skyline_courses(id, name, qualification_code)')
-          .eq('student_id', sid)
-          .eq('status', 'active')
-          .order('created_at', { ascending: false });
-        const courseList = (
-          (scRows as
-            | Array<{
-                created_at?: string;
-                skyline_courses: { id: number; name: string; qualification_code: string | null } | null;
-              }>
-            | null) || []
-        )
-          .map((r) => {
-            const c = r.skyline_courses;
-            if (!c) return null;
-            return {
-              id: c.id,
-              name: c.name,
-              qualification_code: c.qualification_code,
-              enrolled_at: String(r.created_at ?? ''),
-            };
-          })
-          .filter((c): c is { id: number; name: string; qualification_code: string | null; enrolled_at: string } => !!c);
+        const courseList = await listStudentCourseEnrollments(sid);
 
         if (cancelled) return;
         setStudent(st);
-        setCourses(courseList);
+        setEnrollments(courseList);
       } catch (e) {
         if (cancelled) return;
         console.error('AdminStudentDetailsPage load error', e);
@@ -471,46 +466,65 @@ export const AdminStudentDetailsPage: React.FC = () => {
     return asc ? d : -d;
   };
 
-  const sortedAssessments = useMemo(() => {
-    const asc = assessmentSort.dir === 'asc';
-    const unitLabel = (row: SubmittedInstanceRow) => String(row.form_name ?? '').trim();
-    const rows = [...assessments];
-    rows.sort((a, b) => {
-      let cmp = 0;
-      switch (assessmentSort.key) {
-        case 'unit':
-          cmp = unitLabel(a).localeCompare(unitLabel(b), undefined, { sensitivity: 'base' });
-          if (!asc) cmp = -cmp;
-          break;
-        case 'start':
-          cmp = compareDateNullsLast(a.start_date, b.start_date, asc);
-          break;
-        case 'end':
-          cmp = compareDateNullsLast(a.end_date, b.end_date, asc);
-          break;
-        case 'completed':
-          cmp = compareDateNullsLast(a.submitted_at, b.submitted_at, asc);
-          break;
-        default:
-          break;
-      }
-      if (cmp !== 0) return cmp;
-      return a.id - b.id;
-    });
-    return rows;
-  }, [assessments, assessmentSort]);
+  const sortAssessmentRows = useCallback(
+    (rows: SubmittedInstanceRow[]) => {
+      const asc = assessmentSort.dir === 'asc';
+      const unitLabel = (row: SubmittedInstanceRow) => String(row.form_name ?? '').trim();
+      return [...rows].sort((a, b) => {
+        let cmp = 0;
+        switch (assessmentSort.key) {
+          case 'unit':
+            cmp = unitLabel(a).localeCompare(unitLabel(b), undefined, { sensitivity: 'base' });
+            if (!asc) cmp = -cmp;
+            break;
+          case 'start':
+            cmp = compareDateNullsLast(a.start_date, b.start_date, asc);
+            break;
+          case 'end':
+            cmp = compareDateNullsLast(a.end_date, b.end_date, asc);
+            break;
+          case 'completed':
+            cmp = compareDateNullsLast(a.submitted_at, b.submitted_at, asc);
+            break;
+          default:
+            break;
+        }
+        if (cmp !== 0) return cmp;
+        return a.id - b.id;
+      });
+    },
+    [assessmentSort]
+  );
 
-  const unitFilterOptions = useMemo(() => {
+  const filterAssessmentRows = useCallback(
+    (baseRows: SubmittedInstanceRow[]) => {
+      let rows = sortAssessmentRows(baseRows);
+      const q = unitSearch.trim().toLowerCase();
+      if (q) {
+        rows = rows.filter((r) => String(r.form_name ?? '').toLowerCase().includes(q));
+      }
+      if (selectedFormFilter) {
+        rows = rows.filter((r) => String(r.form_id) === selectedFormFilter);
+      }
+      return rows;
+    },
+    [sortAssessmentRows, unitSearch, selectedFormFilter]
+  );
+
+  const getUnitFilterOptionsForRows = useCallback((rows: SubmittedInstanceRow[]) => {
     const map = new Map<number, string>();
-    for (const a of assessments) {
+    for (const a of rows) {
       if (!map.has(a.form_id)) {
         map.set(a.form_id, (a.form_name || `Form #${a.form_id}`).trim() || `Form #${a.form_id}`);
       }
     }
-    return [...map.entries()]
-      .sort((x, y) => x[1].localeCompare(y[1], undefined, { sensitivity: 'base' }))
-      .map(([id, name]) => ({ value: String(id), label: name }));
-  }, [assessments]);
+    return [
+      { value: '', label: 'All units' },
+      ...[...map.entries()]
+        .sort((x, y) => x[1].localeCompare(y[1], undefined, { sensitivity: 'base' }))
+        .map(([id, name]) => ({ value: String(id), label: name })),
+    ];
+  }, []);
 
   const formIdFromUrl = searchParams.get('formId')?.trim() ?? '';
 
@@ -528,18 +542,6 @@ export const AdminStudentDetailsPage: React.FC = () => {
   useEffect(() => {
     if (!formIdFromUrl) setSelectedFormFilter('');
   }, [formIdFromUrl]);
-
-  const displayedAssessments = useMemo(() => {
-    let rows = sortedAssessments;
-    const q = unitSearch.trim().toLowerCase();
-    if (q) {
-      rows = rows.filter((r) => String(r.form_name ?? '').toLowerCase().includes(q));
-    }
-    if (selectedFormFilter) {
-      rows = rows.filter((r) => String(r.form_id) === selectedFormFilter);
-    }
-    return rows;
-  }, [sortedAssessments, unitSearch, selectedFormFilter]);
 
   useEffect(() => {
     const key = `${sid}:${formIdFromUrl}`;
@@ -570,15 +572,11 @@ export const AdminStudentDetailsPage: React.FC = () => {
     [setSearchParams]
   );
 
-  const unitFilterSelectOptions = useMemo(
-    () => [{ value: '', label: 'All units' }, ...unitFilterOptions],
-    [unitFilterOptions]
-  );
-
   const filterAssessmentsActive = unitSearch.trim() !== '' || selectedFormFilter !== '';
-  const assessmentCountLabel = filterAssessmentsActive
-    ? `${displayedAssessments.length} shown of ${assessments.length} total`
-    : `${assessments.length} total`;
+  const assessmentCountLabel = (courseRows: SubmittedInstanceRow[], filteredRows: SubmittedInstanceRow[]) =>
+    filterAssessmentsActive
+      ? `${filteredRows.length} shown of ${courseRows.length} in course`
+      : `${courseRows.length} in course`;
 
   const getEffectiveStart = useCallback(
     (row: SubmittedInstanceRow) => {
@@ -638,8 +636,8 @@ export const AdminStudentDetailsPage: React.FC = () => {
     [getEffectiveEnd, getEffectiveStart, loadAssessments]
   );
 
-  const massApplyDates = useCallback(async () => {
-    const targets = sortedAssessments.filter(hasRowDateChanges);
+  const massApplyDates = useCallback(async (scopeRows: SubmittedInstanceRow[]) => {
+    const targets = scopeRows.filter(hasRowDateChanges);
     if (targets.length === 0) return;
     setMassApplying(true);
     let ok = 0;
@@ -668,7 +666,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
     } finally {
       setMassApplying(false);
     }
-  }, [getEffectiveEnd, getEffectiveStart, hasRowDateChanges, loadAssessments, sortedAssessments]);
+  }, [getEffectiveEnd, getEffectiveStart, hasRowDateChanges, loadAssessments]);
 
   const handleCopyLink = async (row: SubmittedInstanceRow) => {
     const role = row.role_context === 'trainer' ? 'trainer' : row.role_context === 'office' ? 'office' : 'student';
@@ -700,193 +698,41 @@ export const AdminStudentDetailsPage: React.FC = () => {
     window.open(nextUrl, '_blank');
   };
 
-  const canDeleteStudent = !!student && viewerIsSuperadmin;
-  const viewerCanLoginAsStudent = viewerIsSuperadmin || Boolean(user?.can_login_as_student);
-
-  const loginAsStudent = async () => {
-    if (!viewerCanLoginAsStudent || !student || !Number.isFinite(sid) || sid <= 0) return;
-    // Store student dashboard session. Keep staff session intact (opens in new tab).
-    sessionStorage.setItem(
-      STUDENT_DASHBOARD_AUTH_STORAGE_KEY,
-      JSON.stringify({ studentId: sid, email: student.email, at: Date.now(), by: user?.id ?? null })
-    );
-    window.open('/student/dashboard', '_blank');
-  };
-
-  const confirmDeleteStudent = async () => {
-    if (!student || !Number.isFinite(sid) || sid <= 0) return;
-    if (!viewerIsSuperadmin) {
-      toast.error('Only a super admin can delete students.');
-      setDeleteStudentOpen(false);
-      return;
-    }
-    setDeletingStudent(true);
-    try {
-      const res = await deleteStudentSuperadmin(sid);
-      if (!res.ok) {
-        toast.error(res.error);
-        return;
-      }
-      toast.success('Student deleted');
-      navigate('/admin/students');
-    } finally {
-      setDeletingStudent(false);
-      setDeleteStudentOpen(false);
-    }
-  };
-
-  return (
-    <div className="min-h-screen bg-[var(--bg)]">
-      <div className="w-full px-4 md:px-6 lg:px-8 py-6 space-y-4">
-        <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" onClick={() => navigate('/admin/students')}>
-                <ArrowLeft className="w-4 h-4 mr-1 inline" />
-                Back
-              </Button>
-              <h2 className="text-lg font-bold text-[var(--text)] truncate">{title}</h2>
-            </div>
-            {student?.student_id ? <div className="text-xs text-gray-500 mt-1">Student ID: {student.student_id}</div> : null}
-          </div>
-        </div>
-
-        {loading ? (
-          <Card>
-            <div className="py-10">
-              <Loader variant="dots" size="lg" message="Loading student..." />
-            </div>
-          </Card>
-        ) : !student ? (
-          <Card>
-            <p className="text-gray-600">Student not found.</p>
-          </Card>
-        ) : (
-          <div className="flex flex-col lg:flex-row gap-4">
-            <div className="w-full lg:w-[340px] lg:shrink-0">
-              <Card>
-                <div className="space-y-3">
-                  <div>
-                    <div className="text-xs text-gray-500">Student</div>
-                    <div className="font-semibold text-[var(--text)] break-words">
-                      {[student.first_name, student.last_name].filter(Boolean).join(' ') || student.email}
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-1 gap-2 text-sm">
-                    <div className="flex items-center gap-2 text-gray-700">
-                      <Mail className="w-4 h-4 text-gray-400" />
-                      <span className="break-words">{student.email}</span>
-                    </div>
-                    <div className="flex items-center gap-2 text-gray-700">
-                      <Phone className="w-4 h-4 text-gray-400" />
-                      <span>{student.phone || '—'}</span>
-                    </div>
-                  </div>
-
-                  <div className="border-t border-gray-100 pt-3 space-y-2 text-sm">
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-gray-500">Course</span>
-                      <div className="text-right text-gray-800">
-                        {courses.length === 0 ? (
-                          '—'
-                        ) : (
-                          <div className="space-y-2">
-                            {courses.map((c) => (
-                              <div key={c.id} className="break-words">
-                                <div>
-                                  {c.qualification_code ? `${c.qualification_code} — ` : ''}
-                                  {c.name}
-                                </div>
-                                {c.enrolled_at ? (
-                                  <div className="text-xs text-gray-500">Enrolled {formatDDMMYYYY(c.enrolled_at)}</div>
-                                ) : null}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-gray-500">Created</span>
-                      <span className="text-gray-800 text-right">{formatDDMMYYYY(student.created_at)}</span>
-                    </div>
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-gray-500">Batch</span>
-                      <span className="text-gray-800 text-right break-words">{student.batch_name ?? '—'}</span>
-                    </div>
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-gray-500">Status</span>
-                      <span className="text-gray-800">{student.status ?? '—'}</span>
-                    </div>
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-gray-500">Role</span>
-                      <span className="text-gray-800">Student</span>
-                    </div>
-                  </div>
-
-                  {viewerCanLoginAsStudent || canDeleteStudent ? (
-                    <div className="border-t border-gray-100 pt-3 space-y-2">
-                      {viewerCanLoginAsStudent ? (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="w-full border-[var(--brand)]/30 text-[var(--brand)] hover:bg-[var(--brand)]/10"
-                          onClick={() => void loginAsStudent()}
-                          title="Switch to student dashboard for this student"
-                        >
-                          Login as student
-                        </Button>
-                      ) : null}
-                      {canDeleteStudent ? (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="w-full text-red-700 border-red-200 hover:bg-red-50"
-                          onClick={() => setDeleteStudentOpen(true)}
-                          disabled={deletingStudent}
-                          title="Delete student (removes all assessments; super admin only)"
-                        >
-                          <Trash2 className="w-4 h-4 mr-2 inline" />
-                          Delete student
-                        </Button>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
-              </Card>
-
-              {viewerCanManagePaymentPlans && user ? (
-                <StudentPaymentPlansSection
-                  student={{
-                    id: student.id,
-                    name: [student.first_name, student.last_name].filter(Boolean).join(' ') || student.name,
-                    email: student.email,
-                  }}
-                  userId={user.id}
-                />
-              ) : null}
-            </div>
-
-            <div className="min-w-0 flex-1">
-              <Card>
+  const renderCourseAssessments = (
+    course: StudentCourseEnrollment,
+    courseRows: SubmittedInstanceRow[]
+  ) => {
+    const rows = filterAssessmentRows(courseRows);
+    const courseUnitFilterOptions = getUnitFilterOptionsForRows(courseRows);
+    return (
+      <>
                 <div className="flex flex-col gap-3 mb-3">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <h3 className="font-bold text-[var(--text)]">Assessment records</h3>
+                    <h4 className="text-sm font-semibold text-[var(--text)]">
+                      Assessment records
+                    </h4>
                     <div className="flex flex-wrap items-center gap-2 justify-end">
                       <Button
                         type="button"
                         variant="outline"
                         size="sm"
                         className="border-[#ea580c]/40 text-[#c2410c] hover:bg-[#fff7ed]"
-                        onClick={() => void massApplyDates()}
-                        disabled={massApplying || assessments.length === 0 || !assessments.some(hasRowDateChanges)}
+                        onClick={() => void massApplyDates(courseRows)}
+                        disabled={massApplying || courseRows.length === 0 || !courseRows.some(hasRowDateChanges)}
                       >
                         {massApplying ? 'Applying…' : 'Mass apply'}
                       </Button>
-                      <Button variant="outline" size="sm" onClick={() => setAddAssessmentOpen(true)}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setAddCourseId(String(course.course_id));
+                          setAddAssessmentOpen(true);
+                        }}
+                      >
                         + Add Assessment
                       </Button>
-                      <div className="text-xs text-gray-500">{assessmentCountLabel}</div>
+                      <div className="text-xs text-gray-500">{assessmentCountLabel(courseRows, rows)}</div>
                     </div>
                   </div>
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:gap-3">
@@ -904,7 +750,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
                         label="Unit"
                         value={selectedFormFilter}
                         onChange={onChangeUnitFilter}
-                        options={unitFilterSelectOptions}
+                        options={courseUnitFilterOptions}
                         searchable
                         searchPlaceholder="Filter by unit…"
                         className="w-full"
@@ -917,9 +763,9 @@ export const AdminStudentDetailsPage: React.FC = () => {
                   <div className="py-10">
                     <Loader variant="dots" size="lg" message="Loading assessments..." />
                   </div>
-                ) : assessments.length === 0 ? (
-                  <p className="text-gray-600">No assessments for this student.</p>
-                ) : displayedAssessments.length === 0 ? (
+                ) : courseRows.length === 0 ? (
+                  <p className="text-gray-600">No assessments for this course yet. Use “Give assessments” or + Add Assessment.</p>
+                ) : rows.length === 0 ? (
                   <p className="text-gray-600">No assessments match the current search or unit filter.</p>
                 ) : (
                   <div className="overflow-x-auto">
@@ -963,7 +809,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
                         </tr>
                       </thead>
                       <tbody>
-                        {displayedAssessments.map((row) => {
+                        {rows.map((row) => {
                           const sum = attemptSummaryByInstanceId[row.id] ?? null;
                           const rawAttemptResults: AttemptResult[] = [
                             sum?.final_attempt_1_result ?? null,
@@ -1292,7 +1138,200 @@ export const AdminStudentDetailsPage: React.FC = () => {
                     </table>
                   </div>
                 )}
+      </>
+    );
+  };
 
+  const canDeleteStudent = !!student && viewerIsSuperadmin;
+  const viewerCanLoginAsStudent = viewerIsSuperadmin || Boolean(user?.can_login_as_student);
+
+  const loginAsStudent = async () => {
+    if (!viewerCanLoginAsStudent || !student || !Number.isFinite(sid) || sid <= 0) return;
+    // Store student dashboard session. Keep staff session intact (opens in new tab).
+    sessionStorage.setItem(
+      STUDENT_DASHBOARD_AUTH_STORAGE_KEY,
+      JSON.stringify({ studentId: sid, email: student.email, at: Date.now(), by: user?.id ?? null })
+    );
+    window.open('/student/dashboard', '_blank');
+  };
+
+  const confirmDeleteStudent = async () => {
+    if (!student || !Number.isFinite(sid) || sid <= 0) return;
+    if (!viewerIsSuperadmin) {
+      toast.error('Only a super admin can delete students.');
+      setDeleteStudentOpen(false);
+      return;
+    }
+    setDeletingStudent(true);
+    try {
+      const res = await deleteStudentSuperadmin(sid);
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
+      toast.success('Student deleted');
+      navigate('/admin/students');
+    } finally {
+      setDeletingStudent(false);
+      setDeleteStudentOpen(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-[var(--bg)]">
+      <div className="w-full px-4 md:px-6 lg:px-8 py-6 space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" onClick={() => navigate('/admin/students')}>
+                <ArrowLeft className="w-4 h-4 mr-1 inline" />
+                Back
+              </Button>
+              <h2 className="text-lg font-bold text-[var(--text)] truncate">{title}</h2>
+            </div>
+            {student?.student_id ? <div className="text-xs text-gray-500 mt-1">Student ID: {student.student_id}</div> : null}
+          </div>
+        </div>
+
+        {loading ? (
+          <Card>
+            <div className="py-10">
+              <Loader variant="dots" size="lg" message="Loading student..." />
+            </div>
+          </Card>
+        ) : !student ? (
+          <Card>
+            <p className="text-gray-600">Student not found.</p>
+          </Card>
+        ) : (
+          <div className="flex flex-col lg:flex-row gap-4">
+            <div className="w-full lg:w-[340px] lg:shrink-0">
+              <Card>
+                <div className="space-y-3">
+                  <div>
+                    <div className="text-xs text-gray-500">Student</div>
+                    <div className="font-semibold text-[var(--text)] break-words">
+                      {[student.first_name, student.last_name].filter(Boolean).join(' ') || student.email}
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 gap-2 text-sm">
+                    <div className="flex items-center gap-2 text-gray-700">
+                      <Mail className="w-4 h-4 text-gray-400" />
+                      <span className="break-words">{student.email}</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-gray-700">
+                      <Phone className="w-4 h-4 text-gray-400" />
+                      <span>{student.phone || '—'}</span>
+                    </div>
+                  </div>
+
+                  <div className="border-t border-gray-100 pt-3 space-y-2 text-sm">
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-gray-500">Courses</span>
+                      <div className="text-right text-gray-800">
+                        {enrollments.length === 0 ? (
+                          '—'
+                        ) : (
+                          <div className="space-y-2">
+                            {enrollments.map((c) => (
+                              <div key={c.course_id} className="break-words">
+                                <div>
+                                  {c.qualification_code ? `${c.qualification_code} — ` : ''}
+                                  {c.name}
+                                </div>
+                                <div className="text-xs text-gray-500">
+                                  {c.enrollment_status === 'completed'
+                                    ? 'Completed'
+                                    : c.enrollment_status === 'suspended'
+                                      ? 'Suspended'
+                                      : 'In progress'}
+                                  {c.enrolled_at ? ` · enrolled ${formatDDMMYYYY(c.enrolled_at)}` : ''}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-gray-500">Created</span>
+                      <span className="text-gray-800 text-right">{formatDDMMYYYY(student.created_at)}</span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-gray-500">Batch</span>
+                      <span className="text-gray-800 text-right break-words">{student.batch_name ?? '—'}</span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-gray-500">Status</span>
+                      <span className="text-gray-800">{student.status ?? '—'}</span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-gray-500">Role</span>
+                      <span className="text-gray-800">Student</span>
+                    </div>
+                  </div>
+
+                  {viewerCanLoginAsStudent || canDeleteStudent ? (
+                    <div className="border-t border-gray-100 pt-3 space-y-2">
+                      {viewerCanLoginAsStudent ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="w-full border-[var(--brand)]/30 text-[var(--brand)] hover:bg-[var(--brand)]/10"
+                          onClick={() => void loginAsStudent()}
+                          title="Switch to student dashboard for this student"
+                        >
+                          Login as student
+                        </Button>
+                      ) : null}
+                      {canDeleteStudent ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="w-full text-red-700 border-red-200 hover:bg-red-50"
+                          onClick={() => setDeleteStudentOpen(true)}
+                          disabled={deletingStudent}
+                          title="Delete student (removes all assessments; super admin only)"
+                        >
+                          <Trash2 className="w-4 h-4 mr-2 inline" />
+                          Delete student
+                        </Button>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              </Card>
+
+              {viewerCanManagePaymentPlans && user ? (
+                <StudentPaymentPlansSection
+                  student={{
+                    id: student.id,
+                    name: [student.first_name, student.last_name].filter(Boolean).join(' ') || student.name,
+                    email: student.email,
+                  }}
+                  userId={user.id}
+                />
+              ) : null}
+            </div>
+
+            <div className="min-w-0 flex-1">
+              <Card>
+                <div className="mb-4">
+                  <h3 className="font-bold text-[var(--text)] mb-3">Qualifications</h3>
+                  <StudentQualificationsPanel
+                    studentId={sid}
+                    enrollments={enrollments}
+                    assessments={assessments}
+                    summaries={attemptSummaryByInstanceId}
+                    loading={loading}
+                    onRefresh={() => void reloadStudentData()}
+                    onAddAssessment={(courseId) => {
+                      setAddCourseId(String(courseId));
+                      setAddAssessmentOpen(true);
+                    }}
+                    renderExpandedContent={renderCourseAssessments}
+                  />
+                </div>
               </Card>
             </div>
           </div>
@@ -1393,7 +1432,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
                 });
                 setAdding(false);
                 setAddAssessmentOpen(false);
-                await loadAssessments();
+                await reloadStudentData();
                 toast.success(`Assessment updated. ${res.created} created, ${res.updated} updated.`);
               }}
               disabled={adding || addFormsLoading || addForms.length === 0 || !addFormId || (courses.length > 0 && !addCourseId)}

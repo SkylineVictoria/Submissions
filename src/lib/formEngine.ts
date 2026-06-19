@@ -3988,26 +3988,157 @@ export async function setStudentCourses(studentId: number, courseIds: number[]):
       return false;
     }
 
-    // Upsert selected courses as active.
-    const payload = ids.map((cid) => ({
-      student_id: sid,
-      course_id: cid,
-      status: 'active',
-      created_by,
-      updated_by,
-    }));
-    const { error: upErr } = await supabase
-      .from('skyline_student_courses')
-      .upsert(payload, { onConflict: 'student_id,course_id' });
-    if (upErr) {
-      console.error('setStudentCourses upsert error', upErr);
-      return false;
+    // Upsert selected courses as active without wiping enrollment dates/status on existing rows.
+    for (const cid of ids) {
+      const { data: existing, error: selErr } = await supabase
+        .from('skyline_student_courses')
+        .select('student_id')
+        .eq('student_id', sid)
+        .eq('course_id', cid)
+        .maybeSingle();
+      if (selErr) {
+        console.error('setStudentCourses select error', selErr);
+        return false;
+      }
+      if (existing) {
+        const { error: upErr } = await supabase
+          .from('skyline_student_courses')
+          .update({ status: 'active', updated_by })
+          .eq('student_id', sid)
+          .eq('course_id', cid);
+        if (upErr) {
+          console.error('setStudentCourses reactivate error', upErr);
+          return false;
+        }
+      } else {
+        const { error: insErr } = await supabase.from('skyline_student_courses').insert({
+          student_id: sid,
+          course_id: cid,
+          status: 'active',
+          enrollment_status: 'in_progress',
+          created_by,
+          updated_by,
+        });
+        if (insErr) {
+          console.error('setStudentCourses insert error', insErr);
+          return false;
+        }
+      }
     }
     return true;
   } catch (e) {
     console.error('setStudentCourses error', e);
     return false;
   }
+}
+
+export type StudentCourseEnrollmentStatus = 'in_progress' | 'completed' | 'suspended';
+
+export interface StudentCourseEnrollment {
+  course_id: number;
+  name: string;
+  qualification_code: string | null;
+  enrolled_at: string;
+  start_date: string | null;
+  end_date: string | null;
+  enrollment_status: StudentCourseEnrollmentStatus;
+  completed_at: string | null;
+  intake_label: string | null;
+  link_status: 'active' | 'inactive';
+}
+
+export async function listStudentCourseEnrollments(studentId: number): Promise<StudentCourseEnrollment[]> {
+  const sid = Number(studentId);
+  if (!Number.isFinite(sid) || sid <= 0) return [];
+  const { data, error } = await supabase
+    .from('skyline_student_courses')
+    .select(
+      'created_at, status, start_date, end_date, enrollment_status, completed_at, intake_label, course_id, skyline_courses(id, name, qualification_code)'
+    )
+    .eq('student_id', sid)
+    .eq('status', 'active')
+    .order('created_at', { ascending: false });
+  if (error) {
+    console.error('listStudentCourseEnrollments error', error);
+    return [];
+  }
+  const rows =
+    (data as unknown as Array<{
+      created_at?: string;
+      status?: string;
+      start_date?: string | null;
+      end_date?: string | null;
+      enrollment_status?: string | null;
+      completed_at?: string | null;
+      intake_label?: string | null;
+      course_id: number;
+      skyline_courses: { id: number; name: string; qualification_code: string | null } | null;
+    }> | null) ?? [];
+  return rows
+    .map((r) => {
+      const c = r.skyline_courses;
+      if (!c) return null;
+      const enrollmentStatus = String(r.enrollment_status ?? 'in_progress') as StudentCourseEnrollmentStatus;
+      return {
+        course_id: Number(c.id),
+        name: c.name,
+        qualification_code: c.qualification_code,
+        enrolled_at: String(r.created_at ?? ''),
+        start_date: r.start_date ? String(r.start_date) : null,
+        end_date: r.end_date ? String(r.end_date) : null,
+        enrollment_status:
+          enrollmentStatus === 'completed' || enrollmentStatus === 'suspended'
+            ? enrollmentStatus
+            : 'in_progress',
+        completed_at: r.completed_at ? String(r.completed_at) : null,
+        intake_label: r.intake_label ? String(r.intake_label) : null,
+        link_status: r.status === 'inactive' ? 'inactive' : 'active',
+      } satisfies StudentCourseEnrollment;
+    })
+    .filter((c): c is StudentCourseEnrollment => !!c);
+}
+
+export async function updateStudentCourseEnrollment(
+  studentId: number,
+  courseId: number,
+  patch: Partial<
+    Pick<StudentCourseEnrollment, 'start_date' | 'end_date' | 'enrollment_status' | 'completed_at' | 'intake_label'>
+  >
+): Promise<boolean> {
+  const sid = Number(studentId);
+  const cid = Number(courseId);
+  if (!Number.isFinite(sid) || sid <= 0 || !Number.isFinite(cid) || cid <= 0) return false;
+  const { updated_by } = getAuditFields();
+  const payload: Record<string, unknown> = { updated_by };
+  if (patch.start_date !== undefined) payload.start_date = patch.start_date || null;
+  if (patch.end_date !== undefined) payload.end_date = patch.end_date || null;
+  if (patch.enrollment_status !== undefined) payload.enrollment_status = patch.enrollment_status;
+  if (patch.completed_at !== undefined) payload.completed_at = patch.completed_at || null;
+  if (patch.intake_label !== undefined) payload.intake_label = patch.intake_label?.trim() || null;
+  const { error } = await supabase
+    .from('skyline_student_courses')
+    .update(payload)
+    .eq('student_id', sid)
+    .eq('course_id', cid);
+  if (error) {
+    console.error('updateStudentCourseEnrollment error', error);
+    return false;
+  }
+  return true;
+}
+
+export async function markStudentCourseComplete(
+  studentId: number,
+  courseId: number,
+  completedAt: string
+): Promise<boolean> {
+  const date = String(completedAt ?? '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+  return updateStudentCourseEnrollment(studentId, courseId, {
+    enrollment_status: 'completed',
+    completed_at: date,
+    end_date: date,
+  });
 }
 
 export async function getActiveStudentCountsByCourse(courseIds: number[]): Promise<Record<number, number>> {
