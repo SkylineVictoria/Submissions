@@ -234,7 +234,7 @@ export const AdminAssessmentsPage: React.FC = () => {
   const [formFilter, setFormFilter] = useState('');
   const [workflowFilter, setWorkflowFilter] = useState<AssessmentDirectoryWorkflowFilter>('all');
   const [startFromFilter, setStartFromFilter] = useState<string>('');
-  const [startToFilter, setStartToFilter] = useState<string>('');
+  const [endDateToFilter, setEndDateToFilter] = useState<string>('');
   const [sendToTrainerRow, setSendToTrainerRow] = useState<SubmittedInstanceRow | null>(null);
   const [trainers, setTrainers] = useState<Trainer[]>([]);
   const [trainersLoading, setTrainersLoading] = useState(false);
@@ -259,7 +259,7 @@ export const AdminAssessmentsPage: React.FC = () => {
     const courseId = courseFilter ? Number(courseFilter) : undefined;
     const formId = formFilter ? Number(formFilter) : undefined;
     const startFrom = startFromFilter.trim() || null;
-    const startTo = startToFilter.trim() || null;
+    const endDateTo = endDateToFilter.trim() || null;
     const res = await listSubmittedInstancesPaged(
       page,
       PAGE_SIZE,
@@ -274,12 +274,12 @@ export const AdminAssessmentsPage: React.FC = () => {
       null,
       workflowFilter,
       startFrom,
-      startTo
+      endDateTo
     );
     setRows(res.data);
     setTotalRows(res.total);
     setLoading(false);
-  }, [courseFilter, formFilter, directorySort, workflowFilter, startFromFilter, startToFilter]);
+  }, [courseFilter, formFilter, directorySort, workflowFilter, startFromFilter, endDateToFilter]);
 
   const loadCoursesOptions = useCallback(async (page: number, search: string) => {
     const res = await listCoursesPaged(page, 20, search ? search.trim() : undefined);
@@ -305,7 +305,7 @@ export const AdminAssessmentsPage: React.FC = () => {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, courseFilter, formFilter, workflowFilter, startFromFilter, startToFilter]);
+  }, [searchTerm, courseFilter, formFilter, workflowFilter, startFromFilter, endDateToFilter]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -519,8 +519,8 @@ export const AdminAssessmentsPage: React.FC = () => {
       const courseId = courseFilter ? Number(courseFilter) : undefined;
       const fId = formFilter ? Number(formFilter) : undefined;
       const startFrom = startFromFilter.trim() || null;
-      const startTo = startToFilter.trim() || null;
-      const first = await listSubmittedInstancesPaged(1, BATCH, searchTerm || undefined, courseId, fId, undefined, { key: directorySort.key, dir: directorySort.dir }, null, workflowFilter, startFrom, startTo);
+      const endDateTo = endDateToFilter.trim() || null;
+      const first = await listSubmittedInstancesPaged(1, BATCH, searchTerm || undefined, courseId, fId, undefined, { key: directorySort.key, dir: directorySort.dir }, null, workflowFilter, startFrom, endDateTo);
       allRows.push(...first.data);
       const total = first.total;
       const pct = (n: number) => (total > 0 ? Math.round((n / total) * 100) : 100);
@@ -529,7 +529,7 @@ export const AdminAssessmentsPage: React.FC = () => {
 
       const totalPages = Math.ceil(total / BATCH);
       for (let p = 2; p <= totalPages; p++) {
-        const batch = await listSubmittedInstancesPaged(p, BATCH, searchTerm || undefined, courseId, fId, undefined, { key: directorySort.key, dir: directorySort.dir }, null, workflowFilter, startFrom, startTo);
+        const batch = await listSubmittedInstancesPaged(p, BATCH, searchTerm || undefined, courseId, fId, undefined, { key: directorySort.key, dir: directorySort.dir }, null, workflowFilter, startFrom, endDateTo);
         allRows.push(...batch.data);
         const progress = pct(allRows.length);
         setExportProgress(progress);
@@ -607,7 +607,7 @@ export const AdminAssessmentsPage: React.FC = () => {
       setExporting(false);
       setExportProgress(0);
     }
-  }, [exporting, courseFilter, formFilter, searchTerm, directorySort, workflowFilter, startFromFilter, startToFilter]);
+  }, [exporting, courseFilter, formFilter, searchTerm, directorySort, workflowFilter, startFromFilter, endDateToFilter]);
 
   const handleSendToTrainerConfirm = async () => {
     if (!sendToTrainerRow || !selectedTrainerId) return;
@@ -908,20 +908,18 @@ export const AdminAssessmentsPage: React.FC = () => {
                     }}
                     compact
                     placement="below"
-                    maxDate={startToFilter || undefined}
                   />
                 </div>
                 <div className="w-full min-w-0 sm:w-[13rem] sm:flex-shrink-0">
-                  <div className="text-xs font-medium text-gray-600 mb-1">Start to</div>
+                  <div className="text-xs font-medium text-gray-600 mb-1">End date</div>
                   <DatePicker
-                    value={startToFilter}
+                    value={endDateToFilter}
                     onChange={(v) => {
-                      setStartToFilter(v || '');
+                      setEndDateToFilter(v || '');
                       setCurrentPage(1);
                     }}
                     compact
                     placement="below"
-                    minDate={startFromFilter || undefined}
                   />
                 </div>
               </div>
@@ -935,7 +933,7 @@ export const AdminAssessmentsPage: React.FC = () => {
                     setFormFilter('');
                     setWorkflowFilter('all');
                     setStartFromFilter('');
-                    setStartToFilter('');
+                    setEndDateToFilter('');
                     setCurrentPage(1);
                   }}
                   disabled={loading || exporting || refreshing}

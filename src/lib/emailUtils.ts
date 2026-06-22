@@ -101,12 +101,10 @@ export type InstitutionalDomain = typeof STUDENT_DOMAIN | typeof STAFF_DOMAIN;
 
 /** Prefer Contact ID from file; if missing, use local part of an institutional @student.slit.edu.au address. */
 export function resolveStudentIdFromImportRow(contactIdFromCell: string | undefined, emailFromFile: string): string {
-  let sid = String(contactIdFromCell ?? '')
-    .trim()
-    .replace(/\s+/g, '');
+  let sid = String(contactIdFromCell ?? '').trim();
   const e = (emailFromFile ?? '').trim();
   if (!sid && e.toLowerCase().endsWith(STUDENT_DOMAIN.toLowerCase())) {
-    sid = e.slice(0, -STUDENT_DOMAIN.length).trim().replace(/\s+/g, '');
+    sid = e.slice(0, -STUDENT_DOMAIN.length).trim();
   }
   return sid;
 }
@@ -116,9 +114,7 @@ export function resolveStudentIdFromImportRow(contactIdFromCell: string | undefi
  * @student.slit.edu.au (e.g. Gmail), use `{studentId}@student.slit.edu.au`.
  */
 export function normalizeStudentImportEmail(studentId: string | undefined, emailFromFile: string): string {
-  const sid = String(studentId ?? '')
-    .trim()
-    .replace(/\s+/g, '');
+  const sid = String(studentId ?? '').trim();
   const e = (emailFromFile ?? '').trim();
   const d = STUDENT_DOMAIN.toLowerCase();
   if (sid && (!e || !e.toLowerCase().endsWith(d))) {

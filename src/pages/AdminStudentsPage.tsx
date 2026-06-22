@@ -15,10 +15,13 @@ import {
   updateFormInstanceDates,
   extendInstanceAccessTokensToDate,
   getStudentsByEmails,
+  getStudentsByStudentIds,
+  getActiveCourseIdsForStudent,
   listCoursesPaged,
   getBatchById,
   getCoursesByQualificationCodes,
   setStudentCourses,
+  appendStudentCourses,
   deleteStudentSuperadmin,
 } from '../lib/formEngine';
 import {
@@ -30,6 +33,7 @@ import {
   type InstitutionalDomain,
   STUDENT_DOMAIN,
 } from '../lib/emailUtils';
+import { normalizeImportStudentId } from '../lib/studentBatchValidation';
 import type { Student } from '../lib/formEngine';
 import type { Form } from '../types/database';
 import { Card } from '../components/ui/Card';
@@ -128,6 +132,7 @@ export const AdminStudentsPage: React.FC = () => {
   const [importing, setImporting] = useState(false);
   const [importProgress, setImportProgress] = useState<{ done: number; total: number; success: number; failed: number } | null>(null);
   const [importExistingByEmail, setImportExistingByEmail] = useState<Record<string, Student>>({});
+  const [importExistingByStudentId, setImportExistingByStudentId] = useState<Record<string, Student>>({});
   const [importIdDecisionByEmail, setImportIdDecisionByEmail] = useState<Record<string, 'keep_existing' | 'use_new'>>({});
   const [lastImportLinksPayload, setLastImportLinksPayload] = useState<{
     createdAtIso: string;
@@ -510,7 +515,16 @@ export const AdminStudentsPage: React.FC = () => {
   const colMatch = (h: string, ...aliases: string[]) =>
     aliases.some((a) => normalizeCol(h).includes(normalizeCol(a)) || normalizeCol(a).includes(normalizeCol(h)));
 
-  /** Spreadsheet cells: Contact ID / Student ID column is canonical (not derived from name). */
+  /** Spreadsheet cells: preserve formatted text (leading zeroes) when available. */
+  const readStudentIdFromSheet = (ws: XLSX.WorkSheet, rowIndex: number, colIndex: number): string | undefined => {
+    if (colIndex < 0) return undefined;
+    const ref = XLSX.utils.encode_cell({ r: rowIndex, c: colIndex });
+    const cell = ws[ref];
+    if (!cell) return undefined;
+    if (typeof cell.w === 'string' && cell.w.trim()) return cell.w.trim();
+    return cellToImportStudentId(cell.v);
+  };
+
   const cellToImportStudentId = (val: unknown): string | undefined => {
     if (val === null || val === undefined || val === '') return undefined;
     if (typeof val === 'number' && Number.isFinite(val)) {
@@ -663,7 +677,7 @@ export const AdminStudentsPage: React.FC = () => {
             const last = lnIdx >= 0 ? String(row[lnIdx] ?? '').trim() : '';
             const emailRaw = emIdx >= 0 ? String(row[emIdx] ?? '').trim() : '';
             const phone = phIdx >= 0 ? digitsOnly(String(row[phIdx] ?? '')).slice(0, 10) : '';
-            const studentIdCell = sidIdx >= 0 ? cellToImportStudentId(row[sidIdx]) : undefined;
+            const studentIdCell = sidIdx >= 0 ? readStudentIdFromSheet(ws, i, sidIdx) : undefined;
             const resolvedSid = resolveStudentIdFromImportRow(studentIdCell, emailRaw);
             const email = normalizeStudentImportEmail(resolvedSid || undefined, emailRaw);
             const unitCode = unitIdx >= 0 ? String(row[unitIdx] ?? '').trim() : '';
@@ -720,6 +734,7 @@ export const AdminStudentsPage: React.FC = () => {
   useEffect(() => {
     if (importRows.length === 0) {
       setImportExistingByEmail({});
+      setImportExistingByStudentId({});
       setImportIdDecisionByEmail({});
       return;
     }
@@ -734,20 +749,31 @@ export const AdminStudentsPage: React.FC = () => {
           .filter(Boolean)
       )
     );
-    getStudentsByEmails(emails).then((existing) => {
-      const map: Record<string, Student> = {};
-      for (const s of existing) {
-        if (s.email) map[String(s.email).trim().toLowerCase()] = s;
-      }
-      setImportExistingByEmail(map);
-      setImportIdDecisionByEmail((prev) => {
-        const next = { ...prev };
-        for (const email of emails) {
-          if (!(email in next)) next[email] = 'keep_existing';
+    const studentIds = Array.from(
+      new Set(importRows.map((r) => normalizeImportStudentId(r.student_id)).filter(Boolean))
+    );
+    Promise.all([getStudentsByEmails(emails), getStudentsByStudentIds(studentIds)]).then(
+      ([existingByEmail, existingByStudentId]) => {
+        const emailMap: Record<string, Student> = {};
+        for (const s of existingByEmail) {
+          if (s.email) emailMap[String(s.email).trim().toLowerCase()] = s;
         }
-        return next;
-      });
-    });
+        setImportExistingByEmail(emailMap);
+        const sidMap: Record<string, Student> = {};
+        for (const s of existingByStudentId) {
+          const key = normalizeImportStudentId(s.student_id);
+          if (key) sidMap[key] = s;
+        }
+        setImportExistingByStudentId(sidMap);
+        setImportIdDecisionByEmail((prev) => {
+          const next = { ...prev };
+          for (const email of emails) {
+            if (!(email in next)) next[email] = 'keep_existing';
+          }
+          return next;
+        });
+      }
+    );
   }, [importRows]);
 
   const updateImportRow = (index: number, field: keyof typeof importRows[0], value: string) => {
@@ -791,6 +817,11 @@ export const AdminStudentsPage: React.FC = () => {
     try {
       const importQualCodes = Array.from(new Set(importRows.flatMap((r) => splitCodes(r.qualification_code))));
       const courseByQual = await getCoursesByQualificationCodes(importQualCodes);
+      const importBatch = importBatchId ? await getBatchById(Number(importBatchId)) : null;
+      const importBatchCourseId =
+        importBatch?.course_id != null && Number.isFinite(Number(importBatch.course_id))
+          ? Number(importBatch.course_id)
+          : null;
       const unitToFormIds = new Map<string, number[]>();
       const qualToFormIds = new Map<string, number[]>();
       for (const f of displayForms) {
@@ -968,29 +999,29 @@ export const AdminStudentsPage: React.FC = () => {
         }
       }
 
-      // Prevent duplicates within this single import run
+      // Prevent duplicates within this single import run (keyed by Student ID).
       const localStudentByEmail = new Map<string, Student>();
       for (const [k, v] of Object.entries(importExistingByEmail)) {
         if (v) localStudentByEmail.set(String(k).trim().toLowerCase(), v);
       }
       const localStudentByStudentId = new Map<string, Student>();
+      for (const [k, v] of Object.entries(importExistingByStudentId)) {
+        if (v) localStudentByStudentId.set(normalizeImportStudentId(k), v);
+      }
       importStudentsForPdf = [];
       importFormIdsForPdf = new Set<number>();
 
-      // Group rows by normalized institutional email (Contact ID drives identity).
-      const rowsByEmail = new Map<string, typeof importRows>();
+      const rowsByStudentId = new Map<string, typeof importRows>();
       for (const r of importRows) {
-        const raw = String(r.email ?? '').trim();
-        const sid = resolveStudentIdFromImportRow(String(r.student_id ?? '').trim() || undefined, raw);
-        const norm = normalizeStudentImportEmail(sid || undefined, raw).trim().toLowerCase();
-        if (!norm) continue;
-        const list = rowsByEmail.get(norm) ?? [];
+        const key = normalizeImportStudentId(r.student_id);
+        if (!key) continue;
+        const list = rowsByStudentId.get(key) ?? [];
         list.push(r);
-        rowsByEmail.set(norm, list);
+        rowsByStudentId.set(key, list);
       }
 
       let done = 0;
-      for (const [emailKey, rows] of rowsByEmail.entries()) {
+      for (const [candidateIdKey, rows] of rowsByStudentId.entries()) {
         const firstRow = rows[0];
         const first = String(firstRow.first_name ?? '').trim();
         const emailRaw = String(firstRow.email ?? '').trim();
@@ -999,7 +1030,7 @@ export const AdminStudentsPage: React.FC = () => {
           emailRaw
         );
         const studentEmail = normalizeStudentImportEmail(resolvedSid || undefined, emailRaw);
-        const candidateIdKey = resolvedSid.replace(/\s+/g, '').trim();
+        const emailKey = studentEmail.trim().toLowerCase();
         if (!first) {
           failed += rows.length;
           done += rows.length;
@@ -1018,10 +1049,11 @@ export const AdminStudentsPage: React.FC = () => {
           continue;
         }
 
-        const existingStudent = localStudentByEmail.get(emailKey) ?? importExistingByEmail[emailKey];
-        const batchId = importBatchId ? Number(importBatchId) : null;
+        const existingStudent =
+          localStudentByStudentId.get(candidateIdKey) ??
+          importExistingByStudentId[candidateIdKey] ??
+          (emailKey ? localStudentByEmail.get(emailKey) ?? importExistingByEmail[emailKey] : undefined);
         let student: Student | null = existingStudent ?? null;
-        if (!student && candidateIdKey) student = localStudentByStudentId.get(candidateIdKey) ?? null;
 
         if (student == null) {
           const created = await createStudent({
@@ -1030,15 +1062,19 @@ export const AdminStudentsPage: React.FC = () => {
             last_name: String(firstRow.last_name ?? ''),
             email: studentEmail,
             phone: String(firstRow.phone ?? '') || undefined,
-            batch_id: batchId && Number.isFinite(batchId) ? batchId : undefined,
           });
           if (!created) {
-            failed += rows.length;
-            done += rows.length;
-            setImportProgress({ done, total: importRows.length, success, failed });
-            continue;
+            const dup = await getStudentsByStudentIds([candidateIdKey]);
+            student = dup[0] ?? null;
+            if (!student) {
+              failed += rows.length;
+              done += rows.length;
+              setImportProgress({ done, total: importRows.length, success, failed });
+              continue;
+            }
+          } else {
+            student = created;
           }
-          student = created;
         } else {
           const decision = importIdDecisionByEmail[emailKey] ?? 'keep_existing';
           const studentIdToSet = decision === 'use_new' ? candidateIdKey : (student.student_id ?? candidateIdKey);
@@ -1048,7 +1084,6 @@ export const AdminStudentsPage: React.FC = () => {
             last_name: String(firstRow.last_name ?? ''),
             email: studentEmail,
             phone: String(firstRow.phone ?? '') || undefined,
-            batch_id: batchId && Number.isFinite(batchId) ? batchId : undefined,
           });
           if (updated) student = updated;
         }
@@ -1060,15 +1095,25 @@ export const AdminStudentsPage: React.FC = () => {
           continue;
         }
         localStudentByEmail.set(emailKey, student);
-        if (candidateIdKey) localStudentByStudentId.set(candidateIdKey, student);
+        localStudentByStudentId.set(candidateIdKey, student);
 
-        // Assign course(s) from ALL qualification codes across this student's rows.
+        // Append course(s) from ALL qualification codes across this student's rows (never replace existing).
         const allQualCodes = Array.from(new Set(rows.flatMap((r) => splitCodes(r.qualification_code))));
         const courseIds = allQualCodes
           .map((c) => courseByQual[c]?.id)
           .filter((n): n is number => typeof n === 'number' && Number.isFinite(n) && n > 0);
-        if (courseIds.length > 0) {
-          await setStudentCourses(student.id, courseIds);
+        if (importBatchCourseId != null) courseIds.push(importBatchCourseId);
+        const uniqueCourseIds = Array.from(new Set(courseIds));
+        if (uniqueCourseIds.length > 0) {
+          await appendStudentCourses(student.id, uniqueCourseIds);
+        }
+
+        const batchId = importBatchId ? Number(importBatchId) : null;
+        if (batchId && Number.isFinite(batchId) && importBatchCourseId != null) {
+          const enrolled = await getActiveCourseIdsForStudent(student.id);
+          if (enrolled.includes(importBatchCourseId)) {
+            await updateStudent(student.id, { batch_id: batchId });
+          }
         }
 
         // Process each row's assessments (unit/qualification mapping) and dates.
@@ -1281,11 +1326,22 @@ export const AdminStudentsPage: React.FC = () => {
       last_name: editForm.last_name || undefined,
       phone: editForm.phone || undefined,
       email,
-      batch_id: batchId ?? undefined,
       status: editForm.status,
     });
     if (updated) {
       await setStudentCourses(updated.id, editForm.course_ids);
+      if (batchId != null) {
+        const withBatch = await updateStudent(updated.id, { batch_id: batchId });
+        if (!withBatch) {
+          setSavingEdit(false);
+          toast.error(
+            'Student cannot be added to this batch because the student is not enrolled in the batch course.'
+          );
+          return;
+        }
+      } else {
+        await updateStudent(updated.id, { batch_id: null });
+      }
     }
     setSavingEdit(false);
     if (updated) {

@@ -2927,6 +2927,53 @@ export async function getStudentsByEmails(emails: string[]): Promise<Student[]> 
   return out;
 }
 
+export async function getStudentsByStudentIds(studentIds: string[]): Promise<Student[]> {
+  const cleaned = Array.from(
+    new Set(
+      (studentIds || [])
+        .map((id) => String(id ?? '').trim())
+        .filter(Boolean)
+    )
+  );
+  if (cleaned.length === 0) return [];
+  const out: Student[] = [];
+  const chunkSize = 200;
+  for (let i = 0; i < cleaned.length; i += chunkSize) {
+    const chunk = cleaned.slice(i, i + chunkSize);
+    const { data, error } = await supabase
+      .from('skyline_students')
+      .select('*, skyline_batches(name)')
+      .in('student_id', chunk);
+    if (error) {
+      console.error('getStudentsByStudentIds error', error);
+      continue;
+    }
+    const rows = ((data as Record<string, unknown>[]) || []).map((r) => {
+      const batch = r.skyline_batches as { name?: string } | null;
+      return mapStudentRow({ ...r, batch_name: batch?.name ?? null });
+    });
+    out.push(...rows);
+  }
+  return out;
+}
+
+export async function getActiveCourseIdsForStudent(studentId: number): Promise<number[]> {
+  const sid = Number(studentId);
+  if (!Number.isFinite(sid) || sid <= 0) return [];
+  const { data, error } = await supabase
+    .from('skyline_student_courses')
+    .select('course_id')
+    .eq('student_id', sid)
+    .eq('status', 'active');
+  if (error) {
+    console.error('getActiveCourseIdsForStudent error', error);
+    return [];
+  }
+  return ((data as Array<{ course_id: number }> | null) || [])
+    .map((r) => Number(r.course_id))
+    .filter((n) => Number.isFinite(n) && n > 0);
+}
+
 export async function listSubmittedInstances(): Promise<SubmittedInstanceRow[]> {
   const { data: instances, error } = await supabase
     .from('skyline_form_instances')
@@ -3047,15 +3094,15 @@ export async function listSubmittedInstancesPaged(
   activeOnIso?: string | null,
   workflowStatus?: AssessmentDirectoryWorkflowFilter | null,
   startFromIso?: string | null,
-  startToIso?: string | null,
+  endDateToIso?: string | null,
   batchId?: number | null
 ): Promise<PaginatedResult<SubmittedInstanceRow>> {
   const active =
     activeOnIso && /^\d{4}-\d{2}-\d{2}$/.test(String(activeOnIso).trim()) ? String(activeOnIso).trim() : null;
   const startFrom =
     startFromIso && /^\d{4}-\d{2}-\d{2}$/.test(String(startFromIso).trim()) ? String(startFromIso).trim() : null;
-  const startTo =
-    startToIso && /^\d{4}-\d{2}-\d{2}$/.test(String(startToIso).trim()) ? String(startToIso).trim() : null;
+  const endDateTo =
+    endDateToIso && /^\d{4}-\d{2}-\d{2}$/.test(String(endDateToIso).trim()) ? String(endDateToIso).trim() : null;
   const wf = workflowStatus && workflowStatus !== 'all' ? workflowStatus : null;
   const { data, error } = await supabase.rpc('skyline_list_submitted_instances_paged', {
     p_page: page,
@@ -3067,7 +3114,7 @@ export async function listSubmittedInstancesPaged(
     p_active_on: active,
     p_workflow_status: wf,
     p_start_from: startFrom,
-    p_start_to: startTo,
+    p_end_date_to: endDateTo,
     p_sort_key: sort?.key ?? 'created',
     p_sort_dir: sort?.dir ?? 'desc',
     p_batch_id: Number.isFinite(Number(batchId)) && Number(batchId) > 0 ? Number(batchId) : null,
@@ -3916,24 +3963,33 @@ export async function updateBatch(id: number, input: UpdateBatchInput): Promise<
   return batch ?? null;
 }
 
-export async function updateBatchStudentAssignments(batchId: number, studentIds: number[]): Promise<boolean> {
+export async function updateBatchStudentAssignments(
+  batchId: number,
+  studentIds: number[]
+): Promise<{ ok: boolean; error?: string }> {
+  const bid = Number(batchId);
+  if (!Number.isFinite(bid) || bid <= 0) return { ok: false, error: 'Invalid batch id' };
+  const ids = Array.from(new Set(studentIds.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0)));
   try {
-    const { updated_by } = getAuditFields();
-    await supabase.from('skyline_students').update({ batch_id: null, updated_by }).eq('batch_id', batchId);
-    if (studentIds.length > 0) {
-      const { error } = await supabase
-        .from('skyline_students')
-        .update({ batch_id: batchId, updated_by })
-        .in('id', studentIds);
-      if (error) {
-        console.error('updateBatchStudentAssignments assign error', error);
-        return false;
-      }
+    const { data, error } = await supabase.rpc('skyline_update_batch_student_assignments', {
+      p_batch_id: bid,
+      p_student_ids: ids,
+    });
+    if (error) {
+      console.error('updateBatchStudentAssignments rpc error', error);
+      return { ok: false, error: error.message };
     }
-    return true;
+    const row = data as { ok?: boolean; error?: string } | null;
+    if (!row?.ok) {
+      return {
+        ok: false,
+        error: row?.error ?? 'Failed to update batch student assignments',
+      };
+    }
+    return { ok: true };
   } catch (e) {
     console.error('updateBatchStudentAssignments error', e);
-    return false;
+    return { ok: false, error: e instanceof Error ? e.message : 'Failed to update batch student assignments' };
   }
 }
 
@@ -4030,6 +4086,56 @@ export async function setStudentCourses(studentId: number, courseIds: number[]):
     console.error('setStudentCourses error', e);
     return false;
   }
+}
+
+/** Add courses to a student without removing existing course mappings. */
+export async function appendStudentCourses(studentId: number, courseIds: number[]): Promise<boolean> {
+  const sid = Number(studentId);
+  if (!Number.isFinite(sid) || sid <= 0) return false;
+  const ids = Array.from(new Set(courseIds.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0)));
+  if (ids.length === 0) return true;
+  const existing = await getActiveCourseIdsForStudent(sid);
+  const merged = Array.from(new Set([...existing, ...ids]));
+  if (merged.length === existing.length) return true;
+  const toAdd = ids.filter((id) => !existing.includes(id));
+  const { created_by, updated_by } = getAuditFields();
+  for (const cid of toAdd) {
+    const { data: row, error: selErr } = await supabase
+      .from('skyline_student_courses')
+      .select('student_id, status')
+      .eq('student_id', sid)
+      .eq('course_id', cid)
+      .maybeSingle();
+    if (selErr) {
+      console.error('appendStudentCourses select error', selErr);
+      return false;
+    }
+    if (row) {
+      const { error: upErr } = await supabase
+        .from('skyline_student_courses')
+        .update({ status: 'active', updated_by })
+        .eq('student_id', sid)
+        .eq('course_id', cid);
+      if (upErr) {
+        console.error('appendStudentCourses reactivate error', upErr);
+        return false;
+      }
+    } else {
+      const { error: insErr } = await supabase.from('skyline_student_courses').insert({
+        student_id: sid,
+        course_id: cid,
+        status: 'active',
+        enrollment_status: 'in_progress',
+        created_by,
+        updated_by,
+      });
+      if (insErr) {
+        console.error('appendStudentCourses insert error', insErr);
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 export type StudentCourseEnrollmentStatus = 'in_progress' | 'completed' | 'suspended';
@@ -4222,17 +4328,23 @@ export async function createStudent(input: CreateStudentInput): Promise<Student 
   const first = input.first_name.trim();
   const last = (input.last_name ?? '').trim();
   const fullName = [first, last].filter(Boolean).join(' ');
+  const studentIdKey = input.student_id.trim();
+  if (!studentIdKey) {
+    console.error('createStudent error: student_id is required');
+    return null;
+  }
   const { created_by } = getAuditFields();
+  const pendingBatchId = input.batch_id ?? null;
   const { data, error } = await supabase
     .from('skyline_students')
     .insert({
-      student_id: input.student_id.trim(),
+      student_id: studentIdKey,
       name: fullName || first,
       first_name: first || null,
       last_name: last || null,
       email: input.email.trim(),
       phone: input.phone?.trim() || null,
-      batch_id: input.batch_id ?? null,
+      batch_id: null,
       date_of_birth: input.date_of_birth?.trim() || null,
       address_line_1: input.address_line_1?.trim() || null,
       address_line_2: input.address_line_2?.trim() || null,
@@ -4250,6 +4362,9 @@ export async function createStudent(input: CreateStudentInput): Promise<Student 
     .single();
   if (error) {
     console.error('createStudent error', error);
+    if (error.code === '23505') {
+      console.error('createStudent duplicate student_id', studentIdKey);
+    }
     return null;
   }
   const row = data as Record<string, unknown>;
@@ -4283,6 +4398,21 @@ export async function createStudent(input: CreateStudentInput): Promise<Student 
     await setStudentCourses(createdStudent.id, input.course_ids);
   }
 
+  if (pendingBatchId != null && Number.isFinite(Number(pendingBatchId)) && Number(pendingBatchId) > 0) {
+    const batch = await getBatchById(Number(pendingBatchId));
+    if (batch?.course_id) {
+      const enrolled = await getActiveCourseIdsForStudent(createdStudent.id);
+      if (enrolled.includes(batch.course_id)) {
+        const { error: batchErr } = await supabase
+          .from('skyline_students')
+          .update({ batch_id: pendingBatchId, updated_by: getAuditFields().updated_by })
+          .eq('id', createdStudent.id);
+        if (!batchErr) createdStudent.batch_id = Number(pendingBatchId);
+        else console.error('createStudent batch_id assignment error', batchErr);
+      }
+    }
+  }
+
   return createdStudent;
 }
 
@@ -4301,7 +4431,20 @@ export async function updateStudent(id: number, input: UpdateStudentInput): Prom
   if (input.email !== undefined) payload.email = input.email.trim();
   if (input.student_id !== undefined) payload.student_id = input.student_id?.trim() || null;
   if (input.phone !== undefined) payload.phone = input.phone?.trim() || null;
-  if (input.batch_id !== undefined) payload.batch_id = input.batch_id;
+  if (input.batch_id !== undefined) {
+    const bid = input.batch_id != null ? Number(input.batch_id) : null;
+    if (bid != null && Number.isFinite(bid) && bid > 0) {
+      const batch = await getBatchById(bid);
+      if (batch?.course_id) {
+        const enrolled = await getActiveCourseIdsForStudent(id);
+        if (!enrolled.includes(batch.course_id)) {
+          console.error('updateStudent batch course mismatch', { studentId: id, batchId: bid });
+          return null;
+        }
+      }
+    }
+    payload.batch_id = input.batch_id;
+  }
   if (input.date_of_birth !== undefined) payload.date_of_birth = input.date_of_birth?.trim() || null;
   if (input.address_line_1 !== undefined) payload.address_line_1 = input.address_line_1?.trim() || null;
   if (input.address_line_2 !== undefined) payload.address_line_2 = input.address_line_2?.trim() || null;

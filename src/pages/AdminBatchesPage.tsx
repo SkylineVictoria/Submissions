@@ -191,16 +191,23 @@ export const AdminBatchesPage: React.FC = () => {
     };
   }, []);
 
-  const loadStudentsOptions = useCallback(async (page: number, search: string) => {
-    const res = await listStudentsPaged(page, 20, search || undefined, 'active');
-    return {
-      options: res.data.map((s) => ({
-        value: s.id,
-        label: `${[s.first_name, s.last_name].filter(Boolean).join(' ') || s.email} (${s.student_id ?? s.email})`,
-      })),
-      hasMore: page * 20 < res.total,
-    };
-  }, []);
+  const loadStudentsOptions = useCallback(
+    async (page: number, search: string) => {
+      const courseId = editDraft?.course_id ? Number(editDraft.course_id) : null;
+      if (!courseId || !Number.isFinite(courseId)) {
+        return { options: [], hasMore: false };
+      }
+      const res = await listStudentsPaged(page, 20, search || undefined, 'active', { courseIds: [courseId] });
+      return {
+        options: res.data.map((s) => ({
+          value: s.id,
+          label: `${[s.first_name, s.last_name].filter(Boolean).join(' ') || s.email} (${s.student_id ?? s.email})`,
+        })),
+        hasMore: page * 20 < res.total,
+      };
+    },
+    [editDraft?.course_id]
+  );
 
   const loadCoursesOptions = useCallback(async (page: number, search: string) => {
     const res = await listCoursesPaged(page, 20, search || undefined);
@@ -289,14 +296,14 @@ export const AdminBatchesPage: React.FC = () => {
       trainer_ids: editDraft.trainer_ids,
       course_id: courseId,
     });
-    const assignmentsOk = await updateBatchStudentAssignments(editingId, editDraft.student_ids);
+    const assignments = await updateBatchStudentAssignments(editingId, editDraft.student_ids);
     setSavingEdit(false);
-    if (batchUpdated && assignmentsOk) {
+    if (batchUpdated && assignments.ok) {
       await loadBatches(currentPage);
       setEditingId(null);
       toast.success('Batch updated');
     } else {
-      toast.error('Failed to update batch');
+      toast.error(assignments.error ?? 'Failed to update batch');
     }
   };
 
@@ -556,7 +563,16 @@ export const AdminBatchesPage: React.FC = () => {
               <span className="text-sm font-medium text-gray-700">Course *</span>
               <SelectAsync
                 value={editDraft.course_id}
-                onChange={(v) => setEditDraft((p) => (p ? { ...p, course_id: v } : null))}
+                onChange={(v) => {
+                  setEditDraft((p) => {
+                    if (!p) return null;
+                    if (p.course_id !== v && p.student_ids.length > 0) {
+                      toast.info('Course changed — student selection cleared. Select students enrolled in this course.');
+                      return { ...p, course_id: v, student_ids: [] };
+                    }
+                    return { ...p, course_id: v };
+                  });
+                }}
                 loadOptions={loadCoursesOptions}
                 placeholder="Select course"
                 selectedLabel={editingBatch?.course_name ?? undefined}
@@ -569,11 +585,22 @@ export const AdminBatchesPage: React.FC = () => {
                 value={editDraft.student_ids}
                 onChange={(ids) => setEditDraft((p) => (p ? { ...p, student_ids: ids } : null))}
                 loadOptions={loadStudentsOptions}
-                placeholder="Select students for this batch"
+                placeholder={
+                  editDraft.course_id
+                    ? 'Select students for this batch'
+                    : 'Select a course first'
+                }
                 maxHeight={220}
                 countLabel="students"
-                searchPlaceholder="Search students..."
+                searchPlaceholder="Search eligible students…"
               />
+              {editDraft.course_id ? (
+                <p className="mt-1 text-xs text-gray-500">
+                  Only students actively enrolled in the selected course are listed.
+                </p>
+              ) : (
+                <p className="mt-1 text-xs text-amber-700">Select a course to choose students.</p>
+              )}
             </div>
 
             {editingBatch ? (
