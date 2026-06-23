@@ -34,11 +34,9 @@ import { canManagePaymentPlans } from '../lib/formEngine';
 import { StudentPaymentPlansSection } from '../components/paymentPlans/StudentPaymentPlansSection';
 import {
   allowStudentResubmission,
-  extendInstanceAccessTokensToDate,
   getOrIssueInstanceAccessLink,
   listCoursesPaged,
   listSubmittedInstancesPaged,
-  updateFormInstanceDates,
   fetchInstanceAdminReferenceNotes,
   updateInstanceAdminReferenceNote,
   fetchAssessmentSummaries,
@@ -49,6 +47,13 @@ import {
   listStudentCourseEnrollments,
   type StudentCourseEnrollment,
 } from '../lib/formEngine';
+import { ConfirmDialog } from '../components/ui/ConfirmDialog';
+import {
+  commitAssessmentDateChange,
+  END_DATE_RESET_DIALOG_MESSAGE,
+  END_DATE_RESET_DIALOG_TITLE,
+  needsResetPromptOnEndDateChange,
+} from '../utils/assessmentDateChange';
 import { StudentQualificationsPanel } from '../components/students/StudentQualificationsPanel';
 import type { Student, SubmittedInstanceRow } from '../lib/formEngine';
 import { STUDENT_DASHBOARD_AUTH_STORAGE_KEY } from '../lib/formEngine';
@@ -222,6 +227,11 @@ export const AdminStudentDetailsPage: React.FC = () => {
   const [savingDateId, setSavingDateId] = useState<number | null>(null);
   const [dateDrafts, setDateDrafts] = useState<Record<number, { start?: string | null; end?: string | null }>>({});
   const [massApplying, setMassApplying] = useState(false);
+  const [endDateResetConfirm, setEndDateResetConfirm] = useState<{
+    row: SubmittedInstanceRow;
+    nextStart: string | null;
+    nextEnd: string | null;
+  } | null>(null);
   const [deleteStudentOpen, setDeleteStudentOpen] = useState(false);
   const [deletingStudent, setDeletingStudent] = useState(false);
   const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -607,6 +617,39 @@ export const AdminStudentDetailsPage: React.FC = () => {
     [getEffectiveStart, getEffectiveEnd]
   );
 
+  const executeApplyRowDates = useCallback(
+    async (row: SubmittedInstanceRow, nextStart: string | null, nextEnd: string | null, resetAttempts: boolean) => {
+      try {
+        setSavingDateId(row.id);
+        await commitAssessmentDateChange(
+          row.id,
+          { start_date: nextStart, end_date: nextEnd },
+          { resetAttempts }
+        );
+        if (resetAttempts) {
+          setAttemptSummaryByInstanceId((prev) => {
+            const next = { ...prev };
+            delete next[row.id];
+            return next;
+          });
+        }
+        setDateDrafts((prev) => {
+          const next = { ...prev };
+          delete next[row.id];
+          return next;
+        });
+        setEditingDateCell(null);
+        await loadAssessments();
+        toast.success(resetAttempts ? 'Dates updated and assessment reset to attempt 1' : 'Dates updated');
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Failed to update dates');
+      } finally {
+        setSavingDateId(null);
+      }
+    },
+    [loadAssessments]
+  );
+
   const applyRowDates = useCallback(
     async (row: SubmittedInstanceRow) => {
       const nextStart = getEffectiveStart(row) || null;
@@ -615,32 +658,28 @@ export const AdminStudentDetailsPage: React.FC = () => {
         toast.error('Start date cannot be later than end date');
         return;
       }
-      try {
-        setSavingDateId(row.id);
-        await updateFormInstanceDates(row.id, { start_date: nextStart, end_date: nextEnd });
-        if (nextEnd) await extendInstanceAccessTokensToDate(row.id, 'student', nextEnd);
-        setDateDrafts((prev) => {
-          const next = { ...prev };
-          delete next[row.id];
-          return next;
-        });
-        setEditingDateCell(null);
-        await loadAssessments();
-        toast.success('Dates updated');
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : 'Failed to update dates');
-      } finally {
-        setSavingDateId(null);
+      if (await needsResetPromptOnEndDateChange(row, nextEnd)) {
+        setEndDateResetConfirm({ row, nextStart, nextEnd });
+        return;
       }
+      await executeApplyRowDates(row, nextStart, nextEnd, false);
     },
-    [getEffectiveEnd, getEffectiveStart, loadAssessments]
+    [executeApplyRowDates, getEffectiveEnd, getEffectiveStart]
   );
+
+  const confirmEndDateReset = useCallback(async () => {
+    const pending = endDateResetConfirm;
+    if (!pending) return;
+    setEndDateResetConfirm(null);
+    await executeApplyRowDates(pending.row, pending.nextStart, pending.nextEnd, true);
+  }, [endDateResetConfirm, executeApplyRowDates]);
 
   const massApplyDates = useCallback(async (scopeRows: SubmittedInstanceRow[]) => {
     const targets = scopeRows.filter(hasRowDateChanges);
     if (targets.length === 0) return;
     setMassApplying(true);
     let ok = 0;
+    let skippedReset = 0;
     try {
       for (const row of targets) {
         const nextStart = getEffectiveStart(row) || null;
@@ -649,8 +688,11 @@ export const AdminStudentDetailsPage: React.FC = () => {
           toast.error(`Skipped ${row.form_name ?? 'unit'}: start cannot be after end`);
           continue;
         }
-        await updateFormInstanceDates(row.id, { start_date: nextStart, end_date: nextEnd });
-        if (nextEnd) await extendInstanceAccessTokensToDate(row.id, 'student', nextEnd);
+        if (await needsResetPromptOnEndDateChange(row, nextEnd)) {
+          skippedReset++;
+          continue;
+        }
+        await commitAssessmentDateChange(row.id, { start_date: nextStart, end_date: nextEnd }, { resetAttempts: false });
         setDateDrafts((prev) => {
           const n = { ...prev };
           delete n[row.id];
@@ -660,7 +702,12 @@ export const AdminStudentDetailsPage: React.FC = () => {
       }
       setEditingDateCell(null);
       await loadAssessments();
-      toast.success(`Updated ${ok} assessment${ok !== 1 ? 's' : ''}`);
+      if (skippedReset > 0) {
+        toast.info(
+          `${skippedReset} assessment${skippedReset !== 1 ? 's' : ''} skipped — use Apply on each row to confirm reset`
+        );
+      }
+      if (ok > 0) toast.success(`Updated ${ok} assessment${ok !== 1 ? 's' : ''}`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Mass apply failed');
     } finally {
@@ -1488,6 +1535,17 @@ export const AdminStudentDetailsPage: React.FC = () => {
           </div>
         ) : null}
       </Modal>
+
+      <ConfirmDialog
+        isOpen={!!endDateResetConfirm}
+        onClose={() => setEndDateResetConfirm(null)}
+        onConfirm={() => void confirmEndDateReset()}
+        title={END_DATE_RESET_DIALOG_TITLE}
+        message={END_DATE_RESET_DIALOG_MESSAGE}
+        confirmLabel="Reset and update dates"
+        cancelLabel="Cancel"
+        variant="danger"
+      />
     </div>
   );
 };

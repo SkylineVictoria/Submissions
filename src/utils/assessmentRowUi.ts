@@ -496,6 +496,47 @@ export function isTerminalFailureProgressRow(row: {
   );
 }
 
+export type AssessmentRowForAttemptReset = {
+  did_not_attempt?: boolean | null;
+  no_attempt_rollovers?: number | null;
+  end_date?: string | null;
+  submission_count?: number | null;
+  submitted_at?: string | null;
+};
+
+/** True when end date is changing on an assessment with no attempts remaining (terminal / all 3 used). */
+export function shouldPromptResetAttemptsOnEndDateChange(input: {
+  row: AssessmentRowForAttemptReset;
+  currentEnd: string | null | undefined;
+  nextEnd: string | null | undefined;
+  attemptResults?: AttemptResult[] | null;
+}): boolean {
+  const next = String(input.nextEnd ?? '').trim();
+  const current = String(input.currentEnd ?? '').trim();
+  if (!next || next === current) return false;
+
+  const row = input.row;
+  if (isTerminalFailureProgressRow(row)) return true;
+  if (Boolean(row.did_not_attempt)) return true;
+
+  const r = (input.attemptResults ?? []).slice(0, 3);
+  if (
+    r[0] === 'not_yet_competent' &&
+    r[1] === 'not_yet_competent' &&
+    r[2] === 'not_yet_competent'
+  ) {
+    return true;
+  }
+
+  const submitted = Math.min(
+    3,
+    Math.max(0, Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0))
+  );
+  if (submitted >= 3 && !r.some((x) => x === 'competent')) return true;
+
+  return false;
+}
+
 function getTrainerActiveReviewAttempt(
   role_context: string | null | undefined,
   status: string | null | undefined,

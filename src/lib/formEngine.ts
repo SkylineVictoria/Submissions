@@ -984,13 +984,37 @@ export async function createFormInstance(
   return data as FormInstance;
 }
 
+/** Clear attempt results and per-attempt summary fields so the student starts at attempt 1. */
+export async function clearAssessmentAttemptHistory(instanceId: number): Promise<void> {
+  await saveAssessmentSummaryData(instanceId, {
+    final_attempt_1_result: null,
+    final_attempt_2_result: null,
+    final_attempt_3_result: null,
+    trainer_sig_1: null,
+    trainer_date_1: null,
+    trainer_sig_2: null,
+    trainer_date_2: null,
+    trainer_sig_3: null,
+    trainer_date_3: null,
+    student_sig_1: null,
+    student_date_1: null,
+    student_sig_2: null,
+    student_date_2: null,
+    student_sig_3: null,
+    student_date_3: null,
+  });
+}
+
 export async function updateFormInstanceDates(
   instanceId: number,
-  updates: { start_date?: string | null; end_date?: string | null }
+  updates: { start_date?: string | null; end_date?: string | null },
+  options?: { resetAttempts?: boolean }
 ): Promise<void> {
   const changingStart = 'start_date' in updates;
   const changingEnd = 'end_date' in updates;
   if (!changingStart && !changingEnd) return;
+
+  const resetAttempts = Boolean(options?.resetAttempts);
 
   const { data: current, error: fetchError } = await supabase
     .from('skyline_form_instances')
@@ -1010,18 +1034,29 @@ export async function updateFormInstanceDates(
     Boolean((current as { did_not_attempt?: boolean | null } | null)?.did_not_attempt) ||
     Number((current as { no_attempt_rollovers?: number | null } | null)?.no_attempt_rollovers ?? 0) > 0;
 
-  if (changingStart || changingEnd) {
+  if (resetAttempts) {
+    payload.status = 'draft';
+    payload.role_context = 'student';
+    payload.workflow_status = 'draft';
+    payload.submission_count = 0;
+    payload.submitted_at = null;
+    payload.did_not_attempt = false;
+    payload.no_attempt_rollovers = 0;
+    payload.trainer_nyc_assessed_on_1 = null;
+    payload.trainer_nyc_assessed_on_2 = null;
+    payload.trainer_nyc_assessed_on_3 = null;
+  } else if (changingStart || changingEnd) {
     payload.did_not_attempt = false;
     payload.no_attempt_rollovers = 0;
   }
 
   // Re-open student access when admin changes dates on a terminal missed-attempt row,
   // or when the assessment end date is moved (existing behaviour).
-  if (changingEnd || (changingStart && hadTerminalRollover)) {
+  if (!resetAttempts && (changingEnd || (changingStart && hadTerminalRollover))) {
     payload.status = 'draft';
     payload.role_context = 'student';
     payload.workflow_status = 'draft';
-  } else if (changingStart || changingEnd) {
+  } else if (!resetAttempts && (changingStart || changingEnd)) {
     // Any admin date change on an open draft should clear a stale failed workflow flag.
     const st = String((current as { status?: string | null } | null)?.status ?? '').trim();
     if (st === 'draft') {
@@ -1040,11 +1075,14 @@ export async function updateFormInstanceDates(
         console.error('updateFormInstanceDates update error', retryError);
         throw retryError;
       }
+      if (resetAttempts) await clearAssessmentAttemptHistory(instanceId);
       return;
     }
     console.error('updateFormInstanceDates update error', updateError);
     throw updateError;
   }
+
+  if (resetAttempts) await clearAssessmentAttemptHistory(instanceId);
 }
 
 export type InstanceAccessRole = 'student' | 'trainer' | 'office';

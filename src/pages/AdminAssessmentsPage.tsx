@@ -9,10 +9,8 @@ import {
   getOrIssueInstanceAccessLink,
   revokeRoleAccessTokens,
   extendInstanceAccessTokens,
-  extendInstanceAccessTokensToDate,
   allowStudentResubmission,
   listTrainers,
-  updateFormInstanceDates,
   listCoursesPaged,
   listFormsPaged,
   fetchAssessmentSummaries,
@@ -46,6 +44,13 @@ import {
   type AttemptResult,
 } from '../utils/assessmentRowUi';
 import { FormDocumentsPanel } from '../components/documents/FormDocumentsPanel';
+import { ConfirmDialog } from '../components/ui/ConfirmDialog';
+import {
+  commitAssessmentDateChange,
+  END_DATE_RESET_DIALOG_MESSAGE,
+  END_DATE_RESET_DIALOG_TITLE,
+  needsResetPromptOnEndDateChange,
+} from '../utils/assessmentDateChange';
 import { useAuth } from '../contexts/AuthContext';
 import {
   rowMatchesTrainerHighlightCourse,
@@ -247,6 +252,11 @@ export const AdminAssessmentsPage: React.FC = () => {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
+  const [endDateResetConfirm, setEndDateResetConfirm] = useState<{
+    row: SubmittedInstanceRow;
+    nextStart: string | null;
+    nextEnd: string | null;
+  } | null>(null);
 
   type DirectorySortKey = 'student' | 'form' | 'start' | 'end' | 'created' | 'workflow';
   const [directorySort, setDirectorySort] = useState<{ key: DirectorySortKey; dir: SortDirection }>({
@@ -439,6 +449,34 @@ export const AdminAssessmentsPage: React.FC = () => {
     [getEffectiveStart, getEffectiveEnd]
   );
 
+  const executeApplyRowDates = useCallback(
+    async (row: SubmittedInstanceRow, nextStart: string | null, nextEnd: string | null, resetAttempts: boolean, opts?: { silent?: boolean }) => {
+      try {
+        setSavingDateId(row.id);
+        await commitAssessmentDateChange(
+          row.id,
+          { start_date: nextStart, end_date: nextEnd },
+          { resetAttempts }
+        );
+        setDateDrafts((prev) => {
+          const next = { ...prev };
+          delete next[row.id];
+          return next;
+        });
+        setEditingDateCell(null);
+        await loadRows(currentPage, searchTerm, { silent: true });
+        if (!opts?.silent) {
+          toast.success(resetAttempts ? 'Dates updated and assessment reset to attempt 1' : 'Dates updated');
+        }
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Failed to update dates');
+      } finally {
+        setSavingDateId(null);
+      }
+    },
+    [currentPage, loadRows, searchTerm]
+  );
+
   const applyRowDates = useCallback(
     async (row: SubmittedInstanceRow, opts?: { silent?: boolean }) => {
       const nextStart = getEffectiveStart(row) || null;
@@ -447,32 +485,28 @@ export const AdminAssessmentsPage: React.FC = () => {
         toast.error('Start date cannot be later than end date');
         return;
       }
-      try {
-        setSavingDateId(row.id);
-        await updateFormInstanceDates(row.id, { start_date: nextStart, end_date: nextEnd });
-        if (nextEnd) await extendInstanceAccessTokensToDate(row.id, 'student', nextEnd);
-        setDateDrafts((prev) => {
-          const next = { ...prev };
-          delete next[row.id];
-          return next;
-        });
-        setEditingDateCell(null);
-        await loadRows(currentPage, searchTerm, { silent: true });
-        if (!opts?.silent) toast.success('Dates updated');
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : 'Failed to update dates');
-      } finally {
-        setSavingDateId(null);
+      if (await needsResetPromptOnEndDateChange(row, nextEnd)) {
+        setEndDateResetConfirm({ row, nextStart, nextEnd });
+        return;
       }
+      await executeApplyRowDates(row, nextStart, nextEnd, false, opts);
     },
-    [currentPage, getEffectiveEnd, getEffectiveStart, loadRows, searchTerm]
+    [executeApplyRowDates, getEffectiveEnd, getEffectiveStart]
   );
+
+  const confirmEndDateReset = useCallback(async () => {
+    const pending = endDateResetConfirm;
+    if (!pending) return;
+    setEndDateResetConfirm(null);
+    await executeApplyRowDates(pending.row, pending.nextStart, pending.nextEnd, true);
+  }, [endDateResetConfirm, executeApplyRowDates]);
 
   const massApplyDates = useCallback(async () => {
     const targets = rows.filter(hasRowDateChanges);
     if (targets.length === 0) return;
     setMassApplying(true);
     let ok = 0;
+    let skippedReset = 0;
     try {
       for (const row of targets) {
         const nextStart = getEffectiveStart(row) || null;
@@ -481,8 +515,11 @@ export const AdminAssessmentsPage: React.FC = () => {
           toast.error(`Skipped ${row.form_name}: start cannot be after end`);
           continue;
         }
-        await updateFormInstanceDates(row.id, { start_date: nextStart, end_date: nextEnd });
-        if (nextEnd) await extendInstanceAccessTokensToDate(row.id, 'student', nextEnd);
+        if (await needsResetPromptOnEndDateChange(row, nextEnd)) {
+          skippedReset++;
+          continue;
+        }
+        await commitAssessmentDateChange(row.id, { start_date: nextStart, end_date: nextEnd }, { resetAttempts: false });
         setDateDrafts((prev) => {
           const n = { ...prev };
           delete n[row.id];
@@ -492,7 +529,12 @@ export const AdminAssessmentsPage: React.FC = () => {
       }
       setEditingDateCell(null);
       await loadRows(currentPage, searchTerm, { silent: true });
-      toast.success(`Updated ${ok} assessment${ok !== 1 ? 's' : ''}`);
+      if (skippedReset > 0) {
+        toast.info(
+          `${skippedReset} assessment${skippedReset !== 1 ? 's' : ''} skipped — use Apply on each row to confirm reset`
+        );
+      }
+      if (ok > 0) toast.success(`Updated ${ok} assessment${ok !== 1 ? 's' : ''}`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Mass apply failed');
     } finally {
@@ -1363,6 +1405,17 @@ export const AdminAssessmentsPage: React.FC = () => {
             </div>
           )}
         </Modal>
+
+        <ConfirmDialog
+          isOpen={!!endDateResetConfirm}
+          onClose={() => setEndDateResetConfirm(null)}
+          onConfirm={() => void confirmEndDateReset()}
+          title={END_DATE_RESET_DIALOG_TITLE}
+          message={END_DATE_RESET_DIALOG_MESSAGE}
+          confirmLabel="Reset and update dates"
+          cancelLabel="Cancel"
+          variant="danger"
+        />
       </div>
     </div>
   );
