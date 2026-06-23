@@ -4,6 +4,7 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
+import { formatMelbourneDateTime } from '../utils/melbourneTime';
 import { toast } from '../utils/toast';
 
 type NotificationRow = {
@@ -144,7 +145,7 @@ export const NotificationsPage: React.FC = () => {
                 >
                   <div className="text-sm font-semibold text-[var(--text)]">{row.title}</div>
                   <div className="mt-1 text-sm text-gray-700">{row.message}</div>
-                  <div className="mt-1 text-xs text-gray-500">{new Date(row.created_at).toLocaleString()}</div>
+                  <div className="mt-1 text-xs text-gray-500">{formatMelbourneDateTime(row.created_at)}</div>
                   {!row.is_read ? (
                     <div className="mt-1">
                       <span

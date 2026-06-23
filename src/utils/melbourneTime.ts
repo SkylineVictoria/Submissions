@@ -1,6 +1,34 @@
 import { DateTime } from 'luxon';
 
-const ZONE = 'Australia/Melbourne';
+export const MELBOURNE_TZ = 'Australia/Melbourne';
+const ZONE = MELBOURNE_TZ;
+
+/** True when value looks like a DB timestamptz (not a plain calendar date). */
+export function isTimestampIso(value: string | null | undefined): boolean {
+  const v = String(value ?? '').trim();
+  if (!v) return false;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+  return /T|\s\d{1,2}:\d{2}/.test(v) || /Z$|[+-]\d{2}:\d{2}$/.test(v);
+}
+
+/** Calendar date only (yyyy-mm-dd) → dd/MM/yyyy — no timezone shift. */
+export function formatIsoDateOnly(value: string | null | undefined): string {
+  const v = String(value ?? '').trim();
+  if (!v) return '—';
+  const m = v.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[3]}/${m[2]}/${m[1]}`;
+  return v;
+}
+
+/**
+ * Display DB values: plain dates as dd/MM/yyyy; timestamptz in Melbourne local time.
+ */
+export function formatMelbourneDisplay(value: string | null | undefined): string {
+  const v = String(value ?? '').trim();
+  if (!v) return '—';
+  if (isTimestampIso(v)) return formatMelbourneDateTime(v);
+  return formatIsoDateOnly(v);
+}
 
 /** Parse date + time fields as Melbourne wall time → UTC ISO for DB. */
 export function melbourneLocalToUtcIso(dateStr: string, timeStr: string): string {

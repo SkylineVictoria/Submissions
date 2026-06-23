@@ -713,12 +713,7 @@ export const PublicInductionPage: React.FC = () => {
                   Draft autosaves while you edit.{' '}
                   {draftSavedAt ? (
                     <>
-                      Last saved{' '}
-                      {new Date(draftSavedAt).toLocaleString(undefined, {
-                        dateStyle: 'short',
-                        timeStyle: 'short',
-                      })}
-                      . Sign in again with the same email to continue on another device.
+                      Last saved {formatMelbourneDateTime(new Date(draftSavedAt).toISOString())}. Sign in again with the same email to continue on another device.
                     </>
                   ) : (
                     <>Use Save draft before closing the tab.</>

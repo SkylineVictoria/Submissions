@@ -3,6 +3,7 @@ import { AlertCircle, Bell, CheckCircle2, Clock, Info, RotateCcw, XCircle } from
 import { supabase } from '../lib/supabase';
 import { Button } from './ui/Button';
 import { cn } from './utils/cn';
+import { formatMelbourneDateTime } from '../utils/melbourneTime';
 import { toast } from '../utils/toast';
 import {
   acknowledgeAssessmentOutcome,
@@ -35,9 +36,7 @@ function OutcomeIcon({ kind, className }: { kind: NotificationOutcomeKind; class
 }
 
 function formatWhen(iso: string): string {
-  const dt = new Date(iso);
-  if (Number.isNaN(dt.getTime())) return iso;
-  return dt.toLocaleString();
+  return formatMelbourneDateTime(iso);
 }
 
 interface NotificationAcknowledgmentGateProps {

@@ -3,6 +3,7 @@ import { Download, Trash2 } from 'lucide-react';
 import { getLearningDocPublicUrl, type LearningDoc } from '../../lib/formDocuments';
 import { Button } from '../ui/Button';
 import { Loader } from '../ui/Loader';
+import { formatMelbourneDateTime } from '../../utils/melbourneTime';
 
 const formatBytes = (n: number | null): string => {
   const v = Number(n ?? 0);
@@ -119,7 +120,7 @@ export function LearningDocRows({
                   <div className="font-medium text-[var(--text)] break-words">{d.name}</div>
                   <div className="text-xs text-gray-500">
                     <span>{formatBytes(d.size)}</span>
-                    {d.updatedAt ? <span className="ml-2">Updated {new Date(d.updatedAt).toLocaleString()}</span> : null}
+                    {d.updatedAt ? <span className="ml-2">Updated {formatMelbourneDateTime(d.updatedAt)}</span> : null}
                   </div>
                 </div>
               </div>

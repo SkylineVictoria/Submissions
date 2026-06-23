@@ -1,4 +1,4 @@
-const MEL_TZ = 'Australia/Melbourne';
+import { formatIsoDateOnly, formatMelbourneDateTime, isTimestampIso, MELBOURNE_TZ } from './melbourneTime';
 
 export type AttemptResult = 'competent' | 'not_yet_competent' | null;
 
@@ -38,16 +38,15 @@ export const TERMINAL_DID_NOT_ATTEMPT_ROW_CLASS =
 export const ALL_ATTEMPTS_FAILED_TONES: AttemptDotTone[] = ['red', 'red', 'red'];
 
 export function melDateString(d: Date = new Date()): string {
-  const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: MEL_TZ, year: 'numeric', month: '2-digit', day: '2-digit' });
+  const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: MELBOURNE_TZ, year: 'numeric', month: '2-digit', day: '2-digit' });
   return fmt.format(d);
 }
 
 export function formatDDMMYYYY(value: string | null): string {
   const v = (value ?? '').trim();
   if (!v) return '—';
-  const m = v.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (m) return `${m[3]}/${m[2]}/${m[1]}`;
-  return v;
+  if (isTimestampIso(v)) return formatMelbourneDateTime(v);
+  return formatIsoDateOnly(v);
 }
 
 export type InstanceAccessRole = 'student' | 'trainer' | 'office';

@@ -64,16 +64,7 @@ const STATUS_FILTER_OPTIONS = [
   { value: 'inactive', label: 'Inactive' },
 ];
 
-const pad2 = (n: number) => String(n).padStart(2, '0');
-const formatCreatedDisplay = (value: string | null | undefined): string => {
-  const v = String(value ?? '').trim();
-  if (!v) return '—';
-  const m = v.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (m) return `${m[3]}/${m[2]}/${m[1]}`;
-  const dt = new Date(v);
-  if (Number.isNaN(dt.getTime())) return v;
-  return `${pad2(dt.getDate())}/${pad2(dt.getMonth() + 1)}/${dt.getFullYear()}`;
-};
+import { formatMelbourneDateTime } from '../utils/melbourneTime';
 
 export const AdminStudentsPage: React.FC = () => {
   const navigate = useNavigate();
@@ -1599,7 +1590,7 @@ export const AdminStudentsPage: React.FC = () => {
                             {student.status || 'active'}
                           </span>
                         </div>
-                        <div className="mt-1 text-xs text-gray-500">Created {formatCreatedDisplay(student.created_at)}</div>
+                        <div className="mt-1 text-xs text-gray-500">Created {formatMelbourneDateTime(student.created_at)}</div>
                         <div className="mt-2 space-y-1 text-sm text-gray-700 break-all">
                           <div className="flex items-start gap-2">
                             <Mail className="mt-0.5 h-4 w-4 shrink-0 text-gray-400" />
@@ -1758,7 +1749,7 @@ export const AdminStudentsPage: React.FC = () => {
                         </span>
                       </td>
                       <td className="px-4 py-3 border-b border-[var(--border)] text-gray-700 whitespace-nowrap">
-                        {formatCreatedDisplay(student.created_at)}
+                        {formatMelbourneDateTime(student.created_at)}
                       </td>
                       <td className="px-4 py-3 border-b border-[var(--border)]">
                         <div className="space-y-1">

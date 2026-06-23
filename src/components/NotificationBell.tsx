@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { AlertCircle, Bell, CheckCheck, CheckCircle2, Clock, Info, RotateCcw, XCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
+import { formatMelbourneDateTime } from '../utils/melbourneTime';
 import { cn } from './utils/cn';
 import { toast } from '../utils/toast';
 import { listenForForegroundMessages } from '../services/pushNotificationService';
@@ -42,9 +43,7 @@ type AssessmentStatusRow = {
 };
 
 function formatWhen(iso: string): string {
-  const dt = new Date(iso);
-  if (Number.isNaN(dt.getTime())) return iso;
-  return dt.toLocaleString();
+  return formatMelbourneDateTime(iso);
 }
 
 function OutcomeIcon({ kind, className }: { kind: NotificationOutcomeKind; className?: string }) {

@@ -27,6 +27,7 @@ import { Modal } from '../components/ui/Modal';
 import { Loader } from '../components/ui/Loader';
 import { DatePicker } from '../components/ui/DatePicker';
 import { AdminListPagination } from '../components/admin/AdminListPagination';
+import { formatMelbourneDateTime } from '../utils/melbourneTime';
 import { toast } from '../utils/toast';
 import { pdf } from '@react-pdf/renderer';
 import { GenericLinksPdf } from '../components/pdf/GenericLinksPdf';
@@ -968,7 +969,7 @@ export const AdminCoursesPage: React.FC = () => {
                 <tbody>
                   {exports.map((ex) => (
                     <tr key={ex.id} className="border-t border-gray-100">
-                      <td className="px-3 py-2 text-gray-700">{new Date(ex.created_at).toLocaleString()}</td>
+                      <td className="px-3 py-2 text-gray-700">{formatMelbourneDateTime(ex.created_at)}</td>
                       <td className="px-3 py-2 text-gray-700">
                         {(() => {
                           const p = ex.payload_json as { forms?: Array<{ name?: string; version?: string | null }> };

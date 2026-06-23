@@ -59,6 +59,7 @@ import type { Student, SubmittedInstanceRow } from '../lib/formEngine';
 import { STUDENT_DASHBOARD_AUTH_STORAGE_KEY } from '../lib/formEngine';
 import { FormDocumentsPanel } from '../components/documents/FormDocumentsPanel';
 import { cn } from '../components/utils/cn';
+import { formatMelbourneDateTime } from '../utils/melbourneTime';
 import {
   rowMatchesTrainerHighlightCourse,
   TRAINER_HIGHLIGHT_ROW_EXTRA_CLASS,
@@ -1325,7 +1326,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
                     </div>
                     <div className="flex items-start justify-between gap-3">
                       <span className="text-gray-500">Created</span>
-                      <span className="text-gray-800 text-right">{formatDDMMYYYY(student.created_at)}</span>
+                      <span className="text-gray-800 text-right">{formatMelbourneDateTime(student.created_at)}</span>
                     </div>
                     <div className="flex items-start justify-between gap-3">
                       <span className="text-gray-500">Batch</span>

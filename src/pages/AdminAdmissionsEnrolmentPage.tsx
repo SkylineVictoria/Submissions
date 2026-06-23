@@ -16,20 +16,8 @@ import {
   listEnrolmentApplications,
   type EnrolmentApplicationListRow,
 } from '../lib/enrolmentAdmin';
+import { formatMelbourneDateTime } from '../utils/melbourneTime';
 import { toast } from '../utils/toast';
-
-function formatMelbourneDateTime(iso: string | null): string {
-  if (!iso) return '—';
-  try {
-    return new Date(iso).toLocaleString('en-AU', {
-      timeZone: 'Australia/Melbourne',
-      dateStyle: 'medium',
-      timeStyle: 'short',
-    });
-  } catch {
-    return iso;
-  }
-}
 
 export const AdminAdmissionsEnrolmentPage: React.FC = () => {
   const navigate = useNavigate();
