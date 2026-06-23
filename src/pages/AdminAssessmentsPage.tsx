@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { Copy, ExternalLink, Send, RefreshCw, Ban, CheckCircle, User, Download, FileDown } from 'lucide-react';
 import {
@@ -49,7 +49,7 @@ import {
   commitAssessmentDateChange,
   END_DATE_RESET_DIALOG_MESSAGE,
   END_DATE_RESET_DIALOG_TITLE,
-  needsResetPromptOnEndDateChange,
+  resolveNeedsResetPrompt,
 } from '../utils/assessmentDateChange';
 import { useAuth } from '../contexts/AuthContext';
 import {
@@ -253,6 +253,11 @@ export const AdminAssessmentsPage: React.FC = () => {
   const [exporting, setExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
   const [endDateResetConfirm, setEndDateResetConfirm] = useState<{
+    row: SubmittedInstanceRow;
+    nextStart: string | null;
+    nextEnd: string | null;
+  } | null>(null);
+  const endDateResetPendingRef = useRef<{
     row: SubmittedInstanceRow;
     nextStart: string | null;
     nextEnd: string | null;
@@ -485,8 +490,10 @@ export const AdminAssessmentsPage: React.FC = () => {
         toast.error('Start date cannot be later than end date');
         return;
       }
-      if (await needsResetPromptOnEndDateChange(row, nextEnd)) {
-        setEndDateResetConfirm({ row, nextStart, nextEnd });
+      if (await resolveNeedsResetPrompt(row, nextEnd)) {
+        const pending = { row, nextStart, nextEnd };
+        endDateResetPendingRef.current = pending;
+        setEndDateResetConfirm(pending);
         return;
       }
       await executeApplyRowDates(row, nextStart, nextEnd, false, opts);
@@ -495,11 +502,17 @@ export const AdminAssessmentsPage: React.FC = () => {
   );
 
   const confirmEndDateReset = useCallback(async () => {
-    const pending = endDateResetConfirm;
-    if (!pending) return;
+    const pending = endDateResetPendingRef.current;
+    endDateResetPendingRef.current = null;
     setEndDateResetConfirm(null);
+    if (!pending) return;
     await executeApplyRowDates(pending.row, pending.nextStart, pending.nextEnd, true);
-  }, [endDateResetConfirm, executeApplyRowDates]);
+  }, [executeApplyRowDates]);
+
+  const cancelEndDateReset = useCallback(() => {
+    endDateResetPendingRef.current = null;
+    setEndDateResetConfirm(null);
+  }, []);
 
   const massApplyDates = useCallback(async () => {
     const targets = rows.filter(hasRowDateChanges);
@@ -515,7 +528,7 @@ export const AdminAssessmentsPage: React.FC = () => {
           toast.error(`Skipped ${row.form_name}: start cannot be after end`);
           continue;
         }
-        if (await needsResetPromptOnEndDateChange(row, nextEnd)) {
+        if (await resolveNeedsResetPrompt(row, nextEnd)) {
           skippedReset++;
           continue;
         }
@@ -1408,12 +1421,12 @@ export const AdminAssessmentsPage: React.FC = () => {
 
         <ConfirmDialog
           isOpen={!!endDateResetConfirm}
-          onClose={() => setEndDateResetConfirm(null)}
+          onClose={cancelEndDateReset}
           onConfirm={() => void confirmEndDateReset()}
           title={END_DATE_RESET_DIALOG_TITLE}
           message={END_DATE_RESET_DIALOG_MESSAGE}
-          confirmLabel="Reset and update dates"
-          cancelLabel="Cancel"
+          confirmLabel="Yes"
+          cancelLabel="No"
           variant="danger"
         />
       </div>

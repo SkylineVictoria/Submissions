@@ -1033,6 +1033,9 @@ export async function updateFormInstanceDates(
   const hadTerminalRollover =
     Boolean((current as { did_not_attempt?: boolean | null } | null)?.did_not_attempt) ||
     Number((current as { no_attempt_rollovers?: number | null } | null)?.no_attempt_rollovers ?? 0) > 0;
+  const isTerminalExhausted =
+    Boolean((current as { did_not_attempt?: boolean | null } | null)?.did_not_attempt) ||
+    Number((current as { no_attempt_rollovers?: number | null } | null)?.no_attempt_rollovers ?? 0) >= 2;
 
   if (resetAttempts) {
     payload.status = 'draft';
@@ -1045,19 +1048,21 @@ export async function updateFormInstanceDates(
     payload.trainer_nyc_assessed_on_1 = null;
     payload.trainer_nyc_assessed_on_2 = null;
     payload.trainer_nyc_assessed_on_3 = null;
-  } else if (changingStart || changingEnd) {
+  } else if (changingEnd && isTerminalExhausted) {
+    // Exhausted assessments require explicit reset confirmation — only update dates here.
+  } else if (changingEnd) {
     payload.did_not_attempt = false;
     payload.no_attempt_rollovers = 0;
-  }
-
-  // Re-open student access when admin changes dates on a terminal missed-attempt row,
-  // or when the assessment end date is moved (existing behaviour).
-  if (!resetAttempts && (changingEnd || (changingStart && hadTerminalRollover))) {
     payload.status = 'draft';
     payload.role_context = 'student';
     payload.workflow_status = 'draft';
-  } else if (!resetAttempts && (changingStart || changingEnd)) {
-    // Any admin date change on an open draft should clear a stale failed workflow flag.
+  } else if (changingStart && hadTerminalRollover) {
+    payload.did_not_attempt = false;
+    payload.no_attempt_rollovers = 0;
+    payload.status = 'draft';
+    payload.role_context = 'student';
+    payload.workflow_status = 'draft';
+  } else if (changingStart || changingEnd) {
     const st = String((current as { status?: string | null } | null)?.status ?? '').trim();
     if (st === 'draft') {
       payload.workflow_status = 'draft';

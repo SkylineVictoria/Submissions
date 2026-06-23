@@ -1278,9 +1278,11 @@ export const AdminFormBuilderPage: React.FC = () => {
 
   const handleConfirmRemove = async () => {
     if (!confirmRemove) return;
-    if (confirmRemove.type === 'step') await executeRemoveStep(confirmRemove.id);
-    else if (confirmRemove.type === 'section') await executeRemoveSection(confirmRemove.id);
-    else await executeRemoveQuestion(confirmRemove.id);
+    const item = confirmRemove;
+    setConfirmRemove(null);
+    if (item.type === 'step') await executeRemoveStep(item.id);
+    else if (item.type === 'section') await executeRemoveSection(item.id);
+    else await executeRemoveQuestion(item.id);
   };
 
   const getConfirmDialogConfig = () => {

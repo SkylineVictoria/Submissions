@@ -281,6 +281,7 @@ export const FormDocumentsPanel: React.FC<Props> = ({
         variant="danger"
         onConfirm={() => {
           const target = deleteTarget;
+          setDeleteTarget(null);
           if (!target) return;
           void (async () => {
             try {

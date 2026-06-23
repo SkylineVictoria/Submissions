@@ -52,7 +52,7 @@ import {
   commitAssessmentDateChange,
   END_DATE_RESET_DIALOG_MESSAGE,
   END_DATE_RESET_DIALOG_TITLE,
-  needsResetPromptOnEndDateChange,
+  resolveNeedsResetPrompt,
 } from '../utils/assessmentDateChange';
 import { StudentQualificationsPanel } from '../components/students/StudentQualificationsPanel';
 import type { Student, SubmittedInstanceRow } from '../lib/formEngine';
@@ -228,6 +228,11 @@ export const AdminStudentDetailsPage: React.FC = () => {
   const [dateDrafts, setDateDrafts] = useState<Record<number, { start?: string | null; end?: string | null }>>({});
   const [massApplying, setMassApplying] = useState(false);
   const [endDateResetConfirm, setEndDateResetConfirm] = useState<{
+    row: SubmittedInstanceRow;
+    nextStart: string | null;
+    nextEnd: string | null;
+  } | null>(null);
+  const endDateResetPendingRef = useRef<{
     row: SubmittedInstanceRow;
     nextStart: string | null;
     nextEnd: string | null;
@@ -658,21 +663,33 @@ export const AdminStudentDetailsPage: React.FC = () => {
         toast.error('Start date cannot be later than end date');
         return;
       }
-      if (await needsResetPromptOnEndDateChange(row, nextEnd)) {
-        setEndDateResetConfirm({ row, nextStart, nextEnd });
+      const sum = attemptSummaryByInstanceId[row.id];
+      const attemptResults = sum
+        ? [sum.final_attempt_1_result, sum.final_attempt_2_result, sum.final_attempt_3_result]
+        : null;
+      if (await resolveNeedsResetPrompt(row, nextEnd, attemptResults)) {
+        const pending = { row, nextStart, nextEnd };
+        endDateResetPendingRef.current = pending;
+        setEndDateResetConfirm(pending);
         return;
       }
       await executeApplyRowDates(row, nextStart, nextEnd, false);
     },
-    [executeApplyRowDates, getEffectiveEnd, getEffectiveStart]
+    [attemptSummaryByInstanceId, executeApplyRowDates, getEffectiveEnd, getEffectiveStart]
   );
 
   const confirmEndDateReset = useCallback(async () => {
-    const pending = endDateResetConfirm;
-    if (!pending) return;
+    const pending = endDateResetPendingRef.current;
+    endDateResetPendingRef.current = null;
     setEndDateResetConfirm(null);
+    if (!pending) return;
     await executeApplyRowDates(pending.row, pending.nextStart, pending.nextEnd, true);
-  }, [endDateResetConfirm, executeApplyRowDates]);
+  }, [executeApplyRowDates]);
+
+  const cancelEndDateReset = useCallback(() => {
+    endDateResetPendingRef.current = null;
+    setEndDateResetConfirm(null);
+  }, []);
 
   const massApplyDates = useCallback(async (scopeRows: SubmittedInstanceRow[]) => {
     const targets = scopeRows.filter(hasRowDateChanges);
@@ -688,7 +705,13 @@ export const AdminStudentDetailsPage: React.FC = () => {
           toast.error(`Skipped ${row.form_name ?? 'unit'}: start cannot be after end`);
           continue;
         }
-        if (await needsResetPromptOnEndDateChange(row, nextEnd)) {
+        if (await resolveNeedsResetPrompt(row, nextEnd, attemptSummaryByInstanceId[row.id]
+          ? [
+              attemptSummaryByInstanceId[row.id].final_attempt_1_result,
+              attemptSummaryByInstanceId[row.id].final_attempt_2_result,
+              attemptSummaryByInstanceId[row.id].final_attempt_3_result,
+            ]
+          : null)) {
           skippedReset++;
           continue;
         }
@@ -713,7 +736,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
     } finally {
       setMassApplying(false);
     }
-  }, [getEffectiveEnd, getEffectiveStart, hasRowDateChanges, loadAssessments]);
+  }, [attemptSummaryByInstanceId, getEffectiveEnd, getEffectiveStart, hasRowDateChanges, loadAssessments]);
 
   const handleCopyLink = async (row: SubmittedInstanceRow) => {
     const role = row.role_context === 'trainer' ? 'trainer' : row.role_context === 'office' ? 'office' : 'student';
@@ -1538,12 +1561,12 @@ export const AdminStudentDetailsPage: React.FC = () => {
 
       <ConfirmDialog
         isOpen={!!endDateResetConfirm}
-        onClose={() => setEndDateResetConfirm(null)}
+        onClose={cancelEndDateReset}
         onConfirm={() => void confirmEndDateReset()}
         title={END_DATE_RESET_DIALOG_TITLE}
         message={END_DATE_RESET_DIALOG_MESSAGE}
-        confirmLabel="Reset and update dates"
-        cancelLabel="Cancel"
+        confirmLabel="Yes"
+        cancelLabel="No"
         variant="danger"
       />
     </div>
