@@ -26,6 +26,10 @@ import {
   formNameExists,
   fetchFormBuilderTree,
   fetchSectionQuestionsForBuilder,
+  getStepIdsLinkedToTaskRow,
+  insertAssessmentTaskStepWithSections,
+  logDuplicateAssessmentTaskSteps,
+  nextAssessmentTaskLabel,
   type FormBuilderStep,
 } from '../lib/formEngine';
 import { uploadFormCoverImage, uploadRowImage, uploadQuestionImage } from '../lib/storage';
@@ -774,6 +778,7 @@ export const AdminFormBuilderPage: React.FC = () => {
     if (!formId) return;
     const fid = Number(formId);
     await ensureTaskSectionsForForm(fid);
+    await logDuplicateAssessmentTaskSteps(fid);
     const [f, stepsWithSections] = await Promise.all([
       fetchForm(fid, { allowInactiveForAdmin: true }),
       fetchFormBuilderTree(fid),
@@ -783,6 +788,13 @@ export const AdminFormBuilderPage: React.FC = () => {
     setSteps(stepsWithSections);
     if (stepsWithSections.length > 0 && !selectedStepId) setSelectedStepId(stepsWithSections[0].id);
     setLoading(false);
+  }, [formId]);
+
+  const refreshStepsTree = useCallback(async () => {
+    if (!formId) return;
+    const fid = Number(formId);
+    const stepsWithSections = await fetchFormBuilderTree(fid);
+    setSteps(stepsWithSections);
   }, [formId]);
 
   useEffect(() => {
@@ -1004,6 +1016,12 @@ export const AdminFormBuilderPage: React.FC = () => {
       ? (firstTaskSec as { assessment_task_row_id?: number | null }).assessment_task_row_id
       : null;
 
+    let shouldDeleteGridRow = false;
+    if (rowId != null && formId) {
+      const linkedStepIds = await getStepIdsLinkedToTaskRow(Number(formId), rowId);
+      shouldDeleteGridRow = linkedStepIds.length === 1 && linkedStepIds[0] === stepId;
+    }
+
     await supabase.from('skyline_form_steps').delete().eq('id', stepId);
     setSteps((prev) => prev.filter((s) => s.id !== stepId));
     if (selectedStepId === stepId) {
@@ -1012,7 +1030,7 @@ export const AdminFormBuilderPage: React.FC = () => {
       setSelectedSectionId(remaining[0]?.sections[0]?.id ?? null);
     }
 
-    if (rowId != null) {
+    if (shouldDeleteGridRow && rowId != null) {
       await supabase.from('skyline_form_question_rows').delete().eq('id', rowId);
       setAssessmentTaskRows((prev) => prev.filter((r) => r.id !== rowId));
     }
@@ -1054,13 +1072,7 @@ export const AdminFormBuilderPage: React.FC = () => {
         .select('row_label')
         .eq('question_id', assessmentTasksGridQuestionId);
       const labels = (existingRows as { row_label: string }[]) ?? [];
-      const match = /Assessment\s+Task\s*-?\s*(\d+)/i;
-      let maxNum = 0;
-      for (const r of labels) {
-        const m = r.row_label?.match(match);
-        if (m) maxNum = Math.max(maxNum, parseInt(m[1], 10));
-      }
-      newStepTitle = `Assessment Task - ${maxNum + 1}`;
+      newStepTitle = nextAssessmentTaskLabel(labels.map((r) => r.row_label));
     }
     const { data: newStep } = await supabase
       .from('skyline_form_steps')
@@ -2363,7 +2375,7 @@ export const AdminFormBuilderPage: React.FC = () => {
                           sectionPdfMode={selectedSection?.pdf_render_mode}
                           formId={formId ? Number(formId) : null}
                           steps={steps}
-                          onStepsCreated={loadData}
+                          onStepsCreated={refreshStepsTree}
                           gridTableLayout={q.type === 'grid_table' ? ((q.pdf_meta as Record<string, unknown>)?.layout as string) : undefined}
                           simpleLabelsOnly={q.type === 'single_choice' && (q.code === 'written.evidence.checklist' || q.code === 'assessment.marking.evidence_outcome' || q.code === 'assessment.marking.performance_outcome')}
                         />
@@ -2733,7 +2745,7 @@ export const AdminFormBuilderPage: React.FC = () => {
                                           ))}
                                           <Button type="button" variant="outline" size="sm" onClick={() => { const next = [...childColumns, { label: `Column ${childColumns.length + 1}`, type: 'answer' as GridColumnType }]; updateQuestion(childQ.id, { pdf_meta: withGridColumnsMeta(childPm, next) }); }}>+ Add column</Button>
                                         </div>
-                                        <QuestionRowsEditor questionId={childQ.id} sectionPdfMode="task_questions" formId={formId ? Number(formId) : null} steps={steps} onStepsCreated={loadData} gridTableLayout={(childPm.layout as string) || undefined} />
+                                        <QuestionRowsEditor questionId={childQ.id} sectionPdfMode="task_questions" formId={formId ? Number(formId) : null} steps={steps} onStepsCreated={refreshStepsTree} gridTableLayout={(childPm.layout as string) || undefined} />
                                       </div>
                                     );
                                   })()}
@@ -2990,13 +3002,10 @@ function QuestionRowsEditor({ questionId, sectionPdfMode, formId, steps, onSteps
 
   const addRow = async () => {
     const currentRows = rowsRef.current;
-    const match = /Assessment\s+Task\s*-?\s*(\d+)/i;
-    let maxNum = 0;
-    for (const r of currentRows) {
-      const m = r.row_label?.match(match);
-      if (m) maxNum = Math.max(maxNum, parseInt(m[1], 10));
-    }
-    const defaultLabel = sectionPdfMode === 'assessment_tasks' ? `Assessment Task - ${maxNum + 1}` : '';
+    const defaultLabel =
+      sectionPdfMode === 'assessment_tasks'
+        ? nextAssessmentTaskLabel(currentRows.map((r) => r.row_label))
+        : '';
     const { data } = await supabase
       .from('skyline_form_question_rows')
       .insert({ question_id: questionId, row_label: defaultLabel, sort_order: currentRows.length })
@@ -3017,69 +3026,14 @@ function QuestionRowsEditor({ questionId, sectionPdfMode, formId, steps, onSteps
           .order('sort_order', { ascending: false })
           .limit(1)
           .maybeSingle();
-        const maxStepOrder = maxStepRow && typeof (maxStepRow as { sort_order: number }).sort_order === 'number'
-          ? (maxStepRow as { sort_order: number }).sort_order
-          : steps?.length
-            ? Math.max(...steps.map((s) => s.sort_order), 0)
-            : 0;
-        const { data: taskStep } = await supabase
-          .from('skyline_form_steps')
-          .insert({ form_id: formId, title: row.row_label, subtitle: 'Instructions, Questions & Results', sort_order: maxStepOrder + 1 })
-          .select('id')
-          .single();
-        if (taskStep) {
-          const taskStepId = (taskStep as { id: number }).id;
-          await supabase.from('skyline_form_sections').insert([
-            { step_id: taskStepId, title: 'Student Instructions', pdf_render_mode: 'task_instructions', assessment_task_row_id: row.id, sort_order: 0 },
-            { step_id: taskStepId, title: 'Questions', pdf_render_mode: 'task_questions', assessment_task_row_id: row.id, sort_order: 1 },
-            { step_id: taskStepId, title: 'Written Evidence Checklist', pdf_render_mode: 'task_written_evidence_checklist', assessment_task_row_id: row.id, sort_order: 2 },
-            { step_id: taskStepId, title: 'Assessment Marking Checklist', pdf_render_mode: 'task_marking_checklist', assessment_task_row_id: row.id, sort_order: 3 },
-            { step_id: taskStepId, title: 'Results', pdf_render_mode: 'task_results', assessment_task_row_id: row.id, sort_order: 4 },
-          ]);
-          const { data: wecSection } = await supabase.from('skyline_form_sections').select('id').eq('step_id', taskStepId).eq('pdf_render_mode', 'task_written_evidence_checklist').single();
-          if (wecSection) {
-            const { data: writtenQ } = await supabase.from('skyline_form_questions').insert({
-              section_id: (wecSection as { id: number }).id,
-              type: 'single_choice',
-              code: 'written.evidence.checklist',
-              label: 'Written Evidence Checklist',
-              sort_order: 0,
-              role_visibility: { student: false, trainer: true, office: true },
-              role_editability: { student: false, trainer: true, office: true },
-            }).select('id').single();
-            if (writtenQ) {
-              await supabase.from('skyline_form_question_options').insert([
-                { question_id: (writtenQ as { id: number }).id, value: 'yes', label: 'Yes', sort_order: 0 },
-                { question_id: (writtenQ as { id: number }).id, value: 'no', label: 'No', sort_order: 1 },
-              ]);
-            }
-          }
-          const { data: mcSection } = await supabase.from('skyline_form_sections').select('id').eq('step_id', taskStepId).eq('pdf_render_mode', 'task_marking_checklist').single();
-          if (mcSection) {
-            const mcSecId = (mcSection as { id: number }).id;
-            const { data: evidenceQ } = await supabase.from('skyline_form_questions').insert({
-              section_id: mcSecId, type: 'single_choice', code: 'assessment.marking.evidence_outcome', label: 'Evidence Outcome', sort_order: 0,
-              role_visibility: { student: false, trainer: true, office: true }, role_editability: { student: false, trainer: true, office: true },
-            }).select('id').single();
-            if (evidenceQ) {
-              await supabase.from('skyline_form_question_options').insert([
-                { question_id: (evidenceQ as { id: number }).id, value: 'yes', label: 'Yes', sort_order: 0 },
-                { question_id: (evidenceQ as { id: number }).id, value: 'no', label: 'No', sort_order: 1 },
-              ]);
-            }
-            const { data: perfQ } = await supabase.from('skyline_form_questions').insert({
-              section_id: mcSecId, type: 'single_choice', code: 'assessment.marking.performance_outcome', label: 'Performance Outcome', sort_order: 1,
-              role_visibility: { student: false, trainer: true, office: true }, role_editability: { student: false, trainer: true, office: true },
-            }).select('id').single();
-            if (perfQ) {
-              await supabase.from('skyline_form_question_options').insert([
-                { question_id: (perfQ as { id: number }).id, value: 'yes', label: 'Yes', sort_order: 0 },
-                { question_id: (perfQ as { id: number }).id, value: 'no', label: 'No', sort_order: 1 },
-              ]);
-            }
-          }
-          onStepsCreated();
-        }
+        const maxStepOrder =
+          maxStepRow && typeof (maxStepRow as { sort_order: number }).sort_order === 'number'
+            ? (maxStepRow as { sort_order: number }).sort_order
+            : steps?.length
+              ? Math.max(...steps.map((s) => s.sort_order), 0)
+              : 0;
+        await insertAssessmentTaskStepWithSections(formId, row.id, row.row_label, maxStepOrder + 1);
+        onStepsCreated();
       }
     }
   };
