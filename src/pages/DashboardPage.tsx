@@ -393,6 +393,8 @@ export const DashboardPage: React.FC = () => {
                       attemptResults: rawAttemptResults,
                       status: row.status,
                       role_context: row.role_context,
+                      no_attempt_rollovers: row.no_attempt_rollovers ?? null,
+                      did_not_attempt: row.did_not_attempt ?? null,
                     });
                     const trainerAttemptFailedText = getTrainerAttemptFailedText(rawAttemptResults, row);
                     const missedAttemptText = getMissedAttemptWindowText({
@@ -463,12 +465,14 @@ export const DashboardPage: React.FC = () => {
                                   status: row.status,
                                   role_context: row.role_context,
                                   did_not_attempt: row.did_not_attempt ?? null,
+                                  no_attempt_rollovers: row.no_attempt_rollovers ?? null,
                                 })}`}
                               >
                                 {getInstanceWorkflowLabel({
                                   status: row.status,
                                   role_context: row.role_context,
                                   did_not_attempt: row.did_not_attempt ?? null,
+                                  no_attempt_rollovers: row.no_attempt_rollovers ?? null,
                                 })}
                               </span>
                               <div

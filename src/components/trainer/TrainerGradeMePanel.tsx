@@ -223,6 +223,8 @@ export const TrainerGradeMePanel: React.FC<Props> = ({ trainerUserId }) => {
                           attemptResults: rawAttemptResults,
                           status: row.status,
                           role_context: row.role_context,
+                          no_attempt_rollovers: row.no_attempt_rollovers ?? null,
+                          did_not_attempt: row.did_not_attempt ?? null,
                         });
                         const missedAttemptText = getMissedAttemptWindowText({
                           noAttemptRollovers: row.no_attempt_rollovers ?? null,

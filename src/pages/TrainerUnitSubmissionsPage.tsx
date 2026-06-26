@@ -277,6 +277,7 @@ export const TrainerUnitSubmissionsPage: React.FC = () => {
                                   status: row.status,
                                   role_context: row.role_context,
                                   did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
+                                  no_attempt_rollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
                                 }),
                               )}
                             >
@@ -284,6 +285,7 @@ export const TrainerUnitSubmissionsPage: React.FC = () => {
                                 status: row.status,
                                 role_context: row.role_context,
                                 did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
+                                no_attempt_rollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
                               })}
                             </span>
                             <div className={cn('text-xs font-medium', outcome.className)}>{outcome.label}</div>

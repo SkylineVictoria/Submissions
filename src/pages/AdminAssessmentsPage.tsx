@@ -64,6 +64,7 @@ const getWorkflowRowInput = (row: SubmittedInstanceRow) => ({
   status: row.status,
   role_context: row.role_context,
   did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
+  no_attempt_rollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
 });
 
 const pad2 = (n: number) => String(n).padStart(2, '0');
@@ -139,6 +140,8 @@ const getExportStatusText = (row: SubmittedInstanceRow, rawAttemptResults: Attem
     attemptResults: rawAttemptResults,
     status: row.status,
     role_context: row.role_context,
+    no_attempt_rollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
+    did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
   });
   const trainerAttemptFailedText = getTrainerAttemptFailedText(rawAttemptResults, row);
   const missedAttemptText = normalizeMissedAttemptText(missedAttemptTextRaw);
@@ -194,12 +197,9 @@ const getDirectoryRowClass = (row: SubmittedInstanceRow, trainerHighlightCourseI
   let base: string;
   const didNotAttempt = (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null;
   const noAttemptRollovers = (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null;
-  if (
-    isDidNotAttemptAnyFailure({ didNotAttempt, noAttemptRollovers }) ||
-    Boolean(didNotAttempt)
-  ) {
+  if (isDidNotAttemptAnyFailure({ didNotAttempt, noAttemptRollovers })) {
     base = TERMINAL_DID_NOT_ATTEMPT_ROW_CLASS;
-  } else if (row.status === 'locked' && !didNotAttempt) {
+  } else if (row.status === 'locked' && !isDidNotAttemptAnyFailure({ didNotAttempt, noAttemptRollovers })) {
     base = 'bg-emerald-50/70 hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors';
   } else {
     const ui = computeRowUi({

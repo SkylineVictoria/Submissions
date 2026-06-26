@@ -55,14 +55,22 @@ export type InstanceWorkflowRow = {
   status?: string | null;
   role_context?: string | null;
   did_not_attempt?: boolean | null;
+  no_attempt_rollovers?: number | null;
 };
 
-/** Workflow badge label; `did_not_attempt` is terminal and must not show as "Waiting Office". */
+/** Workflow badge label; terminal missed-all-windows only — not partial rollovers. */
 export function getInstanceWorkflowLabel(
   row: InstanceWorkflowRow,
   opts?: { submittedFallback?: string },
 ): string {
-  if (Boolean(row.did_not_attempt)) return 'Did not attempt';
+  if (
+    isDidNotAttemptAnyFailure({
+      didNotAttempt: row.did_not_attempt,
+      noAttemptRollovers: row.no_attempt_rollovers,
+    })
+  ) {
+    return 'Did not attempt';
+  }
   const status = String(row.status ?? '').trim();
   const rc = String(row.role_context ?? '').trim();
   if (status === 'locked') return 'Completed';
@@ -77,7 +85,14 @@ export function getInstanceWorkflowBadgeClass(
   opts?: { withBorder?: boolean },
 ): string {
   const border = opts?.withBorder ? 'border border-gray-200/80 ' : '';
-  if (Boolean(row.did_not_attempt)) return `${border}bg-red-50 text-red-800`.trim();
+  if (
+    isDidNotAttemptAnyFailure({
+      didNotAttempt: row.did_not_attempt,
+      noAttemptRollovers: row.no_attempt_rollovers,
+    })
+  ) {
+    return `${border}bg-red-50 text-red-800`.trim();
+  }
   const status = String(row.status ?? '').trim();
   const rc = String(row.role_context ?? '').trim();
   if (status === 'locked') {
@@ -125,9 +140,8 @@ export function computeRowUi(input: {
   const today = (input.today ?? melDateString()).trim();
   const start = String(input.row.start_date ?? '').trim();
   const end = String(input.row.end_date ?? '').trim();
-  const didNotAttempt = Boolean(input.row.did_not_attempt ?? false);
   const missedAllWindows = isDidNotAttemptAnyFailure({
-    didNotAttempt: didNotAttempt,
+    didNotAttempt: input.row.did_not_attempt,
     noAttemptRollovers: input.row.no_attempt_rollovers,
   });
 
@@ -143,13 +157,13 @@ export function computeRowUi(input: {
   const trainerReviewing = rc === 'trainer' && st !== 'locked' && submitted > 0;
 
   // Terminal missed-all-windows overrides summary NYC/auto-sync — student failed, all attempts gone.
-  if (missedAllWindows || didNotAttempt) {
+  if (missedAllWindows) {
     return {
       kind: 'did_not_attempt',
       disabled: true,
-      reason: missedAllWindows ? "Didn't attempt any" : 'Did not attempt',
+      reason: "Didn't attempt any",
       rowClassName: TERMINAL_DID_NOT_ATTEMPT_ROW_CLASS,
-      outcomeLabel: missedAllWindows ? "Didn't attempt any" : 'Did not attempt',
+      outcomeLabel: "Didn't attempt any",
       outcomeClassName: 'text-red-800 font-semibold',
     };
   }
@@ -338,14 +352,20 @@ export function getAwaitingTrainerAttemptNumber(input: {
   submissionCount?: number | null;
   submittedAt?: string | null;
   attemptResults?: AttemptResult[] | null;
+  no_attempt_rollovers?: number | null;
+  did_not_attempt?: boolean | null;
 }): number | null {
   const submitted = getSubmittedAttemptCount(input);
   if (submitted <= 0) return null;
   const r = (input.attemptResults ?? []).slice(0, 3);
-  for (let i = submitted - 1; i >= 0; i--) {
-    if (r[i] === null || r[i] === 'not_yet_competent') return i + 1;
+  const missed = getMissedAttemptIndexes(input);
+  const submittedSlots = getSubmittedAttemptSlots(missed, submitted);
+  for (let i = submittedSlots.length - 1; i >= 0; i--) {
+    const slot = submittedSlots[i];
+    if (r[slot] === null || r[slot] === 'not_yet_competent') return slot + 1;
   }
-  return submitted;
+  const lastSlot = submittedSlots[submittedSlots.length - 1];
+  return lastSlot != null ? lastSlot + 1 : null;
 }
 
 export function getStudentAttemptDoneText(input: {
@@ -354,6 +374,8 @@ export function getStudentAttemptDoneText(input: {
   attemptResults?: AttemptResult[] | null;
   status?: string | null;
   role_context?: string | null;
+  no_attempt_rollovers?: number | null;
+  did_not_attempt?: boolean | null;
 }): string | null {
   const status = String(input.status ?? '').trim();
   const rc = String(input.role_context ?? '').trim();
@@ -400,19 +422,9 @@ export function getMissedAttemptWindowText(input: {
   if (isDidNotAttemptAnyFailure(input)) return "Didn't attempt any";
 
   const rollovers = Math.max(0, Number(input.noAttemptRollovers ?? 0) || 0);
-  const finalMiss = Boolean(input.didNotAttempt ?? false);
-
-  // rollovers: 0 = none missed, 1 = missed 1st window, 2 = missed 1st+2nd windows
-  // didNotAttempt: final (3rd) window missed as well.
-  if (!finalMiss && rollovers <= 0) return null;
-
-  const missed: string[] = [];
-  if (rollovers >= 1) missed.push('1st attempt');
-  if (rollovers >= 2) missed.push('2nd attempt');
-  if (finalMiss) missed.push('3rd attempt');
-  if (missed.length === 0) return null;
-
-  return `Missed ${missed.join(', ')}`;
+  if (rollovers <= 0) return null;
+  if (rollovers >= 2) return 'Missed 1st attempt, 2nd attempt';
+  return 'Missed 1st attempt';
 }
 
 /** Student row check: green only once any attempt is marked competent (not merely submitted). */
@@ -441,31 +453,79 @@ export function maskCompetentWhileAwaitingTrainer(
   return triple.map((x) => (x === 'competent' ? null : x));
 }
 
-function isWaitingTrainerMark(r: AttemptResult[], submitted: number, slotIndex: number): boolean {
-  if (r[slotIndex] !== null) return false;
-  return submitted >= slotIndex + 1;
+/** 0-based attempt slots missed by window rollover / terminal failure. */
+export function getMissedAttemptIndexes(input: {
+  no_attempt_rollovers?: number | null;
+  noAttemptRollovers?: number | null;
+  did_not_attempt?: boolean | null;
+  didNotAttempt?: boolean | null;
+}): Set<number> {
+  const rollovers = Math.max(0, Number(input.no_attempt_rollovers ?? input.noAttemptRollovers ?? 0) || 0);
+  const finalMiss = Boolean(input.did_not_attempt ?? input.didNotAttempt ?? false);
+  const missed = new Set<number>();
+  if (rollovers >= 1) missed.add(0);
+  if (rollovers >= 2) missed.add(1);
+  if (finalMiss && rollovers >= 2) missed.add(2);
+  return missed;
+}
+
+function getAvailableAttemptSlots(missed: Set<number>): number[] {
+  return [0, 1, 2].filter((i) => !missed.has(i));
+}
+
+/** Map 1-based submission ordinal to 0-based slot (skipping missed windows). */
+function submissionOrdinalToSlot(ordinal: number, missed: Set<number>): number | null {
+  const slots = getAvailableAttemptSlots(missed);
+  return slots[ordinal - 1] ?? null;
+}
+
+function getSubmittedAttemptSlots(missed: Set<number>, submitted: number): number[] {
+  const slots: number[] = [];
+  for (let o = 1; o <= submitted; o++) {
+    const slot = submissionOrdinalToSlot(o, missed);
+    if (slot != null) slots.push(slot);
+  }
+  return slots;
 }
 
 /**
  * Which student attempt slot should show as "next" (yellow): only when the student may submit that attempt,
  * not while an earlier attempt is still awaiting trainer marking (avoids yellow on attempt 2 while attempt 1 is pending).
  */
-function computeStudentNextYellowIndex(r: AttemptResult[], submitted: number): number | null {
+function computeStudentNextYellowIndex(
+  r: AttemptResult[],
+  submitted: number,
+  missed: Set<number>,
+  rollovers: number,
+): number | null {
   if (r.some((x) => x === 'competent')) return null;
-  // Submitted attempt not yet marked — do not show yellow on a later attempt slot.
-  for (let s = 0; s < submitted; s++) {
-    if (r[s] === null) return null;
+
+  const submittedSlots = getSubmittedAttemptSlots(missed, submitted);
+  for (const slot of submittedSlots) {
+    if (r[slot] === null) return null;
   }
+
   for (let i = 0; i < 3; i++) {
+    if (missed.has(i)) continue;
     if (r[i] === 'competent') return null;
-    if (r[i] === 'not_yet_competent') continue;
-    // r[i] === null
-    for (let j = 0; j < i; j++) {
-      if (r[j] === null) return null;
+    if (r[i] === 'not_yet_competent') {
+      for (let j = i + 1; j < 3; j++) {
+        if (!missed.has(j) && r[j] === null) return j;
+      }
+      continue;
     }
-    if (isWaitingTrainerMark(r, submitted, i)) continue;
-    return i;
+    if (r[i] === null) {
+      for (const slot of submittedSlots) {
+        if (slot < i && r[slot] === null) return null;
+      }
+      return i;
+    }
   }
+
+  if (submitted === 0 && rollovers > 0) {
+    return getAvailableAttemptSlots(missed)[0] ?? null;
+  }
+
   return null;
 }
 
@@ -487,12 +547,10 @@ export function isTerminalFailureProgressRow(row: {
   did_not_attempt?: boolean | null;
   no_attempt_rollovers?: number | null;
 }): boolean {
-  return (
-    isDidNotAttemptAnyFailure({
-      didNotAttempt: row.did_not_attempt,
-      noAttemptRollovers: row.no_attempt_rollovers,
-    }) || Boolean(row.did_not_attempt)
-  );
+  return isDidNotAttemptAnyFailure({
+    didNotAttempt: row.did_not_attempt,
+    noAttemptRollovers: row.no_attempt_rollovers,
+  });
 }
 
 export type AssessmentRowForAttemptReset = {
@@ -516,7 +574,6 @@ export function shouldPromptResetAttemptsOnEndDateChange(input: {
 
   const row = input.row;
   if (isTerminalFailureProgressRow(row)) return true;
-  if (Boolean(row.did_not_attempt)) return true;
 
   const r = (input.attemptResults ?? []).slice(0, 3);
   if (
@@ -536,32 +593,37 @@ export function shouldPromptResetAttemptsOnEndDateChange(input: {
   return false;
 }
 
-function getTrainerActiveReviewAttempt(
-  role_context: string | null | undefined,
-  status: string | null | undefined,
-  submissionCount: number,
-  results: AttemptResult[],
-): number | null {
-  const rc = String(role_context ?? '').trim();
-  const st = String(status ?? '').trim();
+function getTrainerActiveReviewAttempt(input: {
+  role_context?: string | null;
+  status?: string | null;
+  submissionCount: number;
+  results: AttemptResult[];
+  no_attempt_rollovers?: number | null;
+  did_not_attempt?: boolean | null;
+}): number | null {
+  const rc = String(input.role_context ?? '').trim();
+  const st = String(input.status ?? '').trim();
   if (rc !== 'trainer' || st === 'locked') return null;
   return getAwaitingTrainerAttemptNumber({
-    submissionCount,
+    submissionCount: input.submissionCount,
     submittedAt: null,
-    attemptResults: results,
+    attemptResults: input.results,
+    no_attempt_rollovers: input.no_attempt_rollovers,
+    did_not_attempt: input.did_not_attempt,
   });
 }
 
 function toneForAttemptSlot(
   slotIndex: number,
   r: AttemptResult[],
-  submitted: number,
+  missed: Set<number>,
   trainerActiveReview: number | null,
   studentNextYellow: number | null,
+  submittedSlots: number[],
 ): AttemptDotTone {
-  const attemptNum = slotIndex + 1;
+  if (missed.has(slotIndex)) return 'red';
 
-  // Current attempt with trainer: yellow while reviewing; green once all tasks satisfactory.
+  const attemptNum = slotIndex + 1;
   if (trainerActiveReview === attemptNum) {
     if (r[slotIndex] === 'competent') return 'green';
     return 'yellow';
@@ -569,7 +631,7 @@ function toneForAttemptSlot(
 
   if (r[slotIndex] === 'competent') return 'green';
   if (r[slotIndex] === 'not_yet_competent') return 'red';
-  if (slotIndex < submitted) return 'yellow';
+  if (submittedSlots.includes(slotIndex) && r[slotIndex] === null) return 'yellow';
   if (studentNextYellow === slotIndex) return 'yellow';
   return 'gray';
 }
@@ -581,6 +643,9 @@ export function computeAttemptTones(input: {
   terminalDidNotAttempt?: boolean;
   role_context?: string | null;
   status?: string | null;
+  did_not_attempt?: boolean | null;
+  no_attempt_rollovers?: number | null;
+  currentAttemptNumber?: number | null;
 }): { student: AttemptDotTone[]; trainer: AttemptDotTone[] } {
   if (input.terminalDidNotAttempt) {
     return { student: [...ALL_ATTEMPTS_FAILED_TONES], trainer: [...ALL_ATTEMPTS_FAILED_TONES] };
@@ -589,18 +654,36 @@ export function computeAttemptTones(input: {
   const submitted = Math.min(3, Math.max(0, Number(input.submissionCount) || 0));
   const r = [...input.results, null, null, null].slice(0, 3) as AttemptResult[];
   const rc = String(input.role_context ?? '').trim();
+  const rollovers = Math.max(0, Number(input.no_attempt_rollovers ?? 0) || 0);
+  const missed = getMissedAttemptIndexes({
+    no_attempt_rollovers: input.no_attempt_rollovers,
+    did_not_attempt: input.did_not_attempt,
+  });
+  const submittedSlots = getSubmittedAttemptSlots(missed, submitted);
 
-  const trainerActiveReview = getTrainerActiveReviewAttempt(input.role_context, input.status, submitted, r);
+  const trainerActiveReview = getTrainerActiveReviewAttempt({
+    role_context: input.role_context,
+    status: input.status,
+    submissionCount: submitted,
+    results: r,
+    no_attempt_rollovers: input.no_attempt_rollovers,
+    did_not_attempt: input.did_not_attempt,
+  });
 
-  // Next-attempt yellow only when the instance is back with the student — not while trainer is reviewing.
-  const studentNextYellow = rc === 'trainer' ? null : computeStudentNextYellowIndex(r, submitted);
+  let studentNextYellow =
+    rc === 'trainer' ? null : computeStudentNextYellowIndex(r, submitted, missed, rollovers);
+
+  if (studentNextYellow == null && input.currentAttemptNumber != null) {
+    const idx = input.currentAttemptNumber - 1;
+    if (idx >= 0 && idx < 3 && !missed.has(idx)) studentNextYellow = idx;
+  }
 
   const student: AttemptDotTone[] = [0, 1, 2].map((i) =>
-    toneForAttemptSlot(i, r, submitted, trainerActiveReview, studentNextYellow),
+    toneForAttemptSlot(i, r, missed, trainerActiveReview, studentNextYellow, submittedSlots),
   );
 
   const trainer: AttemptDotTone[] = [0, 1, 2].map((i) =>
-    toneForAttemptSlot(i, r, submitted, trainerActiveReview, null),
+    toneForAttemptSlot(i, r, missed, trainerActiveReview, null, submittedSlots),
   );
 
   return { student, trainer };

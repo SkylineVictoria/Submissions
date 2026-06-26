@@ -6,6 +6,7 @@ import {
   fetchTemplateForForm,
   fetchAnswersForInstance,
   fetchInstance,
+  fetchInstanceIdentitySources,
   saveAnswer,
   saveTrainerAssessment,
   fetchTrainerAssessments,
@@ -39,6 +40,13 @@ import {
   collectStepAnswerSaveTargets,
   groupSaveTargetsByQuestion,
 } from '../utils/stepAnswerSave';
+import { mergeFormAnswersPreservingExisting } from '../utils/formAnswerMerge';
+import {
+  buildIdentityHydrationUpdates,
+  buildIdentitySourceValues,
+  type IdentityFieldCode,
+  type IdentityQuestionRef,
+} from '../utils/identityFieldRepair';
 import { Card } from '../components/ui/Card';
 import { Loader } from '../components/ui/Loader';
 import { Button } from '../components/ui/Button';
@@ -66,6 +74,13 @@ import {
   isPreSummarySection,
   maxTaskAttemptDate,
 } from '../utils/taskResultsOutcome';
+import {
+  ASSESSMENT_RESULT_PROGRESS_MESSAGE,
+  hasAtLeastOneValidResultSheetAttempt,
+  hasAtLeastOneValidSummaryAttempt,
+  toggleOutcomeSelection,
+  validateAssessmentBeforeProgress,
+} from '../utils/assessmentResultValidation';
 
 const PDF_BASE = import.meta.env.VITE_PDF_API_URL ?? '';
 
@@ -824,6 +839,46 @@ export const InstanceFillPage: React.FC = () => {
       const key = getAnswerKey(a.question_id, a.row_id);
       ansMap[key] = parseAnswerValue(a) as string | number | boolean | Record<string, unknown> | string[];
     }
+
+    const identityQuestions: IdentityQuestionRef[] = [];
+    for (const step of tpl?.steps ?? []) {
+      for (const section of step.sections) {
+        for (const q of section.questions) {
+          if (
+            q.code === 'student.fullName' ||
+            q.code === 'student.id' ||
+            q.code === 'student.email' ||
+            q.code === 'trainer.fullName'
+          ) {
+            identityQuestions.push({ code: q.code as IdentityFieldCode, questionId: q.id });
+          }
+        }
+      }
+    }
+    if (identityQuestions.length > 0) {
+      const identitySources = await fetchInstanceIdentitySources(id);
+      if (identitySources) {
+        const sourceValues = buildIdentitySourceValues({
+          profileName: identitySources.studentFullName,
+          profileEmail: identitySources.studentEmail,
+          profileStudentCode: identitySources.studentId,
+          trainerName: identitySources.trainerFullName,
+          resultsStudentName: identitySources.resultsStudentName,
+          resultsTrainerName: identitySources.resultsTrainerName,
+        });
+        const hydrationUpdates = buildIdentityHydrationUpdates({
+          questions: identityQuestions,
+          currentAnswers: ansMap,
+          sources: sourceValues,
+          getAnswerKey: (questionId) => getAnswerKey(questionId, null),
+        });
+        for (const update of hydrationUpdates) {
+          ansMap[getAnswerKey(update.questionId, null)] = update.value;
+          await saveAnswer(id, update.questionId, null, { text: update.value }, { source: 'identity-hydration' });
+        }
+      }
+    }
+
     setAnswers(ansMap);
     setTrainerAssessments(assessments || {});
     setTrainerRowAssessments(rowAssessments || {});
@@ -1004,6 +1059,20 @@ export const InstanceFillPage: React.FC = () => {
       setPdfRefresh((r) => r + 1);
     },
     [id, normalizeSignatureValue, assessmentSummary, studentDeclarationDateMinIso, template]
+  );
+
+  const handleResultsOutcomeSelect = useCallback(
+    (
+      sectionId: number,
+      field: 'first_attempt_satisfactory' | 'second_attempt_satisfactory' | 'third_attempt_satisfactory',
+      value: 's' | 'ns',
+      editable: boolean,
+    ) => {
+      if (!editable) return;
+      const current = resultsData[sectionId]?.[field] ?? null;
+      void handleResultsDataChange(sectionId, field, toggleOutcomeSelection(current, value));
+    },
+    [resultsData, handleResultsDataChange],
   );
 
   useEffect(() => {
@@ -1570,6 +1639,22 @@ export const InstanceFillPage: React.FC = () => {
 
   const handleAssessmentSummaryChange = useCallback(
     async (field: keyof import('../lib/formEngine').AssessmentSummaryDataEntry, value: string | null | boolean) => {
+      const outcomeFields = new Set([
+        'final_attempt_1_result',
+        'final_attempt_2_result',
+        'final_attempt_3_result',
+      ]);
+      if (outcomeFields.has(field) && (value === null || value === '')) {
+        setAssessmentSummary((prev) => {
+          const next: import('../lib/formEngine').AssessmentSummaryDataEntry = prev
+            ? { ...prev, [field]: null }
+            : ({ [field]: null } as unknown as import('../lib/formEngine').AssessmentSummaryDataEntry);
+          void saveAssessmentSummaryData(id, { [field]: null }).then(() => setPdfRefresh((r) => r + 1));
+          return next;
+        });
+        return;
+      }
+
       if (value === 'competent') {
         const attempt: 1 | 2 | 3 | null =
           field === 'final_attempt_1_result' ? 1 : field === 'final_attempt_2_result' ? 2 : field === 'final_attempt_3_result' ? 3 : null;
@@ -1681,6 +1766,19 @@ export const InstanceFillPage: React.FC = () => {
     ]
   );
 
+  const handleSummaryOutcomeSelect = useCallback(
+    (
+      field: 'final_attempt_1_result' | 'final_attempt_2_result' | 'final_attempt_3_result',
+      value: 'competent' | 'not_yet_competent',
+      editable: boolean,
+    ) => {
+      if (!editable) return;
+      const current = assessmentSummary?.[field] ?? null;
+      void handleAssessmentSummaryChange(field, toggleOutcomeSelection(current, value));
+    },
+    [assessmentSummary, handleAssessmentSummaryChange],
+  );
+
   /** Trainer may submit while waiting for trainer, or if sent to office prematurely while instance is still on trainer. */
   const trainerCanFinaliseReview = useMemo(
     () =>
@@ -1758,10 +1856,10 @@ export const InstanceFillPage: React.FC = () => {
     return flushed;
   }, [id, answers, clearPendingSave]);
 
-  /** Save task_questions answers one question at a time (correct grid row format) before advancing. */
-  const saveStepTaskQuestionsSequential = useCallback(
-    async (taskSections: FormSectionWithQuestions[]): Promise<boolean> => {
-      if (!template || !id || taskSections.length === 0) return true;
+  /** Save current step answers (all section types) before advancing — flush debounced + sequential persist. */
+  const saveStepAnswersSequential = useCallback(
+    async (stepSections: FormSectionWithQuestions[]): Promise<boolean> => {
+      if (!template || !id || stepSections.length === 0) return true;
 
       try {
         await flushPendingDebouncedAnswerSaves();
@@ -1769,8 +1867,8 @@ export const InstanceFillPage: React.FC = () => {
         return false;
       }
 
-      const orderedIds = collectOrderedQuestionIdsFromSections(taskSections);
-      const targets = collectStepAnswerSaveTargets(template, taskSections, answers);
+      const orderedIds = collectOrderedQuestionIdsFromSections(stepSections);
+      const targets = collectStepAnswerSaveTargets(template, stepSections, answers);
       const byQuestion = groupSaveTargetsByQuestion(targets);
 
       let anySaved = false;
@@ -1782,7 +1880,7 @@ export const InstanceFillPage: React.FC = () => {
         try {
           for (const t of qTargets) {
             const payload = valueToSavePayload(t.value);
-            await saveAnswer(id, t.questionId, t.rowId, payload);
+            await saveAnswer(id, t.questionId, t.rowId, payload, { source: 'step-save' });
           }
           setQuestionSaveStatus((prev) => ({ ...prev, [qid]: 'saved' }));
           anySaved = true;
@@ -1794,9 +1892,15 @@ export const InstanceFillPage: React.FC = () => {
 
       if (anySaved) {
         setAnswers((prev) => {
-          const next = { ...prev };
+          const incoming: Record<string, string | number | boolean | Record<string, unknown> | string[]> = {};
           for (const t of targets) {
-            next[getAnswerKey(t.questionId, t.rowId)] = t.value;
+            incoming[getAnswerKey(t.questionId, t.rowId)] = t.value;
+          }
+          const next = mergeFormAnswersPreservingExisting(prev, incoming, { source: 'step-save' }) as Record<
+            string,
+            string | number | boolean | Record<string, unknown> | string[]
+          >;
+          for (const t of targets) {
             if (t.rowId != null) delete next[getAnswerKey(t.questionId, null)];
           }
           return next;
@@ -1868,7 +1972,7 @@ export const InstanceFillPage: React.FC = () => {
 
   /** Collect validation errors for one wizard step (matches Stepper visible steps, incl. Appendix A rules). */
   const getStepValidationErrors = useCallback(
-    (stepNumber: number): Record<string, string> => {
+    (stepNumber: number, options?: { forSubmit?: boolean }): Record<string, string> => {
       if (!template || stepNumber <= 1) return {};
       const visibleStepsForValidation = (template.steps ?? []).filter(
         (s) => role !== 'student' || !/Appendix\s*A/i.test((s.title || '').trim())
@@ -1880,10 +1984,11 @@ export const InstanceFillPage: React.FC = () => {
       const assessmentSubmissionHasDeclSig = stepData.sections.some(
         (s) => s.pdf_render_mode === 'assessment_submission' && s.questions.some((q) => q.code === 'student.declarationSignature')
       );
-      /** Trainer/office must finish result sheets + summary by resubmission cycle before leaving review. */
+      /** Trainer/office must finish result sheets + summary before leaving review or submitting. */
       const strictReviewCycle =
         (role === 'trainer' && trainerCanFinaliseReview) ||
-        (workflowStatus === 'waiting_office' && role === 'office');
+        (workflowStatus === 'waiting_office' && role === 'office') ||
+        (isAdminEditMode && (role === 'trainer' || role === 'office'));
       const resubmissionCycle = submissionWave;
       const taskResultIdsAppendixVal = buildTaskResultSections(template, resultsData)
         .map((e) => e.sectionId)
@@ -1916,81 +2021,20 @@ export const InstanceFillPage: React.FC = () => {
           }
 
           if (trainerCanEdit) {
-            const firstAttemptComplete =
-              rowAnswerHasContent(rd?.first_attempt_satisfactory ?? undefined) &&
-              rowAnswerHasContent(rd?.first_attempt_date ?? undefined);
-            const secondAttemptComplete =
-              rowAnswerHasContent(rd?.second_attempt_satisfactory ?? undefined) &&
-              rowAnswerHasContent(rd?.second_attempt_date ?? undefined);
-            const thirdAttemptComplete =
-              rowAnswerHasContent(rd?.third_attempt_satisfactory ?? undefined) &&
-              rowAnswerHasContent(rd?.third_attempt_date ?? undefined);
-
-            if (strictReviewCycle) {
-              if (resubmissionCycle >= 3 && !thirdAttemptComplete) {
-                if (!rowAnswerHasContent(rd?.third_attempt_satisfactory ?? undefined)) {
-                  stepErrors[`task-results-${section.id}-third_attempt_satisfactory`] =
-                    'Third attempt outcome (S/NS) is required';
-                }
-                if (!rowAnswerHasContent(rd?.third_attempt_date ?? undefined)) {
-                  stepErrors[`task-results-${section.id}-third_attempt_date`] = 'Third attempt date is required';
-                }
-              } else if (resubmissionCycle >= 2 && !secondAttemptComplete) {
-                if (!rowAnswerHasContent(rd?.second_attempt_satisfactory ?? undefined)) {
-                  stepErrors[`task-results-${section.id}-second_attempt_satisfactory`] =
-                    'Second attempt outcome (S/NS) is required';
-                }
-                if (!rowAnswerHasContent(rd?.second_attempt_date ?? undefined)) {
-                  stepErrors[`task-results-${section.id}-second_attempt_date`] =
-                    'Second attempt date is required';
-                }
-              } else if (!firstAttemptComplete) {
-                if (!rowAnswerHasContent(rd?.first_attempt_satisfactory ?? undefined)) {
-                  stepErrors[`task-results-${section.id}-first_attempt_satisfactory`] =
-                    'First attempt outcome (S/NS) is required on every task result sheet';
-                }
-                if (!rowAnswerHasContent(rd?.first_attempt_date ?? undefined)) {
-                  stepErrors[`task-results-${section.id}-first_attempt_date`] =
-                    'First attempt date is required on every task result sheet';
-                }
-              }
-            } else {
-              const activeResultsAttemptNum = getActiveMarkingAttemptNum(submissionCount, assessmentSummary, rd);
-
-              if (isCurrentMarkingAttemptColumn(activeResultsAttemptNum, 1)) {
-                if (!rowAnswerHasContent(rd?.first_attempt_satisfactory ?? undefined)) {
-                  stepErrors[`task-results-${section.id}-first_attempt_satisfactory`] = 'First attempt outcome (S/NS) is required';
-                }
-                if (!rowAnswerHasContent(rd?.first_attempt_date ?? undefined)) {
-                  stepErrors[`task-results-${section.id}-first_attempt_date`] = 'First attempt date is required';
-                }
-              }
-              if (isCurrentMarkingAttemptColumn(activeResultsAttemptNum, 2)) {
-                if (!rowAnswerHasContent(rd?.second_attempt_satisfactory ?? undefined)) {
-                  stepErrors[`task-results-${section.id}-second_attempt_satisfactory`] = 'Second attempt outcome (S/NS) is required';
-                }
-                if (!rowAnswerHasContent(rd?.second_attempt_date ?? undefined)) {
-                  stepErrors[`task-results-${section.id}-second_attempt_date`] = 'Second attempt date is required';
-                }
-              }
-              if (isCurrentMarkingAttemptColumn(activeResultsAttemptNum, 3)) {
-                if (!rowAnswerHasContent(rd?.third_attempt_satisfactory ?? undefined)) {
-                  stepErrors[`task-results-${section.id}-third_attempt_satisfactory`] = 'Third attempt outcome (S/NS) is required';
-                }
-                if (!rowAnswerHasContent(rd?.third_attempt_date ?? undefined)) {
-                  stepErrors[`task-results-${section.id}-third_attempt_date`] = 'Third attempt date is required';
-                }
-              }
+            if (strictReviewCycle && !hasAtLeastOneValidResultSheetAttempt(rd)) {
+              stepErrors[`task-results-${section.id}-minimum`] = ASSESSMENT_RESULT_PROGRESS_MESSAGE;
             }
 
-            if (!rowAnswerHasContent(rd?.trainer_name ?? undefined)) {
-              stepErrors[`task-results-${section.id}-trainer_name`] = 'Trainer name is required';
-            }
-            if (!rowAnswerHasContent(rd?.trainer_signature ?? undefined)) {
-              stepErrors[`task-results-${section.id}-trainer_signature`] = 'Trainer signature is required';
-            }
-            if (!rowAnswerHasContent(rd?.trainer_date ?? undefined)) {
-              stepErrors[`task-results-${section.id}-trainer_date`] = 'Trainer date is required';
+            if (options?.forSubmit) {
+              if (!rowAnswerHasContent(rd?.trainer_name ?? undefined)) {
+                stepErrors[`task-results-${section.id}-trainer_name`] = 'Trainer name is required';
+              }
+              if (!rowAnswerHasContent(rd?.trainer_signature ?? undefined)) {
+                stepErrors[`task-results-${section.id}-trainer_signature`] = 'Trainer signature is required';
+              }
+              if (!rowAnswerHasContent(rd?.trainer_date ?? undefined)) {
+                stepErrors[`task-results-${section.id}-trainer_date`] = 'Trainer date is required';
+              }
             }
 
             const resultsDateErr = validateResultsSheetDateChain(rd, assessmentSummary, studentDeclarationDateMinIso);
@@ -2035,7 +2079,11 @@ export const InstanceFillPage: React.FC = () => {
           const sumStudentThirdEditable = studentPrepAttempt === 3;
 
           if (trainerCanEdit) {
-            if (strictReviewCycle) {
+            if (strictReviewCycle && !hasAtLeastOneValidSummaryAttempt(sum)) {
+              stepErrors['assessment-summary-minimum'] = ASSESSMENT_RESULT_PROGRESS_MESSAGE;
+            }
+
+            if (options?.forSubmit && strictReviewCycle) {
               const sumTrainerAttempt1Complete =
                 rowAnswerHasContent(sum.final_attempt_1_result ?? undefined) &&
                 rowAnswerHasContent(sum.trainer_sig_1 ?? undefined) &&
@@ -2083,7 +2131,8 @@ export const InstanceFillPage: React.FC = () => {
                   stepErrors['assessment-summary-trainer_date_1'] = 'Assessment summary: trainer date (attempt 1) is required';
                 }
               }
-            } else {
+            } else if (options?.forSubmit) {
+              const staffSummaryActiveAttempt = getActiveMarkingAttemptNum(submissionCount, sum, firstTaskRd);
               if (isCurrentMarkingAttemptColumn(staffSummaryActiveAttempt, 1)) {
                 if (!rowAnswerHasContent(sum.final_attempt_1_result ?? undefined)) {
                   stepErrors['assessment-summary-final_attempt_1_result'] = 'Attempt 1 result (Competent / Not Yet Competent) is required';
@@ -2289,6 +2338,7 @@ export const InstanceFillPage: React.FC = () => {
       isQuestionReadOnlyByTrainer,
       isQuestionEditableForRole,
       studentDeclarationDateMinIso,
+      isAdminEditMode,
     ]
   );
 
@@ -2307,12 +2357,29 @@ export const InstanceFillPage: React.FC = () => {
   /** Every content step must validate before trainer can submit (not only the last step). */
   const validateAllStepsForTrainerSubmit = useCallback((): boolean => {
     if (!template || role !== 'trainer') return true;
+    const progressCheck = validateAssessmentBeforeProgress({
+      template,
+      resultsData,
+      assessmentSummary,
+    });
+    if (!progressCheck.valid) {
+      const merged: Record<string, string> = {};
+      for (const sectionId of progressCheck.missingResultSheetSectionIds) {
+        merged[`task-results-${sectionId}-minimum`] = ASSESSMENT_RESULT_PROGRESS_MESSAGE;
+      }
+      if (progressCheck.missingSummarySheet) {
+        merged['assessment-summary-minimum'] = ASSESSMENT_RESULT_PROGRESS_MESSAGE;
+      }
+      setErrors(merged);
+      toast.error(progressCheck.message ?? ASSESSMENT_RESULT_PROGRESS_MESSAGE);
+      return false;
+    }
     // Trainers see all template steps (Appendix A is only hidden for students in the stepper).
     const visibleStepsForValidation = template.steps ?? [];
     const totalSteps = 1 + visibleStepsForValidation.length;
     const merged: Record<string, string> = {};
     for (let stepNumber = 2; stepNumber <= totalSteps; stepNumber++) {
-      Object.assign(merged, getStepValidationErrors(stepNumber));
+      Object.assign(merged, getStepValidationErrors(stepNumber, { forSubmit: true }));
     }
     setErrors(merged);
     if (Object.keys(merged).length > 0) {
@@ -2320,12 +2387,20 @@ export const InstanceFillPage: React.FC = () => {
       return false;
     }
     return true;
-  }, [template, role, getStepValidationErrors]);
+  }, [template, role, getStepValidationErrors, resultsData, assessmentSummary]);
 
   const runFinalSubmitByRole = useCallback(async () => {
     if (!id) return;
     setWorkflowSubmitting(true);
     try {
+      if (canRoleEditCurrentWorkflow) {
+        try {
+          await flushPendingDebouncedAnswerSaves();
+        } catch {
+          toast.error('Could not save pending answers before submit. Please try again.');
+          return;
+        }
+      }
       if (role === 'student' && workflowStatus === 'draft') {
         const handoff = await submitInstanceToTrainerViaRpc(id);
         if (!handoff.ok) {
@@ -2365,6 +2440,27 @@ export const InstanceFillPage: React.FC = () => {
       const hasTaskResultSections = (template?.steps ?? []).some((st) =>
         st.sections.some((s) => s.pdf_render_mode === 'task_results')
       );
+      if (hasTaskResultSections) {
+        const progressCheck = validateAssessmentBeforeProgress({
+          template,
+          resultsData,
+          assessmentSummary,
+        });
+        if (!progressCheck.valid) {
+          const merged: Record<string, string> = {};
+          for (const sectionId of progressCheck.missingResultSheetSectionIds) {
+            merged[`task-results-${sectionId}-minimum`] = ASSESSMENT_RESULT_PROGRESS_MESSAGE;
+          }
+          if (progressCheck.missingSummarySheet) {
+            merged['assessment-summary-minimum'] = ASSESSMENT_RESULT_PROGRESS_MESSAGE;
+          }
+          setErrors(merged);
+          toast.error(progressCheck.message ?? ASSESSMENT_RESULT_PROGRESS_MESSAGE);
+          setWorkflowSubmitting(false);
+          setConfirmConfig(null);
+          return;
+        }
+      }
       if (hasTaskResultSections && latestResult == null) {
         toast.error('Mark every task result sheet (S or NS) for the current attempt, and complete the assessment summary, before submitting.');
         setWorkflowSubmitting(false);
@@ -2479,6 +2575,8 @@ export const InstanceFillPage: React.FC = () => {
     validateAllStepsForTrainerSubmit,
     template,
     trainerCanFinaliseReview,
+    canRoleEditCurrentWorkflow,
+    flushPendingDebouncedAnswerSaves,
   ]);
 
   const handleFinalSubmitByRole = useCallback(() => {
@@ -2507,6 +2605,23 @@ export const InstanceFillPage: React.FC = () => {
     }
   }, [role, workflowStatus, isAdminEditMode, trainerCanFinaliseReview]);
 
+  const handlePreviousStep = useCallback(async () => {
+    if (stepNavSaving || currentStep <= 1) return;
+    if (canRoleEditCurrentWorkflow) {
+      setStepNavSaving(true);
+      try {
+        await flushPendingDebouncedAnswerSaves();
+      } catch {
+        toast.error('Could not save answers. Please try again.');
+        return;
+      } finally {
+        setStepNavSaving(false);
+      }
+    }
+    setErrors({});
+    setCurrentStep((s) => Math.max(1, s - 1));
+  }, [stepNavSaving, currentStep, canRoleEditCurrentWorkflow, flushPendingDebouncedAnswerSaves]);
+
   const handleNextStep = useCallback(async () => {
     if (stepNavSaving || !template) return;
     if (!validateStep(currentStep)) return;
@@ -2514,17 +2629,23 @@ export const InstanceFillPage: React.FC = () => {
     const visibleStepsForNav = getVisibleStepsForRole(template, role);
     const totalSteps = 1 + visibleStepsForNav.length;
     const stepData = currentStep === 1 ? null : visibleStepsForNav[currentStep - 2];
-    const taskSections =
-      stepData?.sections.filter((s) => s.pdf_render_mode === 'task_questions') ?? [];
-    const willSaveStepAnswers = taskSections.length > 0 && canRoleEditCurrentWorkflow;
+    const stepSections = stepData?.sections ?? [];
 
-    if (willSaveStepAnswers) setStepNavSaving(true);
+    if (canRoleEditCurrentWorkflow) setStepNavSaving(true);
     try {
-      if (willSaveStepAnswers) {
-        const ok = await saveStepTaskQuestionsSequential(taskSections);
-        if (!ok) {
+      if (canRoleEditCurrentWorkflow) {
+        try {
+          await flushPendingDebouncedAnswerSaves();
+        } catch {
           toast.error('Could not save answers. Please try again.');
           return;
+        }
+        if (stepSections.length > 0) {
+          const ok = await saveStepAnswersSequential(stepSections);
+          if (!ok) {
+            toast.error('Could not save answers. Please try again.');
+            return;
+          }
         }
       }
 
@@ -2533,7 +2654,7 @@ export const InstanceFillPage: React.FC = () => {
       formScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } finally {
-      if (willSaveStepAnswers) setStepNavSaving(false);
+      if (canRoleEditCurrentWorkflow) setStepNavSaving(false);
     }
   }, [
     stepNavSaving,
@@ -2542,7 +2663,8 @@ export const InstanceFillPage: React.FC = () => {
     validateStep,
     currentStep,
     canRoleEditCurrentWorkflow,
-    saveStepTaskQuestionsSequential,
+    saveStepAnswersSequential,
+    flushPendingDebouncedAnswerSaves,
   ]);
 
   if (loading) {
@@ -4226,7 +4348,12 @@ export const InstanceFillPage: React.FC = () => {
                           const suggestedStudentName = !rd?.student_name && studentNameQ ? String(answers[getAnswerKey(studentNameQ.id, null)] ?? '') : null;
                           const suggestedTrainerName = !rd?.trainer_name && trainerNameQ ? String(answers[getAnswerKey(trainerNameQ.id, null)] ?? '') : null;
                           return (
-                        <div className="border border-gray-200 rounded-lg overflow-hidden bg-white">
+                        <div className={`border border-gray-200 rounded-lg overflow-hidden bg-white ${errors[`task-results-${section.id}-minimum`] ? 'ring-2 ring-red-400' : ''}`}>
+                          {errors[`task-results-${section.id}-minimum`] && (
+                            <p className="bg-red-50 text-red-700 text-sm px-4 py-2 border-b border-red-200">
+                              {errors[`task-results-${section.id}-minimum`]}
+                            </p>
+                          )}
                           <div className="bg-[#5E5E5E] text-white font-bold px-4 py-3">
                             {((section as { taskRow?: { row_label: string } }).taskRow?.row_label || section.title) + ' – Results Sheet'}
                           </div>
@@ -4240,13 +4367,18 @@ export const InstanceFillPage: React.FC = () => {
                                   <td className="bg-white p-3 border border-gray-300 align-top">
                                     <div className="font-semibold mb-2">First attempt:</div>
                                     <div className="mb-2">Outcome (make sure to tick the correct checkbox):</div>
-                                    <div className="flex flex-wrap gap-3 sm:gap-4 mb-2">
+                                    <div className="flex flex-wrap gap-3 sm:gap-4 mb-2 items-center">
                                       <label className="flex items-center gap-2 cursor-pointer">
                                         <input
                                           type="radio"
                                           name={`results-${section.id}-first`}
                                           checked={rd?.first_attempt_satisfactory === 's'}
-                                          onChange={() => firstAttemptEditable && handleResultsDataChange(section.id, 'first_attempt_satisfactory', 's')}
+                                          onClick={() => {
+                                            if (firstAttemptEditable && rd?.first_attempt_satisfactory === 's') {
+                                              void handleResultsDataChange(section.id, 'first_attempt_satisfactory', null);
+                                            }
+                                          }}
+                                          onChange={() => handleResultsOutcomeSelect(section.id, 'first_attempt_satisfactory', 's', firstAttemptEditable)}
                                           disabled={!firstAttemptEditable}
                                           className="w-4 h-4"
                                         />
@@ -4257,12 +4389,26 @@ export const InstanceFillPage: React.FC = () => {
                                           type="radio"
                                           name={`results-${section.id}-first`}
                                           checked={rd?.first_attempt_satisfactory === 'ns'}
-                                          onChange={() => firstAttemptEditable && handleResultsDataChange(section.id, 'first_attempt_satisfactory', 'ns')}
+                                          onClick={() => {
+                                            if (firstAttemptEditable && rd?.first_attempt_satisfactory === 'ns') {
+                                              void handleResultsDataChange(section.id, 'first_attempt_satisfactory', null);
+                                            }
+                                          }}
+                                          onChange={() => handleResultsOutcomeSelect(section.id, 'first_attempt_satisfactory', 'ns', firstAttemptEditable)}
                                           disabled={!firstAttemptEditable}
                                           className="w-4 h-4"
                                         />
                                         <span>Not Satisfactory (NS)</span>
                                       </label>
+                                      {firstAttemptEditable && rd?.first_attempt_satisfactory && (
+                                        <button
+                                          type="button"
+                                          className="text-xs text-gray-500 underline"
+                                          onClick={() => void handleResultsDataChange(section.id, 'first_attempt_satisfactory', null)}
+                                        >
+                                          Clear outcome
+                                        </button>
+                                      )}
                                     </div>
                                     <div className="mb-2"><span className="font-medium">Date:</span>{' '}
                                       <DatePicker
@@ -4289,13 +4435,18 @@ export const InstanceFillPage: React.FC = () => {
                                   <td className="bg-white p-3 border border-gray-300 align-top">
                                     <div className="font-semibold mb-2">Second attempt:</div>
                                     <div className="mb-2">Outcome (make sure to tick the correct checkbox):</div>
-                                    <div className="flex flex-wrap gap-3 sm:gap-4 mb-2">
+                                    <div className="flex flex-wrap gap-3 sm:gap-4 mb-2 items-center">
                                       <label className="flex items-center gap-2 cursor-pointer">
                                         <input
                                           type="radio"
                                           name={`results-${section.id}-second`}
                                           checked={rd?.second_attempt_satisfactory === 's'}
-                                          onChange={() => secondAttemptEditable && handleResultsDataChange(section.id, 'second_attempt_satisfactory', 's')}
+                                          onClick={() => {
+                                            if (secondAttemptEditable && rd?.second_attempt_satisfactory === 's') {
+                                              void handleResultsDataChange(section.id, 'second_attempt_satisfactory', null);
+                                            }
+                                          }}
+                                          onChange={() => handleResultsOutcomeSelect(section.id, 'second_attempt_satisfactory', 's', secondAttemptEditable)}
                                           disabled={!secondAttemptEditable}
                                           className="w-4 h-4"
                                         />
@@ -4306,12 +4457,26 @@ export const InstanceFillPage: React.FC = () => {
                                           type="radio"
                                           name={`results-${section.id}-second`}
                                           checked={rd?.second_attempt_satisfactory === 'ns'}
-                                          onChange={() => secondAttemptEditable && handleResultsDataChange(section.id, 'second_attempt_satisfactory', 'ns')}
+                                          onClick={() => {
+                                            if (secondAttemptEditable && rd?.second_attempt_satisfactory === 'ns') {
+                                              void handleResultsDataChange(section.id, 'second_attempt_satisfactory', null);
+                                            }
+                                          }}
+                                          onChange={() => handleResultsOutcomeSelect(section.id, 'second_attempt_satisfactory', 'ns', secondAttemptEditable)}
                                           disabled={!secondAttemptEditable}
                                           className="w-4 h-4"
                                         />
                                         <span>Not Satisfactory (NS)</span>
                                       </label>
+                                      {secondAttemptEditable && rd?.second_attempt_satisfactory && (
+                                        <button
+                                          type="button"
+                                          className="text-xs text-gray-500 underline"
+                                          onClick={() => void handleResultsDataChange(section.id, 'second_attempt_satisfactory', null)}
+                                        >
+                                          Clear outcome
+                                        </button>
+                                      )}
                                     </div>
                                     <div className="mb-2"><span className="font-medium">Date:</span>{' '}
                                       <DatePicker
@@ -4338,13 +4503,18 @@ export const InstanceFillPage: React.FC = () => {
                                   <td className="bg-white p-3 border border-gray-300 align-top">
                                     <div className="font-semibold mb-2">Third attempt:</div>
                                     <div className="mb-2">Outcome (make sure to tick the correct checkbox):</div>
-                                    <div className="flex flex-wrap gap-3 sm:gap-4 mb-2">
+                                    <div className="flex flex-wrap gap-3 sm:gap-4 mb-2 items-center">
                                       <label className="flex items-center gap-2 cursor-pointer">
                                         <input
                                           type="radio"
                                           name={`results-${section.id}-third`}
                                           checked={rd?.third_attempt_satisfactory === 's'}
-                                          onChange={() => thirdAttemptEditable && handleResultsDataChange(section.id, 'third_attempt_satisfactory', 's')}
+                                          onClick={() => {
+                                            if (thirdAttemptEditable && rd?.third_attempt_satisfactory === 's') {
+                                              void handleResultsDataChange(section.id, 'third_attempt_satisfactory', null);
+                                            }
+                                          }}
+                                          onChange={() => handleResultsOutcomeSelect(section.id, 'third_attempt_satisfactory', 's', thirdAttemptEditable)}
                                           disabled={!thirdAttemptEditable}
                                           className="w-4 h-4"
                                         />
@@ -4355,12 +4525,26 @@ export const InstanceFillPage: React.FC = () => {
                                           type="radio"
                                           name={`results-${section.id}-third`}
                                           checked={rd?.third_attempt_satisfactory === 'ns'}
-                                          onChange={() => thirdAttemptEditable && handleResultsDataChange(section.id, 'third_attempt_satisfactory', 'ns')}
+                                          onClick={() => {
+                                            if (thirdAttemptEditable && rd?.third_attempt_satisfactory === 'ns') {
+                                              void handleResultsDataChange(section.id, 'third_attempt_satisfactory', null);
+                                            }
+                                          }}
+                                          onChange={() => handleResultsOutcomeSelect(section.id, 'third_attempt_satisfactory', 'ns', thirdAttemptEditable)}
                                           disabled={!thirdAttemptEditable}
                                           className="w-4 h-4"
                                         />
                                         <span>Not Satisfactory (NS)</span>
                                       </label>
+                                      {thirdAttemptEditable && rd?.third_attempt_satisfactory && (
+                                        <button
+                                          type="button"
+                                          className="text-xs text-gray-500 underline"
+                                          onClick={() => void handleResultsDataChange(section.id, 'third_attempt_satisfactory', null)}
+                                        >
+                                          Clear outcome
+                                        </button>
+                                      )}
                                     </div>
                                     <div className="mb-2"><span className="font-medium">Date:</span>{' '}
                                       <DatePicker
@@ -4628,7 +4812,12 @@ export const InstanceFillPage: React.FC = () => {
                           const unitName = String(template?.form?.unit_name ?? '');
                           const unitCodeName = [unitCode, unitName].filter(Boolean).join(' ');
                           return (
-                            <div className="border border-gray-200 rounded-lg overflow-hidden bg-white">
+                            <div className={`border border-gray-200 rounded-lg overflow-hidden bg-white ${errors['assessment-summary-minimum'] ? 'ring-2 ring-red-400' : ''}`}>
+                              {errors['assessment-summary-minimum'] && (
+                                <p className="bg-red-50 text-red-700 text-sm px-4 py-2 border-b border-red-200">
+                                  {errors['assessment-summary-minimum']}
+                                </p>
+                              )}
                               <div className="bg-[#374151] text-white font-bold text-center px-3 sm:px-4 py-3 sm:py-4 text-base sm:text-lg leading-tight">
                                 ASSESSMENT SUMMARY SHEET
                               </div>
@@ -4764,22 +4953,31 @@ export const InstanceFillPage: React.FC = () => {
                                       <td className="border border-gray-400 bg-gray-100 font-semibold p-1.5 text-xs">Final Assessment result for this unit</td>
                                       <td className="border border-gray-400 p-1.5">
                                         <div className="flex flex-col gap-0.5">
-                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-1" checked={sum.final_attempt_1_result === 'competent'} onChange={() => trainerCanEdit && sumTrainerFirstEditable && handleAssessmentSummaryChange('final_attempt_1_result', 'competent')} disabled={!trainerCanEdit || !sumTrainerFirstEditable} className="w-3.5 h-3.5" /> Competent</label>
-                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-1" checked={sum.final_attempt_1_result === 'not_yet_competent'} onChange={() => trainerCanEdit && sumTrainerFirstEditable && handleAssessmentSummaryChange('final_attempt_1_result', 'not_yet_competent')} disabled={!trainerCanEdit || !sumTrainerFirstEditable} className="w-3.5 h-3.5" /> Not Yet Competent</label>
+                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-1" checked={sum.final_attempt_1_result === 'competent'} onClick={() => { if (trainerCanEdit && sumTrainerFirstEditable && sum.final_attempt_1_result === 'competent') void handleAssessmentSummaryChange('final_attempt_1_result', null); }} onChange={() => handleSummaryOutcomeSelect('final_attempt_1_result', 'competent', trainerCanEdit && sumTrainerFirstEditable)} disabled={!trainerCanEdit || !sumTrainerFirstEditable} className="w-3.5 h-3.5" /> Competent</label>
+                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-1" checked={sum.final_attempt_1_result === 'not_yet_competent'} onClick={() => { if (trainerCanEdit && sumTrainerFirstEditable && sum.final_attempt_1_result === 'not_yet_competent') void handleAssessmentSummaryChange('final_attempt_1_result', null); }} onChange={() => handleSummaryOutcomeSelect('final_attempt_1_result', 'not_yet_competent', trainerCanEdit && sumTrainerFirstEditable)} disabled={!trainerCanEdit || !sumTrainerFirstEditable} className="w-3.5 h-3.5" /> Not Yet Competent</label>
+                                          {trainerCanEdit && sumTrainerFirstEditable && sum.final_attempt_1_result && (
+                                            <button type="button" className="text-[10px] text-gray-500 underline text-left" onClick={() => void handleAssessmentSummaryChange('final_attempt_1_result', null)}>Clear outcome</button>
+                                          )}
                                           <span className="text-[10px] text-gray-700">Date: {formatSummaryDisplayDate(finalDate1)}</span>
                                         </div>
                                       </td>
                                       <td className="border border-gray-400 p-1.5">
                                         <div className="flex flex-col gap-0.5">
-                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-2" checked={sum.final_attempt_2_result === 'competent'} onChange={() => trainerCanEdit && sumTrainerSecondEditable && handleAssessmentSummaryChange('final_attempt_2_result', 'competent')} disabled={!trainerCanEdit || !sumTrainerSecondEditable} className="w-3.5 h-3.5" /> Competent</label>
-                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-2" checked={sum.final_attempt_2_result === 'not_yet_competent'} onChange={() => trainerCanEdit && sumTrainerSecondEditable && handleAssessmentSummaryChange('final_attempt_2_result', 'not_yet_competent')} disabled={!trainerCanEdit || !sumTrainerSecondEditable} className="w-3.5 h-3.5" /> Not Yet Competent</label>
+                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-2" checked={sum.final_attempt_2_result === 'competent'} onClick={() => { if (trainerCanEdit && sumTrainerSecondEditable && sum.final_attempt_2_result === 'competent') void handleAssessmentSummaryChange('final_attempt_2_result', null); }} onChange={() => handleSummaryOutcomeSelect('final_attempt_2_result', 'competent', trainerCanEdit && sumTrainerSecondEditable)} disabled={!trainerCanEdit || !sumTrainerSecondEditable} className="w-3.5 h-3.5" /> Competent</label>
+                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-2" checked={sum.final_attempt_2_result === 'not_yet_competent'} onClick={() => { if (trainerCanEdit && sumTrainerSecondEditable && sum.final_attempt_2_result === 'not_yet_competent') void handleAssessmentSummaryChange('final_attempt_2_result', null); }} onChange={() => handleSummaryOutcomeSelect('final_attempt_2_result', 'not_yet_competent', trainerCanEdit && sumTrainerSecondEditable)} disabled={!trainerCanEdit || !sumTrainerSecondEditable} className="w-3.5 h-3.5" /> Not Yet Competent</label>
+                                          {trainerCanEdit && sumTrainerSecondEditable && sum.final_attempt_2_result && (
+                                            <button type="button" className="text-[10px] text-gray-500 underline text-left" onClick={() => void handleAssessmentSummaryChange('final_attempt_2_result', null)}>Clear outcome</button>
+                                          )}
                                           <span className="text-[10px] text-gray-700">Date: {formatSummaryDisplayDate(finalDate2)}</span>
                                         </div>
                                       </td>
                                       <td className="border border-gray-400 p-1.5">
                                         <div className="flex flex-col gap-0.5">
-                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-3" checked={sum.final_attempt_3_result === 'competent'} onChange={() => trainerCanEdit && sumTrainerThirdEditable && handleAssessmentSummaryChange('final_attempt_3_result', 'competent')} disabled={!trainerCanEdit || !sumTrainerThirdEditable} className="w-3.5 h-3.5" /> Competent</label>
-                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-3" checked={sum.final_attempt_3_result === 'not_yet_competent'} onChange={() => trainerCanEdit && sumTrainerThirdEditable && handleAssessmentSummaryChange('final_attempt_3_result', 'not_yet_competent')} disabled={!trainerCanEdit || !sumTrainerThirdEditable} className="w-3.5 h-3.5" /> Not Yet Competent</label>
+                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-3" checked={sum.final_attempt_3_result === 'competent'} onClick={() => { if (trainerCanEdit && sumTrainerThirdEditable && sum.final_attempt_3_result === 'competent') void handleAssessmentSummaryChange('final_attempt_3_result', null); }} onChange={() => handleSummaryOutcomeSelect('final_attempt_3_result', 'competent', trainerCanEdit && sumTrainerThirdEditable)} disabled={!trainerCanEdit || !sumTrainerThirdEditable} className="w-3.5 h-3.5" /> Competent</label>
+                                          <label className="flex items-center gap-1.5 cursor-pointer text-[10px]"><input type="radio" name="final-3" checked={sum.final_attempt_3_result === 'not_yet_competent'} onClick={() => { if (trainerCanEdit && sumTrainerThirdEditable && sum.final_attempt_3_result === 'not_yet_competent') void handleAssessmentSummaryChange('final_attempt_3_result', null); }} onChange={() => handleSummaryOutcomeSelect('final_attempt_3_result', 'not_yet_competent', trainerCanEdit && sumTrainerThirdEditable)} disabled={!trainerCanEdit || !sumTrainerThirdEditable} className="w-3.5 h-3.5" /> Not Yet Competent</label>
+                                          {trainerCanEdit && sumTrainerThirdEditable && sum.final_attempt_3_result && (
+                                            <button type="button" className="text-[10px] text-gray-500 underline text-left" onClick={() => void handleAssessmentSummaryChange('final_attempt_3_result', null)}>Clear outcome</button>
+                                          )}
                                           <span className="text-[10px] text-gray-700">Date: {formatSummaryDisplayDate(finalDate3)}</span>
                                         </div>
                                       </td>
@@ -5184,10 +5382,7 @@ export const InstanceFillPage: React.FC = () => {
               <Button
                 variant="outline"
                 className="w-full sm:w-auto shrink-0"
-                onClick={() => {
-                  setErrors({});
-                  setCurrentStep((s) => Math.max(1, s - 1));
-                }}
+                onClick={() => void handlePreviousStep()}
                 disabled={currentStep <= 1 || stepNavSaving}
               >
                 Back

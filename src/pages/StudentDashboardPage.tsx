@@ -73,6 +73,8 @@ function WorkflowProgressColumns({
     terminalDidNotAttempt: terminalFailed,
     role_context: row.role_context,
     status: row.status,
+    did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
+    no_attempt_rollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
   });
   const adminDot = getAdminOfficeDotTone({ ...stageInput, terminalDidNotAttempt: terminalFailed });
 
@@ -381,6 +383,8 @@ export const StudentDashboardPage: React.FC = () => {
                     attemptResults: rawAttemptResults,
                     status: row.status,
                     role_context: row.role_context,
+                    no_attempt_rollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
+                    did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
                   });
                   const trainerAttemptFailedText = getTrainerAttemptFailedText(rawAttemptResults, row);
                   const missedAttemptText = getMissedAttemptWindowText({

@@ -21,7 +21,6 @@ export function needsResetPromptOnEndDateChangeSync(
 ): boolean | 'check-async' {
   if (!endDateChanged(row, nextEnd)) return false;
   if (isTerminalFailureProgressRow(row)) return true;
-  if (Boolean(row.did_not_attempt)) return true;
 
   const submitted = Math.min(
     3,

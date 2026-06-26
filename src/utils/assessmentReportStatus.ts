@@ -1,4 +1,4 @@
-import { melDateString } from './assessmentRowUi';
+import { isDidNotAttemptAnyFailure, melDateString } from './assessmentRowUi';
 
 export type AssessmentReportStatus = 'Completed' | 'In Progress' | 'Failed';
 
@@ -7,10 +7,15 @@ export function getAssessmentReportStatus(row: {
   status?: string | null;
   end_date?: string | null;
   did_not_attempt?: boolean | null;
+  no_attempt_rollovers?: number | null;
 }): AssessmentReportStatus {
   const st = String(row.status ?? '').trim();
-  if (st === 'locked') return 'Completed';
-  if (Boolean(row.did_not_attempt)) return 'Failed';
+  if (st === 'locked' && !isDidNotAttemptAnyFailure({ didNotAttempt: row.did_not_attempt, noAttemptRollovers: row.no_attempt_rollovers })) {
+    return 'Completed';
+  }
+  if (isDidNotAttemptAnyFailure({ didNotAttempt: row.did_not_attempt, noAttemptRollovers: row.no_attempt_rollovers })) {
+    return 'Failed';
+  }
   const end = String(row.end_date ?? '').trim();
   if (end) {
     const today = melDateString();

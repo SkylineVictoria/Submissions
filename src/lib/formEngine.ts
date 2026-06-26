@@ -1,5 +1,7 @@
 import { supabase } from './supabase';
 import { createDefaultSectionsToStep } from './defaultFormSteps';
+import { isDidNotAttemptAnyFailure } from '../utils/assessmentRowUi';
+import { mergeSaveValuePreservingExisting } from '../utils/formAnswerMerge';
 import {
   findDuplicateAssessmentTaskStepsByRowId,
   type AssessmentTaskStepLink,
@@ -750,6 +752,78 @@ export async function fetchAnswersForInstance(instanceId: number): Promise<FormA
   return (data as FormAnswer[]) || [];
 }
 
+export type InstanceIdentitySources = {
+  studentFullName: string | null;
+  studentId: string | null;
+  studentEmail: string | null;
+  trainerFullName: string | null;
+  resultsStudentName: string | null;
+  resultsTrainerName: string | null;
+};
+
+/** Profile/enrolment/batch trainer values used to hydrate missing identity fields. */
+export async function fetchInstanceIdentitySources(instanceId: number): Promise<InstanceIdentitySources | null> {
+  const { data: inst, error: instErr } = await supabase
+    .from('skyline_form_instances')
+    .select('student_id')
+    .eq('id', instanceId)
+    .maybeSingle();
+  if (instErr || !inst?.student_id) return null;
+
+  const studentId = Number((inst as { student_id: number }).student_id);
+  const { data: student } = await supabase
+    .from('skyline_students')
+    .select('name, first_name, last_name, email, student_id, batch_id')
+    .eq('id', studentId)
+    .maybeSingle();
+
+  let trainerFullName: string | null = null;
+  const batchId = Number((student as { batch_id?: number | null } | null)?.batch_id ?? 0);
+  if (Number.isFinite(batchId) && batchId > 0) {
+    const { data: batch } = await supabase.from('skyline_batches').select('trainer_id').eq('id', batchId).maybeSingle();
+    const trainerId = Number((batch as { trainer_id?: number | null } | null)?.trainer_id ?? 0);
+    if (Number.isFinite(trainerId) && trainerId > 0) {
+      const { data: trainer } = await supabase.from('skyline_users').select('full_name').eq('id', trainerId).maybeSingle();
+      trainerFullName = String((trainer as { full_name?: string | null } | null)?.full_name ?? '').trim() || null;
+    }
+  }
+
+  const { data: resultsRows } = await supabase
+    .from('skyline_form_results_data')
+    .select('student_name, trainer_name')
+    .eq('instance_id', instanceId)
+    .limit(5);
+
+  const resultsStudentName =
+    ((resultsRows as Array<{ student_name?: string | null }> | null) ?? [])
+      .map((r) => String(r.student_name ?? '').trim())
+      .find(Boolean) ?? null;
+  const resultsTrainerName =
+    ((resultsRows as Array<{ trainer_name?: string | null }> | null) ?? [])
+      .map((r) => String(r.trainer_name ?? '').trim())
+      .find(Boolean) ?? null;
+
+  const st = student as {
+    name?: string | null;
+    first_name?: string | null;
+    last_name?: string | null;
+    email?: string | null;
+    student_id?: string | null;
+  } | null;
+
+  const nameParts = [st?.first_name, st?.last_name].map((x) => String(x ?? '').trim()).filter(Boolean).join(' ').trim();
+  const studentFullName = String(st?.name ?? '').trim() || nameParts || resultsStudentName;
+
+  return {
+    studentFullName: studentFullName || null,
+    studentId: String(st?.student_id ?? '').trim() || null,
+    studentEmail: String(st?.email ?? '').trim() || null,
+    trainerFullName: trainerFullName || resultsTrainerName,
+    resultsStudentName,
+    resultsTrainerName,
+  };
+}
+
 export interface ResultsOfficeEntry {
   section_id: number;
   entered_date: string | null;
@@ -1029,11 +1103,12 @@ export async function saveAnswer(
   instanceId: number,
   questionId: number,
   rowId: number | null,
-  value: { text?: string; number?: number; json?: unknown }
+  value: { text?: string; number?: number; json?: unknown },
+  options?: { allowClear?: boolean; source?: string }
 ): Promise<void> {
   const q = supabase
     .from('skyline_form_answers')
-    .select('id')
+    .select('id, value_text, value_number, value_json')
     .eq('instance_id', instanceId)
     .eq('question_id', questionId);
 
@@ -1042,17 +1117,36 @@ export async function saveAnswer(
     : await q.eq('row_id', rowId).maybeSingle();
 
   const { created_by, updated_by } = getAuditFields();
+  const merged = mergeSaveValuePreservingExisting(
+    existing
+      ? {
+          text: (existing as { value_text?: string | null }).value_text ?? null,
+          number: (existing as { value_number?: number | null }).value_number ?? null,
+          json: (existing as { value_json?: unknown }).value_json ?? null,
+        }
+      : null,
+    {
+      text: value.text ?? null,
+      number: value.number ?? null,
+      json: value.json ?? null,
+    },
+    { allowClear: options?.allowClear, source: options?.source ?? 'saveAnswer' },
+  );
+
   const payload: Record<string, unknown> = {
-    value_text: value.text ?? null,
-    value_number: value.number ?? null,
-    value_json: value.json ?? null,
+    value_text: merged.text ?? null,
+    value_number: merged.number ?? null,
+    value_json: merged.json ?? null,
     updated_at: new Date().toISOString(),
   };
 
   if (existing) {
     payload.updated_by = updated_by;
-    await supabase.from('skyline_form_answers').update(payload).eq('id', existing.id);
+    await supabase.from('skyline_form_answers').update(payload).eq('id', (existing as { id: number }).id);
   } else {
+    if (merged.text == null && merged.number == null && merged.json == null) {
+      return;
+    }
     await supabase.from('skyline_form_answers').insert({
       instance_id: instanceId,
       question_id: questionId,
@@ -1155,7 +1249,27 @@ export async function clearAssessmentAttemptHistory(instanceId: number): Promise
     student_date_2: null,
     student_sig_3: null,
     student_date_3: null,
+    student_overall_feedback: null,
   });
+
+  const { error: resultsError } = await supabase
+    .from('skyline_form_results_data')
+    .update({
+      first_attempt_satisfactory: null,
+      first_attempt_date: null,
+      first_attempt_feedback: null,
+      second_attempt_satisfactory: null,
+      second_attempt_date: null,
+      second_attempt_feedback: null,
+      third_attempt_satisfactory: null,
+      third_attempt_date: null,
+      third_attempt_feedback: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('instance_id', instanceId);
+  if (resultsError) {
+    console.error('clearAssessmentAttemptHistory results_data error', resultsError);
+  }
 }
 
 export async function updateFormInstanceDates(
@@ -1184,11 +1298,15 @@ export async function updateFormInstanceDates(
   if (changingEnd) payload.end_date = updates.end_date ? updates.end_date.trim() : null;
 
   const hadTerminalRollover =
-    Boolean((current as { did_not_attempt?: boolean | null } | null)?.did_not_attempt) ||
-    Number((current as { no_attempt_rollovers?: number | null } | null)?.no_attempt_rollovers ?? 0) > 0;
-  const isTerminalExhausted =
-    Boolean((current as { did_not_attempt?: boolean | null } | null)?.did_not_attempt) ||
-    Number((current as { no_attempt_rollovers?: number | null } | null)?.no_attempt_rollovers ?? 0) >= 2;
+    Number((current as { no_attempt_rollovers?: number | null } | null)?.no_attempt_rollovers ?? 0) > 0 ||
+    isDidNotAttemptAnyFailure({
+      didNotAttempt: (current as { did_not_attempt?: boolean | null } | null)?.did_not_attempt,
+      noAttemptRollovers: (current as { no_attempt_rollovers?: number | null } | null)?.no_attempt_rollovers,
+    });
+  const isTerminalExhausted = isDidNotAttemptAnyFailure({
+    didNotAttempt: (current as { did_not_attempt?: boolean | null } | null)?.did_not_attempt,
+    noAttemptRollovers: (current as { no_attempt_rollovers?: number | null } | null)?.no_attempt_rollovers,
+  });
 
   if (resetAttempts) {
     payload.status = 'draft';
