@@ -1,5 +1,10 @@
 import { supabase } from '../lib/supabase';
 import {
+  dedupeSupabaseRead,
+  recordSupabaseError,
+  SupabaseBackoffError,
+} from '../lib/supabaseRequestGuard';
+import {
   fetchAssessmentSummaries,
   listStudentAssessmentsPaged,
 } from '../lib/formEngine';
@@ -34,17 +39,82 @@ export type PendingAssessmentAck = {
   outcomeKind: NotificationOutcomeKind;
 };
 
+export type NotificationBellData = {
+  rows: NotificationRecord[];
+  unreadCount: number;
+};
+
+/** Single lightweight read for the notification bell (no HEAD count, no polling). */
+export async function fetchNotificationBellData(
+  userId: string,
+  options?: { accurateUnread?: boolean; skipCache?: boolean }
+): Promise<NotificationBellData> {
+  const uid = String(userId ?? '').trim();
+  if (!uid) return { rows: [], unreadCount: 0 };
+
+  const cacheKey = `skyline_notifications:bell:${uid}:${options?.accurateUnread ? 'full' : 'recent'}`;
+  try {
+    return await dedupeSupabaseRead(
+      cacheKey,
+      options?.skipCache ? 0 : 30_000,
+      async () => {
+        const { data, error } = await supabase
+          .from('skyline_notifications')
+          .select('id,user_id,title,message,url,type,is_read,created_at,read_at')
+          .eq('user_id', uid)
+          .order('created_at', { ascending: false })
+          .limit(10);
+        if (error) {
+          recordSupabaseError('skyline_notifications', error);
+          throw new Error(error.message);
+        }
+        const rows = ((data as NotificationRecord[] | null) ?? []) as NotificationRecord[];
+        let unreadCount = rows.filter((r) => !r.is_read).length;
+        if (options?.accurateUnread) {
+          const { data: unreadRows, error: unreadErr } = await supabase
+            .from('skyline_notifications')
+            .select('id')
+            .eq('user_id', uid)
+            .eq('is_read', false)
+            .limit(100);
+          if (unreadErr) {
+            recordSupabaseError('skyline_notifications', unreadErr);
+          } else {
+            unreadCount = unreadRows?.length ?? unreadCount;
+          }
+        }
+        return { rows, unreadCount };
+      },
+      { skipCache: options?.skipCache }
+    );
+  } catch (e) {
+    if (e instanceof SupabaseBackoffError) return { rows: [], unreadCount: 0 };
+    throw e;
+  }
+}
+
 export async function fetchUnreadNotifications(userId: string): Promise<NotificationRecord[]> {
   const uid = String(userId ?? '').trim();
   if (!uid) return [];
-  const { data, error } = await supabase
-    .from('skyline_notifications')
-    .select('id,user_id,title,message,url,type,is_read,created_at,read_at')
-    .eq('user_id', uid)
-    .eq('is_read', false)
-    .order('created_at', { ascending: true });
-  if (error) throw new Error(error.message);
-  return (data ?? []) as NotificationRecord[];
+  try {
+    return await dedupeSupabaseRead(`skyline_notifications:unread:${uid}`, 30_000, async () => {
+      const { data, error } = await supabase
+        .from('skyline_notifications')
+        .select('id,user_id,title,message,url,type,is_read,created_at,read_at')
+        .eq('user_id', uid)
+        .eq('is_read', false)
+        .order('created_at', { ascending: true })
+        .limit(100);
+      if (error) {
+        recordSupabaseError('skyline_notifications', error);
+        throw new Error(error.message);
+      }
+      return (data ?? []) as NotificationRecord[];
+    });
+  } catch (e) {
+    if (e instanceof SupabaseBackoffError) return [];
+    throw e;
+  }
 }
 
 export async function markNotificationRead(userId: string, notificationId: string): Promise<void> {

@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Bell, CheckCircle2, Clock, Info, RotateCcw, XCircle } from 'lucide-react';
-import { supabase } from '../lib/supabase';
 import { Button } from './ui/Button';
 import { cn } from './utils/cn';
 import { formatMelbourneDateTime } from '../utils/melbourneTime';
@@ -85,23 +84,6 @@ export const NotificationAcknowledgmentGate: React.FC<NotificationAcknowledgment
   useEffect(() => {
     void loadPending();
   }, [loadPending]);
-
-  useEffect(() => {
-    if (!uid) return;
-    const channel = supabase
-      .channel(`notification-ack-gate-${uid}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'skyline_notifications', filter: `user_id=eq.${uid}` },
-        () => {
-          void loadPending();
-        }
-      )
-      .subscribe();
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [uid, loadPending]);
 
   const pendingNotifications = notifications.filter((n) => !ackedNotificationIds.has(n.id));
   const pendingAssessments = assessments.filter((a) => !ackedAssessmentIds.has(a.instanceId));

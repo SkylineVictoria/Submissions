@@ -63,23 +63,6 @@ export const NotificationsPage: React.FC = () => {
     void loadRows(1, true);
   }, [uid, tab]);
 
-  useEffect(() => {
-    if (!uid) return;
-    const channel = supabase
-      .channel(`notifications-page-${uid}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'skyline_notifications', filter: `user_id=eq.${uid}` },
-        () => {
-          void loadRows(1, true);
-        }
-      )
-      .subscribe();
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [uid, tab]);
-
   const unreadCount = useMemo(() => rows.filter((r) => !r.is_read).length, [rows]);
 
   const markOneRead = async (id: string) => {

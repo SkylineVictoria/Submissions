@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { AlertCircle, Bell, CheckCheck, CheckCircle2, Clock, Info, RotateCcw, XCircle } from 'lucide-react';
+import { AlertCircle, Bell, CheckCheck, CheckCircle2, Clock, Info, RotateCcw, RefreshCw, XCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { formatMelbourneDateTime } from '../utils/melbourneTime';
 import { cn } from './utils/cn';
 import { toast } from '../utils/toast';
 import { listenForForegroundMessages } from '../services/pushNotificationService';
+import { fetchNotificationBellData } from '../services/notifications';
 import {
   fetchAssessmentSummaries,
   listStudentAssessmentsPaged,
@@ -79,33 +80,32 @@ export const NotificationBell: React.FC<{
   const [assessmentRows, setAssessmentRows] = useState<AssessmentStatusRow[]>([]);
   const [assessmentLoading, setAssessmentLoading] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
-  const rootRef = useRef<HTMLDivElement | null>(null);
   const btnRef = useRef<HTMLButtonElement | null>(null);
   const dropdownRef = useRef<HTMLDivElement | null>(null);
   const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null);
-  const realtimeRef = useRef<{ uid: string; channel: ReturnType<typeof supabase.channel> } | null>(null);
-  const realtimeCleanupTimerRef = useRef<number | null>(null);
+  const initialLoadDoneRef = useRef<string | null>(null);
 
   const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 
-  const fetchLatest = useCallback(async () => {
-    if (!uid) return;
-    setLoading(true);
-    const [{ data, error }, { count, error: countError }] = await Promise.all([
-      supabase
-        .from('skyline_notifications')
-        .select('id,user_id,title,message,url,type,is_read,created_at,read_at')
-        .eq('user_id', uid)
-        .order('created_at', { ascending: false })
-        .limit(10),
-      supabase.from('skyline_notifications').select('id', { count: 'exact', head: true }).eq('user_id', uid).eq('is_read', false),
-    ]);
-    if (error) console.error('fetch notifications error', error);
-    if (countError) console.error('fetch unread count error', countError);
-    setRows(((data as NotificationRow[] | null) ?? []) as NotificationRow[]);
-    setUnreadCount(Number(count ?? 0));
-    setLoading(false);
-  }, [uid]);
+  const fetchLatest = useCallback(
+    async (opts?: { accurateUnread?: boolean; skipCache?: boolean }) => {
+      if (!uid) return;
+      setLoading(true);
+      try {
+        const { rows: nextRows, unreadCount: nextUnread } = await fetchNotificationBellData(uid, {
+          accurateUnread: opts?.accurateUnread,
+          skipCache: opts?.skipCache,
+        });
+        setRows(nextRows);
+        setUnreadCount(nextUnread);
+      } catch (e) {
+        if (import.meta.env.DEV) console.debug('fetch notifications error', e);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [uid]
+  );
 
   const fetchAssessmentStatus = useCallback(async () => {
     const sid = Number(assessmentStudentId);
@@ -151,107 +151,37 @@ export const NotificationBell: React.FC<{
       });
       setAssessmentRows(items);
     } catch (e) {
-      console.error('fetch assessment status error', e);
+      if (import.meta.env.DEV) console.debug('fetch assessment status error', e);
       setAssessmentRows([]);
     } finally {
       setAssessmentLoading(false);
     }
   }, [assessmentStudentId]);
 
+  // Initial load once per user (deduped in service; ref avoids StrictMode double-fetch).
   useEffect(() => {
     if (!uid) return;
+    if (initialLoadDoneRef.current === uid) return;
+    initialLoadDoneRef.current = uid;
     void fetchLatest();
+  }, [uid, fetchLatest]);
+
+  // Foreground push: refresh only when a message arrives (no polling).
+  useEffect(() => {
+    if (!uid) return;
     let fgUnsub: (() => void) | null = null;
     void listenForForegroundMessages((payload) => {
       const t = payload.notification?.title || payload.data?.title || 'Notification';
       const m = payload.notification?.body || payload.data?.message || '';
       toast.info(`${t}${m ? `: ${m}` : ''}`);
-      void fetchLatest();
+      void fetchLatest({ accurateUnread: true, skipCache: true });
     }).then((unsub) => {
       fgUnsub = unsub;
     });
-
-    if (realtimeCleanupTimerRef.current) {
-      window.clearTimeout(realtimeCleanupTimerRef.current);
-      realtimeCleanupTimerRef.current = null;
-    }
-
-    if (!realtimeRef.current || realtimeRef.current.uid !== uid) {
-      if (realtimeRef.current) {
-        supabase.removeChannel(realtimeRef.current.channel);
-        realtimeRef.current = null;
-      }
-      const channel = supabase
-        .channel(`notifications-bell-${uid}`)
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'skyline_notifications', filter: `user_id=eq.${uid}` },
-          (payload) => {
-            const eventType = payload.eventType;
-            if (eventType === 'INSERT') {
-              const n = payload.new as NotificationRow;
-              setRows((prev) => [n, ...prev].slice(0, 10));
-              if (!n.is_read) setUnreadCount((c) => c + 1);
-              toast.info(`${n.title}: ${n.message}`);
-              return;
-            }
-            if (eventType === 'UPDATE') {
-              const n = payload.new as NotificationRow;
-              setRows((prev) => prev.map((p) => (p.id === n.id ? n : p)));
-              void supabase
-                .from('skyline_notifications')
-                .select('id', { count: 'exact', head: true })
-                .eq('user_id', uid)
-                .eq('is_read', false)
-                .then(({ count }) => setUnreadCount(Number(count ?? 0)));
-            }
-          }
-        )
-        .subscribe((status) => {
-          if (status === 'TIMED_OUT' || status === 'CHANNEL_ERROR') {
-            void fetchLatest();
-          }
-        });
-      realtimeRef.current = { uid, channel };
-    }
-
     return () => {
       if (fgUnsub) fgUnsub();
-      realtimeCleanupTimerRef.current = window.setTimeout(() => {
-        if (realtimeRef.current?.uid === uid) {
-          supabase.removeChannel(realtimeRef.current.channel);
-          realtimeRef.current = null;
-        }
-      }, 250);
     };
   }, [uid, fetchLatest]);
-
-  const pollUnreadCount = useCallback(async () => {
-    if (!uid || document.hidden) return;
-    const { count, error } = await supabase
-      .from('skyline_notifications')
-      .select('id', { count: 'exact', head: true })
-      .eq('user_id', uid)
-      .eq('is_read', false);
-    if (error) return;
-    setUnreadCount(Number(count ?? 0));
-  }, [uid]);
-
-  useEffect(() => {
-    if (!uid) return;
-    const interval = window.setInterval(() => void pollUnreadCount(), 25000);
-    const onFocus = () => void fetchLatest();
-    const onVis = () => {
-      if (!document.hidden) void fetchLatest();
-    };
-    window.addEventListener('focus', onFocus);
-    document.addEventListener('visibilitychange', onVis);
-    return () => {
-      window.clearInterval(interval);
-      window.removeEventListener('focus', onFocus);
-      document.removeEventListener('visibilitychange', onVis);
-    };
-  }, [uid, fetchLatest, pollUnreadCount]);
 
   useEffect(() => {
     if (!open) return;
@@ -266,8 +196,9 @@ export const NotificationBell: React.FC<{
 
   useEffect(() => {
     if (!open) return;
+    void fetchLatest({ accurateUnread: true });
     if (assessmentStudentId) void fetchAssessmentStatus();
-  }, [open, assessmentStudentId, fetchAssessmentStatus]);
+  }, [open, assessmentStudentId, fetchLatest, fetchAssessmentStatus]);
 
   useEffect(() => {
     const onDocClick = (event: MouseEvent) => {
@@ -314,15 +245,12 @@ export const NotificationBell: React.FC<{
   if (!uid) return null;
 
   return (
-    <div ref={rootRef} className={cn('relative', className)}>
+    <div className={cn('relative', className)}>
       <button
         ref={btnRef}
         type="button"
         className="relative inline-flex h-10 w-10 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-800 shadow-sm hover:border-[#ea580c]/40 hover:bg-[#fff7ed] hover:text-[#ea580c]"
-        onClick={() => {
-          setOpen((v) => !v);
-          if (!open) void fetchLatest();
-        }}
+        onClick={() => setOpen((v) => !v)}
         aria-label={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : 'Notifications'}
         title="Notifications"
       >
@@ -345,15 +273,27 @@ export const NotificationBell: React.FC<{
                   <Bell className="h-4 w-4 text-[#ea580c]" strokeWidth={2.25} />
                   <div className="text-sm font-semibold text-[var(--text)]">Notifications</div>
                 </div>
-                <button
-                  type="button"
-                  className="inline-flex items-center gap-1 rounded border border-gray-200 px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
-                  onClick={() => void markAllRead()}
-                  disabled={unreadCount === 0}
-                >
-                  <CheckCheck className="h-3.5 w-3.5" />
-                  Mark all read
-                </button>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 rounded border border-gray-200 px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
+                    onClick={() => void fetchLatest({ accurateUnread: true, skipCache: true })}
+                    disabled={loading}
+                    title="Refresh notifications"
+                  >
+                    <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
+                    Refresh
+                  </button>
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 rounded border border-gray-200 px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
+                    onClick={() => void markAllRead()}
+                    disabled={unreadCount === 0}
+                  >
+                    <CheckCheck className="h-3.5 w-3.5" />
+                    Mark all read
+                  </button>
+                </div>
               </div>
 
               {assessmentStudentId ? (

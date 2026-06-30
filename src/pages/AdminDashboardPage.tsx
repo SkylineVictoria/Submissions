@@ -115,15 +115,18 @@ export const AdminDashboardPage: React.FC = () => {
 
   const range = useMemo(() => melbourneDateRangeForPreset(timePreset, customFrom, customTo), [timePreset, customFrom, customTo]);
 
-  const load = async (opts?: { silent?: boolean }) => {
+  const load = async (opts?: { silent?: boolean; forceRefresh?: boolean }) => {
     if (!opts?.silent) setLoading(true);
     const bid = batchId ? Number(batchId) : null;
-    const res = await getAdminDashboardStatsV2({
-      fromDate: range.fromDate,
-      toDate: range.toDate,
-      status,
-      batchId: bid && Number.isFinite(bid) && bid > 0 ? bid : null,
-    });
+    const res = await getAdminDashboardStatsV2(
+      {
+        fromDate: range.fromDate,
+        toDate: range.toDate,
+        status,
+        batchId: bid && Number.isFinite(bid) && bid > 0 ? bid : null,
+      },
+      { forceRefresh: opts?.forceRefresh }
+    );
     if (!res.ok) {
       toast.error(res.error);
       setStats(null);
@@ -134,10 +137,18 @@ export const AdminDashboardPage: React.FC = () => {
     setLoading(false);
   };
 
-  const loadRows = async (opts?: { silent?: boolean }) => {
+  const loadRows = async (opts?: { silent?: boolean; forceRefresh?: boolean }) => {
     if (!opts?.silent) setRowsLoading(true);
     const bid = batchId ? Number(batchId) : null;
-    const res = await listAdminDashboardInstancesPaged(page, PAGE_SIZE, status, range.fromDate, range.toDate, bid);
+    const res = await listAdminDashboardInstancesPaged(
+      page,
+      PAGE_SIZE,
+      status,
+      range.fromDate,
+      range.toDate,
+      bid && Number.isFinite(bid) && bid > 0 ? bid : null,
+      { forceRefresh: opts?.forceRefresh }
+    );
     setRows(res.data);
     setRowsTotal(res.total);
     setRowsLoading(false);
@@ -271,8 +282,8 @@ export const AdminDashboardPage: React.FC = () => {
               variant="outline"
               onClick={async () => {
                 setRefreshing(true);
-                await load({ silent: true });
-                await loadRows({ silent: true });
+                await load({ silent: true, forceRefresh: true });
+                await loadRows({ silent: true, forceRefresh: true });
                 setRefreshing(false);
                 toast.success('Dashboard refreshed');
               }}

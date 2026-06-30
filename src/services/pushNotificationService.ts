@@ -1,12 +1,44 @@
 import { getToken, onMessage, type MessagePayload } from 'firebase/messaging';
 import { firebasePublicConfigForSw, firebaseVapidKey, getFirebaseMessaging } from '../lib/firebase';
 import { supabase } from '../lib/supabase';
+import { recordSupabaseError } from '../lib/supabaseRequestGuard';
+
+const PUSH_TOKEN_SESSION_KEY = 'signflow.push_token.session_v1';
+const pushTokenLocalKey = (userId: string) => `signflow.push_token.last_v1.${userId}`;
 
 function getBrowserLabel(): string {
   try {
     return navigator.userAgent.slice(0, 255);
   } catch {
     return 'unknown';
+  }
+}
+
+function isPushTokenRegisteredThisSession(userId: string, token: string): boolean {
+  try {
+    const raw = sessionStorage.getItem(PUSH_TOKEN_SESSION_KEY);
+    if (!raw) return false;
+    const parsed = JSON.parse(raw) as { userId?: string; token?: string };
+    return parsed.userId === userId && parsed.token === token;
+  } catch {
+    return false;
+  }
+}
+
+function markPushTokenRegistered(userId: string, token: string): void {
+  try {
+    sessionStorage.setItem(PUSH_TOKEN_SESSION_KEY, JSON.stringify({ userId, token }));
+    localStorage.setItem(pushTokenLocalKey(userId), token);
+  } catch {
+    /* ignore storage errors */
+  }
+}
+
+function isPushTokenUnchangedSinceLastVisit(userId: string, token: string): boolean {
+  try {
+    return localStorage.getItem(pushTokenLocalKey(userId)) === token;
+  } catch {
+    return false;
   }
 }
 
@@ -34,7 +66,7 @@ export async function requestNotificationPreference(): Promise<NotificationPermi
     }
     return permission;
   } catch (e) {
-    console.error('requestNotificationPreference error', e);
+    if (import.meta.env.DEV) console.debug('requestNotificationPreference error', e);
     return null;
   }
 }
@@ -43,6 +75,13 @@ export async function saveFcmToken(userId: string | number, token: string): Prom
   const uid = String(userId ?? '').trim();
   const t = String(token ?? '').trim();
   if (!uid || !t) return;
+
+  if (isPushTokenRegisteredThisSession(uid, t)) return;
+  if (isPushTokenUnchangedSinceLastVisit(uid, t)) {
+    markPushTokenRegistered(uid, t);
+    return;
+  }
+
   const now = new Date().toISOString();
   const { error } = await supabase.from('skyline_push_tokens').upsert(
     {
@@ -56,8 +95,10 @@ export async function saveFcmToken(userId: string | number, token: string): Prom
     { onConflict: 'user_id,fcm_token' }
   );
   if (error) {
-    console.error('saveFcmToken error', error);
+    recordSupabaseError('skyline_push_tokens', error);
+    return;
   }
+  markPushTokenRegistered(uid, t);
 }
 
 export async function requestNotificationPermission(userId: string | number): Promise<string | null> {
@@ -86,7 +127,7 @@ export async function requestNotificationPermission(userId: string | number): Pr
     await saveFcmToken(userId, token);
     return token;
   } catch (e) {
-    console.error('requestNotificationPermission error', e);
+    if (import.meta.env.DEV) console.debug('requestNotificationPermission error', e);
     return null;
   }
 }
@@ -96,6 +137,8 @@ export async function requestNotificationPermission(userId: string | number): Pr
  * Does NOT prompt the user (no Notification.requestPermission call).
  */
 export async function ensureFcmToken(userId: string | number): Promise<string | null> {
+  const uid = String(userId ?? '').trim();
+  if (!uid) return null;
   if (typeof window === 'undefined' || !('Notification' in window)) return null;
   if (Notification.permission !== 'granted') return null;
   if (!firebaseVapidKey) return null;
@@ -111,10 +154,10 @@ export async function ensureFcmToken(userId: string | number): Promise<string | 
       serviceWorkerRegistration: registration,
     });
     if (!token) return null;
-    await saveFcmToken(userId, token);
+    await saveFcmToken(uid, token);
     return token;
   } catch (e) {
-    console.error('ensureFcmToken error', e);
+    if (import.meta.env.DEV) console.debug('ensureFcmToken error', e);
     return null;
   }
 }
@@ -126,4 +169,3 @@ export async function listenForForegroundMessages(
   if (!messaging) return null;
   return onMessage(messaging, callback);
 }
-

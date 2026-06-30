@@ -1,4 +1,9 @@
 import { supabase } from './supabase';
+import {
+  dedupeSupabaseRead,
+  recordSupabaseError,
+  SupabaseBackoffError,
+} from './supabaseRequestGuard';
 import { createDefaultSectionsToStep } from './defaultFormSteps';
 import { isDidNotAttemptAnyFailure } from '../utils/assessmentRowUi';
 import { mergeSaveValuePreservingExisting } from '../utils/formAnswerMerge';
@@ -2347,21 +2352,28 @@ export async function fetchUserLoginRights(
   userId: number
 ): Promise<Pick<AppUser, 'can_login_as_student' | 'can_login_as_trainer'> | null> {
   if (!Number.isFinite(userId) || userId <= 0) return null;
-  const { data, error } = await supabase
-    .from('skyline_users')
-    .select('can_login_as_student, can_login_as_trainer')
-    .eq('id', userId)
-    .maybeSingle();
-  if (error) {
-    console.error('fetchUserLoginRights error', error);
-    return null;
+  try {
+    return await dedupeSupabaseRead(`skyline_users:login-rights:${userId}`, 60_000, async () => {
+      const { data, error } = await supabase
+        .from('skyline_users')
+        .select('can_login_as_student, can_login_as_trainer')
+        .eq('id', userId)
+        .maybeSingle();
+      if (error) {
+        recordSupabaseError('skyline_users', error);
+        return null;
+      }
+      if (!data) return null;
+      const row = data as { can_login_as_student?: boolean | null; can_login_as_trainer?: boolean | null };
+      return {
+        can_login_as_student: Boolean(row.can_login_as_student),
+        can_login_as_trainer: Boolean(row.can_login_as_trainer),
+      };
+    });
+  } catch (e) {
+    if (e instanceof SupabaseBackoffError) return null;
+    throw e;
   }
-  if (!data) return null;
-  const row = data as { can_login_as_student?: boolean | null; can_login_as_trainer?: boolean | null };
-  return {
-    can_login_as_student: Boolean(row.can_login_as_student),
-    can_login_as_trainer: Boolean(row.can_login_as_trainer),
-  };
 }
 
 /** Audit fields for created_by / updated_by (current user). Use for insert/update. */
@@ -2961,45 +2973,63 @@ export interface AdminDashboardStatsV2 {
   workflow: { awaiting_student: number; awaiting_trainer: number; awaiting_office: number; completed: number };
 }
 
-export async function getAdminDashboardStatsV2(input: {
-  fromDate?: string | null;
-  toDate?: string | null;
-  status: 'all' | 'awaiting_student' | 'awaiting_trainer' | 'awaiting_office' | 'completed';
-  batchId?: number | null;
-}): Promise<{ ok: true; stats: AdminDashboardStatsV2 } | { ok: false; error: string }> {
+export async function getAdminDashboardStatsV2(
+  input: {
+    fromDate?: string | null;
+    toDate?: string | null;
+    status: 'all' | 'awaiting_student' | 'awaiting_trainer' | 'awaiting_office' | 'completed';
+    batchId?: number | null;
+  },
+  options?: { forceRefresh?: boolean }
+): Promise<{ ok: true; stats: AdminDashboardStatsV2 } | { ok: false; error: string }> {
   const bid =
     input.batchId != null && Number.isFinite(Number(input.batchId)) && Number(input.batchId) > 0 ? Number(input.batchId) : null;
-  const { data, error } = await supabase.rpc('skyline_admin_dashboard_stats_v2', {
-    p_from_date: input.fromDate && /^\d{4}-\d{2}-\d{2}$/.test(String(input.fromDate)) ? String(input.fromDate) : null,
-    p_to_date: input.toDate && /^\d{4}-\d{2}-\d{2}$/.test(String(input.toDate)) ? String(input.toDate) : null,
-    p_status: input.status,
-    p_batch_id: bid,
-  });
-  if (error) {
-    console.error('skyline_admin_dashboard_stats_v2 rpc error', error);
-    return { ok: false, error: error.message };
+  const cacheKey = `skyline_admin_dashboard_stats_v2:${input.fromDate ?? ''}:${input.toDate ?? ''}:${input.status}:${bid ?? ''}`;
+  try {
+    return await dedupeSupabaseRead(
+      cacheKey,
+      60_000,
+      async () => {
+        const { data, error } = await supabase.rpc('skyline_admin_dashboard_stats_v2', {
+          p_from_date: input.fromDate && /^\d{4}-\d{2}-\d{2}$/.test(String(input.fromDate)) ? String(input.fromDate) : null,
+          p_to_date: input.toDate && /^\d{4}-\d{2}-\d{2}$/.test(String(input.toDate)) ? String(input.toDate) : null,
+          p_status: input.status,
+          p_batch_id: bid,
+        });
+        if (error) {
+          recordSupabaseError('skyline_admin_dashboard_stats_v2', error);
+          return { ok: false as const, error: error.message };
+        }
+        const raw = data as { ok?: boolean; totals?: unknown; workflow?: unknown } | null;
+        if (!raw || raw.ok !== true) return { ok: false as const, error: 'Failed to load dashboard stats' };
+        const totals = raw.totals as { assessments?: unknown; students?: unknown; trainers?: unknown; admins?: unknown } | undefined;
+        const workflow = raw.workflow as { awaiting_student?: unknown; awaiting_trainer?: unknown; awaiting_office?: unknown; completed?: unknown } | undefined;
+        return {
+          ok: true as const,
+          stats: {
+            totals: {
+              assessments: Number(totals?.assessments ?? 0) || 0,
+              students: Number(totals?.students ?? 0) || 0,
+              trainers: Number(totals?.trainers ?? 0) || 0,
+              admins: Number(totals?.admins ?? 0) || 0,
+            },
+            workflow: {
+              awaiting_student: Number(workflow?.awaiting_student ?? 0) || 0,
+              awaiting_trainer: Number(workflow?.awaiting_trainer ?? 0) || 0,
+              awaiting_office: Number(workflow?.awaiting_office ?? 0) || 0,
+              completed: Number(workflow?.completed ?? 0) || 0,
+            },
+          },
+        };
+      },
+      { skipCache: options?.forceRefresh }
+    );
+  } catch (e) {
+    if (e instanceof SupabaseBackoffError) {
+      return { ok: false, error: 'Dashboard temporarily unavailable. Try again in a few minutes.' };
+    }
+    throw e;
   }
-  const raw = data as { ok?: boolean; totals?: unknown; workflow?: unknown } | null;
-  if (!raw || raw.ok !== true) return { ok: false, error: 'Failed to load dashboard stats' };
-  const totals = raw.totals as { assessments?: unknown; students?: unknown; trainers?: unknown; admins?: unknown } | undefined;
-  const workflow = raw.workflow as { awaiting_student?: unknown; awaiting_trainer?: unknown; awaiting_office?: unknown; completed?: unknown } | undefined;
-  return {
-    ok: true,
-    stats: {
-      totals: {
-        assessments: Number(totals?.assessments ?? 0) || 0,
-        students: Number(totals?.students ?? 0) || 0,
-        trainers: Number(totals?.trainers ?? 0) || 0,
-        admins: Number(totals?.admins ?? 0) || 0,
-      },
-      workflow: {
-        awaiting_student: Number(workflow?.awaiting_student ?? 0) || 0,
-        awaiting_trainer: Number(workflow?.awaiting_trainer ?? 0) || 0,
-        awaiting_office: Number(workflow?.awaiting_office ?? 0) || 0,
-        completed: Number(workflow?.completed ?? 0) || 0,
-      },
-    },
-  };
 }
 
 export async function listAdminDashboardInstancesPaged(
@@ -3008,21 +3038,45 @@ export async function listAdminDashboardInstancesPaged(
   status: 'all' | 'awaiting_student' | 'awaiting_trainer' | 'awaiting_office' | 'completed',
   fromDate?: string | null,
   toDate?: string | null,
-  batchId?: number | null
+  batchId?: number | null,
+  options?: { forceRefresh?: boolean }
 ): Promise<PaginatedResult<SubmittedInstanceRow>> {
   const bid = batchId != null && Number.isFinite(Number(batchId)) && Number(batchId) > 0 ? Number(batchId) : null;
-  const { data, error } = await supabase.rpc('skyline_admin_dashboard_instances_paged', {
-    p_page: page,
-    p_page_size: pageSize,
-    p_status: status,
-    p_from_date: fromDate && /^\d{4}-\d{2}-\d{2}$/.test(String(fromDate)) ? String(fromDate) : null,
-    p_to_date: toDate && /^\d{4}-\d{2}-\d{2}$/.test(String(toDate)) ? String(toDate) : null,
-    p_batch_id: bid,
-  });
-  if (error) {
-    console.error('skyline_admin_dashboard_instances_paged rpc error', error);
-    return { data: [], total: 0, page, pageSize };
+  const cacheKey = `skyline_admin_dashboard_instances_paged:${page}:${pageSize}:${status}:${fromDate ?? ''}:${toDate ?? ''}:${bid ?? ''}`;
+  try {
+    return await dedupeSupabaseRead(
+      cacheKey,
+      60_000,
+      async () => {
+        const { data, error } = await supabase.rpc('skyline_admin_dashboard_instances_paged', {
+          p_page: page,
+          p_page_size: pageSize,
+          p_status: status,
+          p_from_date: fromDate && /^\d{4}-\d{2}-\d{2}$/.test(String(fromDate)) ? String(fromDate) : null,
+          p_to_date: toDate && /^\d{4}-\d{2}-\d{2}$/.test(String(toDate)) ? String(toDate) : null,
+          p_batch_id: bid,
+        });
+        if (error) {
+          recordSupabaseError('skyline_admin_dashboard_instances_paged', error);
+          return { data: [], total: 0, page, pageSize };
+        }
+        return mapAdminDashboardInstancesPaged(data, page, pageSize);
+      },
+      { skipCache: options?.forceRefresh }
+    );
+  } catch (e) {
+    if (e instanceof SupabaseBackoffError) {
+      return { data: [], total: 0, page, pageSize };
+    }
+    throw e;
   }
+}
+
+function mapAdminDashboardInstancesPaged(
+  data: unknown,
+  page: number,
+  pageSize: number
+): PaginatedResult<SubmittedInstanceRow> {
   const rowsRaw =
     (data as Array<{
       id: number;
@@ -3975,15 +4029,23 @@ export interface CreateBatchInput {
 }
 
 export async function listBatches(): Promise<Batch[]> {
-  const { data, error } = await supabase
-    .from('skyline_batches')
-    .select('id, name, trainer_id, course_id, created_at')
-    .order('name', { ascending: true });
-  if (error) {
-    console.error('listBatches error', error);
-    return [];
+  try {
+    return await dedupeSupabaseRead('skyline_batches:list', 120_000, async () => {
+      const { data, error } = await supabase
+        .from('skyline_batches')
+        .select('id, name, trainer_id, course_id, created_at')
+        .order('name', { ascending: true })
+        .limit(500);
+      if (error) {
+        recordSupabaseError('skyline_batches', error);
+        return [];
+      }
+      return hydrateBatchRows((data as Record<string, unknown>[]) || []);
+    });
+  } catch (e) {
+    if (e instanceof SupabaseBackoffError) return [];
+    throw e;
   }
-  return hydrateBatchRows((data as Record<string, unknown>[]) || []);
 }
 
 export async function listBatchesPaged(
