@@ -8,6 +8,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "build": "tsc && vite build",
+    "build:maintenance": "tsc && vite build",
     "preview": "vite preview",
     "start": "cd pdf-server && npm install && npm start",
     "convert-logo": "node scripts/convert-logo-to-base64.js",
