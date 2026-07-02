@@ -6,6 +6,7 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Loader } from '../components/ui/Loader';
 import { Stepper } from '../components/ui/Stepper';
+import { usePdfPreviewLoadState } from '../hooks/usePdfPreviewLoadState';
 
 const PDF_BASE = import.meta.env.VITE_PDF_API_URL ?? '';
 
@@ -16,7 +17,15 @@ export const AdminFormPreviewPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [currentStep, setCurrentStep] = useState(1);
   const [pdfRefresh, setPdfRefresh] = useState(0);
-  const [pdfLoading, setPdfLoading] = useState(true);
+  const numericFormId = Number(formId || 0);
+  const pdfCacheBust = useMemo(() => Date.now(), [numericFormId, pdfRefresh]);
+  const {
+    loading: pdfLoading,
+    timedOut: pdfTimedOut,
+    onLoad: onPdfFrameLoad,
+    onError: onPdfFrameError,
+    restart: restartPdfLoad,
+  } = usePdfPreviewLoadState(numericFormId > 0 && Boolean(PDF_BASE), pdfCacheBust);
 
   useEffect(() => {
     const id = Number(formId);
@@ -38,12 +47,6 @@ export const AdminFormPreviewPage: React.FC = () => {
     : [{ number: 1, label: 'Introduction', description: 'Preview mode' }];
   const isIntro = currentStep === 1;
   const stepData = template && !isIntro ? template.steps[currentStep - 2] : null;
-  const numericFormId = Number(formId || 0);
-  const pdfCacheBust = useMemo(() => Date.now(), [numericFormId, pdfRefresh]);
-
-  useEffect(() => {
-    setPdfLoading(true);
-  }, [pdfCacheBust]);
 
   if (loading) return <Loader fullPage variant="dots" size="lg" message="Loading preview..." />;
   if (!template) {
@@ -138,7 +141,7 @@ export const AdminFormPreviewPage: React.FC = () => {
                   size="sm"
                   className="w-full"
                   onClick={() => {
-                    setPdfLoading(true);
+                    restartPdfLoad();
                     setPdfRefresh((r) => r + 1);
                   }}
                 >
@@ -161,13 +164,25 @@ export const AdminFormPreviewPage: React.FC = () => {
                     <Loader variant="spinner" size="lg" />
                   </div>
                 )}
-                <iframe
-                  key={pdfCacheBust}
-                  src={`${PDF_BASE}/pdf/preview/form/${numericFormId}?t=${pdfCacheBust}#toolbar=0`}
-                  title="Admin Preview PDF"
-                  className="h-[min(50vh,400px)] w-full border-0 rounded-lg sm:h-96"
-                  onLoad={() => setPdfLoading(false)}
-                />
+                {!pdfLoading && pdfTimedOut && (
+                  <div className="absolute top-2 left-2 right-2 z-10 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                    Preview is taking longer than expected. Use Refresh PDF or Download PDF if the preview looks blank.
+                  </div>
+                )}
+                {!PDF_BASE ? (
+                  <div className="flex h-[min(50vh,400px)] items-center justify-center p-4 text-center text-sm text-gray-500 sm:h-96">
+                    PDF preview is not configured (missing VITE_PDF_API_URL).
+                  </div>
+                ) : (
+                  <iframe
+                    key={pdfCacheBust}
+                    src={`${PDF_BASE}/pdf/preview/form/${numericFormId}?t=${pdfCacheBust}#toolbar=0`}
+                    title="Admin Preview PDF"
+                    className="h-[min(50vh,400px)] w-full border-0 rounded-lg sm:h-96"
+                    onLoad={onPdfFrameLoad}
+                    onError={onPdfFrameError}
+                  />
+                )}
               </div>
             </Card>
           </div>

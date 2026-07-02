@@ -55,10 +55,11 @@ export const registerPdfFonts = async (): Promise<void> => {
   }
   
   if (fontsRegistering) {
-    // Wait for ongoing registration
+    // Wait for ongoing registration (with cap — avoid infinite wait if font fetch hangs).
     return new Promise((resolve) => {
+      const started = Date.now();
       const checkInterval = setInterval(() => {
-        if (fontsRegistered) {
+        if (fontsRegistered || Date.now() - started > 30_000) {
           clearInterval(checkInterval);
           resolve();
         }

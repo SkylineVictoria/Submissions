@@ -52,6 +52,7 @@ import { Loader } from '../components/ui/Loader';
 import { Button } from '../components/ui/Button';
 import { Stepper } from '../components/ui/Stepper';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
+import { usePdfPreviewLoadState } from '../hooks/usePdfPreviewLoadState';
 import { QuestionRenderer } from '../components/form-fill/QuestionRenderer';
 import { TaskInstructionsBlocksDisplay } from '../components/form-fill/TaskInstructionsBlocksDisplay';
 import { getQuestionInstructionsData } from '../utils/questionInstructionLabel';
@@ -745,11 +746,14 @@ export const InstanceFillPage: React.FC = () => {
   const id = instanceId ? Number(instanceId) : 0;
   const accessToken = searchParams.get('token')?.trim() || '';
   const [pdfRefresh, setPdfRefresh] = useState(0);
-  const [pdfLoading, setPdfLoading] = useState(true);
   const pdfCacheBust = useMemo(() => Date.now(), [id, pdfRefresh]);
-  useEffect(() => {
-    setPdfLoading(true);
-  }, [pdfCacheBust]);
+  const {
+    loading: pdfLoading,
+    timedOut: pdfTimedOut,
+    onLoad: onPdfFrameLoad,
+    onError: onPdfFrameError,
+    restart: restartPdfLoad,
+  } = usePdfPreviewLoadState(role === 'office' && id > 0 && Boolean(PDF_BASE), pdfCacheBust);
 
   const loadData = useCallback(async () => {
     if (!id) return;
@@ -5458,7 +5462,7 @@ export const InstanceFillPage: React.FC = () => {
                       size="sm"
                       className="w-full"
                       onClick={() => {
-                        setPdfLoading(true);
+                        restartPdfLoad();
                         setPdfRefresh((r) => r + 1);
                       }}
                     >
@@ -5482,13 +5486,25 @@ export const InstanceFillPage: React.FC = () => {
                         <p className="text-sm font-medium text-gray-600 animate-pulse">Loading PDF...</p>
                       </div>
                     )}
+                    {!pdfLoading && pdfTimedOut && (
+                      <div className="absolute top-2 left-2 right-2 z-10 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                        Preview is taking longer than expected. Use Refresh PDF or Download PDF if the preview looks blank.
+                      </div>
+                    )}
+                    {!PDF_BASE ? (
+                      <div className="flex h-64 sm:h-80 lg:h-96 items-center justify-center p-4 text-center text-sm text-gray-500">
+                        PDF preview is not configured (missing VITE_PDF_API_URL).
+                      </div>
+                    ) : (
                     <iframe
                       key={pdfCacheBust}
                       src={`${PDF_BASE}/pdf/${id}?role=${role}&t=${pdfCacheBust}#toolbar=0`}
                       title="PDF Preview"
                       className="w-full h-64 sm:h-80 lg:h-96 min-h-[16rem] border-0 rounded-lg"
-                      onLoad={() => setPdfLoading(false)}
+                      onLoad={onPdfFrameLoad}
+                      onError={onPdfFrameError}
                     />
+                    )}
                   </div>
                 </Card>
               </div>
