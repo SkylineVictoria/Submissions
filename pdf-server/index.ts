@@ -138,6 +138,52 @@ function inductionFilledPdfFilename(payload: Record<string, unknown>): string {
   return `${base} induction form.pdf`;
 }
 
+function sanitizePdfFilenameSegment(value: string): string {
+  return value.replace(/[/\\:*?"<>|]/g, '_').replace(/\s+/g, ' ').trim();
+}
+
+type PdfFilenameQuestionStep = {
+  sections: Array<{
+    questions: Array<{ question: { code: string | null; id: number } }>;
+  }>;
+};
+
+/** Assessment instance PDF download name: "{unit name}_{student id}_{student name}.pdf" */
+function buildInstancePdfDownloadFilename(
+  instanceId: number,
+  form: { name: string; unit_name?: string | null; qualification_name?: string | null },
+  steps: PdfFilenameQuestionStep[],
+  answerMap: Map<string, unknown>
+): string {
+  let studentId = '';
+  let studentName = '';
+  let unitName = '';
+
+  for (const step of steps) {
+    for (const { questions } of step.sections) {
+      for (const { question } of questions) {
+        const code = String(question.code ?? '').trim();
+        if (!code) continue;
+        const raw = answerMap.get(`q-${question.id}`);
+        if (raw == null) continue;
+        const value = String(raw).trim();
+        if (!value) continue;
+        if (code === 'student.id') studentId = value;
+        if (code === 'student.fullName') studentName = value;
+        if (code === 'unit.name') unitName = value;
+      }
+    }
+  }
+
+  if (!unitName) {
+    unitName = String(form.unit_name ?? form.qualification_name ?? form.name ?? '').trim();
+  }
+
+  const parts = [unitName, studentId, studentName].map(sanitizePdfFilenameSegment).filter(Boolean);
+  if (parts.length === 0) return `form-${instanceId}.pdf`;
+  return `${parts.join('_')}.pdf`;
+}
+
 /** Filled induction pack from submitted JSON (admin export). Body: { payload } or { payloads: [] } (max ${MAX_BULK_PDF_EXPORT}). */
 app.post('/pdf/induction/:token/filled', async (req, res) => {
   const token = String(req.params.token || '').trim();
@@ -2757,7 +2803,15 @@ app.get('/pdf/:instanceId', async (req, res) => {
       for (const r of (taskRows as FormQuestionRow[]) || []) taskRowsMap.set(r.id, r);
     }
 
-    const form = template.instance.form as { name: string; version: string | null; unit_code: string | null; header_asset_url: string | null; cover_asset_url?: string | null };
+    const form = template.instance.form as {
+      name: string;
+      version: string | null;
+      unit_code: string | null;
+      unit_name?: string | null;
+      qualification_name?: string | null;
+      header_asset_url: string | null;
+      cover_asset_url?: string | null;
+    };
     const { html, unitCode, version, headerHtml } = buildHtml({
       form,
       steps: template.steps,
@@ -2784,29 +2838,8 @@ app.get('/pdf/:instanceId', async (req, res) => {
 
     let pdfFilename = `form-${instanceId}.pdf`;
     if (download) {
-      let studentId = '';
-      let studentName = '';
-      for (const g of template.steps) {
-        for (const { questions } of g.sections) {
-          for (const { question } of questions) {
-            if (question.code === 'student.id') {
-              const v = answerMap.get(`q-${question.id}`);
-              if (v != null) studentId = String(v).trim();
-            }
-            if (question.code === 'student.fullName') {
-              const v = answerMap.get(`q-${question.id}`);
-              if (v != null) studentName = String(v).trim();
-            }
-          }
-        }
-      }
-      if (studentId || studentName) {
-        const sanitize = (s: string) => s.replace(/[/\\:*?"<>|]/g, '_').replace(/\s+/g, ' ').trim();
-        const idPart = sanitize(studentId);
-        const namePart = sanitize(studentName);
-        pdfFilename = [idPart, namePart].filter(Boolean).join('_') + '.pdf';
-      }
-      res.setHeader('Content-Disposition', `attachment; filename="${pdfFilename}"`);
+      pdfFilename = buildInstancePdfDownloadFilename(instanceId, form, template.steps, answerMap);
+      res.setHeader('Content-Disposition', `attachment; filename="${pdfFilename.replace(/"/g, "'")}"`);
     }
 
     res.setHeader('Content-Type', 'application/pdf');
