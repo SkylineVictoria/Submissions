@@ -5990,6 +5990,47 @@ export async function submitInstanceToTrainerViaRpc(instanceId: number): Promise
   return { ok: true };
 }
 
+/** Hand off an already-submitted instance to the trainer queue without changing submission_count. */
+export async function repairInstanceTrainerHandoff(instanceId: number): Promise<{ ok: boolean; error?: string }> {
+  if (!Number.isFinite(instanceId) || instanceId <= 0) return { ok: false, error: 'Invalid instance' };
+  const { data: instRow, error: readErr } = await supabase
+    .from('skyline_form_instances')
+    .select('status, role_context, submission_count, submitted_at')
+    .eq('id', instanceId)
+    .maybeSingle();
+  if (readErr) return { ok: false, error: readErr.message };
+  if (!instRow) return { ok: false, error: 'Instance not found' };
+  const row = instRow as {
+    status?: string | null;
+    role_context?: string | null;
+    submission_count?: number | null;
+    submitted_at?: string | null;
+  };
+  const submitted =
+    Math.min(3, Math.max(0, Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0))) > 0;
+  if (!submitted) return { ok: false, error: 'No student submission to hand off' };
+  if (String(row.role_context ?? '').trim() === 'trainer' && String(row.status ?? '').trim() !== 'draft') {
+    return { ok: true };
+  }
+  const payload: Record<string, unknown> = {
+    status: 'submitted',
+    role_context: 'trainer',
+    updated_by: getAuditFields().updated_by,
+  };
+  const payloadWithWf: Record<string, unknown> = { ...payload, workflow_status: 'waiting_trainer' };
+  const { error } = await supabase.from('skyline_form_instances').update(payloadWithWf).eq('id', instanceId);
+  if (error) {
+    const msg = String((error as { message?: string }).message ?? '');
+    if (msg.toLowerCase().includes('workflow_status')) {
+      const { error: retryErr } = await supabase.from('skyline_form_instances').update(payload).eq('id', instanceId);
+      if (retryErr) return { ok: false, error: retryErr.message };
+      return { ok: true };
+    }
+    return { ok: false, error: error.message };
+  }
+  return { ok: true };
+}
+
 export async function updateInstanceWorkflowStatus(instanceId: number, workflowStatus: InstanceWorkflowStatus): Promise<void> {
   const nowIso = new Date().toISOString();
   const payload: Record<string, unknown> = { updated_by: getAuditFields().updated_by };
@@ -6019,18 +6060,13 @@ export async function updateInstanceWorkflowStatus(instanceId: number, workflowS
       .eq('id', instanceId)
       .single();
     const existingSubmittedAt = (instRow as { submitted_at?: string | null } | null)?.submitted_at;
+    const current = Number((instRow as { submission_count?: number | null } | null)?.submission_count ?? 0) || 0;
     // First student submission sets submitted_at; resubmissions must not overwrite the original timestamp.
     if (!existingSubmittedAt) {
       payload.submitted_at = nowIso;
-    }
-    const current = Number((instRow as { submission_count?: number | null } | null)?.submission_count ?? 0) || 0;
-    // Count completed student hand-ins to trainer (cap 3). Each resubmission after the first must bump
-    // so trainer validation requires attempt 2 / 3 S/NS (Math.max(current,1) alone never exceeded 1).
-    if (!existingSubmittedAt) {
       payload.submission_count = Math.max(1, current);
-    } else {
-      payload.submission_count = Math.min(Math.max(current, 1) + 1, 3);
     }
+    // If already submitted, only hand off to trainer — do not bump submission_count again.
   }
   // Best-effort: also persist workflow_status when the column exists.
   const payloadWithWf: Record<string, unknown> = { ...payload, workflow_status: workflowStatus };

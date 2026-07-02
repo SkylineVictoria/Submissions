@@ -5,6 +5,7 @@ import {
   listSubmittedInstancesPaged,
   updateInstanceRole,
   updateInstanceWorkflowStatus,
+  repairInstanceTrainerHandoff,
   issueInstanceAccessLink,
   getOrIssueInstanceAccessLink,
   revokeRoleAccessTokens,
@@ -65,6 +66,8 @@ const getWorkflowRowInput = (row: SubmittedInstanceRow) => ({
   role_context: row.role_context,
   did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
   no_attempt_rollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
+  submission_count: row.submission_count,
+  submitted_at: row.submitted_at,
 });
 
 const pad2 = (n: number) => String(n).padStart(2, '0');
@@ -382,13 +385,27 @@ export const AdminAssessmentsPage: React.FC = () => {
 
           // Ensure trainer sees editable form (trainer can only edit in waiting_trainer workflow).
           setSendingId(instanceId);
-          if (row.status === 'draft') {
-            await updateInstanceWorkflowStatus(instanceId, 'waiting_trainer');
-            setRows((prev) => prev.map((r) => (r.id === instanceId ? { ...r, status: 'submitted' } : r)));
+          const alreadySubmitted =
+            (Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0)) > 0;
+          if (row.status === 'draft' || row.role_context !== 'trainer') {
+            if (alreadySubmitted) {
+              const repaired = await repairInstanceTrainerHandoff(instanceId);
+              if (!repaired.ok) {
+                setSendingId(null);
+                toast.error(repaired.error ?? 'Could not send to trainer');
+                return;
+              }
+            } else if (row.status === 'draft') {
+              await updateInstanceWorkflowStatus(instanceId, 'waiting_trainer');
+            }
+            setRows((prev) =>
+              prev.map((r) =>
+                r.id === instanceId ? { ...r, status: 'submitted', role_context: 'trainer' } : r
+              )
+            );
           }
           if (row.role_context !== 'trainer') {
             await updateInstanceRole(instanceId, 'trainer');
-            setRows((prev) => prev.map((r) => (r.id === instanceId ? { ...r, role_context: 'trainer' } : r)));
           }
           const url = await issueInstanceAccessLink(instanceId, 'trainer');
           setSendingId(null);
@@ -668,14 +685,27 @@ export const AdminAssessmentsPage: React.FC = () => {
     if (!sendToTrainerRow || !selectedTrainerId) return;
     const trainer = trainers.find((t) => t.id === selectedTrainerId);
     setSendingId(sendToTrainerRow.id);
-    // Ensure trainer sees editable form (trainer can only edit in waiting_trainer workflow).
-    if (sendToTrainerRow.status === 'draft') {
-      await updateInstanceWorkflowStatus(sendToTrainerRow.id, 'waiting_trainer');
-      setRows((prev) => prev.map((r) => (r.id === sendToTrainerRow.id ? { ...r, status: 'submitted' } : r)));
+    const alreadySubmitted =
+      (Number(sendToTrainerRow.submission_count ?? 0) || (sendToTrainerRow.submitted_at ? 1 : 0)) > 0;
+    if (sendToTrainerRow.status === 'draft' || sendToTrainerRow.role_context !== 'trainer') {
+      if (alreadySubmitted) {
+        const repaired = await repairInstanceTrainerHandoff(sendToTrainerRow.id);
+        if (!repaired.ok) {
+          setSendingId(null);
+          toast.error(repaired.error ?? 'Could not send to trainer');
+          return;
+        }
+      } else if (sendToTrainerRow.status === 'draft') {
+        await updateInstanceWorkflowStatus(sendToTrainerRow.id, 'waiting_trainer');
+      }
+      setRows((prev) =>
+        prev.map((r) =>
+          r.id === sendToTrainerRow.id ? { ...r, status: 'submitted', role_context: 'trainer' } : r
+        )
+      );
     }
     if (sendToTrainerRow.role_context !== 'trainer') {
       await updateInstanceRole(sendToTrainerRow.id, 'trainer');
-      setRows((prev) => prev.map((r) => (r.id === sendToTrainerRow.id ? { ...r, role_context: 'trainer' } : r)));
     }
     const url = await issueInstanceAccessLink(sendToTrainerRow.id, 'trainer');
     setSendingId(null);

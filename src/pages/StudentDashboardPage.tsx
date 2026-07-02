@@ -16,6 +16,7 @@ import {
   getMissedAttemptWindowText,
   computeAttemptTones,
   computeWorkflowStageChecks,
+  getTrainerWorkflowStageState,
   getAdminOfficeDotTone,
   isTerminalFailureProgressRow,
   getAssessmentOutcomeDisplay,
@@ -102,7 +103,13 @@ function WorkflowProgressColumns({
   };
 
   const studentStageState: WorkflowStageState = terminalFailed ? 'idle' : studentDone ? 'done' : 'idle';
-  const trainerStageState: WorkflowStageState = terminalFailed ? 'idle' : trainerDone ? 'done' : 'idle';
+  const trainerStageState = getTrainerWorkflowStageState({
+    terminalFailed,
+    trainerDone,
+    role_context: row.role_context,
+    status: row.status,
+    submissionCount,
+  });
   const adminStageState: WorkflowStageState = terminalFailed ? 'idle' : adminState;
 
   return (

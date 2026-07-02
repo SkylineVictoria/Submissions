@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   computeAttemptTones,
   computeRowUi,
+  getInstanceWorkflowLabel,
   getMissedAttemptIndexes,
   getMissedAttemptWindowText,
   getStudentAttemptDoneText,
+  hasStudentSubmissionNotSentToTrainer,
   isDidNotAttemptAnyFailure,
   isTerminalFailureProgressRow,
 } from './assessmentRowUi';
@@ -76,7 +78,49 @@ describe('getMissedAttemptIndexes', () => {
 });
 
 describe('computeAttemptTones', () => {
-  const tones = (input: Parameters<typeof computeAttemptTones>[0]) => computeAttemptTones(input).student;
+  const studentTones = (input: Parameters<typeof computeAttemptTones>[0]) => computeAttemptTones(input).student;
+  const trainerTones = (input: Parameters<typeof computeAttemptTones>[0]) => computeAttemptTones(input).trainer;
+  const tones = studentTones;
+
+  it('trainer dots stay gray when submission exists but handoff to trainer never happened', () => {
+    expect(
+      trainerTones({
+        submissionCount: 1,
+        results: [null, null, null],
+        no_attempt_rollovers: 0,
+        did_not_attempt: false,
+        role_context: 'student',
+        status: 'draft',
+      }),
+    ).toEqual(['gray', 'gray', 'gray']);
+    expect(
+      studentTones({
+        submissionCount: 1,
+        results: [null, null, null],
+        no_attempt_rollovers: 0,
+        did_not_attempt: false,
+        role_context: 'student',
+        status: 'draft',
+      }),
+    ).toEqual(['gray', 'gray', 'gray']);
+  });
+
+  it('labels stuck handoff as submitted not sent', () => {
+    expect(
+      hasStudentSubmissionNotSentToTrainer({
+        status: 'draft',
+        role_context: 'student',
+        submission_count: 1,
+      }),
+    ).toBe(true);
+    expect(
+      getInstanceWorkflowLabel({
+        status: 'draft',
+        role_context: 'student',
+        submission_count: 1,
+      }),
+    ).toBe('Submitted (Not Sent)');
+  });
 
   it('Case A: clean start', () => {
     expect(

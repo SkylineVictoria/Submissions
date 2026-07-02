@@ -56,7 +56,37 @@ export type InstanceWorkflowRow = {
   role_context?: string | null;
   did_not_attempt?: boolean | null;
   no_attempt_rollovers?: number | null;
+  submission_count?: number | null;
+  submitted_at?: string | null;
 };
+
+function getSubmittedAttemptCount(input: {
+  submissionCount?: number | null;
+  submittedAt?: string | null;
+}): number {
+  return Math.min(
+    3,
+    Math.max(0, Number(input.submissionCount ?? 0) || (String(input.submittedAt ?? '').trim() ? 1 : 0)),
+  );
+}
+
+/** Student submitted but instance never moved to trainer queue (stuck draft + student role). */
+export function hasStudentSubmissionNotSentToTrainer(row: InstanceWorkflowRow): boolean {
+  const submitted = getSubmittedAttemptCount({
+    submissionCount: row.submission_count,
+    submittedAt: row.submitted_at,
+  });
+  if (submitted <= 0) return false;
+  const rc = String(row.role_context ?? '').trim();
+  const st = String(row.status ?? '').trim();
+  return rc === 'student' && st === 'draft';
+}
+
+export function isAwaitingTrainerReview(row: Pick<InstanceWorkflowRow, 'role_context' | 'status'>): boolean {
+  const rc = String(row.role_context ?? '').trim();
+  const st = String(row.status ?? '').trim();
+  return rc === 'trainer' && st !== 'locked';
+}
 
 /** Workflow badge label; terminal missed-all-windows only — not partial rollovers. */
 export function getInstanceWorkflowLabel(
@@ -74,6 +104,9 @@ export function getInstanceWorkflowLabel(
   const status = String(row.status ?? '').trim();
   const rc = String(row.role_context ?? '').trim();
   if (status === 'locked') return 'Completed';
+  if (hasStudentSubmissionNotSentToTrainer(row)) {
+    return opts?.submittedFallback ?? 'Submitted (Not Sent)';
+  }
   if (rc === 'trainer') return 'Waiting Trainer';
   if (rc === 'office') return 'Waiting Office';
   if (status === 'draft') return 'Awaiting Student';
@@ -97,6 +130,9 @@ export function getInstanceWorkflowBadgeClass(
   const rc = String(row.role_context ?? '').trim();
   if (status === 'locked') {
     return `${border}${opts?.withBorder ? 'bg-emerald-50 text-emerald-800' : 'bg-emerald-100 text-emerald-800'}`.trim();
+  }
+  if (hasStudentSubmissionNotSentToTrainer(row)) {
+    return `${border}${opts?.withBorder ? 'bg-orange-50 text-orange-900' : 'bg-orange-100 text-orange-900'}`.trim();
   }
   if (rc === 'trainer') {
     return `${border}${opts?.withBorder ? 'bg-amber-50 text-amber-800' : 'bg-amber-100 text-amber-800'}`.trim();
@@ -328,17 +364,38 @@ export function getAssessmentOutcomeDisplay(input: {
       subtextClassName: 'text-[11px] font-medium text-amber-700',
     };
   }
+  if (
+    hasStudentSubmissionNotSentToTrainer({
+      status: input.status,
+      role_context: input.role_context,
+      submission_count: input.submissionCount,
+      submitted_at: input.submittedAt,
+    })
+  ) {
+    return {
+      label: 'Submitted',
+      className: 'text-orange-800',
+      subtext: 'Not sent to trainer',
+      subtextClassName: 'text-[11px] font-medium text-orange-700',
+    };
+  }
   return { label: 'In progress', className: 'text-gray-700', subtext: null, subtextClassName: '' };
 }
 
-function getSubmittedAttemptCount(input: {
-  submissionCount?: number | null;
-  submittedAt?: string | null;
-}): number {
-  return Math.min(
-    3,
-    Math.max(0, Number(input.submissionCount ?? 0) || (String(input.submittedAt ?? '').trim() ? 1 : 0)),
-  );
+export function getTrainerWorkflowStageState(input: {
+  terminalFailed?: boolean;
+  trainerDone: boolean;
+  role_context?: string | null;
+  status?: string | null;
+  submissionCount?: number;
+}): WorkflowStageState {
+  if (input.terminalFailed) return 'idle';
+  if (input.trainerDone) return 'done';
+  if (isAwaitingTrainerReview({ role_context: input.role_context, status: input.status })) {
+    const submitted = Math.max(0, Number(input.submissionCount ?? 0) || 0);
+    if (submitted > 0) return 'pending';
+  }
+  return 'idle';
 }
 
 function formatAwaitingTrainerText(attemptNum: number): string {
@@ -620,19 +677,23 @@ function toneForAttemptSlot(
   trainerActiveReview: number | null,
   studentNextYellow: number | null,
   submittedSlots: number[],
+  column: 'student' | 'trainer',
+  handoffIncomplete: boolean,
 ): AttemptDotTone {
   if (missed.has(slotIndex)) return 'red';
 
   const attemptNum = slotIndex + 1;
-  if (trainerActiveReview === attemptNum) {
+  if (column === 'trainer' && trainerActiveReview === attemptNum) {
     if (r[slotIndex] === 'competent') return 'green';
     return 'yellow';
   }
 
   if (r[slotIndex] === 'competent') return 'green';
   if (r[slotIndex] === 'not_yet_competent') return 'red';
-  if (submittedSlots.includes(slotIndex) && r[slotIndex] === null) return 'yellow';
-  if (studentNextYellow === slotIndex) return 'yellow';
+  if (column === 'student' && submittedSlots.includes(slotIndex) && r[slotIndex] === null) {
+    return handoffIncomplete ? 'gray' : 'yellow';
+  }
+  if (column === 'student' && studentNextYellow === slotIndex) return 'yellow';
   return 'gray';
 }
 
@@ -660,6 +721,11 @@ export function computeAttemptTones(input: {
     did_not_attempt: input.did_not_attempt,
   });
   const submittedSlots = getSubmittedAttemptSlots(missed, submitted);
+  const handoffIncomplete = hasStudentSubmissionNotSentToTrainer({
+    status: input.status,
+    role_context: input.role_context,
+    submission_count: submitted,
+  });
 
   const trainerActiveReview = getTrainerActiveReviewAttempt({
     role_context: input.role_context,
@@ -679,11 +745,11 @@ export function computeAttemptTones(input: {
   }
 
   const student: AttemptDotTone[] = [0, 1, 2].map((i) =>
-    toneForAttemptSlot(i, r, missed, trainerActiveReview, studentNextYellow, submittedSlots),
+    toneForAttemptSlot(i, r, missed, trainerActiveReview, studentNextYellow, submittedSlots, 'student', handoffIncomplete),
   );
 
   const trainer: AttemptDotTone[] = [0, 1, 2].map((i) =>
-    toneForAttemptSlot(i, r, missed, trainerActiveReview, null, submittedSlots),
+    toneForAttemptSlot(i, r, missed, trainerActiveReview, null, submittedSlots, 'trainer', handoffIncomplete),
   );
 
   return { student, trainer };
