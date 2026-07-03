@@ -148,16 +148,15 @@ type PdfFilenameQuestionStep = {
   }>;
 };
 
-/** Assessment instance PDF download name: "{unit name}_{student id}_{student name}.pdf" */
+/** Assessment instance PDF download name: "{unit code}_{student id}_{student name}.pdf" */
 function buildInstancePdfDownloadFilename(
   instanceId: number,
-  form: { name: string; unit_name?: string | null; qualification_name?: string | null },
+  unitCode: string,
   steps: PdfFilenameQuestionStep[],
   answerMap: Map<string, unknown>
 ): string {
   let studentId = '';
   let studentName = '';
-  let unitName = '';
 
   for (const step of steps) {
     for (const { questions } of step.sections) {
@@ -170,16 +169,11 @@ function buildInstancePdfDownloadFilename(
         if (!value) continue;
         if (code === 'student.id') studentId = value;
         if (code === 'student.fullName') studentName = value;
-        if (code === 'unit.name') unitName = value;
       }
     }
   }
 
-  if (!unitName) {
-    unitName = String(form.unit_name ?? form.qualification_name ?? form.name ?? '').trim();
-  }
-
-  const parts = [unitName, studentId, studentName].map(sanitizePdfFilenameSegment).filter(Boolean);
+  const parts = [unitCode, studentId, studentName].map(sanitizePdfFilenameSegment).filter(Boolean);
   if (parts.length === 0) return `form-${instanceId}.pdf`;
   return `${parts.join('_')}.pdf`;
 }
@@ -2838,7 +2832,7 @@ app.get('/pdf/:instanceId', async (req, res) => {
 
     let pdfFilename = `form-${instanceId}.pdf`;
     if (download) {
-      pdfFilename = buildInstancePdfDownloadFilename(instanceId, form, template.steps, answerMap);
+      pdfFilename = buildInstancePdfDownloadFilename(instanceId, unitCode, template.steps, answerMap);
       res.setHeader('Content-Disposition', `attachment; filename="${pdfFilename.replace(/"/g, "'")}"`);
     }
 
