@@ -2921,6 +2921,8 @@ export interface SubmittedInstanceRow {
   form_version: string | null;
   /** Unit of competency code from skyline_forms (when loaded). */
   form_unit_code?: string | null;
+  /** Unit of competency title from skyline_forms (when loaded). */
+  form_unit_name?: string | null;
   student_id: number | null;
   student_name: string;
   student_email: string;
@@ -3678,14 +3680,15 @@ export async function listDashboardInstances(
     }
   }
 
-  const formMap = new Map<number, { name: string; version: string | null; unit_code: string | null }>();
+  const formMap = new Map<number, { name: string; version: string | null; unit_code: string | null; unit_name: string | null }>();
   if (formIds.length > 0) {
-    const { data: forms } = await supabase.from('skyline_forms').select('id, name, version, unit_code').in('id', formIds);
+    const { data: forms } = await supabase.from('skyline_forms').select('id, name, version, unit_code, unit_name').in('id', formIds);
     for (const f of (forms as Array<Record<string, unknown>>) || []) {
       formMap.set(Number(f.id), {
         name: String(f.name ?? ''),
         version: f.version ? String(f.version) : null,
         unit_code: f.unit_code != null && String(f.unit_code).trim() ? String(f.unit_code).trim() : null,
+        unit_name: f.unit_name != null && String(f.unit_name).trim() ? String(f.unit_name).trim() : null,
       });
     }
   }
@@ -3739,6 +3742,7 @@ export async function listDashboardInstances(
         form_name: form?.name || `Form #${formId}`,
         form_version: form?.version ?? null,
         form_unit_code: form?.unit_code ?? null,
+        form_unit_name: form?.unit_name ?? null,
         student_id: studentId,
         student_name: student?.name || 'Unknown student',
         student_email: student?.email || '',
@@ -3876,6 +3880,8 @@ export async function listTrainerUnitInstancesPaged(
   const form = await fetchForm(fid, { allowInactiveForAdmin: true });
   const formName = form?.name ?? `Form #${fid}`;
   const formVersion = form?.version ?? null;
+  const formUnitCode = form?.unit_code != null && String(form.unit_code).trim() ? String(form.unit_code).trim() : null;
+  const formUnitName = form?.unit_name != null && String(form.unit_name).trim() ? String(form.unit_name).trim() : null;
 
   const studentMap = new Map<number, { name: string; email: string }>();
   if (studentIds.length > 0) {
@@ -3901,6 +3907,8 @@ export async function listTrainerUnitInstancesPaged(
       form_id: fid,
       form_name: formName,
       form_version: formVersion,
+      form_unit_code: formUnitCode,
+      form_unit_name: formUnitName,
       student_id: studentId,
       student_name: student?.name || 'Unknown student',
       student_email: student?.email || '',

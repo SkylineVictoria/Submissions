@@ -17,6 +17,7 @@ import {
 import type { Form } from '../types/database';
 import { cn } from '../components/utils/cn';
 import { setTrainerHighlightCourseId, TRAINER_HIGHLIGHT_ROW_EXTRA_CLASS } from '../utils/trainerCourseHighlight';
+import { resolveFormUnitDisplay } from '../utils/formUnitDisplay';
 
 export const TrainerCourseUnitsPage: React.FC = () => {
   const { user } = useAuth();
@@ -114,8 +115,9 @@ export const TrainerCourseUnitsPage: React.FC = () => {
   const unitSelectOptions = useMemo(
     () =>
       [{ value: '', label: 'All units' }, ...forms.map((f) => {
-        const codePart = f.unit_code ? `Unit ${f.unit_code}` : null;
-        const label = [codePart, f.name].filter(Boolean).join(' · ');
+        const display = resolveFormUnitDisplay(f);
+        const codePart = display.unitCode ? `Unit ${display.unitCode}` : null;
+        const label = [codePart, display.title].filter(Boolean).join(' · ');
         return { value: String(f.id), label: label || f.name };
       })],
     [forms]
@@ -220,6 +222,7 @@ export const TrainerCourseUnitsPage: React.FC = () => {
               ) : !selectedForm ? (
                 <div className="space-y-2">
                   {forms.map((form) => {
+                    const display = resolveFormUnitDisplay(form);
                     const isOpen = expandedFormId === form.id;
                     return (
                       <div
@@ -236,10 +239,10 @@ export const TrainerCourseUnitsPage: React.FC = () => {
                           aria-expanded={isOpen}
                         >
                           <div className="min-w-0">
-                            <div className="font-semibold text-[var(--text)] break-words">{form.name}</div>
+                            <div className="font-semibold text-[var(--text)] break-words">{display.title}</div>
                             <div className="text-xs text-gray-500 mt-1 flex flex-wrap gap-x-3 gap-y-1">
-                              {form.unit_code ? <span>Unit {form.unit_code}</span> : null}
-                              {form.unit_name ? <span>{form.unit_name}</span> : null}
+                              {display.unitCode ? <span>Unit {display.unitCode}</span> : null}
+                              {display.unitName ? <span>{display.unitName}</span> : null}
                               {form.version ? <span>v{form.version}</span> : null}
                             </div>
                           </div>
@@ -274,12 +277,19 @@ export const TrainerCourseUnitsPage: React.FC = () => {
                   )}
                 >
                   <div className="px-4 py-3 border-b border-[var(--border)] bg-gray-50/80">
-                    <div className="font-semibold text-[var(--text)] break-words">{selectedForm.name}</div>
-                    <div className="text-xs text-gray-500 mt-1 flex flex-wrap gap-x-3 gap-y-1">
-                      {selectedForm.unit_code ? <span>Unit {selectedForm.unit_code}</span> : null}
-                      {selectedForm.unit_name ? <span>{selectedForm.unit_name}</span> : null}
-                      {selectedForm.version ? <span>v{selectedForm.version}</span> : null}
-                    </div>
+                    {(() => {
+                      const display = resolveFormUnitDisplay(selectedForm);
+                      return (
+                        <>
+                          <div className="font-semibold text-[var(--text)] break-words">{display.title}</div>
+                          <div className="text-xs text-gray-500 mt-1 flex flex-wrap gap-x-3 gap-y-1">
+                            {display.unitCode ? <span>Unit {display.unitCode}</span> : null}
+                            {display.unitName ? <span>{display.unitName}</span> : null}
+                            {selectedForm.version ? <span>v{selectedForm.version}</span> : null}
+                          </div>
+                        </>
+                      );
+                    })()}
                     <div className="mt-3 flex items-center justify-end">
                       <Link to={`/admin/course-units/${selectedForm.id}/submissions`}>
                         <Button variant="outline" size="sm">View student submissions</Button>

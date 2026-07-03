@@ -26,6 +26,7 @@ import {
   TRAINER_HIGHLIGHT_ROW_EXTRA_CLASS,
   useTrainerHighlightCourseId,
 } from '../../utils/trainerCourseHighlight';
+import { resolveFormUnitDisplay } from '../../utils/formUnitDisplay';
 
 async function fetchSummariesChunked(instanceIds: number[]): Promise<
   Record<number, { final_attempt_1_result: AttemptResult; final_attempt_2_result: AttemptResult; final_attempt_3_result: AttemptResult }>
@@ -94,20 +95,25 @@ export const TrainerGradeMePanel: React.FC<Props> = ({ trainerUserId }) => {
   }, [rows]);
 
   const groups = useMemo(() => {
-    const m = new Map<number, { formId: number; unitLabel: string; rows: SubmittedInstanceRow[] }>();
+    const m = new Map<number, { formId: number; unitLabel: string; sortKey: string; rows: SubmittedInstanceRow[] }>();
     for (const row of rows) {
       const fid = row.form_id;
       if (!m.has(fid)) {
-        const code = row.form_unit_code?.trim();
-        const unitLabel = code || row.form_name || `Form #${fid}`;
-        m.set(fid, { formId: fid, unitLabel, rows: [] });
+        const display = resolveFormUnitDisplay({
+          name: row.form_name,
+          unit_code: row.form_unit_code,
+          unit_name: row.form_unit_name,
+        });
+        const unitLabel = display.title || `Form #${fid}`;
+        const sortKey = display.unitCode || unitLabel;
+        m.set(fid, { formId: fid, unitLabel, sortKey, rows: [] });
       }
       m.get(fid)!.rows.push(row);
     }
     for (const g of m.values()) {
       g.rows.sort((a, b) => (a.student_name || '').localeCompare(b.student_name || '', undefined, { sensitivity: 'base' }));
     }
-    return [...m.values()].sort((a, b) => a.unitLabel.localeCompare(b.unitLabel, undefined, { sensitivity: 'base' }));
+    return [...m.values()].sort((a, b) => a.sortKey.localeCompare(b.sortKey, undefined, { sensitivity: 'base' }));
   }, [rows]);
 
   const allFormIds = useMemo(() => groups.map((g) => g.formId), [groups]);
@@ -192,7 +198,7 @@ export const TrainerGradeMePanel: React.FC<Props> = ({ trainerUserId }) => {
                       className={cn('w-4 h-4 text-gray-500 shrink-0 transition-transform', expanded && 'rotate-90')}
                       aria-hidden
                     />
-                    <span className="font-semibold text-[var(--brand)] tabular-nums">{unitLabel}</span>
+                    <span className="font-semibold text-[var(--text)] break-words">{unitLabel}</span>
                     <span className="text-sm text-gray-600">· {unitRows.length} pending</span>
                   </button>
                   {expanded ? (

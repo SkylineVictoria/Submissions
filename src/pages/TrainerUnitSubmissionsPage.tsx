@@ -26,6 +26,7 @@ import {
 import { cn } from '../components/utils/cn';
 import { DatePicker } from '../components/ui/DatePicker';
 import { toast } from '../utils/toast';
+import { resolveFormUnitDisplay } from '../utils/formUnitDisplay';
 
 function getOutcomeLabel(
   row: SubmittedInstanceRow,
@@ -110,7 +111,15 @@ export const TrainerUnitSubmissionsPage: React.FC = () => {
     };
   }, [rows]);
 
-  const unitTitle = useMemo(() => rows[0]?.form_name || 'Unit submissions', [rows]);
+  const unitDisplay = useMemo(() => {
+    const row = rows[0];
+    if (!row) return null;
+    return resolveFormUnitDisplay({
+      name: row.form_name,
+      unit_code: row.form_unit_code,
+      unit_name: row.form_unit_name,
+    });
+  }, [rows]);
   const totalPages = Math.max(1, Math.ceil(totalRows / PAGE_SIZE));
 
   const handleInstanceDatesChange = async (
@@ -174,8 +183,15 @@ export const TrainerUnitSubmissionsPage: React.FC = () => {
             <div>
               <h1 className="text-2xl font-bold text-[var(--text)] flex items-center gap-2">
                 <ClipboardCheck className="w-7 h-7 text-[var(--brand)]" />
-                {unitTitle}
+                {unitDisplay?.title ?? 'Unit submissions'}
               </h1>
+              {unitDisplay?.unitCode || unitDisplay?.unitName ? (
+                <p className="text-sm text-gray-600 mt-1">
+                  {unitDisplay.unitCode ? <>Unit {unitDisplay.unitCode}</> : null}
+                  {unitDisplay.unitCode && unitDisplay.unitName ? ' · ' : null}
+                  {unitDisplay.unitName ?? null}
+                </p>
+              ) : null}
               <p className="text-sm text-gray-600 mt-1">All student submissions/instances for this unit (your batches only).</p>
             </div>
           </div>
