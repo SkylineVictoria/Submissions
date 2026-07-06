@@ -1,8 +1,8 @@
 import path from 'path';
-import { fileURLToPath } from 'url';
-import { config } from 'dotenv';
 import express, { type Response } from 'express';
 import { createClient } from '@supabase/supabase-js';
+import { envTrim, loadPdfServerEnv } from './loadEnv.js';
+import { serverDir } from './paths.js';
 import { createPdfJobId } from './pdfBrowser.js';
 import { logMemory } from './pdfMemory.js';
 import { pdfImageSrc, escapeImgSrc, finalizePdfHtml, MAX_BULK_PDF_EXPORT } from './pdfConstants.js';
@@ -18,18 +18,24 @@ import {
 import { renderAppendixAMatrixHtml } from './appendixAMatrixData.js';
 import { buildInductionPdfHtml } from './inductionHtml.js';
 import { renderTaskQuestionInstructionHtml } from './instructionBlocksHtml.js';
+import { processPdfJobs, DEFAULT_WORKER_LIMIT, MAX_WORKER_LIMIT } from './pdfWorker.js';
+import { seedCompletedInstancePdfJobs } from './seedGeneratedPdfs.js';
+import {
+  buildInstancePdfFileName,
+  extractStudentFieldsFromAnswers,
+  type PdfFilenameQuestionStep,
+} from './pdfFileNaming.js';
 
-// Load .env from project root (parent of pdf-server)
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-config({ path: path.join(__dirname, '..', '.env') });
+// Load pdf-server/.env first; fall back to repo root ../.env only if missing.
+loadPdfServerEnv();
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = envTrim('PORT') || 3001;
 
 app.use(express.json({ limit: '2mb' }));
 
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabaseUrl = envTrim('SUPABASE_URL');
+const supabaseServiceKey = envTrim('SUPABASE_SERVICE_ROLE_KEY');
 
 if (!supabaseUrl || !supabaseServiceKey) {
   console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');
@@ -42,7 +48,7 @@ const supabase = createClient(supabaseUrl, supabaseServiceKey);
 app.use((_req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-worker-secret');
   next();
 });
 
@@ -53,6 +59,82 @@ app.options('*', (_req, res) => {
 // Lightweight health check for Render: ping this every 5–14 min to avoid cold starts (e.g. UptimeRobot)
 app.get('/health', (_req, res) => {
   res.status(200).send('ok');
+});
+
+/**
+ * Background PDF worker — called by Supabase cron/edge function only (not browsers).
+ * Processes pending skyline_generated_pdfs rows one at a time (Render Free safe).
+ */
+app.post('/jobs/process-pdfs', async (req, res) => {
+  const secret = envTrim('PDF_WORKER_SECRET');
+  const header = String(req.headers['x-worker-secret'] ?? '').trim();
+  if (!secret || header !== secret) {
+    console.warn('[pdf-worker] unauthorized request');
+    res.status(401).json({ ok: false, message: 'Unauthorized' });
+    return;
+  }
+
+  const limit = Math.min(
+    MAX_WORKER_LIMIT,
+    Math.max(1, Number(req.body?.limit ?? req.query?.limit ?? DEFAULT_WORKER_LIMIT) || DEFAULT_WORKER_LIMIT),
+  );
+  const role = String(req.body?.role ?? req.query?.role ?? 'office');
+  const dryRun = req.body?.dryRun === true || req.query?.dryRun === '1';
+
+  console.log('[pdf-worker] /jobs/process-pdfs', { limit, role, dryRun });
+  try {
+    const result = await processPdfJobs(supabase, { limit, role, dryRun });
+    if (!result.ok && result.message === 'PDF worker busy, retry later') {
+      res.status(503).json(result);
+      return;
+    }
+    res.status(result.ok ? 200 : 500).json(result);
+  } catch (err) {
+    console.error('[pdf-worker] endpoint error', err);
+    res.status(500).json({
+      ok: false,
+      message: err instanceof Error ? err.message : 'Worker error',
+      picked: 0,
+      uploaded: 0,
+      failed: 0,
+      skipped: 0,
+      results: [],
+    });
+  }
+});
+
+/**
+ * Seed pending skyline_generated_pdfs rows for completed locked instances (worker/cron only).
+ */
+app.post('/jobs/seed-completed-pdfs', async (req, res) => {
+  const secret = envTrim('PDF_WORKER_SECRET');
+  const header = String(req.headers['x-worker-secret'] ?? '').trim();
+  if (!secret || header !== secret) {
+    console.warn('[pdf-worker] unauthorized seed request');
+    res.status(401).json({ ok: false, message: 'Unauthorized' });
+    return;
+  }
+
+  const limit = Math.min(500, Math.max(1, Number(req.body?.limit ?? req.query?.limit ?? 100) || 100));
+  const role = String(req.body?.role ?? req.query?.role ?? 'office');
+  const dryRun = req.body?.dryRun === true || req.query?.dryRun === '1';
+
+  console.log('[pdf-worker] /jobs/seed-completed-pdfs', { limit, role, dryRun });
+  try {
+    const result = await seedCompletedInstancePdfJobs(supabase, { limit, role, dryRun });
+    res.status(result.ok ? 200 : 500).json(result);
+  } catch (err) {
+    console.error('[pdf-worker] seed endpoint error', err);
+    res.status(500).json({
+      ok: false,
+      message: err instanceof Error ? err.message : 'Seed error',
+      scanned: 0,
+      seeded: 0,
+      skipped: 0,
+      instanceIds: [],
+      dryRun,
+    });
+  }
 });
 
 /** Induction pack PDF — HTML includes SLIT header + inner footers per page; no Playwright header/footer (avoids duplicate footers). */
@@ -78,7 +160,7 @@ app.get('/pdf/induction/:token', async (req, res) => {
       return;
     }
 
-    const { crestImg, textImg } = resolveSlitLogoDataUrls(__dirname);
+    const { crestImg, textImg } = resolveSlitLogoDataUrls(serverDir);
     const { html } = buildInductionPdfHtml({
       title: String((row as { title: string }).title),
       startAt: String((row as { start_at: string }).start_at),
@@ -138,44 +220,15 @@ function inductionFilledPdfFilename(payload: Record<string, unknown>): string {
   return `${base} induction form.pdf`;
 }
 
-function sanitizePdfFilenameSegment(value: string): string {
-  return value.replace(/[/\\:*?"<>|]/g, '_').replace(/\s+/g, ' ').trim();
-}
-
-type PdfFilenameQuestionStep = {
-  sections: Array<{
-    questions: Array<{ question: { code: string | null; id: number } }>;
-  }>;
-};
-
 /** Assessment instance PDF download name: "{unit code}_{student id}_{student name}.pdf" */
 function buildInstancePdfDownloadFilename(
   instanceId: number,
   unitCode: string,
   steps: PdfFilenameQuestionStep[],
-  answerMap: Map<string, unknown>
+  answerMap: Map<string, unknown>,
 ): string {
-  let studentId = '';
-  let studentName = '';
-
-  for (const step of steps) {
-    for (const { questions } of step.sections) {
-      for (const { question } of questions) {
-        const code = String(question.code ?? '').trim();
-        if (!code) continue;
-        const raw = answerMap.get(`q-${question.id}`);
-        if (raw == null) continue;
-        const value = String(raw).trim();
-        if (!value) continue;
-        if (code === 'student.id') studentId = value;
-        if (code === 'student.fullName') studentName = value;
-      }
-    }
-  }
-
-  const parts = [unitCode, studentId, studentName].map(sanitizePdfFilenameSegment).filter(Boolean);
-  if (parts.length === 0) return `form-${instanceId}.pdf`;
-  return `${parts.join('_')}.pdf`;
+  const { studentId, studentName } = extractStudentFieldsFromAnswers(steps, answerMap);
+  return buildInstancePdfFileName({ unitCode, studentId, studentName, instanceId });
 }
 
 /** Filled induction pack from submitted JSON (admin export). Body: { payload } or { payloads: [] } (max ${MAX_BULK_PDF_EXPORT}). */
@@ -219,7 +272,7 @@ app.post('/pdf/induction/:token/filled', async (req, res) => {
       return;
     }
 
-    const { crestImg, textImg } = resolveSlitLogoDataUrls(__dirname);
+    const { crestImg, textImg } = resolveSlitLogoDataUrls(serverDir);
     const { html } = buildInductionPdfHtml({
       title: String((row as { title: string }).title),
       startAt: String((row as { start_at: string }).start_at),
@@ -643,7 +696,7 @@ function buildHtml(data: {
   }
   // Header images: data URLs for Playwright header/footer templates; https for custom crest
   let crestImg = form.header_asset_url || '';
-  const defaultLogos = resolveSlitLogoDataUrls(__dirname);
+  const defaultLogos = resolveSlitLogoDataUrls(serverDir);
   let textImg = defaultLogos.textImg;
   if (!crestImg) {
     crestImg = defaultLogos.crestImg;

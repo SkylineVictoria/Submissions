@@ -4,6 +4,11 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { renderAppendixAMatrixHtml } from './appendixAMatrixData.js';
 import { renderTaskQuestionInstructionHtml } from './instructionBlocksHtml.js';
 import { escapeImgSrc, pdfImageSrc } from './pdfConstants.js';
+import { publicDir } from './paths.js';
+import {
+  buildInstancePdfFileName,
+  extractStudentFieldsFromAnswers,
+} from './pdfFileNaming.js';
 
 export interface FormAnswer {
   question_id: number;
@@ -245,21 +250,21 @@ export function buildHtml(data: {
   }
   const { form, steps, answers, taskRowsMap = new Map(), trainerAssessments = new Map(), resultsOffice = new Map(), resultsData = new Map(), assessmentSummaryData = {} } = data;
   // Header images: crest (shield logo) and text logo
-  const basePath = (data as { _basePath?: string })._basePath ?? path.join(__dirname, '..');
+  const publicAssets = (data as { _publicDir?: string })._publicDir ?? publicDir;
   let crestImg = form.header_asset_url || '';
   let textImg = '';
   try {
     if (!crestImg) {
-      const crestPath = path.join(basePath, 'public', 'logo-crest.png');
+      const crestPath = path.join(publicAssets, 'logo-crest.png');
       if (fs.existsSync(crestPath)) {
         const buf = fs.readFileSync(crestPath);
         crestImg = `data:image/png;base64,${buf.toString('base64')}`;
       } else {
-        let logoPath = path.join(basePath, 'public', 'logo.jpeg');
+        let logoPath = path.join(publicAssets, 'logo.jpeg');
         let mime = 'jpeg';
-        if (!fs.existsSync(logoPath)) logoPath = path.join(basePath, 'public', 'logo.jpg');
+        if (!fs.existsSync(logoPath)) logoPath = path.join(publicAssets, 'logo.jpg');
         if (!fs.existsSync(logoPath)) {
-          logoPath = path.join(basePath, 'public', 'logo.png');
+          logoPath = path.join(publicAssets, 'logo.png');
           mime = 'png';
         }
         if (fs.existsSync(logoPath)) {
@@ -268,7 +273,7 @@ export function buildHtml(data: {
         }
       }
     }
-    const textPath = path.join(basePath, 'public', 'logo-text.png');
+    const textPath = path.join(publicAssets, 'logo-text.png');
     if (fs.existsSync(textPath)) {
       const buf = fs.readFileSync(textPath);
       textImg = `data:image/png;base64,${buf.toString('base64')}`;
@@ -1772,7 +1777,10 @@ export function buildHtml(data: {
 
 
 
-export async function getPdfData(supabase: SupabaseClient, instanceId: number): Promise<{ html: string; unitCode: string; version: string; headerHtml: string } | null> {
+export async function getPdfData(
+  supabase: SupabaseClient,
+  instanceId: number,
+): Promise<{ html: string; unitCode: string; version: string; headerHtml: string; fileName: string } | null> {
   const template = await getTemplateForInstance(supabase, instanceId);
   if (!template) return null;
 
@@ -1893,7 +1901,7 @@ export async function getPdfData(supabase: SupabaseClient, instanceId: number): 
   }
 
   const form = template.instance.form;
-  return buildHtml({
+  const built = buildHtml({
     form: form,
     steps: template.steps,
     answers: answerMap,
@@ -1903,4 +1911,14 @@ export async function getPdfData(supabase: SupabaseClient, instanceId: number): 
     resultsData: resultsDataMap,
     assessmentSummaryData: assessmentSummaryMap,
   });
+
+  const { studentId, studentName } = extractStudentFieldsFromAnswers(template.steps, answerMap);
+  const fileName = buildInstancePdfFileName({
+    unitCode: built.unitCode,
+    studentId,
+    studentName,
+    instanceId,
+  });
+
+  return { ...built, fileName };
 }

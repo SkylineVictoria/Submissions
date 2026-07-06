@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { fetchTemplateForForm } from '../lib/formEngine';
 import type { FormTemplate } from '../lib/formEngine';
@@ -6,7 +6,6 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Loader } from '../components/ui/Loader';
 import { Stepper } from '../components/ui/Stepper';
-import { usePdfPreviewLoadState } from '../hooks/usePdfPreviewLoadState';
 
 const PDF_BASE = import.meta.env.VITE_PDF_API_URL ?? '';
 
@@ -18,14 +17,12 @@ export const AdminFormPreviewPage: React.FC = () => {
   const [currentStep, setCurrentStep] = useState(1);
   const [pdfRefresh, setPdfRefresh] = useState(0);
   const numericFormId = Number(formId || 0);
-  const pdfCacheBust = useMemo(() => Date.now(), [numericFormId, pdfRefresh]);
-  const {
-    loading: pdfLoading,
-    timedOut: pdfTimedOut,
-    onLoad: onPdfFrameLoad,
-    onError: onPdfFrameError,
-    restart: restartPdfLoad,
-  } = usePdfPreviewLoadState(numericFormId > 0 && Boolean(PDF_BASE), pdfCacheBust);
+  const livePreviewUrl = PDF_BASE
+    ? `${PDF_BASE.replace(/\/$/, '')}/pdf/preview/form/${numericFormId}?t=${Date.now()}#toolbar=0`
+    : '';
+  const liveDownloadUrl = PDF_BASE
+    ? `${PDF_BASE.replace(/\/$/, '')}/pdf/preview/form/${numericFormId}?download=1&t=${Date.now()}`
+    : '';
 
   useEffect(() => {
     const id = Number(formId);
@@ -125,64 +122,36 @@ export const AdminFormPreviewPage: React.FC = () => {
           <div className="lg:col-span-3">
             <Card>
               <h3 className="font-bold text-[var(--text)] mb-4">PDF Preview</h3>
+              <p className="text-sm text-gray-600 mb-3">
+                Stored SharePoint PDFs apply to completed assessment instances. This form preview has no instance —
+                use live PDF generation manually below (does not run automatically).
+              </p>
               <div className="space-y-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="w-full"
-                  onClick={() => {
-                    window.open(`${PDF_BASE}/pdf/preview/form/${numericFormId}?t=${pdfCacheBust}#toolbar=0`, '_blank', 'width=900,height=700');
-                  }}
-                >
-                  Preview PDF
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="w-full"
-                  onClick={() => {
-                    restartPdfLoad();
-                    setPdfRefresh((r) => r + 1);
-                  }}
-                >
-                  Refresh PDF
-                </Button>
-                <a
-                  href={`${PDF_BASE}/pdf/preview/form/${numericFormId}?download=1&t=${pdfCacheBust}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="block"
-                >
-                  <Button variant="outline" size="sm" className="w-full">
-                    Download PDF
-                  </Button>
-                </a>
-              </div>
-              <div className="mt-4 relative min-h-[50vh] sm:min-h-96 bg-gray-50 border border-[var(--border)] rounded-lg overflow-hidden">
-                {pdfLoading && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-white/80 z-10 select-none cursor-wait">
-                    <Loader variant="spinner" size="lg" />
-                  </div>
-                )}
-                {!pdfLoading && pdfTimedOut && (
-                  <div className="absolute top-2 left-2 right-2 z-10 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                    Preview is taking longer than expected. Use Refresh PDF or Download PDF if the preview looks blank.
-                  </div>
-                )}
-                {!PDF_BASE ? (
-                  <div className="flex h-[min(50vh,400px)] items-center justify-center p-4 text-center text-sm text-gray-500 sm:h-96">
-                    PDF preview is not configured (missing VITE_PDF_API_URL).
-                  </div>
+                {PDF_BASE ? (
+                  <>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full"
+                      onClick={() => {
+                        window.open(livePreviewUrl, '_blank', 'width=900,height=700');
+                        setPdfRefresh((r) => r + 1);
+                      }}
+                    >
+                      Generate live PDF
+                    </Button>
+                    <a href={liveDownloadUrl} target="_blank" rel="noopener noreferrer" className="block">
+                      <Button variant="outline" size="sm" className="w-full">
+                        Download live PDF
+                      </Button>
+                    </a>
+                  </>
                 ) : (
-                  <iframe
-                    key={pdfCacheBust}
-                    src={`${PDF_BASE}/pdf/preview/form/${numericFormId}?t=${pdfCacheBust}#toolbar=0`}
-                    title="Admin Preview PDF"
-                    className="h-[min(50vh,400px)] w-full border-0 rounded-lg sm:h-96"
-                    onLoad={onPdfFrameLoad}
-                    onError={onPdfFrameError}
-                  />
+                  <p className="text-sm text-gray-500">Set VITE_PDF_API_URL to enable live PDF preview.</p>
                 )}
+              </div>
+              <div className="mt-4 rounded-lg border border-dashed border-gray-300 bg-gray-50 px-4 py-8 text-center text-sm text-gray-500">
+                Live PDF is not loaded automatically — this avoids overloading the Render PDF server.
               </div>
             </Card>
           </div>

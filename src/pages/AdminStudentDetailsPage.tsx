@@ -66,8 +66,8 @@ import {
   TRAINER_HIGHLIGHT_ROW_EXTRA_CLASS,
   useTrainerHighlightCourseId,
 } from '../utils/trainerCourseHighlight';
-
-const PDF_BASE = import.meta.env.VITE_PDF_API_URL ?? '';
+import { useInstancePdfDownload } from '../hooks/useInstancePdfDownload';
+import { LivePdfGenerateConfirmDialog } from '../components/pdf/LivePdfGenerateConfirmDialog';
 
 const pad2 = (n: number) => String(n).padStart(2, '0');
 const formatDDMMYYYY = (value: string | null): string => {
@@ -222,6 +222,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
     Record<number, { final_attempt_1_result: AttemptResult; final_attempt_2_result: AttemptResult; final_attempt_3_result: AttemptResult }>
   >({});
   const [managingId, setManagingId] = useState<number | null>(null);
+  const { downloadingId: downloadingPdfId, downloadInstancePdf, liveGenerateDialogProps } = useInstancePdfDownload('office');
   const [adminNotesByInstanceId, setAdminNotesByInstanceId] = useState<Record<number, string>>({});
   const [adminNoteDrafts, setAdminNoteDrafts] = useState<Record<number, string>>({});
   const [savingAdminNoteId, setSavingAdminNoteId] = useState<number | null>(null);
@@ -301,6 +302,11 @@ export const AdminStudentDetailsPage: React.FC = () => {
     setAssessments(res.data);
     setAssessmentsLoading(false);
   }, [sid]);
+
+  const handleDownloadStoredPdf = useCallback(
+    (instanceId: number) => downloadInstancePdf(instanceId, 'office'),
+    [downloadInstancePdf],
+  );
 
   const reloadStudentData = useCallback(async () => {
     if (!Number.isFinite(sid) || sid <= 0) return;
@@ -1129,8 +1135,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
                                     'group inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-gray-200 bg-white text-gray-600 hover:bg-[var(--brand)]/10 hover:border-[var(--brand)]/40 hover:text-[var(--brand)] transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:border-gray-200 disabled:hover:text-gray-600 text-xs font-medium';
                                   const actionIcon = 'w-3 h-3 shrink-0';
                                   const actionText = 'max-w-0 overflow-hidden group-hover:max-w-[8rem] transition-all duration-200 whitespace-nowrap';
-                                  const pdfBase = PDF_BASE.replace(/\/$/, '');
-                                  const downloadPdfHref = pdfBase ? `${pdfBase}/pdf/${row.id}?role=office&download=1` : '';
+                                  const pdfDownloading = downloadingPdfId === row.id;
                                   const canResubmit =
                                     row.status !== 'locked' &&
                                     (Number((row as unknown as { submission_count?: number }).submission_count ?? 0) > 0 || !!row.submitted_at);
@@ -1145,20 +1150,16 @@ export const AdminStudentDetailsPage: React.FC = () => {
                                       >
                                         Apply
                                       </button>
-                                      <a
-                                        href={downloadPdfHref}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
+                                      <button
+                                        type="button"
                                         className={actionBtn}
-                                        aria-disabled={!downloadPdfHref}
-                                        onClick={(e) => {
-                                          if (!downloadPdfHref) e.preventDefault();
-                                        }}
-                                        title={!downloadPdfHref ? 'Set VITE_PDF_API_URL to the PDF server URL' : 'Download PDF'}
+                                        onClick={() => void handleDownloadStoredPdf(row.id)}
+                                        disabled={pdfDownloading}
+                                        title="Download stored PDF from SharePoint"
                                       >
                                         <Download className={actionIcon} />
-                                        <span className={actionText}>Download PDF</span>
-                                      </a>
+                                        <span className={actionText}>{pdfDownloading ? 'Opening…' : 'Download PDF'}</span>
+                                      </button>
                                       <button type="button" className={actionBtn} onClick={() => void handleCopyLink(row)} title="Copy link">
                                         <Copy className={actionIcon} />
                                         <span className={actionText}>Copy link</span>
@@ -1581,6 +1582,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
         cancelLabel="No"
         variant="danger"
       />
+      <LivePdfGenerateConfirmDialog {...liveGenerateDialogProps} />
     </div>
   );
 };

@@ -58,8 +58,8 @@ import {
   TRAINER_HIGHLIGHT_ROW_EXTRA_CLASS,
   useTrainerHighlightCourseId,
 } from '../utils/trainerCourseHighlight';
-
-const PDF_BASE = import.meta.env.VITE_PDF_API_URL ?? '';
+import { useInstancePdfDownload } from '../hooks/useInstancePdfDownload';
+import { LivePdfGenerateConfirmDialog } from '../components/pdf/LivePdfGenerateConfirmDialog';
 
 const getWorkflowRowInput = (row: SubmittedInstanceRow) => ({
   status: row.status,
@@ -237,6 +237,7 @@ export const AdminAssessmentsPage: React.FC = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [sendingId, setSendingId] = useState<number | null>(null);
   const [managingId, setManagingId] = useState<number | null>(null);
+  const { downloadingId: downloadingPdfId, downloadInstancePdf, liveGenerateDialogProps } = useInstancePdfDownload('office');
   const [searchTerm, setSearchTerm] = useState('');
   const [courseFilter, setCourseFilter] = useState('');
   const [formFilter, setFormFilter] = useState('');
@@ -732,6 +733,11 @@ export const AdminAssessmentsPage: React.FC = () => {
 
   const sortedRows = rows;
 
+  const handleDownloadStoredPdf = useCallback(
+    (instanceId: number) => downloadInstancePdf(instanceId, 'office'),
+    [downloadInstancePdf],
+  );
+
   const renderAssessmentActions = (row: SubmittedInstanceRow, mode: 'toolbar' | 'stack') => {
     const role = row.role_context === 'trainer' ? 'trainer' : row.role_context === 'office' ? 'office' : 'student';
     // Admin "Open" should always unlock all fields (admin edit mode),
@@ -771,9 +777,7 @@ export const AdminAssessmentsPage: React.FC = () => {
       window.open(nextUrl, '_blank');
     };
     const openLink = async () => openLinkAs(openRole);
-
-    const pdfBase = PDF_BASE.replace(/\/$/, '');
-    const downloadPdfHref = pdfBase ? `${pdfBase}/pdf/${row.id}?role=office&download=1` : '';
+    const pdfDownloading = downloadingPdfId === row.id;
 
     if (mode === 'stack') {
       return (
@@ -791,18 +795,17 @@ export const AdminAssessmentsPage: React.FC = () => {
             <ExternalLink className="mr-2 h-4 w-4 shrink-0" />
             Open
           </Button>
-          <a
-            href={downloadPdfHref}
-            target="_blank"
-            rel="noopener noreferrer"
-            className={!downloadPdfHref ? 'pointer-events-none opacity-50' : undefined}
-            title={!downloadPdfHref ? 'Set VITE_PDF_API_URL to the PDF server URL' : 'Download PDF'}
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full justify-center"
+            onClick={() => void handleDownloadStoredPdf(row.id)}
+            disabled={pdfDownloading}
+            title="Download stored PDF from SharePoint"
           >
-            <Button variant="outline" size="sm" className="w-full justify-center" disabled={!downloadPdfHref}>
-              <Download className="mr-2 h-4 w-4 shrink-0" />
-              Download PDF
-            </Button>
-          </a>
+            <Download className="mr-2 h-4 w-4 shrink-0" />
+            {pdfDownloading ? 'Opening…' : 'Download PDF'}
+          </Button>
           <Button variant="outline" size="sm" className="w-full justify-center" onClick={() => void handleCopyLink(row.id, role)}>
             <Copy className="mr-2 h-4 w-4 shrink-0" />
             Copy link
@@ -864,20 +867,17 @@ export const AdminAssessmentsPage: React.FC = () => {
           <ExternalLink className={actionIcon} />
           <span className={actionText}>Open</span>
         </button>
-        <a
-          href={downloadPdfHref}
-          target="_blank"
-          rel="noopener noreferrer"
+        <button
+          type="button"
+          onClick={() => void handleDownloadStoredPdf(row.id)}
           className={actionBtn}
-          aria-disabled={!downloadPdfHref}
-          onClick={(e) => {
-            if (!downloadPdfHref) e.preventDefault();
-          }}
+          disabled={pdfDownloading}
           aria-label="Download PDF"
+          title="Download stored PDF from SharePoint"
         >
           <Download className={actionIcon} />
-          <span className={actionText}>Download PDF</span>
-        </a>
+          <span className={actionText}>{pdfDownloading ? 'Opening…' : 'Download PDF'}</span>
+        </button>
         <button type="button" onClick={() => void handleCopyLink(row.id, role)} className={actionBtn} aria-label="Copy link">
           <Copy className={actionIcon} />
           <span className={actionText}>Copy link</span>
@@ -1459,6 +1459,7 @@ export const AdminAssessmentsPage: React.FC = () => {
           cancelLabel="No"
           variant="danger"
         />
+        <LivePdfGenerateConfirmDialog {...liveGenerateDialogProps} />
       </div>
     </div>
   );
