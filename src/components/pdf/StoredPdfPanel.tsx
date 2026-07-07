@@ -5,6 +5,7 @@ import { Loader } from '../ui/Loader';
 import { LivePdfGenerateConfirmDialog } from './LivePdfGenerateConfirmDialog';
 import {
   buildLiveInstancePdfDownloadUrl,
+  buildLiveInstancePdfPreviewUrl,
   fetchGeneratedPdf,
   getStoredPdfPreviewUrl,
   isInstanceCompletedForPdfQueue,
@@ -29,8 +30,8 @@ type Props = {
 };
 
 /**
- * Stored PDF panel — reads SharePoint URL from skyline_generated_pdfs.
- * Does NOT auto-load Render /pdf (prevents Puppeteer queue overload on Render Free).
+ * Stored PDF panel — SharePoint for download; embedded preview via pdf-server iframe.
+ * Does NOT auto-load Render on page mount (iframe only when panel is shown and VITE_PDF_API_URL is set).
  */
 export const StoredPdfPanel: React.FC<Props> = ({
   instanceId,
@@ -65,21 +66,28 @@ export const StoredPdfPanel: React.FC<Props> = ({
     void load();
   }, [load]);
 
-  const previewUrl = useMemo(() => getStoredPdfPreviewUrl(row), [row]);
+  const sharePointUrl = useMemo(() => getStoredPdfPreviewUrl(row), [row]);
+  const embeddedPreviewUrl = useMemo(
+    () => buildLiveInstancePdfPreviewUrl(instanceId, role),
+    [instanceId, role],
+  );
   const canLiveGenerate = Boolean(PDF_BASE && buildLiveInstancePdfDownloadUrl(instanceId, role));
-  const livePdfUrl = PDF_BASE
-    ? `${PDF_BASE.replace(/\/$/, '')}/pdf/${instanceId}?role=${role}&t=${Date.now()}#toolbar=0`
-    : '';
+  const livePdfUrl = embeddedPreviewUrl ?? '';
   const liveDownloadUrl = buildLiveInstancePdfDownloadUrl(instanceId, role) ?? '';
 
   const handleOpenStored = async (download = false) => {
-    if (!previewUrl || !row) return;
+    if (!sharePointUrl || !row) return;
     if (download) await recordGeneratedPdfDownload(row.id);
-    window.open(previewUrl, download ? '_blank' : '_blank', download ? undefined : 'width=900,height=700');
+    window.open(sharePointUrl, '_blank', 'noopener,noreferrer');
+  };
+
+  const handleOpenPdfServerPreview = () => {
+    if (!embeddedPreviewUrl) return;
+    window.open(embeddedPreviewUrl, '_blank', 'noopener,noreferrer');
   };
 
   const handleDownload = async () => {
-    if (previewUrl) {
+    if (sharePointUrl) {
       await handleOpenStored(true);
       return;
     }
@@ -118,8 +126,8 @@ export const StoredPdfPanel: React.FC<Props> = ({
       }
       return 'PDF will be queued after this assessment is completed.';
     }
-    if (previewUrl) {
-      return 'PDF ready (stored in SharePoint).';
+    if (sharePointUrl) {
+      return 'PDF ready (stored in SharePoint). Preview uses the PDF server; download opens SharePoint.';
     }
     switch (row.pdf_status) {
       case 'pending':
@@ -153,13 +161,19 @@ export const StoredPdfPanel: React.FC<Props> = ({
           ) : null}
 
           <div className="space-y-2">
-            {previewUrl ? (
+            {sharePointUrl ? (
               <>
-                <Button variant="outline" size="sm" className="w-full" onClick={() => void handleOpenStored(false)}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                  onClick={handleOpenPdfServerPreview}
+                  disabled={!embeddedPreviewUrl}
+                >
                   Preview PDF
                 </Button>
                 <Button variant="outline" size="sm" className="w-full" onClick={() => void handleOpenStored(true)}>
-                  Download PDF
+                  Download PDF (SharePoint)
                 </Button>
               </>
             ) : canLiveGenerate ? (
@@ -215,12 +229,12 @@ export const StoredPdfPanel: React.FC<Props> = ({
             ) : null}
           </div>
 
-          {previewUrl ? (
+          {embeddedPreviewUrl ? (
             <div className="mt-4 relative min-h-96 bg-gray-50 border border-[var(--border)] rounded-lg overflow-hidden">
               <iframe
-                key={previewUrl}
-                src={previewUrl}
-                title="Stored PDF Preview"
+                key={embeddedPreviewUrl}
+                src={embeddedPreviewUrl}
+                title="PDF Preview"
                 className="w-full h-64 sm:h-80 lg:h-96 min-h-[16rem] border-0 rounded-lg"
               />
             </div>

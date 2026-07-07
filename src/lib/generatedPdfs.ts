@@ -83,6 +83,17 @@ export function buildLiveInstancePdfDownloadUrl(instanceId: number, role = 'offi
   return `${base}/pdf/${instanceId}?${params.toString()}`;
 }
 
+/** Embedded / inline preview via pdf-server (SharePoint blocks iframe embedding). */
+export function buildLiveInstancePdfPreviewUrl(instanceId: number, role = 'office'): string | null {
+  const base = String(import.meta.env.VITE_PDF_API_URL ?? '').replace(/\/$/, '');
+  if (!base || !Number.isFinite(instanceId) || instanceId <= 0) return null;
+  const params = new URLSearchParams({
+    role,
+    t: String(Date.now()),
+  });
+  return `${base}/pdf/${instanceId}?${params.toString()}#toolbar=0`;
+}
+
 export const LIVE_PDF_GENERATE_CONFIRM_MESSAGE =
   'This PDF is not in SharePoint yet. Generate and download it now? This uses the PDF server directly and may take up to 2 minutes.';
 

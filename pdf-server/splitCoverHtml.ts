@@ -22,8 +22,14 @@ export function splitCoverAndRestHtml(fullHtml: string): { coverHtml: string; re
   const restContent = bodyContent.slice(introIndex);
   const htmlClose = '\n</body>\n</html>';
 
-  return {
-    coverHtml: `${beforeBody}${coverContent}${htmlClose}`,
-    restHtml: `${beforeBody}${restContent}${htmlClose}`,
-  };
+  const coverHtml = `${beforeBody}${coverContent}${htmlClose}`;
+  const restHtmlRaw = `${beforeBody}${restContent}${htmlClose}`;
+  // restHtml starts at Student Pack intro — must not use @page :first { margin: 0 } or the
+  // Playwright header template overlaps the first page body.
+  const restHtml = restHtmlRaw.replace(
+    /@page\s*:first\s*\{\s*margin:\s*0;\s*\}/,
+    '@page :first { margin: 190px 15mm 70px 15mm; }',
+  );
+
+  return { coverHtml, restHtml };
 }
