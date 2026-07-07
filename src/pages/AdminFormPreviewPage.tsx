@@ -15,7 +15,6 @@ export const AdminFormPreviewPage: React.FC = () => {
   const [template, setTemplate] = useState<FormTemplate | null>(null);
   const [loading, setLoading] = useState(true);
   const [currentStep, setCurrentStep] = useState(1);
-  const [pdfRefresh, setPdfRefresh] = useState(0);
   const numericFormId = Number(formId || 0);
   const livePreviewUrl = PDF_BASE
     ? `${PDF_BASE.replace(/\/$/, '')}/pdf/preview/form/${numericFormId}?t=${Date.now()}#toolbar=0`
@@ -135,7 +134,6 @@ export const AdminFormPreviewPage: React.FC = () => {
                       className="w-full"
                       onClick={() => {
                         window.open(livePreviewUrl, '_blank', 'width=900,height=700');
-                        setPdfRefresh((r) => r + 1);
                       }}
                     >
                       Generate live PDF

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Card } from './ui/Card';
-import { Button } from './ui/Button';
-import { Loader } from './ui/Loader';
+import { Card } from '../ui/Card';
+import { Button } from '../ui/Button';
+import { Loader } from '../ui/Loader';
 import { LivePdfGenerateConfirmDialog } from './LivePdfGenerateConfirmDialog';
 import {
   buildLiveInstancePdfDownloadUrl,
