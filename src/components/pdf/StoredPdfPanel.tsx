@@ -45,8 +45,10 @@ export const StoredPdfPanel: React.FC<Props> = ({
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [liveGenerateOpen, setLiveGenerateOpen] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewRefresh, setPreviewRefresh] = useState(0);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (options?: { refreshPreview?: boolean }) => {
     if (!Number.isFinite(instanceId) || instanceId <= 0) {
       setRow(null);
       setLoading(false);
@@ -60,17 +62,37 @@ export const StoredPdfPanel: React.FC<Props> = ({
     }
     setRow(record);
     setLoading(false);
+    if (options?.refreshPreview && buildLiveInstancePdfPreviewUrl(instanceId, role)) {
+      setPreviewRefresh((r) => r + 1);
+    }
   }, [instanceId, role, workflowStatus, legacyStatus]);
+
+  const sharePointUrl = useMemo(() => getStoredPdfPreviewUrl(row), [row]);
+  const embeddedPreviewUrl = useMemo(() => {
+    const base = buildLiveInstancePdfPreviewUrl(instanceId, role);
+    if (!base) return null;
+    const separator = base.includes('?') ? '&' : '?';
+    return `${base}${separator}refresh=${previewRefresh}`;
+  }, [instanceId, role, previewRefresh]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const sharePointUrl = useMemo(() => getStoredPdfPreviewUrl(row), [row]);
-  const embeddedPreviewUrl = useMemo(
-    () => buildLiveInstancePdfPreviewUrl(instanceId, role),
-    [instanceId, role],
-  );
+  useEffect(() => {
+    if (embeddedPreviewUrl) {
+      setPreviewLoading(true);
+    } else {
+      setPreviewLoading(false);
+    }
+  }, [embeddedPreviewUrl]);
+
+  useEffect(() => {
+    if (!previewLoading) return;
+    const timer = window.setTimeout(() => setPreviewLoading(false), 130_000);
+    return () => window.clearTimeout(timer);
+  }, [previewLoading, embeddedPreviewUrl]);
+
   const canLiveGenerate = Boolean(PDF_BASE && buildLiveInstancePdfDownloadUrl(instanceId, role));
   const livePdfUrl = embeddedPreviewUrl ?? '';
   const liveDownloadUrl = buildLiveInstancePdfDownloadUrl(instanceId, role) ?? '';
@@ -188,7 +210,13 @@ export const StoredPdfPanel: React.FC<Props> = ({
               </Button>
             ) : null}
 
-            <Button variant="ghost" size="sm" className="w-full" onClick={() => void load()} disabled={actionLoading}>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="w-full"
+              onClick={() => void load({ refreshPreview: true })}
+              disabled={actionLoading}
+            >
               Refresh status
             </Button>
 
@@ -231,11 +259,17 @@ export const StoredPdfPanel: React.FC<Props> = ({
 
           {embeddedPreviewUrl ? (
             <div className="mt-4 relative min-h-96 bg-gray-50 border border-[var(--border)] rounded-lg overflow-hidden">
+              {previewLoading ? (
+                <div className="absolute inset-0 z-10 flex items-center justify-center bg-gray-50/95">
+                  <Loader variant="dots" size="md" message="Generating PDF preview…" />
+                </div>
+              ) : null}
               <iframe
                 key={embeddedPreviewUrl}
                 src={embeddedPreviewUrl}
                 title="PDF Preview"
                 className="w-full h-64 sm:h-80 lg:h-96 min-h-[16rem] border-0 rounded-lg"
+                onLoad={() => setPreviewLoading(false)}
               />
             </div>
           ) : (
