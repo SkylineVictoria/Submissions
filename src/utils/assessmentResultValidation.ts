@@ -5,6 +5,31 @@ import type { FormTemplate } from '../lib/formEngine';
 export const ASSESSMENT_RESULT_PROGRESS_MESSAGE =
   'Please record at least one valid attempt with both outcome and date in the Result Sheet and Assessment Summary Sheet before moving this assessment forward.';
 
+export function rowAnswerHasContent(
+  val: string | number | boolean | Record<string, unknown> | string[] | null | undefined,
+): boolean {
+  if (val == null) return false;
+  if (typeof val === 'object' && !Array.isArray(val)) {
+    return Object.values(val as Record<string, unknown>).some((v) => String(v ?? '').trim());
+  }
+  return String(val).trim() !== '';
+}
+
+export function getSubmissionWave(submissionCount: number): 1 | 2 | 3 {
+  return Math.min(Math.max(submissionCount || 1, 1), 3) as 1 | 2 | 3;
+}
+
+export function getActiveMarkingAttemptNum(submissionCount: number): 1 | 2 | 3 {
+  return getSubmissionWave(submissionCount);
+}
+
+export function isCurrentMarkingAttemptColumn(
+  activeAttemptNum: 1 | 2 | 3,
+  columnAttempt: 1 | 2 | 3,
+): boolean {
+  return columnAttempt === activeAttemptNum;
+}
+
 function hasContent(value: string | null | undefined): boolean {
   return String(value ?? '').trim().length > 0;
 }

@@ -1480,6 +1480,7 @@ export const AdminAssessmentsPage: React.FC = () => {
           isOpen={!!quickEditRow}
           onClose={() => setQuickEditRow(null)}
           row={quickEditRow}
+          onSaved={() => void loadRows(currentPage, searchTerm, { silent: true })}
         />
       </div>
     </div>

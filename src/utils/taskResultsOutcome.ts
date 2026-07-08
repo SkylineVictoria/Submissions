@@ -1,4 +1,4 @@
-import type { FormTemplate, FormStepWithSections, ResultsDataEntry } from '../lib/formEngine';
+import type { FormTemplate, FormStepWithSections, ResultsDataEntry, ResultsOfficeEntry } from '../lib/formEngine';
 
 const TASK_SECTION_MODES = new Set([
   'task_instructions',
@@ -106,6 +106,77 @@ export type TaskResultSectionEntry = {
   label: string;
   taskRowId: number | null;
 };
+
+/** All pre-summary task_results section ids linked to an assessment task row. */
+export function getTaskResultSectionIdsForRow(template: FormTemplate | null, taskRowId: number): number[] {
+  if (!template) return [];
+  const ids: number[] = [];
+  for (let stepIndex = 0; stepIndex < (template.steps ?? []).length; stepIndex++) {
+    if (!isPreAssessmentSummaryStepIndex(template, stepIndex)) continue;
+    for (const sec of template.steps![stepIndex].sections) {
+      if (sec.pdf_render_mode !== 'task_results') continue;
+      if ((sec as { assessment_task_row_id?: number | null }).assessment_task_row_id === taskRowId) {
+        ids.push(sec.id);
+      }
+    }
+  }
+  return ids;
+}
+
+/** Section ids that share office Initial/Updated checks for one task results entry. */
+export function getOfficeCheckSectionIds(
+  template: FormTemplate | null,
+  entry: TaskResultSectionEntry,
+): number[] {
+  if (entry.taskRowId != null) {
+    const ids = getTaskResultSectionIdsForRow(template, entry.taskRowId);
+    if (ids.length > 0) return ids;
+  }
+  return entry.sectionId != null ? [entry.sectionId] : [];
+}
+
+export function isOfficeCheckSetOnAnySection(
+  resultsOffice: Record<number, ResultsOfficeEntry>,
+  sectionIds: number[],
+  field: 'initial_checked' | 'updated_checked',
+): boolean {
+  return sectionIds.some((id) => Boolean(resultsOffice[id]?.[field]));
+}
+
+/** Merge office flags across duplicate task_results sections onto the canonical section id. */
+export function mergeResultsOfficeForTaskSections(
+  template: FormTemplate | null,
+  resultsSections: TaskResultSectionEntry[],
+  resultsOffice: Record<number, ResultsOfficeEntry>,
+): Record<number, ResultsOfficeEntry> {
+  const out = { ...resultsOffice };
+  for (const entry of resultsSections) {
+    if (entry.sectionId == null) continue;
+    const ids = getOfficeCheckSectionIds(template, entry);
+    if (ids.length === 0) continue;
+    const canonical = entry.sectionId;
+    let initialChecked = false;
+    let updatedChecked = false;
+    let enteredBy: string | null = out[canonical]?.entered_by ?? null;
+    let enteredDate: string | null = out[canonical]?.entered_date ?? null;
+    for (const id of ids) {
+      const o = resultsOffice[id];
+      if (!o) continue;
+      initialChecked = initialChecked || Boolean(o.initial_checked);
+      updatedChecked = updatedChecked || Boolean(o.updated_checked);
+      if (!enteredBy && o.entered_by) enteredBy = o.entered_by;
+      if (!enteredDate && o.entered_date) enteredDate = o.entered_date;
+    }
+    out[canonical] = {
+      section_id: canonical,
+      entered_date: enteredDate,
+      entered_by: enteredBy,
+      initial_checked: initialChecked,
+      updated_checked: updatedChecked,
+    };
+  }
+  return out;
+}
 
 function sectionResultsScore(rd: ResultsDataEntry | undefined): number {
   if (!rd) return 0;

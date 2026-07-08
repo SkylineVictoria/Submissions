@@ -354,7 +354,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
     setAdminNoteDrafts((prev) => ({ ...prev, [instanceId]: next }));
   }, [adminNoteDrafts, adminNotesByInstanceId]);
 
-  const handleQuickEditSaved = useCallback(async (instanceId: number) => {
+  const handleQuickEditSaved = useCallback(async (instanceId: number, _statusUpdated?: boolean) => {
     const [m, notes] = await Promise.all([
       fetchAssessmentSummaries([instanceId]),
       fetchInstanceAdminReferenceNotes([instanceId]),
@@ -372,7 +372,8 @@ export const AdminStudentDetailsPage: React.FC = () => {
     }
     setAdminNotesByInstanceId((prev) => ({ ...prev, ...notes }));
     setAdminNoteDrafts((prev) => ({ ...prev, ...notes }));
-  }, []);
+    await loadAssessments();
+  }, [loadAssessments]);
 
   const loadCoursesOptions = useCallback(async (page: number, search: string) => {
     const res = await listCoursesPaged(page, 20, search || undefined);

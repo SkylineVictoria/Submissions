@@ -9,14 +9,17 @@ import { DeclarationSignatureWithDate } from '../form-fill/DeclarationSignatureW
 import { Loader } from '../ui/Loader';
 import { toast } from '../../utils/toast';
 import { cn } from '../utils/cn';
-import { formatDDMMYYYY } from '../../utils/assessmentRowUi';
+import { formatDDMMYYYY, getInstanceWorkflowLabel } from '../../utils/assessmentRowUi';
 import type { SubmittedInstanceRow } from '../../lib/formEngine';
+import { fetchInstance } from '../../lib/formEngine';
 import type { AssessmentSummaryDataEntry, ResultsDataEntry, ResultsOfficeEntry } from '../../lib/formEngine';
 import {
   cloneQuickEditData,
   getAnswerKey,
   loadQuickEditData,
   parseSignatureDisplay,
+  recalculateQuickEditCompletionStatus,
+  getQuickEditStudentDeclarationIso,
   saveQuickEditChanges,
   type IntroQuestionField,
   type QuickEditAnswerValue,
@@ -63,7 +66,7 @@ type Props = {
   isOpen: boolean;
   onClose: () => void;
   row: SubmittedInstanceRow | null;
-  onSaved?: (instanceId: number) => void;
+  onSaved?: (instanceId: number, statusUpdated: boolean) => void;
 };
 
 function ContextHeader({ data }: { data: QuickEditData }) {
@@ -549,16 +552,54 @@ export const AdminQuickEditModal: React.FC<Props> = ({ isOpen, onClose, row, onS
     }
     setSaving(true);
     const res = await saveQuickEditChanges({ baseline, draft });
-    setSaving(false);
     if (!res.ok) {
+      setSaving(false);
       toast.error(res.error);
       return;
     }
-    toast.success('Assessment fields saved');
+
     const refreshed = await loadQuickEditData(row);
+    const completion = await recalculateQuickEditCompletionStatus({
+      row,
+      data: refreshed,
+      studentDeclarationIso: getQuickEditStudentDeclarationIso(refreshed),
+    });
+
+    const inst = await fetchInstance(row.id);
+    if (inst) {
+      refreshed.context = {
+        ...refreshed.context,
+        statusLabel: getInstanceWorkflowLabel({
+          status: inst.status,
+          role_context: inst.role_context,
+          did_not_attempt: (inst as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
+          no_attempt_rollovers: (inst as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
+          submission_count: inst.submission_count,
+          submitted_at: inst.submitted_at,
+        }),
+        workflowStatus: (inst as { workflow_status?: string | null }).workflow_status ?? null,
+      };
+    }
+
+    setSaving(false);
     setBaseline(refreshed);
     setDraft(cloneQuickEditData(refreshed));
-    onSaved?.(row.id);
+
+    if (completion.updated) {
+      toast.success('Assessment saved and finalised (Completed / Locked).');
+    } else if (completion.missingFields.length > 0 || Object.keys(completion.validationErrors).length > 0) {
+      const detail =
+        completion.missingFields[0] ??
+        Object.values(completion.validationErrors)[0] ??
+        'Complete required fields and office checks to finalise.';
+      toast.success('Assessment fields saved');
+      toast.error(`Not finalised: ${detail}`);
+    } else {
+      toast.success('Assessment fields saved');
+    }
+
+    onSaved?.(row.id, completion.updated);
+    onClose();
   };
 
   const updateAnswer = (questionId: number, rowId: number | null, value: QuickEditAnswerValue) => {
@@ -841,6 +882,10 @@ export const AdminQuickEditModal: React.FC<Props> = ({ isOpen, onClose, row, onS
                         Admin updated checked
                       </label>
                     </div>
+                    <p className="text-xs text-amber-800 sm:col-span-2">
+                      To finalise this assessment, tick both checkboxes above and every task Results sheet Initial/Updated
+                      check (Results tab). Admin initials alone do not complete the assessment.
+                    </p>
                   </div>
                 </div>
               ) : null}

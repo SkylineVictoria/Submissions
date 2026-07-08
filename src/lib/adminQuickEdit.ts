@@ -2,6 +2,7 @@ import type { FormAnswer } from '../types/database';
 import {
   fetchAnswersForInstance,
   fetchAssessmentSummaryData,
+  fetchInstance,
   fetchInstanceAdminReferenceNotes,
   fetchInstanceIdentitySources,
   fetchResultsData,
@@ -20,8 +21,14 @@ import {
   type SubmittedInstanceRow,
 } from './formEngine';
 import { mergeFormAnswersPreservingExisting, type FormAnswersMap } from '../utils/formAnswerMerge';
-import { buildTaskResultSections, isPreAssessmentSummaryStepIndex, type TaskResultSectionEntry } from '../utils/taskResultsOutcome';
+import { buildTaskResultSections, getTaskResultSectionIdsForRow, isPreAssessmentSummaryStepIndex, mergeResultsOfficeForTaskSections, type TaskResultSectionEntry } from '../utils/taskResultsOutcome';
 import { getInstanceWorkflowLabel } from '../utils/assessmentRowUi';
+import {
+  evaluateAndUpdateAssessmentStatus,
+  type AssessmentCompletionEvaluation,
+} from './assessmentCompletionStatus';
+import { normalizeInstanceWorkflowStatus } from '../utils/instanceWorkflow';
+import { extractStudentDeclarationIso } from '../utils/assessmentAttemptDates';
 
 export type QuickEditAnswerValue = string | number | boolean | Record<string, unknown> | string[] | null;
 
@@ -288,6 +295,7 @@ export async function loadQuickEditData(row: SubmittedInstanceRow): Promise<Quic
 
   const introQuestions = template ? collectIntroQuestions(template) : [];
   const resultsSections = buildTaskResultSections(template, resultsData);
+  const mergedResultsOffice = mergeResultsOfficeForTaskSections(template, resultsSections, resultsOffice);
 
   return {
     context: buildContext(row, identity),
@@ -296,7 +304,7 @@ export async function loadQuickEditData(row: SubmittedInstanceRow): Promise<Quic
     answers: answersFromRows(answerRows),
     resultsSections,
     resultsData,
-    resultsOffice,
+    resultsOffice: mergedResultsOffice,
     assessmentSummary: assessmentSummary ?? EMPTY_SUMMARY(),
     adminReferenceNote: adminNotes[instanceId] ?? '',
   };
@@ -407,7 +415,14 @@ export async function saveQuickEditChanges(input: QuickEditSaveInput): Promise<{
       const afterOffice = draft.resultsOffice[sectionId] ?? ({ section_id: sectionId } as ResultsOfficeEntry);
       const officePatch = diffPartialRecord(beforeOffice, afterOffice, OFFICE_PATCH_KEYS);
       if (Object.keys(officePatch).length > 0) {
-        await saveResultsOffice(instanceId, sectionId, officePatch);
+        const siblingIds =
+          entry.taskRowId != null && draft.template
+            ? getTaskResultSectionIdsForRow(draft.template, entry.taskRowId)
+            : [sectionId];
+        const targetSectionIds = siblingIds.length > 0 ? siblingIds : [sectionId];
+        for (const sid of targetSectionIds) {
+          await saveResultsOffice(instanceId, sid, officePatch);
+        }
       }
     }
 
@@ -428,6 +443,47 @@ export async function saveQuickEditChanges(input: QuickEditSaveInput): Promise<{
 
   if (errors.length > 0) return { ok: false, error: errors.join('; ') };
   return { ok: true };
+}
+
+export function getQuickEditStudentDeclarationIso(data: QuickEditData): string | undefined {
+  const declarationQuestionId =
+    data.template?.steps
+      ?.flatMap((st) => st.sections)
+      .flatMap((s) => s.questions)
+      .find((item) => item.code === 'student.declarationSignature')?.id ?? null;
+  if (declarationQuestionId == null) return undefined;
+  return extractStudentDeclarationIso(data.answers, getAnswerKey, declarationQuestionId);
+}
+
+export async function recalculateQuickEditCompletionStatus(params: {
+  row: SubmittedInstanceRow;
+  data: QuickEditData;
+  studentDeclarationIso?: string;
+}): Promise<AssessmentCompletionEvaluation> {
+  const inst = await fetchInstance(params.row.id);
+  const workflowSource = inst ?? params.row;
+  const workflowStatus = normalizeInstanceWorkflowStatus({
+    workflow_status: (workflowSource as { workflow_status?: string | null }).workflow_status,
+    status: workflowSource.status,
+    role_context: workflowSource.role_context,
+    submission_count: workflowSource.submission_count,
+    submitted_at: workflowSource.submitted_at,
+    did_not_attempt: (workflowSource as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
+  });
+
+  return evaluateAndUpdateAssessmentStatus({
+    instanceId: params.row.id,
+    template: params.data.template,
+    resultsData: params.data.resultsData,
+    resultsOffice: params.data.resultsOffice,
+    assessmentSummary: params.data.assessmentSummary,
+    submissionCount: Number(workflowSource.submission_count ?? 0) || 0,
+    submittedAt: workflowSource.submitted_at,
+    workflowStatus,
+    roleContext: workflowSource.role_context,
+    studentDeclarationIso: params.studentDeclarationIso,
+    options: { adminQuickEdit: true, applyUpdate: true },
+  });
 }
 
 export function cloneQuickEditData(data: QuickEditData): QuickEditData {
