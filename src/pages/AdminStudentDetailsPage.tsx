@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SortDirection } from '../components/admin/SortableTh';
 import { SortableTh } from '../components/admin/SortableTh';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { CheckCircle, Copy, Phone, Mail, ArrowLeft, RotateCcw, Download, Trash2 } from 'lucide-react';
+import { CheckCircle, Copy, Phone, Mail, ArrowLeft, RotateCcw, Download, Trash2, PencilLine } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -68,6 +68,7 @@ import {
 } from '../utils/trainerCourseHighlight';
 import { useInstancePdfDownload } from '../hooks/useInstancePdfDownload';
 import { LivePdfGenerateConfirmDialog } from '../components/pdf/LivePdfGenerateConfirmDialog';
+import { AdminQuickEditModal } from '../components/admin/AdminQuickEditModal';
 
 const pad2 = (n: number) => String(n).padStart(2, '0');
 const formatDDMMYYYY = (value: string | null): string => {
@@ -222,6 +223,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
     Record<number, { final_attempt_1_result: AttemptResult; final_attempt_2_result: AttemptResult; final_attempt_3_result: AttemptResult }>
   >({});
   const [managingId, setManagingId] = useState<number | null>(null);
+  const [quickEditRow, setQuickEditRow] = useState<SubmittedInstanceRow | null>(null);
   const { downloadingId: downloadingPdfId, downloadInstancePdf, liveGenerateDialogProps } = useInstancePdfDownload('office');
   const [adminNotesByInstanceId, setAdminNotesByInstanceId] = useState<Record<number, string>>({});
   const [adminNoteDrafts, setAdminNoteDrafts] = useState<Record<number, string>>({});
@@ -351,6 +353,26 @@ export const AdminStudentDetailsPage: React.FC = () => {
     setAdminNotesByInstanceId((prev) => ({ ...prev, [instanceId]: next }));
     setAdminNoteDrafts((prev) => ({ ...prev, [instanceId]: next }));
   }, [adminNoteDrafts, adminNotesByInstanceId]);
+
+  const handleQuickEditSaved = useCallback(async (instanceId: number) => {
+    const [m, notes] = await Promise.all([
+      fetchAssessmentSummaries([instanceId]),
+      fetchInstanceAdminReferenceNotes([instanceId]),
+    ]);
+    const summary = m[instanceId];
+    if (summary) {
+      setAttemptSummaryByInstanceId((prev) => ({
+        ...prev,
+        [instanceId]: {
+          final_attempt_1_result: (summary.final_attempt_1_result ?? null) as AttemptResult,
+          final_attempt_2_result: (summary.final_attempt_2_result ?? null) as AttemptResult,
+          final_attempt_3_result: (summary.final_attempt_3_result ?? null) as AttemptResult,
+        },
+      }));
+    }
+    setAdminNotesByInstanceId((prev) => ({ ...prev, ...notes }));
+    setAdminNoteDrafts((prev) => ({ ...prev, ...notes }));
+  }, []);
 
   const loadCoursesOptions = useCallback(async (page: number, search: string) => {
     const res = await listCoursesPaged(page, 20, search || undefined);
@@ -1153,6 +1175,15 @@ export const AdminStudentDetailsPage: React.FC = () => {
                                       <button
                                         type="button"
                                         className={actionBtn}
+                                        onClick={() => setQuickEditRow(row)}
+                                        title="Quick edit assessment fields"
+                                      >
+                                        <PencilLine className={actionIcon} />
+                                        <span className={actionText}>Quick Edit</span>
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className={actionBtn}
                                         onClick={() => void handleDownloadStoredPdf(row.id)}
                                         disabled={pdfDownloading}
                                         title="Download stored PDF from SharePoint"
@@ -1198,6 +1229,21 @@ export const AdminStudentDetailsPage: React.FC = () => {
                                     canUpload={true}
                                     canDelete={viewerIsSuperadmin}
                                   />
+                                  <button
+                                    type="button"
+                                    className="rounded-lg border border-[var(--border)] bg-white p-4 text-left hover:bg-[var(--brand)]/10 focus-visible:bg-[var(--brand)]/10 transition-colors"
+                                    onClick={() => setQuickEditRow(row)}
+                                    title="Quick edit assessment fields"
+                                  >
+                                    <div className="text-sm font-semibold text-[var(--text)]">Quick Edit</div>
+                                    <div className="mt-1 text-xs text-gray-600 break-words">
+                                      Edit intro, results, summary, and admin fields without opening the full form.
+                                    </div>
+                                    <div className="mt-3 inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700">
+                                      <PencilLine className="h-3.5 w-3.5" />
+                                      Quick Edit
+                                    </div>
+                                  </button>
                                   <button
                                     type="button"
                                     className="rounded-lg border border-[var(--border)] bg-white p-4 text-left hover:bg-[var(--brand)]/10 focus-visible:bg-[var(--brand)]/10 transition-colors"
@@ -1583,6 +1629,12 @@ export const AdminStudentDetailsPage: React.FC = () => {
         variant="danger"
       />
       <LivePdfGenerateConfirmDialog {...liveGenerateDialogProps} />
+      <AdminQuickEditModal
+        isOpen={!!quickEditRow}
+        onClose={() => setQuickEditRow(null)}
+        row={quickEditRow}
+        onSaved={(instanceId) => void handleQuickEditSaved(instanceId)}
+      />
     </div>
   );
 };

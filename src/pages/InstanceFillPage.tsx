@@ -82,6 +82,24 @@ import {
   toggleOutcomeSelection,
   validateAssessmentBeforeProgress,
 } from '../utils/assessmentResultValidation';
+import {
+  getAssessmentSummaryDateChainMins,
+  getResultsMinFirstAttemptDate,
+  getResultsMinSecondAttemptDate,
+  getResultsMinThirdAttemptDate,
+  getResultsTrainerFooterDateMin,
+  getResultsSheetFieldDateErrors,
+  getSummarySheetFieldDateErrors,
+  isCalendarBefore,
+  maxIsoDate,
+  normalizeCalendarDateToIso,
+  validateAssessmentSummaryDateChain,
+  validateResultsSheetDateChain,
+} from '../utils/assessmentAttemptDates';
+import {
+  applyResultsStudentSignatureConvenience,
+  applyResultsTrainerSignatureConvenience,
+} from '../utils/assessmentSignatureConvenience';
 
 type AttemptOutcome = 'competent' | 'not_yet_competent' | null;
 
@@ -126,92 +144,6 @@ function parseDebouncedAnswerKey(key: string): { questionId: number; rowId: numb
   return { questionId: Number(m[1]), rowId: m[2] != null ? Number(m[2]) : null };
 }
 
-/**
- * Normalize calendar strings to yyyy-MM-dd for ordering. DB/UI may have ISO or dd-MM-yyyy;
- * raw string compare wrongly treats '01-03-2026' < '2026-03-02'.
- */
-function normalizeCalendarDateToIso(s: string | null | undefined): string | null {
-  const t = String(s ?? '').trim();
-  if (!t) return null;
-  // Accept full ISO timestamps by taking the date portion.
-  if (/^\d{4}-\d{2}-\d{2}T/.test(t)) return t.slice(0, 10);
-  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
-  if (/^\d{2}-\d{2}-\d{4}$/.test(t)) {
-    const [dd, mm, yyyy] = t.split('-');
-    if (dd && mm && yyyy && dd.length === 2 && mm.length === 2 && yyyy.length === 4) return `${yyyy}-${mm}-${dd}`;
-  }
-  // Also accept common slash formats that appear in some exports/pastes.
-  if (/^\d{2}\/\d{2}\/\d{4}$/.test(t)) {
-    const [dd, mm, yyyy] = t.split('/');
-    if (dd && mm && yyyy && dd.length === 2 && mm.length === 2 && yyyy.length === 4) return `${yyyy}-${mm}-${dd}`;
-  }
-  return null;
-}
-
-function isCalendarBefore(a: string | null | undefined, b: string | null | undefined): boolean {
-  const ai = normalizeCalendarDateToIso(a);
-  const bi = normalizeCalendarDateToIso(b);
-  if (!ai || !bi) return false;
-  return ai < bi;
-}
-
-/** Latest of ISO yyyy-MM-dd strings (for min date on 3rd attempt ≥ 1st and 2nd). */
-function maxIsoDate(...vals: (string | null | undefined)[]): string | undefined {
-  const norm = vals.map((v) => normalizeCalendarDateToIso(v)).filter((x): x is string => !!x);
-  if (norm.length === 0) return undefined;
-  return norm.reduce((a, b) => (a >= b ? a : b));
-}
-
-/**
- * Task results sheet (trainer outcomes): enforce the same chronological hierarchy as the assessment summary.
- *
- * Assessment summary chain is:
- * Student1 → Trainer1 → Student2 → Trainer2 → Student3 → Trainer3.
- *
- * Results sheet attempt dates are trainer-recorded outcomes. So:
- * - Attempt 1 results date must be ≥ the student declaration date on the submission and ≥ assessment summary Student1 when present.
- * - Attempt 2 results date must be ≥ assessment summary Trainer1 date (and ≥ Attempt 1 results date).
- * - Attempt 3 results date must be ≥ assessment summary Trainer2 date (and ≥ Attempt 2 results date).
- */
-function getResultsMinFirstAttemptDate(
-  _sum: import('../lib/formEngine').AssessmentSummaryDataEntry | null | undefined,
-  /** yyyy-MM-dd from `student.declarationSignature` (normalized); enforced even before the summary is filled. */
-  studentDeclarationIso?: string | undefined,
-): string | undefined {
-  // Use the live declaration field only — summary student_date_1 can be stale or auto-filled later
-  // and must not block attempt-1 dates that are on/after the student's first-page declaration.
-  return studentDeclarationIso || undefined;
-}
-
-function getResultsMinSecondAttemptDate(
-  rd: import('../lib/formEngine').ResultsDataEntry | null | undefined,
-  sum: import('../lib/formEngine').AssessmentSummaryDataEntry | null | undefined,
-): string | undefined {
-  return maxIsoDate(
-    rd?.first_attempt_date ?? undefined,
-    sum?.trainer_date_1 ?? undefined,
-    // Must not be before summary student attempt-2 date.
-    sum?.student_date_2 ?? undefined,
-    sum?.student_date_1 ?? undefined,
-  );
-}
-
-function getResultsMinThirdAttemptDate(
-  rd: import('../lib/formEngine').ResultsDataEntry | null | undefined,
-  sum: import('../lib/formEngine').AssessmentSummaryDataEntry | null | undefined,
-): string | undefined {
-  return maxIsoDate(
-    rd?.first_attempt_date ?? undefined,
-    rd?.second_attempt_date ?? undefined,
-    sum?.trainer_date_2 ?? undefined,
-    // Must not be before summary student attempt-3 date.
-    sum?.student_date_3 ?? undefined,
-    sum?.student_date_2 ?? undefined,
-    sum?.trainer_date_1 ?? undefined,
-    sum?.student_date_1 ?? undefined,
-  );
-}
-
 function addIsoDays(iso: string, days: number): string | undefined {
   const s = String(iso || '').trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return undefined;
@@ -236,38 +168,6 @@ function getStudentResubDeclarationMinDate(
         )
       : maxIsoDate(rd.trainer_date ?? undefined, rd.first_attempt_date ?? undefined);
   return baseDeclMin ? (addIsoDays(baseDeclMin, 1) ?? baseDeclMin) : undefined;
-}
-
-/**
- * Assessment summary sheet: chronological chain S1 → T1 → S2 → T2 → S3 → T3 (calendar order).
- * Each step must be on or after the previous step. Trainer date for an attempt must be ≥ student date for that attempt.
- * Attempt 1 is not tied to instance submitted_at (assessment may be recorded before the cover sheet is submitted).
- */
-function getAssessmentSummaryDateChainMins(
-  sum: import('../lib/formEngine').AssessmentSummaryDataEntry,
-  studentDeclarationIso?: string,
-): {
-  minStudentDate1: string | undefined;
-  minTrainerDate1: string | undefined;
-  minStudentDate2: string | undefined;
-  minTrainerDate2: string | undefined;
-  minStudentDate3: string | undefined;
-  minTrainerDate3: string | undefined;
-} {
-  const s1 = sum.student_date_1?.trim() || '';
-  const t1 = sum.trainer_date_1?.trim() || '';
-  const s2 = sum.student_date_2?.trim() || '';
-  const t2 = sum.trainer_date_2?.trim() || '';
-  const s3 = sum.student_date_3?.trim() || '';
-
-  return {
-    minStudentDate1: studentDeclarationIso || undefined,
-    minTrainerDate1: maxIsoDate(s1 || undefined),
-    minStudentDate2: maxIsoDate(t1 || undefined, s1 || undefined, studentDeclarationIso),
-    minTrainerDate2: maxIsoDate(t1 || undefined, s2 || undefined),
-    minStudentDate3: maxIsoDate(t2 || undefined, s2 || undefined, t1 || undefined),
-    minTrainerDate3: maxIsoDate(t2 || undefined, s3 || undefined),
-  };
 }
 
 function clampIsoToMin(value: string | null | undefined, min: string | undefined): string | null {
@@ -301,56 +201,6 @@ function pickDateWithMinForStaff(
 /** Staff correcting historical dates need full calendar navigation — not only selectable days. */
 function staffDatePickerMin(min: string | undefined, staffBypass: boolean): string | undefined {
   return staffBypass ? undefined : min || undefined;
-}
-
-function validateAssessmentSummaryDateChain(
-  sum: import('../lib/formEngine').AssessmentSummaryDataEntry,
-  studentDeclarationIso?: string,
-): string | null {
-  const s1 = sum.student_date_1?.trim();
-  const t1 = sum.trainer_date_1?.trim();
-  const s2 = sum.student_date_2?.trim();
-  const t2 = sum.trainer_date_2?.trim();
-  const s3 = sum.student_date_3?.trim();
-  const t3 = sum.trainer_date_3?.trim();
-
-  if (studentDeclarationIso && s1 && isCalendarBefore(s1, studentDeclarationIso)) {
-    return 'Student date (attempt 1) cannot be before the student declaration date.';
-  }
-  if (s1 && t1 && isCalendarBefore(t1, s1)) return 'Trainer date (attempt 1) cannot be before the student date (attempt 1).';
-  if (t1 && s2 && isCalendarBefore(s2, t1)) return 'Student date (attempt 2) cannot be before the trainer date (attempt 1).';
-  if (s1 && s2 && isCalendarBefore(s2, s1)) return 'Student date (attempt 2) cannot be before the student date (attempt 1).';
-  if (s2 && t2 && isCalendarBefore(t2, s2)) return 'Trainer date (attempt 2) cannot be before the student date (attempt 2).';
-  if (t1 && t2 && isCalendarBefore(t2, t1)) return 'Trainer date (attempt 2) cannot be before the trainer date (attempt 1).';
-  if (t2 && s3 && isCalendarBefore(s3, t2)) return 'Student date (attempt 3) cannot be before the trainer date (attempt 2).';
-  if (s2 && s3 && isCalendarBefore(s3, s2)) return 'Student date (attempt 3) cannot be before the student date (attempt 2).';
-  if (s3 && t3 && isCalendarBefore(t3, s3)) return 'Trainer date (attempt 3) cannot be before the student date (attempt 3).';
-  if (t2 && t3 && isCalendarBefore(t3, t2)) return 'Trainer date (attempt 3) cannot be before the trainer date (attempt 2).';
-  return null;
-}
-
-function validateResultsSheetDateChain(
-  rd: import('../lib/formEngine').ResultsDataEntry | null | undefined,
-  sum: import('../lib/formEngine').AssessmentSummaryDataEntry | null | undefined,
-  studentDeclarationIso?: string,
-): string | null {
-  if (!rd) return null;
-  const min1 = getResultsMinFirstAttemptDate(sum, studentDeclarationIso);
-  if (rd.first_attempt_date && min1 && isCalendarBefore(rd.first_attempt_date, min1)) {
-    return 'First attempt date must be on or after the student declaration date (attempt 1).';
-  }
-  const min2 = getResultsMinSecondAttemptDate(rd, sum);
-  if (rd.second_attempt_date && min2 && isCalendarBefore(rd.second_attempt_date, min2)) {
-    return 'Second attempt date must be on or after earlier dates in the assessment chain.';
-  }
-  const min3 = getResultsMinThirdAttemptDate(rd, sum);
-  if (rd.third_attempt_date && min3 && isCalendarBefore(rd.third_attempt_date, min3)) {
-    return 'Third attempt date must be on or after earlier dates in the assessment chain.';
-  }
-  if (rd.trainer_date && min1 && isCalendarBefore(rd.trainer_date, min1)) {
-    return 'Trainer footer date cannot be before the first student date.';
-  }
-  return null;
 }
 
 function getPreSummaryTaskResultSectionIds(template: FormTemplate): number[] {
@@ -737,6 +587,22 @@ export const InstanceFillPage: React.FC = () => {
     return normalizeCalendarDateToIso(raw) ?? undefined;
   }, [template, answers]);
 
+  const instanceStudentName = useMemo(() => {
+    const q = template?.steps
+      ?.flatMap((st) => st.sections)
+      .flatMap((s) => s.questions)
+      .find((item) => item.code === 'student.fullName');
+    return q ? String(answers[getAnswerKey(q.id, null)] ?? '').trim() : '';
+  }, [template, answers]);
+
+  const instanceTrainerName = useMemo(() => {
+    const q = template?.steps
+      ?.flatMap((st) => st.sections)
+      .flatMap((s) => s.questions)
+      .find((item) => item.code === 'trainer.fullName');
+    return q ? String(answers[getAnswerKey(q.id, null)] ?? '').trim() : '';
+  }, [template, answers]);
+
   const [confirmConfig, setConfirmConfig] = useState<{
     title: string;
     message: string;
@@ -985,23 +851,29 @@ export const InstanceFillPage: React.FC = () => {
           if (field === 'second_attempt_date' && normalized) {
             const minSecond = getResultsMinSecondAttemptDate(base, assessmentSummary);
             if (minSecond && isCalendarBefore(normalized, minSecond)) {
-              rejectReason =
-                'Second attempt date must be on or after the student date (attempt 2) on the assessment summary and the first attempt date.';
+              const hasFirstTrainer = Boolean(
+                String(base.trainer_date ?? assessmentSummary?.trainer_date_1 ?? '').trim(),
+              );
+              rejectReason = hasFirstTrainer
+                ? '2nd attempt student date cannot be before the 1st attempt trainer date.'
+                : '2nd attempt student date cannot be before the 1st attempt student date.';
               return prev;
             }
           }
           if (field === 'third_attempt_date' && normalized) {
             const minThird = getResultsMinThirdAttemptDate(base, assessmentSummary);
             if (minThird && isCalendarBefore(normalized, minThird)) {
-              rejectReason =
-                'Third attempt date must be on or after the student date (attempt 3) on the assessment summary and earlier attempt dates.';
+              const hasSecondTrainer = Boolean(String(assessmentSummary?.trainer_date_2 ?? '').trim());
+              rejectReason = hasSecondTrainer
+                ? '3rd attempt student date cannot be before the 2nd attempt trainer date.'
+                : '3rd attempt student date cannot be before the 2nd attempt student date.';
               return prev;
             }
           }
           if (field === 'trainer_date' && normalized) {
-            const minFirst = getResultsMinFirstAttemptDate(assessmentSummary, studentDeclarationDateMinIso);
-            if (minFirst && isCalendarBefore(normalized, minFirst)) {
-              rejectReason = 'Trainer footer date cannot be before the first student date.';
+            const minTrainer = getResultsTrainerFooterDateMin(base);
+            if (minTrainer && isCalendarBefore(normalized, minTrainer)) {
+              rejectReason = 'Trainer date cannot be before the student attempt date.';
               return prev;
             }
           }
@@ -1013,7 +885,13 @@ export const InstanceFillPage: React.FC = () => {
           next[sid] = { ...cur, ...patch } as import('../lib/formEngine').ResultsDataEntry;
         };
 
-        const primaryPatch: Partial<import('../lib/formEngine').ResultsDataEntry> = { [field]: normalized };
+        let primaryPatch: Partial<import('../lib/formEngine').ResultsDataEntry> = { [field]: normalized };
+        if (field === 'student_signature') {
+          primaryPatch = applyResultsStudentSignatureConvenience(base, primaryPatch, instanceStudentName || null);
+        }
+        if (field === 'trainer_signature') {
+          primaryPatch = applyResultsTrainerSignatureConvenience(base, primaryPatch, instanceTrainerName || null);
+        }
         if (attemptDateField && normalized) {
           const existingTrainerFooterDate = String(base.trainer_date ?? '').trim();
           if (!existingTrainerFooterDate) primaryPatch.trainer_date = normalized;
@@ -1067,7 +945,7 @@ export const InstanceFillPage: React.FC = () => {
 
       setPdfRefresh((r) => r + 1);
     },
-    [id, normalizeSignatureValue, assessmentSummary, studentDeclarationDateMinIso, template, staffBypassDateConstraints]
+    [id, normalizeSignatureValue, assessmentSummary, studentDeclarationDateMinIso, template, staffBypassDateConstraints, instanceStudentName, instanceTrainerName]
   );
 
   const handleResultsOutcomeSelect = useCallback(
@@ -4326,7 +4204,13 @@ export const InstanceFillPage: React.FC = () => {
                           const minFirstAttempt = getResultsMinFirstAttemptDate(assessmentSummary, studentDeclarationDateMinIso);
                           const minSecondAttempt = getResultsMinSecondAttemptDate(rd, assessmentSummary);
                           const minThirdAttempt = getResultsMinThirdAttemptDate(rd, assessmentSummary);
-                          const minTrainerDate = maxIsoDate(rd?.first_attempt_date);
+                          const minTrainerDate = getResultsTrainerFooterDateMin(rd);
+                          const resultsFieldDateErrors = getResultsSheetFieldDateErrors(
+                            rd,
+                            assessmentSummary,
+                            studentDeclarationDateMinIso,
+                          );
+                          const fieldDateError = (key: string) => resultsFieldDateErrors[`results-${section.id}-${key}`];
                           const trainerCanEditResults =
                             (role === 'trainer' && canRoleEditCurrentWorkflow) ||
                             (role === 'office' && (canRoleEditCurrentWorkflow || canOfficeAdminEdit));
@@ -4431,6 +4315,7 @@ export const InstanceFillPage: React.FC = () => {
                                         placement="above"
                                         className="inline-block min-w-[120px]"
                                         minDate={staffDatePickerMin(minFirstAttempt, staffBypassDateConstraints)}
+                                        error={fieldDateError('first_attempt_date')}
                                       />
                                     </div>
                                     <div><span className="font-medium">Feedback:</span>
@@ -4499,6 +4384,7 @@ export const InstanceFillPage: React.FC = () => {
                                         placement="above"
                                         className="inline-block min-w-[120px]"
                                         minDate={staffDatePickerMin(minSecondAttempt, staffBypassDateConstraints)}
+                                        error={fieldDateError('second_attempt_date')}
                                       />
                                     </div>
                                     <div><span className="font-medium">Feedback:</span>
@@ -4567,6 +4453,7 @@ export const InstanceFillPage: React.FC = () => {
                                         placement="above"
                                         className="inline-block min-w-[120px]"
                                         minDate={staffDatePickerMin(minThirdAttempt, staffBypassDateConstraints)}
+                                        error={fieldDateError('third_attempt_date')}
                                       />
                                     </div>
                                     <div><span className="font-medium">Feedback:</span>
@@ -4680,6 +4567,7 @@ export const InstanceFillPage: React.FC = () => {
                                       placement="above"
                                       className="min-w-[120px]"
                                       minDate={staffDatePickerMin(trainerFooterDateEditable ? minTrainerDate || undefined : undefined, staffBypassDateConstraints)}
+                                      error={fieldDateError('trainer_date')}
                                     />
                                   </td>
                                 </tr>
@@ -4758,6 +4646,8 @@ export const InstanceFillPage: React.FC = () => {
                             minStudentDate3,
                             minTrainerDate3,
                           } = getAssessmentSummaryDateChainMins(sum, studentDeclarationDateMinIso);
+                          const summaryFieldDateErrors = getSummarySheetFieldDateErrors(sum, studentDeclarationDateMinIso);
+                          const summaryDateError = (key: string) => summaryFieldDateErrors[`summary-${key}`];
                           const staffSummaryActiveAttempt = getActiveMarkingAttemptNum(submissionCount, sum, firstTaskRd);
                           const studentPrepAttempt = getStudentPrepAttemptNum(submissionCount, sum);
                           const sumTrainerFirstEditable =
@@ -5002,9 +4892,9 @@ export const InstanceFillPage: React.FC = () => {
                                           <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_1 ?? null} onChange={(v) => { handleAssessmentSummaryChange('trainer_sig_1', v); const cur = String(sum.trainer_date_1 ?? '').trim(); if ((!cur || (minTrainerDate1 && isCalendarBefore(cur, minTrainerDate1)))) handleAssessmentSummaryChange('trainer_date_1', minTrainerDate1 ?? null); }} disabled={!trainerCanEdit || !sumTrainerFirstEditable} className="mt-0.5" highlight={(role === 'trainer' && sumTrainerFirstEditable) || adminOverride} suggestionFrom={trainerRefSig} onSuggestionClick={trainerRefSig ? () => { handleAssessmentSummaryChange('trainer_sig_1', trainerRefSig); const next = staffBypassDateConstraints ? trainerRefDate : (maxIsoDate(trainerRefDate, minTrainerDate1) ?? minTrainerDate1 ?? trainerRefDate); handleAssessmentSummaryChange('trainer_date_1', next || null); } : undefined} /></div>
                                           <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_2 ?? null} onChange={(v) => { handleAssessmentSummaryChange('trainer_sig_2', v); const cur = String(sum.trainer_date_2 ?? '').trim(); if ((!cur || (minTrainerDate2 && isCalendarBefore(cur, minTrainerDate2)))) handleAssessmentSummaryChange('trainer_date_2', minTrainerDate2 ?? null); }} disabled={!trainerCanEdit || !sumTrainerSecondEditable} className="mt-0.5" highlight={(role === 'trainer' && sumTrainerSecondEditable) || adminOverride} suggestionFrom={sumTrainerSecondEditable ? (sum.trainer_sig_1 ?? undefined) : undefined} onSuggestionClick={sumTrainerSecondEditable && sum.trainer_sig_1 ? () => { handleAssessmentSummaryChange('trainer_sig_2', sum.trainer_sig_1); const next = staffBypassDateConstraints ? (sum.trainer_date_1 ?? sum.student_date_2 ?? null) : (maxIsoDate(sum.trainer_date_1, sum.student_date_2, minTrainerDate2) ?? minTrainerDate2 ?? sum.trainer_date_1 ?? sum.student_date_2); handleAssessmentSummaryChange('trainer_date_2', next || null); } : undefined} /></div>
                                           <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.trainer_sig_3 ?? null} onChange={(v) => { handleAssessmentSummaryChange('trainer_sig_3', v); const cur = String(sum.trainer_date_3 ?? '').trim(); if ((!cur || (minTrainerDate3 && isCalendarBefore(cur, minTrainerDate3)))) handleAssessmentSummaryChange('trainer_date_3', minTrainerDate3 ?? null); }} disabled={!trainerCanEdit || !sumTrainerThirdEditable} className="mt-0.5" highlight={(role === 'trainer' && sumTrainerThirdEditable) || adminOverride} suggestionFrom={sumTrainerThirdEditable ? (sum.trainer_sig_1 ?? undefined) : undefined} onSuggestionClick={sumTrainerThirdEditable && sum.trainer_sig_1 ? () => { handleAssessmentSummaryChange('trainer_sig_3', sum.trainer_sig_1); const next = staffBypassDateConstraints ? (sum.trainer_date_2 ?? sum.student_date_3 ?? null) : (maxIsoDate(sum.trainer_date_2, sum.student_date_3, minTrainerDate3) ?? minTrainerDate3 ?? sum.trainer_date_2 ?? sum.student_date_3); handleAssessmentSummaryChange('trainer_date_3', next || null); } : undefined} /></div>
-                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_1 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_1', pickDateWithMinForStaff(v || null, minTrainerDate1, staffBypassDateConstraints))} disabled={!trainerCanEdit || !sumFirstDateEditable} highlight={(role === 'trainer' && sumFirstDateEditable) || adminOverride} compact placement="above" className="w-full" minDate={staffDatePickerMin(minTrainerDate1, staffBypassDateConstraints)} /></div>
-                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_2 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_2', pickDateWithMinForStaff(v || null, minTrainerDate2, staffBypassDateConstraints))} disabled={!trainerCanEdit || !sumSecondDateEditable} highlight={(role === 'trainer' && sumSecondDateEditable) || adminOverride} compact placement="above" className="w-full" minDate={staffDatePickerMin(minTrainerDate2, staffBypassDateConstraints)} /></div>
-                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_3 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_3', pickDateWithMinForStaff(v || null, minTrainerDate3, staffBypassDateConstraints))} disabled={!trainerCanEdit || !sumThirdDateEditable} highlight={(role === 'trainer' && sumThirdDateEditable) || adminOverride} compact placement="above" className="w-full" minDate={staffDatePickerMin(minTrainerDate3, staffBypassDateConstraints)} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_1 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_1', pickDateWithMinForStaff(v || null, minTrainerDate1, staffBypassDateConstraints))} disabled={!trainerCanEdit || !sumFirstDateEditable} highlight={(role === 'trainer' && sumFirstDateEditable) || adminOverride} compact placement="above" className="w-full" minDate={staffDatePickerMin(minTrainerDate1, staffBypassDateConstraints)} error={summaryDateError('trainer_date_1')} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_2 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_2', pickDateWithMinForStaff(v || null, minTrainerDate2, staffBypassDateConstraints))} disabled={!trainerCanEdit || !sumSecondDateEditable} highlight={(role === 'trainer' && sumSecondDateEditable) || adminOverride} compact placement="above" className="w-full" minDate={staffDatePickerMin(minTrainerDate2, staffBypassDateConstraints)} error={summaryDateError('trainer_date_2')} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.trainer_date_3 ?? ''} onChange={(v) => handleAssessmentSummaryChange('trainer_date_3', pickDateWithMinForStaff(v || null, minTrainerDate3, staffBypassDateConstraints))} disabled={!trainerCanEdit || !sumThirdDateEditable} highlight={(role === 'trainer' && sumThirdDateEditable) || adminOverride} compact placement="above" className="w-full" minDate={staffDatePickerMin(minTrainerDate3, staffBypassDateConstraints)} error={summaryDateError('trainer_date_3')} /></div>
                                         </div>
                                       </td>
                                     </tr>
@@ -5016,9 +4906,9 @@ export const InstanceFillPage: React.FC = () => {
                                           <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_1 ?? null} onChange={(v) => { handleAssessmentSummaryChange('student_sig_1', v); const cur = String(sum.student_date_1 ?? '').trim(); if ((!cur || (minStudentDate1 && isCalendarBefore(cur, minStudentDate1)))) handleAssessmentSummaryChange('student_date_1', minStudentDate1 ?? null); }} disabled={!studentCanEdit || !sumStudentFirstEditable} className="mt-0.5" highlight={studentCanEdit && sumStudentFirstEditable} suggestionFrom={studentRefSig} onSuggestionClick={studentRefSig ? () => { handleAssessmentSummaryChange('student_sig_1', studentRefSig); const next = staffBypassDateConstraints ? studentRefDate : (maxIsoDate(studentRefDate, minStudentDate1) ?? minStudentDate1 ?? studentRefDate); handleAssessmentSummaryChange('student_date_1', next || null); } : undefined} /></div>
                                           <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_2 ?? null} onChange={(v) => { handleAssessmentSummaryChange('student_sig_2', v); const cur = String(sum.student_date_2 ?? '').trim(); if ((!cur || (minStudentDate2 && isCalendarBefore(cur, minStudentDate2)))) handleAssessmentSummaryChange('student_date_2', minStudentDate2 ?? null); }} disabled={!studentCanEdit || !sumStudentSecondEditable} className="mt-0.5" highlight={studentCanEdit && sumStudentSecondEditable} suggestionFrom={sumStudentSecondEditable ? (sum.student_sig_1 ?? undefined) : undefined} onSuggestionClick={sumStudentSecondEditable && sum.student_sig_1 ? () => { handleAssessmentSummaryChange('student_sig_2', sum.student_sig_1); const next = staffBypassDateConstraints ? (sum.student_date_1 ?? null) : (maxIsoDate(sum.student_date_1, minStudentDate2) ?? minStudentDate2 ?? sum.student_date_1); handleAssessmentSummaryChange('student_date_2', next || null); } : undefined} /></div>
                                           <div className="min-w-0"><span className="text-xs font-medium">Signature:</span> <SignatureField value={sum.student_sig_3 ?? null} onChange={(v) => { handleAssessmentSummaryChange('student_sig_3', v); const cur = String(sum.student_date_3 ?? '').trim(); if ((!cur || (minStudentDate3 && isCalendarBefore(cur, minStudentDate3)))) handleAssessmentSummaryChange('student_date_3', minStudentDate3 ?? null); }} disabled={!studentCanEdit || !sumStudentThirdEditable} className="mt-0.5" highlight={studentCanEdit && sumStudentThirdEditable} suggestionFrom={sumStudentThirdEditable ? (sum.student_sig_1 ?? undefined) : undefined} onSuggestionClick={sumStudentThirdEditable && sum.student_sig_1 ? () => { handleAssessmentSummaryChange('student_sig_3', sum.student_sig_1); const next = staffBypassDateConstraints ? (sum.student_date_2 ?? null) : (maxIsoDate(sum.student_date_2, minStudentDate3) ?? minStudentDate3 ?? sum.student_date_2); handleAssessmentSummaryChange('student_date_3', next || null); } : undefined} /></div>
-                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_1 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_1', pickDateWithMinForStaff(v || null, minStudentDate1, staffBypassDateConstraints))} disabled={!(studentCanEdit && sumStudentFirstDateEditable) && !(staffCanCorrectSheetDates && sumTrainerFirstEditable)} highlight={(studentCanEdit && sumStudentFirstDateEditable) || (staffCanCorrectSheetDates && sumTrainerFirstEditable)} compact placement="above" className="w-full" minDate={staffDatePickerMin(minStudentDate1, staffBypassDateConstraints)} /></div>
-                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_2 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_2', pickDateWithMinForStaff(v || null, minStudentDate2, staffBypassDateConstraints))} disabled={!(studentCanEdit && sumStudentSecondDateEditable) && !(staffCanCorrectSheetDates && sumTrainerSecondEditable)} highlight={(studentCanEdit && sumStudentSecondDateEditable) || (staffCanCorrectSheetDates && sumTrainerSecondEditable)} compact placement="above" className="w-full" minDate={staffDatePickerMin(minStudentDate2, staffBypassDateConstraints)} /></div>
-                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_3 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_3', pickDateWithMinForStaff(v || null, minStudentDate3, staffBypassDateConstraints))} disabled={!(studentCanEdit && sumStudentThirdDateEditable) && !(staffCanCorrectSheetDates && sumTrainerThirdEditable)} highlight={(studentCanEdit && sumStudentThirdDateEditable) || (staffCanCorrectSheetDates && sumTrainerThirdEditable)} compact placement="above" className="w-full" minDate={staffDatePickerMin(minStudentDate3, staffBypassDateConstraints)} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_1 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_1', pickDateWithMinForStaff(v || null, minStudentDate1, staffBypassDateConstraints))} disabled={!(studentCanEdit && sumStudentFirstDateEditable) && !(staffCanCorrectSheetDates && sumTrainerFirstEditable)} highlight={(studentCanEdit && sumStudentFirstDateEditable) || (staffCanCorrectSheetDates && sumTrainerFirstEditable)} compact placement="above" className="w-full" minDate={staffDatePickerMin(minStudentDate1, staffBypassDateConstraints)} error={summaryDateError('student_date_1')} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_2 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_2', pickDateWithMinForStaff(v || null, minStudentDate2, staffBypassDateConstraints))} disabled={!(studentCanEdit && sumStudentSecondDateEditable) && !(staffCanCorrectSheetDates && sumTrainerSecondEditable)} highlight={(studentCanEdit && sumStudentSecondDateEditable) || (staffCanCorrectSheetDates && sumTrainerSecondEditable)} compact placement="above" className="w-full" minDate={staffDatePickerMin(minStudentDate2, staffBypassDateConstraints)} error={summaryDateError('student_date_2')} /></div>
+                                          <div className="min-w-0"><span className="text-xs font-medium">Date:</span> <DatePicker value={sum.student_date_3 ?? ''} onChange={(v) => handleAssessmentSummaryChange('student_date_3', pickDateWithMinForStaff(v || null, minStudentDate3, staffBypassDateConstraints))} disabled={!(studentCanEdit && sumStudentThirdDateEditable) && !(staffCanCorrectSheetDates && sumTrainerThirdEditable)} highlight={(studentCanEdit && sumStudentThirdDateEditable) || (staffCanCorrectSheetDates && sumTrainerThirdEditable)} compact placement="above" className="w-full" minDate={staffDatePickerMin(minStudentDate3, staffBypassDateConstraints)} error={summaryDateError('student_date_3')} /></div>
                                         </div>
                                       </td>
                                     </tr>

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
-import { Copy, ExternalLink, Send, RefreshCw, Ban, CheckCircle, User, Download, FileDown } from 'lucide-react';
+import { Copy, ExternalLink, Send, RefreshCw, Ban, CheckCircle, User, Download, FileDown, PencilLine } from 'lucide-react';
 import {
   listSubmittedInstancesPaged,
   updateInstanceRole,
@@ -46,6 +46,7 @@ import {
 } from '../utils/assessmentRowUi';
 import { FormDocumentsPanel } from '../components/documents/FormDocumentsPanel';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
+import { AdminQuickEditModal } from '../components/admin/AdminQuickEditModal';
 import {
   commitAssessmentDateChange,
   END_DATE_RESET_DIALOG_MESSAGE,
@@ -245,6 +246,7 @@ export const AdminAssessmentsPage: React.FC = () => {
   const [startFromFilter, setStartFromFilter] = useState<string>('');
   const [endDateToFilter, setEndDateToFilter] = useState<string>('');
   const [sendToTrainerRow, setSendToTrainerRow] = useState<SubmittedInstanceRow | null>(null);
+  const [quickEditRow, setQuickEditRow] = useState<SubmittedInstanceRow | null>(null);
   const [trainers, setTrainers] = useState<Trainer[]>([]);
   const [trainersLoading, setTrainersLoading] = useState(false);
   const [selectedTrainerId, setSelectedTrainerId] = useState<number | null>(null);
@@ -791,6 +793,10 @@ export const AdminAssessmentsPage: React.FC = () => {
           >
             Apply dates
           </Button>
+          <Button variant="outline" size="sm" className="w-full justify-center" onClick={() => setQuickEditRow(row)}>
+            <PencilLine className="mr-2 h-4 w-4 shrink-0" />
+            Quick Edit
+          </Button>
           <Button variant="outline" size="sm" className="w-full justify-center" onClick={openLink}>
             <ExternalLink className="mr-2 h-4 w-4 shrink-0" />
             Open
@@ -862,6 +868,16 @@ export const AdminAssessmentsPage: React.FC = () => {
           aria-label="Apply date changes"
         >
           Apply
+        </button>
+        <button
+          type="button"
+          onClick={() => setQuickEditRow(row)}
+          className={actionBtn}
+          aria-label="Quick edit assessment fields"
+          title="Quick edit assessment fields"
+        >
+          <PencilLine className={actionIcon} />
+          <span className={actionText}>Quick Edit</span>
         </button>
         <button type="button" onClick={openLink} className={actionBtn} aria-label="Open">
           <ExternalLink className={actionIcon} />
@@ -1460,6 +1476,11 @@ export const AdminAssessmentsPage: React.FC = () => {
           variant="danger"
         />
         <LivePdfGenerateConfirmDialog {...liveGenerateDialogProps} />
+        <AdminQuickEditModal
+          isOpen={!!quickEditRow}
+          onClose={() => setQuickEditRow(null)}
+          row={quickEditRow}
+        />
       </div>
     </div>
   );
