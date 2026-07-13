@@ -2,6 +2,7 @@ import type { AttemptResult } from '../utils/assessmentRowUi';
 import { getAssessmentOutcomeDisplay } from '../utils/assessmentRowUi';
 import type { StudentCourseEnrollment } from '../lib/formEngine';
 import type { SubmittedInstanceRow } from '../lib/formEngine';
+import { courseLifecycleLabel } from './courseLifecycle';
 
 export function defaultIntakeLabel(course: Pick<StudentCourseEnrollment, 'name' | 'qualification_code' | 'enrolled_at'>): string {
   const year = course.enrolled_at?.match(/^(\d{4})/)?.[1];
@@ -11,14 +12,7 @@ export function defaultIntakeLabel(course: Pick<StudentCourseEnrollment, 'name' 
 }
 
 export function enrollmentStatusLabel(status: StudentCourseEnrollment['enrollment_status']): string {
-  switch (status) {
-    case 'completed':
-      return 'Completed';
-    case 'suspended':
-      return 'Suspended';
-    default:
-      return 'In Progress';
-  }
+  return courseLifecycleLabel(status);
 }
 
 export function resolveAssessmentCourseId(

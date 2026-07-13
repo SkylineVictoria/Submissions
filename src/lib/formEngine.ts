@@ -11,6 +11,19 @@ import {
   findDuplicateAssessmentTaskStepsByRowId,
   type AssessmentTaskStepLink,
 } from './assessmentTaskSteps';
+import {
+  isCourseLifecycleStatus,
+  normalizeCourseLifecycleStatus,
+  validateCourseDateOrder,
+  type CourseLifecycleStatus,
+} from './courseLifecycle';
+import {
+  assertStudentInstanceMutationAllowed,
+  getStudentAssessmentAccess,
+  StudentCourseAccessError,
+  studentMayOpenAssessment,
+  type StudentAssessmentAccessResult,
+} from './studentAssessmentAccess';
 
 export { nextAssessmentTaskLabel, nextAssessmentTaskNumber } from './assessmentTaskSteps';
 import type {
@@ -891,8 +904,13 @@ export async function fetchResultsData(instanceId: number): Promise<Record<numbe
 export async function saveResultsData(
   instanceId: number,
   sectionId: number,
-  data: Partial<Omit<ResultsDataEntry, 'section_id'>>
+  data: Partial<Omit<ResultsDataEntry, 'section_id'>>,
+  options?: { actorRole?: 'student' | 'trainer' | 'office' | string | null; source?: string }
 ): Promise<void> {
+  await assertStudentInstanceMutationAllowed(instanceId, {
+    actorRole: options?.actorRole,
+    source: options?.source,
+  });
   const { error } = await supabase.from('skyline_form_results_data').upsert(
     {
       instance_id: instanceId,
@@ -1033,8 +1051,13 @@ export async function fetchAssessmentSummaries(instanceIds: number[]): Promise<R
 
 export async function saveAssessmentSummaryData(
   instanceId: number,
-  data: Partial<AssessmentSummaryDataEntry>
+  data: Partial<AssessmentSummaryDataEntry>,
+  options?: { actorRole?: 'student' | 'trainer' | 'office' | string | null; source?: string }
 ): Promise<void> {
+  await assertStudentInstanceMutationAllowed(instanceId, {
+    actorRole: options?.actorRole,
+    source: options?.source,
+  });
   const { error } = await supabase.from('skyline_form_assessment_summary_data').upsert(
     {
       instance_id: instanceId,
@@ -1109,8 +1132,16 @@ export async function saveAnswer(
   questionId: number,
   rowId: number | null,
   value: { text?: string; number?: number; json?: unknown },
-  options?: { allowClear?: boolean; source?: string }
+  options?: {
+    allowClear?: boolean;
+    source?: string;
+    actorRole?: 'student' | 'trainer' | 'office' | string | null;
+  }
 ): Promise<void> {
+  await assertStudentInstanceMutationAllowed(instanceId, {
+    actorRole: options?.actorRole,
+    source: options?.source,
+  });
   const q = supabase
     .from('skyline_form_answers')
     .select('id, value_text, value_number, value_json')
@@ -1216,12 +1247,22 @@ export async function createFormInstance(
   const now = new Date();
   const startDate = getMelbourneDateStr(now);
   const endDate = getMelbourneDateStr(new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000));
+  // When callers pass start_date/end_date keys (including null), honour them — do not invent defaults.
+  // Defaults apply only when the opts object omits those keys (legacy create paths).
+  const start =
+    opts && Object.prototype.hasOwnProperty.call(opts, 'start_date')
+      ? opts.start_date || null
+      : startDate;
+  const end =
+    opts && Object.prototype.hasOwnProperty.call(opts, 'end_date')
+      ? opts.end_date || null
+      : endDate;
   const insert: Record<string, unknown> = {
     form_id: formId,
     role_context: roleContext,
     created_by,
-    start_date: (opts?.start_date ?? startDate) || null,
-    end_date: (opts?.end_date ?? endDate) || null,
+    start_date: start,
+    end_date: end,
   };
   if (studentId != null) insert.student_id = studentId;
   const { data, error } = await supabase
@@ -1462,6 +1503,7 @@ export interface InstanceAccessValidationResult {
   role_context: InstanceAccessRole | null;
   tokenId: number | null;
   reason?: string;
+  courseAccess?: StudentAssessmentAccessResult;
 }
 
 function generateAccessToken(): string {
@@ -1475,6 +1517,10 @@ export async function getExistingInstanceAccessLink(
   instanceId: number,
   roleContext: InstanceAccessRole
 ): Promise<string | null> {
+  if (roleContext === 'student') {
+    const courseAccess = await getStudentAssessmentAccess({ instanceId });
+    if (!studentMayOpenAssessment(courseAccess)) return null;
+  }
   const now = new Date().toISOString();
   const { data, error } = await supabase
     .from('skyline_instance_access_tokens')
@@ -1515,6 +1561,16 @@ export async function issueInstanceAccessLink(
   const iid = Number(instanceId);
   if (roleContext === 'student' && Number.isFinite(iid) && iid > 0) {
     await syncNoAttemptRollover([iid]);
+    const courseAccess = await getStudentAssessmentAccess({ instanceId: iid });
+    if (!studentMayOpenAssessment(courseAccess)) {
+      console.warn('issueInstanceAccessLink blocked by course lifecycle', {
+        instanceId: iid,
+        reason: courseAccess.reason,
+        courseId: courseAccess.courseId,
+        courseStatus: courseAccess.courseStatus,
+      });
+      return null;
+    }
   }
   const token = generateAccessToken();
   let expiresAt: string;
@@ -1803,7 +1859,42 @@ export async function validateInstanceAccessToken(
       if (end && todayMel > end) {
         return { valid: false, role_context: null, tokenId: Number(row.id ?? 0) || null, reason: 'This assessment has expired. Contact your administrator to extend it.' };
       }
+
+      const courseAccess = await getStudentAssessmentAccess({
+        instanceId,
+        studentId: studentId != null ? Number(studentId) : null,
+        formId: Number((inst as { form_id?: number | null }).form_id ?? 0) || null,
+      });
+      if (!studentMayOpenAssessment(courseAccess)) {
+        console.warn('validateInstanceAccessToken blocked by course lifecycle', {
+          instanceId,
+          studentId,
+          reason: courseAccess.reason,
+          courseId: courseAccess.courseId,
+          courseStatus: courseAccess.courseStatus,
+        });
+        return {
+          valid: false,
+          role_context: null,
+          tokenId: Number(row.id ?? 0) || null,
+          reason: courseAccess.message,
+          courseAccess,
+        };
+      }
+
+      return {
+        valid: true,
+        role_context: role,
+        tokenId: Number(row.id ?? 0) || null,
+        courseAccess,
+      };
     }
+    return {
+      valid: false,
+      role_context: null,
+      tokenId: Number(row.id ?? 0) || null,
+      reason: 'Assessment instance not found.',
+    };
   }
 
   return {
@@ -4398,131 +4489,178 @@ export interface CreateStudentInput {
   status?: string;
 }
 
-export async function setStudentCourses(studentId: number, courseIds: number[]): Promise<boolean> {
+export type SetStudentCoursesOptions = {
+  /** Per-course lifecycle fields when assigning (Edit Student). */
+  enrollments?: Array<{
+    course_id: number;
+    start_date?: string | null;
+    end_date?: string | null;
+    enrollment_status?: StudentCourseEnrollmentStatus;
+    intake_label?: string | null;
+  }>;
+  /** Prefer cancel over hard-delete when pruning deselected courses that have assessments. */
+  cancelInsteadOfDelete?: boolean;
+};
+
+export async function setStudentCourses(
+  studentId: number,
+  courseIds: number[],
+  options?: SetStudentCoursesOptions
+): Promise<{ ok: boolean; error?: string }> {
   const sid = Number(studentId);
-  if (!Number.isFinite(sid) || sid <= 0) return false;
+  if (!Number.isFinite(sid) || sid <= 0) return { ok: false, error: 'Invalid student' };
   const ids = Array.from(new Set(courseIds.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0)));
-  const { created_by, updated_by } = getAuditFields();
+  const { updated_by } = getAuditFields();
+  const byCourse = new Map(
+    (options?.enrollments ?? []).map((e) => [Number(e.course_id), e] as const)
+  );
   try {
-    // Unassign all when empty.
-    if (ids.length === 0) {
-      const { error } = await supabase
-        .from('skyline_student_courses')
-        .delete()
-        .eq('student_id', sid);
-      if (error) {
-        console.error('setStudentCourses delete error', error);
-        return false;
-      }
-      return true;
-    }
+    const existingActive = await listStudentCourseEnrollments(sid);
+    const existingIds = existingActive.map((e) => e.course_id);
+    const toRemove = existingIds.filter((id) => !ids.includes(id));
 
-    // Remove courses not in new selection.
-    const { error: delErr } = await supabase
-      .from('skyline_student_courses')
-      .delete()
-      .eq('student_id', sid)
-      .not('course_id', 'in', `(${ids.join(',')})`);
-    if (delErr) {
-      console.error('setStudentCourses prune error', delErr);
-      return false;
-    }
-
-    // Upsert selected courses as active without wiping enrollment dates/status on existing rows.
-    for (const cid of ids) {
-      const { data: existing, error: selErr } = await supabase
-        .from('skyline_student_courses')
-        .select('student_id')
-        .eq('student_id', sid)
-        .eq('course_id', cid)
-        .maybeSingle();
-      if (selErr) {
-        console.error('setStudentCourses select error', selErr);
-        return false;
-      }
-      if (existing) {
-        const { error: upErr } = await supabase
-          .from('skyline_student_courses')
-          .update({ status: 'active', updated_by })
-          .eq('student_id', sid)
-          .eq('course_id', cid);
-        if (upErr) {
-          console.error('setStudentCourses reactivate error', upErr);
-          return false;
+    for (const cid of toRemove) {
+      if (options?.cancelInsteadOfDelete) {
+        const res = await upsertStudentCourseEnrollment({
+          studentId: sid,
+          courseId: cid,
+          enrollment_status: 'cancelled',
+          link_status: 'inactive',
+          allowCreate: false,
+        });
+        if (!res.ok) {
+          // Fall back to soft-inactive without status change if cancel transition blocked
+          const { error } = await supabase
+            .from('skyline_student_courses')
+            .update({ status: 'inactive', updated_by })
+            .eq('student_id', sid)
+            .eq('course_id', cid);
+          if (error) return { ok: false, error: error.message };
         }
       } else {
-        const { error: insErr } = await supabase.from('skyline_student_courses').insert({
-          student_id: sid,
-          course_id: cid,
-          status: 'active',
-          enrollment_status: 'in_progress',
-          created_by,
-          updated_by,
-        });
-        if (insErr) {
-          console.error('setStudentCourses insert error', insErr);
-          return false;
-        }
+        const { error } = await supabase
+          .from('skyline_student_courses')
+          .update({ status: 'inactive', updated_by })
+          .eq('student_id', sid)
+          .eq('course_id', cid);
+        if (error) return { ok: false, error: error.message };
       }
     }
-    return true;
+
+    if (ids.length === 0) return { ok: true };
+
+    let hasInProgress = existingActive.some(
+      (e) => e.enrollment_status === 'in_progress' && ids.includes(e.course_id)
+    );
+
+    for (const cid of ids) {
+      const draft = byCourse.get(cid);
+      const already = existingActive.find((e) => e.course_id === cid);
+      if (already) {
+        const res = await upsertStudentCourseEnrollment({
+          studentId: sid,
+          courseId: cid,
+          start_date: draft?.start_date !== undefined ? draft.start_date : undefined,
+          end_date: draft?.end_date !== undefined ? draft.end_date : undefined,
+          enrollment_status: draft?.enrollment_status,
+          intake_label: draft?.intake_label,
+          link_status: 'active',
+          allowCreate: false,
+        });
+        if (!res.ok) return { ok: false, error: res.error };
+        if ((draft?.enrollment_status ?? already.enrollment_status) === 'in_progress') {
+          hasInProgress = true;
+        }
+      } else {
+        const status =
+          draft?.enrollment_status ??
+          (hasInProgress ? 'tentative' : 'in_progress');
+        const res = await upsertStudentCourseEnrollment({
+          studentId: sid,
+          courseId: cid,
+          start_date: draft?.start_date ?? null,
+          end_date: draft?.end_date ?? null,
+          enrollment_status: status,
+          intake_label: draft?.intake_label ?? null,
+          link_status: 'active',
+          allowCreate: true,
+        });
+        if (!res.ok) return { ok: false, error: res.error };
+        if (status === 'in_progress') hasInProgress = true;
+      }
+    }
+    return { ok: true };
   } catch (e) {
     console.error('setStudentCourses error', e);
-    return false;
+    return { ok: false, error: e instanceof Error ? e.message : 'setStudentCourses failed' };
   }
 }
 
 /** Add courses to a student without removing existing course mappings. */
-export async function appendStudentCourses(studentId: number, courseIds: number[]): Promise<boolean> {
+export async function appendStudentCourses(
+  studentId: number,
+  courseIds: number[],
+  options?: {
+    enrollments?: Array<{
+      course_id: number;
+      start_date?: string | null;
+      end_date?: string | null;
+      enrollment_status?: StudentCourseEnrollmentStatus;
+    }>;
+    /** When true, also upsert dates/status for courses the student already has (import recompute). */
+    updateExisting?: boolean;
+  }
+): Promise<{ ok: boolean; error?: string }> {
   const sid = Number(studentId);
-  if (!Number.isFinite(sid) || sid <= 0) return false;
+  if (!Number.isFinite(sid) || sid <= 0) return { ok: false, error: 'Invalid student' };
   const ids = Array.from(new Set(courseIds.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0)));
-  if (ids.length === 0) return true;
-  const existing = await getActiveCourseIdsForStudent(sid);
-  const merged = Array.from(new Set([...existing, ...ids]));
-  if (merged.length === existing.length) return true;
-  const toAdd = ids.filter((id) => !existing.includes(id));
-  const { created_by, updated_by } = getAuditFields();
-  for (const cid of toAdd) {
-    const { data: row, error: selErr } = await supabase
-      .from('skyline_student_courses')
-      .select('student_id, status')
-      .eq('student_id', sid)
-      .eq('course_id', cid)
-      .maybeSingle();
-    if (selErr) {
-      console.error('appendStudentCourses select error', selErr);
-      return false;
-    }
-    if (row) {
-      const { error: upErr } = await supabase
-        .from('skyline_student_courses')
-        .update({ status: 'active', updated_by })
-        .eq('student_id', sid)
-        .eq('course_id', cid);
-      if (upErr) {
-        console.error('appendStudentCourses reactivate error', upErr);
-        return false;
-      }
-    } else {
-      const { error: insErr } = await supabase.from('skyline_student_courses').insert({
-        student_id: sid,
-        course_id: cid,
-        status: 'active',
-        enrollment_status: 'in_progress',
-        created_by,
-        updated_by,
+  if (ids.length === 0) return { ok: true };
+  const existing = await listStudentCourseEnrollments(sid);
+  const existingIds = new Set(existing.map((e) => e.course_id));
+  const byCourse = new Map((options?.enrollments ?? []).map((e) => [Number(e.course_id), e] as const));
+
+  if (options?.updateExisting) {
+    for (const cid of ids.filter((id) => existingIds.has(id))) {
+      const draft = byCourse.get(cid);
+      if (!draft) continue;
+      const res = await upsertStudentCourseEnrollment({
+        studentId: sid,
+        courseId: cid,
+        start_date: draft.start_date !== undefined ? draft.start_date : undefined,
+        end_date: draft.end_date !== undefined ? draft.end_date : undefined,
+        enrollment_status: draft.enrollment_status,
+        link_status: 'active',
+        allowCreate: false,
       });
-      if (insErr) {
-        console.error('appendStudentCourses insert error', insErr);
-        return false;
-      }
+      if (!res.ok) return res;
     }
   }
-  return true;
+
+  const toAdd = ids.filter((id) => !existingIds.has(id));
+  if (toAdd.length === 0) return { ok: true };
+
+  let hasInProgress = existing.some((e) => e.enrollment_status === 'in_progress');
+
+  for (const cid of toAdd) {
+    const draft = byCourse.get(cid);
+    const status =
+      draft?.enrollment_status ?? (hasInProgress ? 'tentative' : 'in_progress');
+    const res = await upsertStudentCourseEnrollment({
+      studentId: sid,
+      courseId: cid,
+      start_date: draft?.start_date ?? null,
+      end_date: draft?.end_date ?? null,
+      enrollment_status: status,
+      link_status: 'active',
+      allowCreate: true,
+    });
+    if (!res.ok) return res;
+    if (status === 'in_progress') hasInProgress = true;
+  }
+  return { ok: true };
 }
 
-export type StudentCourseEnrollmentStatus = 'in_progress' | 'completed' | 'suspended';
+export type StudentCourseEnrollmentStatus = CourseLifecycleStatus;
 
 export interface StudentCourseEnrollment {
   course_id: number;
@@ -4535,6 +4673,57 @@ export interface StudentCourseEnrollment {
   completed_at: string | null;
   intake_label: string | null;
   link_status: 'active' | 'inactive';
+  enrollment_status_changed_at: string | null;
+}
+
+export type UpsertStudentCourseEnrollmentInput = {
+  studentId: number;
+  courseId: number;
+  start_date?: string | null;
+  end_date?: string | null;
+  enrollment_status?: StudentCourseEnrollmentStatus | null;
+  intake_label?: string | null;
+  link_status?: 'active' | 'inactive';
+  completed_at?: string | null;
+  allowCreate?: boolean;
+};
+
+export async function upsertStudentCourseEnrollment(
+  input: UpsertStudentCourseEnrollmentInput
+): Promise<{ ok: boolean; error?: string; data?: Record<string, unknown> }> {
+  const sid = Number(input.studentId);
+  const cid = Number(input.courseId);
+  if (!Number.isFinite(sid) || sid <= 0 || !Number.isFinite(cid) || cid <= 0) {
+    return { ok: false, error: 'Invalid student or course' };
+  }
+  if (input.enrollment_status != null && !isCourseLifecycleStatus(input.enrollment_status)) {
+    return { ok: false, error: 'Invalid course status.' };
+  }
+  const dateErr = validateCourseDateOrder(input.start_date ?? null, input.end_date ?? null);
+  if (dateErr) return { ok: false, error: dateErr };
+
+  const { updated_by } = getAuditFields();
+  const { data, error } = await supabase.rpc('skyline_upsert_student_course_enrollment', {
+    p_student_id: sid,
+    p_course_id: cid,
+    p_start_date: input.start_date === undefined ? null : input.start_date,
+    p_end_date: input.end_date === undefined ? null : input.end_date,
+    p_enrollment_status: input.enrollment_status ?? null,
+    p_intake_label: input.intake_label === undefined ? null : input.intake_label,
+    p_link_status: input.link_status ?? 'active',
+    p_completed_at: input.completed_at ?? null,
+    p_actor_user_id: updated_by,
+    p_allow_create: input.allowCreate !== false,
+  });
+  if (error) {
+    console.error('upsertStudentCourseEnrollment rpc error', error);
+    return { ok: false, error: error.message };
+  }
+  const payload = (data ?? {}) as { ok?: boolean; error?: string };
+  if (!payload.ok) {
+    return { ok: false, error: payload.error ?? 'Could not update course enrolment' };
+  }
+  return { ok: true, data: payload as Record<string, unknown> };
 }
 
 export async function listStudentCourseEnrollments(studentId: number): Promise<StudentCourseEnrollment[]> {
@@ -4543,7 +4732,7 @@ export async function listStudentCourseEnrollments(studentId: number): Promise<S
   const { data, error } = await supabase
     .from('skyline_student_courses')
     .select(
-      'created_at, status, start_date, end_date, enrollment_status, completed_at, intake_label, course_id, skyline_courses(id, name, qualification_code)'
+      'created_at, status, start_date, end_date, enrollment_status, completed_at, intake_label, enrollment_status_changed_at, course_id, skyline_courses(id, name, qualification_code)'
     )
     .eq('student_id', sid)
     .eq('status', 'active')
@@ -4561,6 +4750,7 @@ export async function listStudentCourseEnrollments(studentId: number): Promise<S
       enrollment_status?: string | null;
       completed_at?: string | null;
       intake_label?: string | null;
+      enrollment_status_changed_at?: string | null;
       course_id: number;
       skyline_courses: { id: number; name: string; qualification_code: string | null } | null;
     }> | null) ?? [];
@@ -4568,7 +4758,7 @@ export async function listStudentCourseEnrollments(studentId: number): Promise<S
     .map((r) => {
       const c = r.skyline_courses;
       if (!c) return null;
-      const enrollmentStatus = String(r.enrollment_status ?? 'in_progress') as StudentCourseEnrollmentStatus;
+      const enrollmentStatus = normalizeCourseLifecycleStatus(r.enrollment_status) ?? 'in_progress';
       return {
         course_id: Number(c.id),
         name: c.name,
@@ -4576,13 +4766,13 @@ export async function listStudentCourseEnrollments(studentId: number): Promise<S
         enrolled_at: String(r.created_at ?? ''),
         start_date: r.start_date ? String(r.start_date) : null,
         end_date: r.end_date ? String(r.end_date) : null,
-        enrollment_status:
-          enrollmentStatus === 'completed' || enrollmentStatus === 'suspended'
-            ? enrollmentStatus
-            : 'in_progress',
+        enrollment_status: enrollmentStatus,
         completed_at: r.completed_at ? String(r.completed_at) : null,
         intake_label: r.intake_label ? String(r.intake_label) : null,
         link_status: r.status === 'inactive' ? 'inactive' : 'active',
+        enrollment_status_changed_at: r.enrollment_status_changed_at
+          ? String(r.enrollment_status_changed_at)
+          : null,
       } satisfies StudentCourseEnrollment;
     })
     .filter((c): c is StudentCourseEnrollment => !!c);
@@ -4594,36 +4784,26 @@ export async function updateStudentCourseEnrollment(
   patch: Partial<
     Pick<StudentCourseEnrollment, 'start_date' | 'end_date' | 'enrollment_status' | 'completed_at' | 'intake_label'>
   >
-): Promise<boolean> {
-  const sid = Number(studentId);
-  const cid = Number(courseId);
-  if (!Number.isFinite(sid) || sid <= 0 || !Number.isFinite(cid) || cid <= 0) return false;
-  const { updated_by } = getAuditFields();
-  const payload: Record<string, unknown> = { updated_by };
-  if (patch.start_date !== undefined) payload.start_date = patch.start_date || null;
-  if (patch.end_date !== undefined) payload.end_date = patch.end_date || null;
-  if (patch.enrollment_status !== undefined) payload.enrollment_status = patch.enrollment_status;
-  if (patch.completed_at !== undefined) payload.completed_at = patch.completed_at || null;
-  if (patch.intake_label !== undefined) payload.intake_label = patch.intake_label?.trim() || null;
-  const { error } = await supabase
-    .from('skyline_student_courses')
-    .update(payload)
-    .eq('student_id', sid)
-    .eq('course_id', cid);
-  if (error) {
-    console.error('updateStudentCourseEnrollment error', error);
-    return false;
-  }
-  return true;
+): Promise<{ ok: boolean; error?: string }> {
+  return upsertStudentCourseEnrollment({
+    studentId,
+    courseId,
+    start_date: patch.start_date,
+    end_date: patch.end_date,
+    enrollment_status: patch.enrollment_status,
+    completed_at: patch.completed_at,
+    intake_label: patch.intake_label,
+    allowCreate: false,
+  });
 }
 
 export async function markStudentCourseComplete(
   studentId: number,
   courseId: number,
   completedAt: string
-): Promise<boolean> {
+): Promise<{ ok: boolean; error?: string }> {
   const date = String(completedAt ?? '').trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return { ok: false, error: 'Invalid completion date' };
   return updateStudentCourseEnrollment(studentId, courseId, {
     enrollment_status: 'completed',
     completed_at: date,
@@ -4779,7 +4959,10 @@ export async function createStudent(input: CreateStudentInput): Promise<Student 
   };
 
   if (Array.isArray(input.course_ids) && input.course_ids.length > 0) {
-    await setStudentCourses(createdStudent.id, input.course_ids);
+    const courseRes = await setStudentCourses(createdStudent.id, input.course_ids);
+    if (!courseRes.ok) {
+      console.error('createStudent setStudentCourses error', courseRes.error);
+    }
   }
 
   if (pendingBatchId != null && Number.isFinite(Number(pendingBatchId)) && Number(pendingBatchId) > 0) {
@@ -5986,7 +6169,18 @@ export type InstanceWorkflowStatus = 'draft' | 'waiting_trainer' | 'waiting_offi
  * `updateInstanceWorkflowStatus(..., 'waiting_trainer')`) in a single DB round-trip.
  * Prefer this for student final submit to avoid partial state if separate updates fail.
  */
-export async function submitInstanceToTrainerViaRpc(instanceId: number): Promise<{ ok: boolean; error?: string }> {
+export async function submitInstanceToTrainerViaRpc(instanceId: number): Promise<{ ok: boolean; error?: string; code?: string }> {
+  try {
+    await assertStudentInstanceMutationAllowed(instanceId, {
+      actorRole: 'student',
+      source: 'submit',
+    });
+  } catch (e) {
+    if (e instanceof StudentCourseAccessError) {
+      return { ok: false, error: e.message, code: e.code };
+    }
+    throw e;
+  }
   const { data, error } = await supabase.rpc('skyline_submit_instance_to_trainer', {
     p_instance_id: instanceId,
   });

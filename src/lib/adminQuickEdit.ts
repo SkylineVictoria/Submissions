@@ -408,7 +408,7 @@ export async function saveQuickEditChanges(input: QuickEditSaveInput): Promise<{
       const after = draft.resultsData[sectionId] ?? ({ section_id: sectionId } as ResultsDataEntry);
       const patch = diffPartialRecord(before, after, RESULTS_PATCH_KEYS);
       if (Object.keys(patch).length > 0) {
-        await saveResultsData(instanceId, sectionId, patch);
+        await saveResultsData(instanceId, sectionId, patch, { source: 'adminQuickEdit' });
       }
 
       const beforeOffice = baseline.resultsOffice[sectionId] ?? ({ section_id: sectionId } as ResultsOfficeEntry);
@@ -428,7 +428,7 @@ export async function saveQuickEditChanges(input: QuickEditSaveInput): Promise<{
 
     const summaryPatch = diffPartialRecord(baseline.assessmentSummary, draft.assessmentSummary, SUMMARY_PATCH_KEYS);
     if (Object.keys(summaryPatch).length > 0) {
-      await saveAssessmentSummaryData(instanceId, summaryPatch);
+      await saveAssessmentSummaryData(instanceId, summaryPatch, { source: 'adminQuickEdit' });
     }
 
     const noteBefore = (baseline.adminReferenceNote ?? '').trim();

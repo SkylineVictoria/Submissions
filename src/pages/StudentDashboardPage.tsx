@@ -21,6 +21,7 @@ import {
   isTerminalFailureProgressRow,
   getAssessmentOutcomeDisplay,
   maskCompetentWhileAwaitingTrainer,
+  melDateString,
   type WorkflowStageState,
   withinInstanceAccessWindow,
   type AttemptResult,
@@ -28,6 +29,12 @@ import {
 } from '../utils/assessmentRowUi';
 import { FormDocumentsPanel } from '../components/documents/FormDocumentsPanel';
 import { NotificationBell } from '../components/NotificationBell';
+import {
+  evaluateStudentCourseRunningAccess,
+  studentMayMutateAssessment,
+  studentMayOpenAssessment,
+  MSG_COURSE_NOT_IN_PROGRESS,
+} from '../lib/studentAssessmentAccess';
 import { NotificationAcknowledgmentGate } from '../components/NotificationAcknowledgmentGate';
 import { STUDENT_DASHBOARD_AUTH_STORAGE_KEY } from '../lib/formEngine';
 import { cn } from '../components/utils/cn';
@@ -312,24 +319,66 @@ export const StudentDashboardPage: React.FC = () => {
     toast.success('Refreshed');
   };
 
-  const handleOpen = async (row: SubmittedInstanceRow) => {
+  const handleOpen = async (row: SubmittedInstanceRow, course?: StudentCourseEnrollment) => {
+    const courseAccess = course
+      ? evaluateStudentCourseRunningAccess({
+          linkStatus: course.link_status,
+          enrollmentStatus: course.enrollment_status,
+          startDate: course.start_date,
+          endDate: course.end_date,
+          todayMelbourneIso: melDateString(),
+          courseId: course.course_id,
+          studentId: row.student_id,
+          formId: row.form_id,
+        })
+      : null;
+    if (courseAccess && !studentMayOpenAssessment(courseAccess)) {
+      toast.error(courseAccess.message || MSG_COURSE_NOT_IN_PROGRESS);
+      return;
+    }
     const win = withinInstanceAccessWindow(row, 'student');
     if (!win.ok) {
       toast.error(win.reason || 'This assessment is not available right now.');
       return;
     }
+    if (courseAccess && !studentMayMutateAssessment(courseAccess)) {
+      toast.error(courseAccess.message || MSG_COURSE_NOT_IN_PROGRESS);
+      return;
+    }
     const url = await issueInstanceAccessLink(row.id, 'student');
     if (!url) {
-      toast.error('Could not open. This assessment may be outside the allowed window.');
+      toast.error(
+        courseAccess && !studentMayOpenAssessment(courseAccess)
+          ? courseAccess.message
+          : 'Could not open. This assessment may be outside the allowed window.',
+      );
       return;
     }
     window.open(url, '_blank');
   };
 
-  const renderCourseAssessments = (_course: StudentCourseEnrollment, courseRows: SubmittedInstanceRow[]) => {
+  const renderCourseAssessments = (course: StudentCourseEnrollment, courseRows: SubmittedInstanceRow[]) => {
+    const courseAccess = evaluateStudentCourseRunningAccess({
+      linkStatus: course.link_status,
+      enrollmentStatus: course.enrollment_status,
+      startDate: course.start_date,
+      endDate: course.end_date,
+      todayMelbourneIso: melDateString(),
+      courseId: course.course_id,
+    });
+    const lifecycleBlocksOpen = !studentMayOpenAssessment(courseAccess);
+    const lifecycleBlocksMutate = !studentMayMutateAssessment(courseAccess);
     const filteredRows = filterCourseRows(courseRows);
     return (
       <>
+        {lifecycleBlocksMutate ? (
+          <div
+            role="status"
+            className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950"
+          >
+            {courseAccess.message || MSG_COURSE_NOT_IN_PROGRESS}
+          </div>
+        ) : null}
         <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
           <p className="text-sm text-gray-600">
             {filteredRows.length} unit{filteredRows.length === 1 ? '' : 's'}
@@ -411,7 +460,13 @@ export const StudentDashboardPage: React.FC = () => {
                     submittedAt: row.submitted_at ?? null,
                   });
                   const win = withinInstanceAccessWindow(row, 'student');
-                  const disabled = ui.disabled || !win.ok;
+                  const openBlocked = lifecycleBlocksOpen;
+                  const disabled = ui.disabled || !win.ok || openBlocked;
+                  const openTitle = openBlocked
+                    ? courseAccess.message || MSG_COURSE_NOT_IN_PROGRESS
+                    : !win.ok
+                      ? win.reason || 'Not available'
+                      : 'Open assessment';
                   const trainerHighlightExtra = rowMatchesTrainerHighlightCourse(row, trainerHighlightCourseId)
                     ? TRAINER_HIGHLIGHT_ROW_EXTRA_CLASS
                     : '';
@@ -477,7 +532,12 @@ export const StudentDashboardPage: React.FC = () => {
                                 comments.push({ text: missedAttemptText, className: 'text-[11px] font-medium text-amber-700' });
                               }
                             }
-                            if (disabled && (ui.kind === 'future' || ui.kind === 'expired')) {
+                            if (openBlocked) {
+                              comments.push({
+                                text: courseAccess.message || MSG_COURSE_NOT_IN_PROGRESS,
+                                className: 'text-xs text-amber-800',
+                              });
+                            } else if (disabled && (ui.kind === 'future' || ui.kind === 'expired')) {
                               comments.push({ text: ui.reason, className: 'text-xs text-amber-700' });
                             } else if (!win.ok) {
                               comments.push({ text: win.reason || '', className: 'text-xs text-amber-700' });
@@ -514,19 +574,33 @@ export const StudentDashboardPage: React.FC = () => {
                                 canUpload={false}
                                 showTrainerSection={false}
                               />
-                              <button
-                                type="button"
-                                className="rounded-lg border border-[var(--border)] bg-white p-4 text-left hover:bg-[var(--brand)]/10 focus-visible:bg-[var(--brand)]/10 transition-colors disabled:opacity-50"
-                                onClick={() => void handleOpen(row)}
-                                disabled={disabled}
-                                title="Open assessment"
-                              >
-                                <div className="text-sm font-semibold text-[var(--text)]">Assessment</div>
-                                <div className="mt-1 text-xs text-gray-600 break-words">{row.form_name}</div>
-                                <div className="mt-3 inline-flex items-center rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700">
-                                  Open
+                              {disabled ? (
+                                <div
+                                  className="rounded-lg border border-amber-200 bg-amber-50/80 p-4 text-left opacity-90"
+                                  title={openTitle}
+                                  aria-disabled="true"
+                                >
+                                  <div className="text-sm font-semibold text-[var(--text)]">Assessment</div>
+                                  <div className="mt-1 text-xs text-gray-600 break-words">{row.form_name}</div>
+                                  <p className="mt-2 text-xs text-amber-900">{openTitle}</p>
+                                  <div className="mt-3 inline-flex items-center rounded-md border border-gray-200 bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-500 cursor-not-allowed">
+                                    Open unavailable
+                                  </div>
                                 </div>
-                              </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  className="rounded-lg border border-[var(--border)] bg-white p-4 text-left hover:bg-[var(--brand)]/10 focus-visible:bg-[var(--brand)]/10 transition-colors"
+                                  onClick={() => void handleOpen(row, course)}
+                                  title={openTitle}
+                                >
+                                  <div className="text-sm font-semibold text-[var(--text)]">Assessment</div>
+                                  <div className="mt-1 text-xs text-gray-600 break-words">{row.form_name}</div>
+                                  <div className="mt-3 inline-flex items-center rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700">
+                                    Open
+                                  </div>
+                                </button>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -696,6 +770,7 @@ export const StudentDashboardPage: React.FC = () => {
                         completed_at: null,
                         intake_label: null,
                         link_status: 'active',
+                        enrollment_status_changed_at: null,
                       },
                       unassignedAssessments
                     )}

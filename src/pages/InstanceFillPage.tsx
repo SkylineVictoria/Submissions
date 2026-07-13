@@ -7,16 +7,16 @@ import {
   fetchAnswersForInstance,
   fetchInstance,
   fetchInstanceIdentitySources,
-  saveAnswer,
+  saveAnswer as persistAnswer,
   saveTrainerAssessment,
   fetchTrainerAssessments,
   fetchTrainerRowAssessments,
   fetchResultsOffice,
   saveResultsOffice,
   fetchResultsData,
-  saveResultsData,
+  saveResultsData as persistResultsData,
   fetchAssessmentSummaryData,
-  saveAssessmentSummaryData,
+  saveAssessmentSummaryData as persistAssessmentSummaryData,
   submitInstanceToTrainerViaRpc,
   updateInstanceRole,
   updateInstanceWorkflowStatus,
@@ -47,6 +47,16 @@ import {
   type IdentityFieldCode,
   type IdentityQuestionRef,
 } from '../utils/identityFieldRepair';
+import {
+  MSG_COURSE_NOT_IN_PROGRESS,
+  MSG_COURSE_NOT_GOING_ON,
+  MSG_COURSE_TENTATIVE,
+  MSG_COURSE_SUSPENDED,
+  MSG_COURSE_CANCELLED,
+  MSG_COURSE_COMPLETED,
+  studentMayMutateAssessment,
+  type StudentAssessmentAccessResult,
+} from '../lib/studentAssessmentAccess';
 import { Card } from '../components/ui/Card';
 import { Loader } from '../components/ui/Loader';
 import { Button } from '../components/ui/Button';
@@ -615,6 +625,8 @@ export const InstanceFillPage: React.FC = () => {
   const [currentStep, setCurrentStep] = useState(1);
   const [loading, setLoading] = useState(true);
   const [accessDenied, setAccessDenied] = useState<string | null>(null);
+  const [courseRunningAccess, setCourseRunningAccess] = useState<StudentAssessmentAccessResult | null>(null);
+  const [studentCourseMutationAllowed, setStudentCourseMutationAllowed] = useState(true);
   const [errors, setErrors] = useState<Record<string, string>>({});
   /** Debounce saves per answer key (questionId + rowId). A single shared timer causes grid tables to only persist the last row edited. */
   const saveTimeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
@@ -624,9 +636,52 @@ export const InstanceFillPage: React.FC = () => {
   const accessToken = searchParams.get('token')?.trim() || '';
   const [pdfRefresh, setPdfRefresh] = useState(0);
 
+  /** Pass effective token role so staff (trainer/office) are never lifecycle-blocked on student drafts. */
+  const saveAnswer = useCallback(
+    (
+      instanceIdArg: number,
+      questionId: number,
+      rowId: number | null,
+      value: { text?: string; number?: number; json?: unknown },
+      options?: { allowClear?: boolean; source?: string; actorRole?: string | null },
+    ) =>
+      persistAnswer(instanceIdArg, questionId, rowId, value, {
+        ...options,
+        actorRole: options?.actorRole ?? role,
+      }),
+    [role],
+  );
+  const saveResultsData = useCallback(
+    (
+      instanceIdArg: number,
+      sectionId: number,
+      data: Partial<Omit<import('../lib/formEngine').ResultsDataEntry, 'section_id'>>,
+      options?: { actorRole?: string | null; source?: string },
+    ) =>
+      persistResultsData(instanceIdArg, sectionId, data, {
+        ...options,
+        actorRole: options?.actorRole ?? role,
+      }),
+    [role],
+  );
+  const saveAssessmentSummaryData = useCallback(
+    (
+      instanceIdArg: number,
+      data: Partial<import('../lib/formEngine').AssessmentSummaryDataEntry>,
+      options?: { actorRole?: string | null; source?: string },
+    ) =>
+      persistAssessmentSummaryData(instanceIdArg, data, {
+        ...options,
+        actorRole: options?.actorRole ?? role,
+      }),
+    [role],
+  );
+
   const loadData = useCallback(async () => {
     if (!id) return;
     setAccessDenied(null);
+    setCourseRunningAccess(null);
+    setStudentCourseMutationAllowed(true);
     setLoading(true);
     if (!accessToken) {
       setAccessDenied('Secure access token is missing. Please use the link shared by admin.');
@@ -644,6 +699,17 @@ export const InstanceFillPage: React.FC = () => {
     }
     const tokenRole = access.role_context as FormRole;
     setRole(tokenRole);
+    const courseAccess = access.courseAccess ?? null;
+    setCourseRunningAccess(courseAccess);
+    const allowStudentMutate =
+      tokenRole !== 'student' || !courseAccess || studentMayMutateAssessment(courseAccess);
+    setStudentCourseMutationAllowed(allowStudentMutate);
+    // Denied open: validate already rejects; for read-only, continue without mutation/hydration writes.
+    if (tokenRole === 'student' && courseAccess && !allowStudentMutate) {
+      setAccessDenied(courseAccess.message || MSG_COURSE_NOT_IN_PROGRESS);
+      setLoading(false);
+      return;
+    }
     const formId = inst && Number.isFinite(Number(inst.form_id)) ? Number(inst.form_id) : null;
     const [tpl, ans, assessments, rowAssessments, officeData, resultsDataRes, summaryData] = await Promise.all([
       formId ? fetchTemplateForForm(formId, { skipEnsureTaskSections: true }) : Promise.resolve(null),
@@ -728,7 +794,7 @@ export const InstanceFillPage: React.FC = () => {
         }
       }
     }
-    if (identityQuestions.length > 0) {
+    if (identityQuestions.length > 0 && allowStudentMutate) {
       const identitySources = await fetchInstanceIdentitySources(id);
       if (identitySources) {
         const sourceValues = buildIdentitySourceValues({
@@ -747,7 +813,32 @@ export const InstanceFillPage: React.FC = () => {
         });
         for (const update of hydrationUpdates) {
           ansMap[getAnswerKey(update.questionId, null)] = update.value;
-          await saveAnswer(id, update.questionId, null, { text: update.value }, { source: 'identity-hydration' });
+          await saveAnswer(id, update.questionId, null, { text: update.value }, {
+            source: 'identity-hydration',
+            actorRole: tokenRole,
+          });
+        }
+      }
+    } else if (identityQuestions.length > 0) {
+      // Read-only view: hydrate display from profile without persisting.
+      const identitySources = await fetchInstanceIdentitySources(id);
+      if (identitySources) {
+        const sourceValues = buildIdentitySourceValues({
+          profileName: identitySources.studentFullName,
+          profileEmail: identitySources.studentEmail,
+          profileStudentCode: identitySources.studentId,
+          trainerName: identitySources.trainerFullName,
+          resultsStudentName: identitySources.resultsStudentName,
+          resultsTrainerName: identitySources.resultsTrainerName,
+        });
+        const hydrationUpdates = buildIdentityHydrationUpdates({
+          questions: identityQuestions,
+          currentAnswers: ansMap,
+          sources: sourceValues,
+          getAnswerKey: (questionId) => getAnswerKey(questionId, null),
+        });
+        for (const update of hydrationUpdates) {
+          ansMap[getAnswerKey(update.questionId, null)] = update.value;
         }
       }
     }
@@ -772,7 +863,7 @@ export const InstanceFillPage: React.FC = () => {
     setResultsData(resultsDataRes || {});
     setAssessmentSummary(summaryData || null);
     setLoading(false);
-  }, [id, accessToken]);
+  }, [id, accessToken, saveAnswer]);
 
   useEffect(() => {
     loadData();
@@ -1681,14 +1772,17 @@ export const InstanceFillPage: React.FC = () => {
   const canRoleEditCurrentWorkflow = useMemo(() => {
     if (role === 'office' && isAdminEditMode) return true;
     if (workflowStatus === 'completed' || workflowStatus === 'failed') return false;
-    if (role === 'student') return workflowStatus === 'draft';
+    if (role === 'student') {
+      if (!studentCourseMutationAllowed) return false;
+      return workflowStatus === 'draft';
+    }
     if (role === 'trainer') {
       if (workflowStatus === 'waiting_office' && instanceRoleContext !== 'trainer') return false;
       return true;
     }
     if (role === 'office') return workflowStatus === 'waiting_office';
     return false;
-  }, [role, workflowStatus, isAdminEditMode, instanceRoleContext]);
+  }, [role, workflowStatus, isAdminEditMode, instanceRoleContext, studentCourseMutationAllowed]);
 
   /** Student declaration: editable on first cycle; staff may correct dates on later cycles. */
   const getStudentDeclarationEditable = useCallback(
@@ -2561,11 +2655,23 @@ export const InstanceFillPage: React.FC = () => {
     return <Loader fullPage variant="dots" size="lg" message="Loading..." />;
   }
   if (accessDenied) {
+    const isCourseMsg =
+      accessDenied === MSG_COURSE_NOT_IN_PROGRESS ||
+      accessDenied === MSG_COURSE_NOT_GOING_ON ||
+      accessDenied === MSG_COURSE_TENTATIVE ||
+      accessDenied === MSG_COURSE_SUSPENDED ||
+      accessDenied === MSG_COURSE_CANCELLED ||
+      accessDenied === MSG_COURSE_COMPLETED ||
+      /course/i.test(accessDenied);
     return (
       <div className="min-h-screen bg-[var(--bg)] flex items-center justify-center px-4">
-        <Card className="max-w-xl w-full">
-          <h2 className="text-xl font-bold text-[var(--text)] mb-2">Access denied</h2>
-          <p className="text-sm text-gray-600">{accessDenied}</p>
+        <Card className="max-w-xl w-full border-amber-200 bg-amber-50/60">
+          <h2 className="text-xl font-bold text-[var(--text)] mb-2">
+            {isCourseMsg ? 'Course not available' : 'Access denied'}
+          </h2>
+          <p className="text-sm text-amber-950" role="alert">
+            {accessDenied}
+          </p>
         </Card>
       </div>
     );
@@ -2750,6 +2856,15 @@ export const InstanceFillPage: React.FC = () => {
             <Card>
               <Stepper steps={steps} currentStep={currentStep} />
             </Card>
+            {role === 'student' && courseRunningAccess && !studentCourseMutationAllowed ? (
+              <div
+                role="status"
+                className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950"
+              >
+                <p className="font-semibold">Course not currently running</p>
+                <p className="mt-1">{courseRunningAccess.message || MSG_COURSE_NOT_IN_PROGRESS}</p>
+              </div>
+            ) : null}
             {role === 'office' && workflowStatus === 'waiting_office' && (
               <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
                 <p className="font-semibold">Office admin tasks</p>

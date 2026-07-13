@@ -5,7 +5,7 @@ import { Modal } from '../ui/Modal';
 import { DatePicker } from '../ui/DatePicker';
 import { Loader } from '../ui/Loader';
 import { toast } from '../../utils/toast';
-import type { StudentCourseEnrollment } from '../../lib/formEngine';
+import type { StudentCourseEnrollment, StudentCourseEnrollmentStatus } from '../../lib/formEngine';
 import {
   markStudentCourseComplete,
   updateStudentCourseEnrollment,
@@ -16,9 +16,20 @@ import type { AttemptResult } from '../../utils/assessmentRowUi';
 import {
   computeCourseProgressPercent,
   defaultIntakeLabel,
-  enrollmentStatusLabel,
   groupAssessmentsByCourse,
 } from '../../lib/studentCourseEnrollment';
+import {
+  allowedNextCourseStatuses,
+  courseBlocksNewAssessmentActivity,
+  courseLifecycleLabel,
+  ERROR_ALREADY_IN_PROGRESS,
+} from '../../lib/courseLifecycle';
+import {
+  evaluateStudentCourseRunningAccess,
+  studentMayMutateAssessment,
+} from '../../lib/studentAssessmentAccess';
+import { melDateString } from '../../utils/assessmentRowUi';
+import { CourseLifecycleBadge } from './CourseLifecycleBadge';
 import { cn } from '../utils/cn';
 
 const formatDDMMYYYY = (value: string | null): string => {
@@ -45,6 +56,13 @@ interface StudentQualificationsPanelProps {
   renderExpandedContent?: (course: StudentCourseEnrollment, rows: SubmittedInstanceRow[]) => React.ReactNode;
 }
 
+type EditDraft = {
+  course: StudentCourseEnrollment;
+  start_date: string;
+  end_date: string;
+  enrollment_status: StudentCourseEnrollmentStatus;
+};
+
 export const StudentQualificationsPanel: React.FC<StudentQualificationsPanelProps> = ({
   studentId,
   enrollments,
@@ -70,6 +88,18 @@ export const StudentQualificationsPanel: React.FC<StudentQualificationsPanelProp
     new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
   );
   const [assignSaving, setAssignSaving] = useState(false);
+  const [editDraft, setEditDraft] = useState<EditDraft | null>(null);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [confirmAction, setConfirmAction] = useState<{
+    status: 'suspended' | 'cancelled' | 'completed';
+    course: StudentCourseEnrollment;
+  } | null>(null);
+
+  const inProgressCourse = useMemo(
+    () => enrollments.find((e) => e.enrollment_status === 'in_progress') ?? null,
+    [enrollments]
+  );
 
   const grouped = useMemo(
     () => groupAssessmentsByCourse(assessments, enrollments),
@@ -86,7 +116,7 @@ export const StudentQualificationsPanel: React.FC<StudentQualificationsPanelProp
 
   const openComplete = (course: StudentCourseEnrollment) => {
     setCompleteCourse(course);
-    setCompleteDate(course.completed_at ?? new Date().toISOString().slice(0, 10));
+    setCompleteDate(course.completed_at ?? course.end_date ?? new Date().toISOString().slice(0, 10));
     setCompleteOpen(true);
   };
 
@@ -99,6 +129,16 @@ export const StudentQualificationsPanel: React.FC<StudentQualificationsPanelProp
     setAssignOpen(true);
   };
 
+  const openEdit = (course: StudentCourseEnrollment) => {
+    setEditError(null);
+    setEditDraft({
+      course,
+      start_date: course.start_date ?? '',
+      end_date: course.end_date ?? '',
+      enrollment_status: course.enrollment_status,
+    });
+  };
+
   const handleConfirmComplete = async () => {
     if (!isAdmin || !studentId || !completeCourse) return;
     if (!completeDate.trim()) {
@@ -106,10 +146,10 @@ export const StudentQualificationsPanel: React.FC<StudentQualificationsPanelProp
       return;
     }
     setCompleteSaving(true);
-    const ok = await markStudentCourseComplete(studentId, completeCourse.course_id, completeDate);
+    const res = await markStudentCourseComplete(studentId, completeCourse.course_id, completeDate);
     setCompleteSaving(false);
-    if (!ok) {
-      toast.error('Could not mark course complete');
+    if (!res.ok) {
+      toast.error(res.error ?? 'Could not mark course complete');
       return;
     }
     toast.success('Course marked complete');
@@ -129,10 +169,15 @@ export const StudentQualificationsPanel: React.FC<StudentQualificationsPanelProp
       return;
     }
     setAssignSaving(true);
-    await updateStudentCourseEnrollment(studentId, assignCourse.course_id, {
+    const upd = await updateStudentCourseEnrollment(studentId, assignCourse.course_id, {
       start_date: assignStart,
       end_date: assignEnd,
     });
+    if (!upd.ok) {
+      setAssignSaving(false);
+      toast.error(upd.error ?? 'Could not update course dates');
+      return;
+    }
     const res = await upsertStudentAssessmentsForCourse(studentId, assignCourse.course_id, {
       start_date: assignStart,
       end_date: assignEnd,
@@ -144,9 +189,51 @@ export const StudentQualificationsPanel: React.FC<StudentQualificationsPanelProp
     toast.success(`Assessments assigned: ${res.created} created, ${res.updated} updated.`);
   };
 
+  const handleSaveEdit = async () => {
+    if (!isAdmin || !studentId || !editDraft) return;
+    setEditSaving(true);
+    setEditError(null);
+    const res = await updateStudentCourseEnrollment(studentId, editDraft.course.course_id, {
+      start_date: editDraft.start_date || null,
+      end_date: editDraft.end_date || null,
+      enrollment_status: editDraft.enrollment_status,
+      completed_at:
+        editDraft.enrollment_status === 'completed'
+          ? editDraft.end_date || new Date().toISOString().slice(0, 10)
+          : null,
+    });
+    setEditSaving(false);
+    if (!res.ok) {
+      setEditError(res.error ?? ERROR_ALREADY_IN_PROGRESS);
+      toast.error(res.error ?? 'Could not update course');
+      return;
+    }
+    toast.success('Course enrolment updated');
+    setEditDraft(null);
+    onRefresh?.();
+  };
+
+  const handleConfirmStatus = async () => {
+    if (!isAdmin || !studentId || !confirmAction) return;
+    const { course, status } = confirmAction;
+    const end = course.end_date || new Date().toISOString().slice(0, 10);
+    const res = await updateStudentCourseEnrollment(studentId, course.course_id, {
+      enrollment_status: status,
+      end_date: status === 'completed' ? end : course.end_date,
+      completed_at: status === 'completed' ? end : null,
+    });
+    if (!res.ok) {
+      toast.error(res.error ?? 'Could not update course status');
+      return;
+    }
+    toast.success(`Course marked ${status === 'completed' ? 'Completed' : status === 'cancelled' ? 'Cancelled' : 'Suspended'}`);
+    setConfirmAction(null);
+    onRefresh?.();
+  };
+
   const headerCols = isAdmin
-    ? 'grid-cols-[minmax(0,1fr)_88px_88px_110px_120px_auto]'
-    : 'grid-cols-[minmax(0,1fr)_88px_88px_110px_120px]';
+    ? 'grid-cols-[minmax(0,1fr)_88px_88px_120px_120px_auto]'
+    : 'grid-cols-[minmax(0,1fr)_88px_88px_120px_120px]';
   const rowCols = headerCols;
 
   if (loading) {
@@ -167,10 +254,26 @@ export const StudentQualificationsPanel: React.FC<StudentQualificationsPanelProp
     );
   }
 
+  const nextStatuses = editDraft ? allowedNextCourseStatuses(editDraft.course.enrollment_status) : [];
+
   return (
     <>
+      {!isAdmin && inProgressCourse ? (
+        <p className="mb-3 text-xs text-gray-600">
+          Current In Progress course:{' '}
+          <strong>
+            {inProgressCourse.qualification_code
+              ? `${inProgressCourse.qualification_code} — ${inProgressCourse.name}`
+              : inProgressCourse.name}
+          </strong>
+          {inProgressCourse.start_date || inProgressCourse.end_date
+            ? ` (${formatDDMMYYYY(inProgressCourse.start_date)} – ${formatDDMMYYYY(inProgressCourse.end_date)})`
+            : null}
+        </p>
+      ) : null}
+
       <div className="overflow-x-auto">
-        <div className="min-w-[760px] overflow-hidden rounded-lg border border-[var(--border)]">
+        <div className="min-w-[800px] overflow-hidden rounded-lg border border-[var(--border)]">
           <div className={cn('grid gap-2 bg-[#ea580c] px-3 py-2 text-xs font-semibold text-white', headerCols)}>
             <span>Qualification / Intake</span>
             <span>Start</span>
@@ -185,9 +288,20 @@ export const StudentQualificationsPanel: React.FC<StudentQualificationsPanelProp
             const progress = computeCourseProgressPercent(rows, summaries);
             const isOpen = !!expanded[course.course_id];
             const intake = course.intake_label?.trim() || defaultIntakeLabel(course);
-            const status = enrollmentStatusLabel(course.enrollment_status);
+            const accessEval = !isAdmin
+              ? evaluateStudentCourseRunningAccess({
+                  linkStatus: course.link_status,
+                  enrollmentStatus: course.enrollment_status,
+                  startDate: course.start_date,
+                  endDate: course.end_date,
+                  todayMelbourneIso: melDateString(),
+                  courseId: course.course_id,
+                })
+              : null;
+            const accessMsg =
+              accessEval && !studentMayMutateAssessment(accessEval) ? accessEval.message : null;
             const endClass =
-              course.enrollment_status === 'suspended' ? 'text-red-600 font-medium' : 'text-gray-800';
+              course.enrollment_status === 'suspended' ? 'text-orange-700 font-medium' : 'text-gray-800';
 
             return (
               <div key={course.course_id} className="border-t border-[var(--border)]">
@@ -210,18 +324,16 @@ export const StudentQualificationsPanel: React.FC<StudentQualificationsPanelProp
                         <UserRound className="h-3.5 w-3.5 shrink-0 text-sky-600" />
                         {intake}
                       </div>
+                      {accessMsg ? <p className="mt-1 text-xs text-amber-800">{accessMsg}</p> : null}
                     </div>
                   </button>
                   <span className="text-xs text-gray-700">{formatDDMMYYYY(course.start_date)}</span>
                   <span className={cn('text-xs', endClass)}>{formatDDMMYYYY(course.end_date)}</span>
-                  <span className="text-xs font-medium text-gray-800">{status}</span>
+                  <CourseLifecycleBadge status={course.enrollment_status} />
                   <div className="flex items-center gap-2">
                     <div className="h-2 flex-1 min-w-[60px] rounded-full bg-gray-200 overflow-hidden">
                       <div
-                        className={cn(
-                          'h-full rounded-full',
-                          progress >= 100 ? 'bg-emerald-500' : 'bg-emerald-400'
-                        )}
+                        className={cn('h-full rounded-full', progress >= 100 ? 'bg-emerald-500' : 'bg-emerald-400')}
                         style={{ width: `${Math.min(100, progress)}%` }}
                       />
                     </div>
@@ -229,29 +341,53 @@ export const StudentQualificationsPanel: React.FC<StudentQualificationsPanelProp
                   </div>
                   {isAdmin ? (
                     <div className="flex flex-wrap justify-end gap-1">
-                      {course.enrollment_status !== 'completed' ? (
+                      <Button variant="outline" size="sm" className="text-xs px-2 py-1 h-8" onClick={() => openEdit(course)}>
+                        Edit
+                      </Button>
+                      {course.enrollment_status === 'in_progress' ? (
+                        <>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-xs px-2 py-1 h-8"
+                            onClick={() => setConfirmAction({ status: 'suspended', course })}
+                          >
+                            Suspend
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-xs px-2 py-1 h-8"
+                            onClick={() => openComplete(course)}
+                          >
+                            Complete
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-xs px-2 py-1 h-8 text-red-700"
+                            onClick={() => setConfirmAction({ status: 'cancelled', course })}
+                          >
+                            Cancel
+                          </Button>
+                        </>
+                      ) : null}
+                      {course.enrollment_status === 'in_progress' || course.enrollment_status === 'tentative' ? (
                         <Button
                           variant="outline"
                           size="sm"
                           className="text-xs px-2 py-1 h-8"
-                          onClick={() => openComplete(course)}
+                          onClick={() => openAssign(course)}
                         >
-                          Mark complete
+                          Give assessments
                         </Button>
                       ) : null}
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="text-xs px-2 py-1 h-8"
-                        onClick={() => openAssign(course)}
-                      >
-                        Give assessments
-                      </Button>
                       <Button
                         variant="ghost"
                         size="sm"
                         className="text-xs px-2 py-1 h-8"
                         onClick={() => onAddAssessment?.(course.course_id)}
+                        disabled={courseBlocksNewAssessmentActivity(course.enrollment_status)}
                       >
                         + Unit
                       </Button>
@@ -284,72 +420,177 @@ export const StudentQualificationsPanel: React.FC<StudentQualificationsPanelProp
 
       {isAdmin ? (
         <>
-      <Modal
-        isOpen={completeOpen}
-        onClose={() => {
-          if (completeSaving) return;
-          setCompleteOpen(false);
-        }}
-        title="Mark course complete"
-        size="md"
-      >
-        <div className="space-y-4">
-          <p className="text-sm text-gray-600">
-            Confirm completion for{' '}
-            <strong>
-              {completeCourse?.qualification_code ? `${completeCourse.qualification_code} — ` : ''}
-              {completeCourse?.name}
-            </strong>
-            . This sets the course to <strong>Completed</strong> and records the completion date.
-          </p>
-          <div>
-            <label className="block text-xs font-medium text-gray-700 mb-1">Completion date</label>
-            <DatePicker value={completeDate} onChange={(v) => setCompleteDate(v || '')} />
-          </div>
-          <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setCompleteOpen(false)} disabled={completeSaving}>
-              Cancel
-            </Button>
-            <Button variant="primary" onClick={() => void handleConfirmComplete()} disabled={completeSaving}>
-              {completeSaving ? 'Saving…' : 'Confirm completion'}
-            </Button>
-          </div>
-        </div>
-      </Modal>
+          <Modal
+            isOpen={completeOpen}
+            onClose={() => {
+              if (completeSaving) return;
+              setCompleteOpen(false);
+            }}
+            title="Mark course complete"
+            size="md"
+          >
+            <div className="space-y-4">
+              <p className="text-sm text-gray-600">
+                Completing this course will close the enrolment on{' '}
+                <strong>{formatDDMMYYYY(completeDate)}</strong>. Existing assessment records will not be changed.
+                Continue?
+              </p>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Completion date</label>
+                <DatePicker value={completeDate} onChange={(v) => setCompleteDate(v || '')} />
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setCompleteOpen(false)} disabled={completeSaving}>
+                  Cancel
+                </Button>
+                <Button variant="primary" onClick={() => void handleConfirmComplete()} disabled={completeSaving}>
+                  {completeSaving ? 'Saving…' : 'Confirm completion'}
+                </Button>
+              </div>
+            </div>
+          </Modal>
 
-      <Modal
-        isOpen={assignOpen}
-        onClose={() => {
-          if (assignSaving) return;
-          setAssignOpen(false);
-        }}
-        title="Give assessments for course"
-        size="md"
-      >
-        <div className="space-y-4">
-          <p className="text-sm text-gray-600">
-            Create or update all unit assessments linked to <strong>{assignCourse?.name}</strong>.
-          </p>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">Start date</label>
-              <DatePicker value={assignStart} onChange={(v) => setAssignStart(v || '')} />
+          <Modal
+            isOpen={!!confirmAction}
+            onClose={() => setConfirmAction(null)}
+            title={
+              confirmAction?.status === 'suspended'
+                ? 'Suspend course'
+                : confirmAction?.status === 'cancelled'
+                  ? 'Cancel course'
+                  : 'Complete course'
+            }
+            size="md"
+          >
+            <div className="space-y-4">
+              <p className="text-sm text-gray-600">
+                {confirmAction?.status === 'suspended'
+                  ? 'Suspending this course keeps assessment history. Another course may then become In Progress. Continue?'
+                  : confirmAction?.status === 'cancelled'
+                    ? 'Cancelling this course keeps historical records but blocks new assessment activity. Continue?'
+                    : 'Complete this course? Existing assessment records will not be changed.'}
+              </p>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setConfirmAction(null)}>
+                  Back
+                </Button>
+                <Button variant="primary" onClick={() => void handleConfirmStatus()}>
+                  Confirm
+                </Button>
+              </div>
             </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">End date</label>
-              <DatePicker value={assignEnd} onChange={(v) => setAssignEnd(v || '')} />
+          </Modal>
+
+          <Modal
+            isOpen={!!editDraft}
+            onClose={() => {
+              if (editSaving) return;
+              setEditDraft(null);
+            }}
+            title="Edit course enrolment"
+            size="md"
+          >
+            {editDraft ? (
+              <div className="space-y-4">
+                <p className="text-sm text-gray-700 font-medium">
+                  {editDraft.course.qualification_code
+                    ? `${editDraft.course.qualification_code} — ${editDraft.course.name}`
+                    : editDraft.course.name}
+                </p>
+                {inProgressCourse && inProgressCourse.course_id !== editDraft.course.course_id ? (
+                  <p className="text-xs text-amber-800 rounded-md bg-amber-50 border border-amber-200 px-2 py-1.5">
+                    Currently In Progress:{' '}
+                    {inProgressCourse.qualification_code
+                      ? `${inProgressCourse.qualification_code} — ${inProgressCourse.name}`
+                      : inProgressCourse.name}{' '}
+                    ({formatDDMMYYYY(inProgressCourse.start_date)} – {formatDDMMYYYY(inProgressCourse.end_date)})
+                  </p>
+                ) : null}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Course start date</label>
+                    <DatePicker
+                      value={editDraft.start_date}
+                      onChange={(v) => setEditDraft((p) => (p ? { ...p, start_date: v || '' } : p))}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Course end date</label>
+                    <DatePicker
+                      value={editDraft.end_date}
+                      onChange={(v) => setEditDraft((p) => (p ? { ...p, end_date: v || '' } : p))}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Course status</label>
+                  <select
+                    className="w-full rounded-md border border-gray-300 bg-white px-2 py-2 text-sm"
+                    value={editDraft.enrollment_status}
+                    onChange={(e) =>
+                      setEditDraft((p) =>
+                        p
+                          ? { ...p, enrollment_status: e.target.value as StudentCourseEnrollmentStatus }
+                          : p
+                      )
+                    }
+                  >
+                    <option value={editDraft.course.enrollment_status}>
+                      Current: {courseLifecycleLabel(editDraft.course.enrollment_status)}
+                    </option>
+                    {nextStatuses.map((s) => (
+                      <option key={s} value={s}>
+                        {courseLifecycleLabel(s)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {editError ? <p className="text-sm text-red-700">{editError}</p> : null}
+                <div className="flex justify-end gap-2">
+                  <Button variant="outline" onClick={() => setEditDraft(null)} disabled={editSaving}>
+                    Cancel
+                  </Button>
+                  <Button variant="primary" onClick={() => void handleSaveEdit()} disabled={editSaving}>
+                    {editSaving ? 'Saving…' : 'Save changes'}
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+          </Modal>
+
+          <Modal
+            isOpen={assignOpen}
+            onClose={() => {
+              if (assignSaving) return;
+              setAssignOpen(false);
+            }}
+            title="Give assessments for course"
+            size="md"
+          >
+            <div className="space-y-4">
+              <p className="text-sm text-gray-600">
+                Create or update all unit assessments linked to <strong>{assignCourse?.name}</strong>.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Start date</label>
+                  <DatePicker value={assignStart} onChange={(v) => setAssignStart(v || '')} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">End date</label>
+                  <DatePicker value={assignEnd} onChange={(v) => setAssignEnd(v || '')} />
+                </div>
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setAssignOpen(false)} disabled={assignSaving}>
+                  Cancel
+                </Button>
+                <Button variant="primary" onClick={() => void handleAssignAssessments()} disabled={assignSaving}>
+                  {assignSaving ? 'Assigning…' : 'Confirm & assign'}
+                </Button>
+              </div>
             </div>
-          </div>
-          <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setAssignOpen(false)} disabled={assignSaving}>
-              Cancel
-            </Button>
-            <Button variant="primary" onClick={() => void handleAssignAssessments()} disabled={assignSaving}>
-              {assignSaving ? 'Assigning…' : 'Confirm & assign'}
-            </Button>
-          </div>
-        </div>
-      </Modal>
+          </Modal>
         </>
       ) : null}
     </>
