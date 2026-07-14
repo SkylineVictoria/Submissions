@@ -157,6 +157,28 @@ export function defaultStatusForNewCourse(hasInProgress: boolean): CourseLifecyc
   return hasInProgress ? 'tentative' : 'in_progress';
 }
 
+/**
+ * Prefer In Progress only when dates exist and no other course is already In Progress.
+ * Without dates, default to Tentative so admin create/enrolment does not fail RPC date checks.
+ * Even an explicit In Progress request falls back to Tentative when dates are missing.
+ */
+export function defaultStatusForNewCourseEnrollment(input: {
+  hasInProgress: boolean;
+  startDate?: string | null;
+  endDate?: string | null;
+  explicitStatus?: CourseLifecycleStatus | null;
+}): CourseLifecycleStatus {
+  const start = String(input.startDate ?? '').trim();
+  const end = String(input.endDate ?? '').trim();
+  const hasDates = Boolean(start && end);
+  if (input.explicitStatus) {
+    if (input.explicitStatus === 'in_progress' && !hasDates) return 'tentative';
+    return input.explicitStatus;
+  }
+  if (!hasDates) return 'tentative';
+  return defaultStatusForNewCourse(input.hasInProgress);
+}
+
 export type OverlapConflict = {
   course_id: number;
   name?: string;

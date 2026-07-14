@@ -6,7 +6,7 @@ import {
   resolveCourseDatesAfterImport,
   validateActivityDatePair,
 } from './studentImportCourseDates';
-import { defaultStatusForNewCourse, findCourseOverlapConflicts } from './courseLifecycle';
+import { defaultStatusForNewCourse, defaultStatusForNewCourseEnrollment, findCourseOverlapConflicts } from './courseLifecycle';
 
 describe('studentImportCourseDates', () => {
   it('derives course start as earliest unit start and end as latest unit end', () => {
@@ -125,6 +125,26 @@ describe('studentImportCourseDates', () => {
   it('defaults second course to Tentative when another is In Progress', () => {
     expect(defaultStatusForNewCourse(true)).toBe('tentative');
     expect(defaultStatusForNewCourse(false)).toBe('in_progress');
+  });
+
+  it('defaults import enrolment without activity dates to Tentative (not In Progress)', () => {
+    const derived = deriveCourseDatesFromActivityRows([
+      { activity_start_date: null, activity_end_date: null },
+    ]);
+    expect(
+      defaultStatusForNewCourseEnrollment({
+        hasInProgress: false,
+        startDate: derived.courseStartDate,
+        endDate: derived.courseEndDate,
+      })
+    ).toBe('tentative');
+    expect(
+      defaultStatusForNewCourseEnrollment({
+        hasInProgress: false,
+        startDate: '2026-02-01',
+        endDate: '2026-03-18',
+      })
+    ).toBe('in_progress');
   });
 
   it('detects overlapping course schedules for import rejection', () => {

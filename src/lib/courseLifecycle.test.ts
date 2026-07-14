@@ -4,6 +4,7 @@ import {
   canTransitionCourseStatus,
   courseDateRangesOverlap,
   defaultStatusForNewCourse,
+  defaultStatusForNewCourseEnrollment,
   findCourseOverlapConflicts,
   normalizeCourseLifecycleStatus,
   validateCourseDateOrder,
@@ -168,5 +169,33 @@ describe('courseLifecycle', () => {
     expect(conflicts).toHaveLength(1);
     expect(conflicts[0].course_id).toBe(2);
     expect(ERROR_ALREADY_IN_PROGRESS).toMatch(/in progress/i);
+  });
+
+  it('defaults new enrolment without dates to Tentative', () => {
+    expect(
+      defaultStatusForNewCourseEnrollment({ hasInProgress: false, startDate: null, endDate: null })
+    ).toBe('tentative');
+    expect(
+      defaultStatusForNewCourseEnrollment({
+        hasInProgress: false,
+        startDate: '2026-01-01',
+        endDate: '2026-06-01',
+      })
+    ).toBe('in_progress');
+    expect(
+      defaultStatusForNewCourseEnrollment({
+        hasInProgress: true,
+        startDate: '2026-01-01',
+        endDate: '2026-06-01',
+      })
+    ).toBe('tentative');
+    expect(
+      defaultStatusForNewCourseEnrollment({
+        hasInProgress: false,
+        startDate: null,
+        endDate: null,
+        explicitStatus: 'in_progress',
+      })
+    ).toBe('tentative');
   });
 });

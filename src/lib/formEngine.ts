@@ -15,6 +15,7 @@ import {
   isCourseLifecycleStatus,
   normalizeCourseLifecycleStatus,
   validateCourseDateOrder,
+  defaultStatusForNewCourseEnrollment,
   type CourseLifecycleStatus,
 } from './courseLifecycle';
 import {
@@ -4572,9 +4573,12 @@ export async function setStudentCourses(
           hasInProgress = true;
         }
       } else {
-        const status =
-          draft?.enrollment_status ??
-          (hasInProgress ? 'tentative' : 'in_progress');
+        const status = defaultStatusForNewCourseEnrollment({
+          hasInProgress,
+          startDate: draft?.start_date,
+          endDate: draft?.end_date,
+          explicitStatus: draft?.enrollment_status,
+        });
         const res = await upsertStudentCourseEnrollment({
           studentId: sid,
           courseId: cid,
@@ -4643,8 +4647,12 @@ export async function appendStudentCourses(
 
   for (const cid of toAdd) {
     const draft = byCourse.get(cid);
-    const status =
-      draft?.enrollment_status ?? (hasInProgress ? 'tentative' : 'in_progress');
+    const status = defaultStatusForNewCourseEnrollment({
+      hasInProgress,
+      startDate: draft?.start_date,
+      endDate: draft?.end_date,
+      explicitStatus: draft?.enrollment_status,
+    });
     const res = await upsertStudentCourseEnrollment({
       studentId: sid,
       courseId: cid,
@@ -4888,14 +4896,49 @@ export async function getCoursesByQualificationCodes(
   return out;
 }
 
-export async function createStudent(input: CreateStudentInput): Promise<Student | null> {
+export async function ensureStudentEnrolledInCourse(
+  studentId: number,
+  courseId: number,
+  options?: {
+    start_date?: string | null;
+    end_date?: string | null;
+    enrollment_status?: StudentCourseEnrollmentStatus;
+  }
+): Promise<{ ok: boolean; error?: string }> {
+  const sid = Number(studentId);
+  const cid = Number(courseId);
+  if (!Number.isFinite(sid) || sid <= 0 || !Number.isFinite(cid) || cid <= 0) {
+    return { ok: false, error: 'Invalid student or course' };
+  }
+  const existing = await listStudentCourseEnrollments(sid);
+  if (existing.some((e) => e.course_id === cid)) return { ok: true };
+  const hasInProgress = existing.some((e) => e.enrollment_status === 'in_progress');
+  const status = defaultStatusForNewCourseEnrollment({
+    hasInProgress,
+    startDate: options?.start_date,
+    endDate: options?.end_date,
+    explicitStatus: options?.enrollment_status,
+  });
+  return upsertStudentCourseEnrollment({
+    studentId: sid,
+    courseId: cid,
+    start_date: options?.start_date ?? null,
+    end_date: options?.end_date ?? null,
+    enrollment_status: status,
+    link_status: 'active',
+    allowCreate: true,
+  });
+}
+
+export async function createStudent(
+  input: CreateStudentInput
+): Promise<{ ok: true; student: Student } | { ok: false; error: string; student?: Student }> {
   const first = input.first_name.trim();
   const last = (input.last_name ?? '').trim();
   const fullName = [first, last].filter(Boolean).join(' ');
   const studentIdKey = input.student_id.trim();
   if (!studentIdKey) {
-    console.error('createStudent error: student_id is required');
-    return null;
+    return { ok: false, error: 'Student ID is required' };
   }
   const { created_by } = getAuditFields();
   const pendingBatchId = input.batch_id ?? null;
@@ -4927,9 +4970,9 @@ export async function createStudent(input: CreateStudentInput): Promise<Student 
   if (error) {
     console.error('createStudent error', error);
     if (error.code === '23505') {
-      console.error('createStudent duplicate student_id', studentIdKey);
+      return { ok: false, error: `A student with ID "${studentIdKey}" already exists.` };
     }
-    return null;
+    return { ok: false, error: error.message || 'Failed to create student' };
   }
   const row = data as Record<string, unknown>;
   const firstName = String(row.first_name ?? '').trim();
@@ -4958,29 +5001,76 @@ export async function createStudent(input: CreateStudentInput): Promise<Student 
     created_at: String(row.created_at ?? ''),
   };
 
-  if (Array.isArray(input.course_ids) && input.course_ids.length > 0) {
-    const courseRes = await setStudentCourses(createdStudent.id, input.course_ids);
-    if (!courseRes.ok) {
-      console.error('createStudent setStudentCourses error', courseRes.error);
-    }
-  }
+  const courseIds = Array.from(
+    new Set((input.course_ids ?? []).map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0))
+  );
 
+  // If a batch is chosen, ensure its course is included in enrolments before assigning batch_id.
+  let batchCourseId: number | null = null;
   if (pendingBatchId != null && Number.isFinite(Number(pendingBatchId)) && Number(pendingBatchId) > 0) {
     const batch = await getBatchById(Number(pendingBatchId));
     if (batch?.course_id) {
-      const enrolled = await getActiveCourseIdsForStudent(createdStudent.id);
-      if (enrolled.includes(batch.course_id)) {
-        const { error: batchErr } = await supabase
-          .from('skyline_students')
-          .update({ batch_id: pendingBatchId, updated_by: getAuditFields().updated_by })
-          .eq('id', createdStudent.id);
-        if (!batchErr) createdStudent.batch_id = Number(pendingBatchId);
-        else console.error('createStudent batch_id assignment error', batchErr);
+      batchCourseId = Number(batch.course_id);
+      if (Number.isFinite(batchCourseId) && batchCourseId > 0 && !courseIds.includes(batchCourseId)) {
+        courseIds.push(batchCourseId);
       }
     }
   }
 
-  return createdStudent;
+  if (courseIds.length > 0) {
+    const courseRes = await setStudentCourses(createdStudent.id, courseIds);
+    if (!courseRes.ok) {
+      // Retry as Tentative without dates so a bad default status cannot orphan the student.
+      const retry = await setStudentCourses(createdStudent.id, courseIds, {
+        enrollments: courseIds.map((course_id) => ({
+          course_id,
+          start_date: null,
+          end_date: null,
+          enrollment_status: 'tentative' as StudentCourseEnrollmentStatus,
+        })),
+      });
+      if (!retry.ok) {
+        return {
+          ok: false,
+          error: retry.error ?? courseRes.error ?? 'Student was created but course enrolment failed.',
+          student: createdStudent,
+        };
+      }
+    }
+  }
+
+  if (pendingBatchId != null && Number.isFinite(Number(pendingBatchId)) && Number(pendingBatchId) > 0) {
+    if (batchCourseId) {
+      const enrolled = await getActiveCourseIdsForStudent(createdStudent.id);
+      if (!enrolled.includes(batchCourseId)) {
+        const enrolRes = await ensureStudentEnrolledInCourse(createdStudent.id, batchCourseId);
+        if (!enrolRes.ok) {
+          return {
+            ok: false,
+            error:
+              enrolRes.error ??
+              'Student was created but could not enrol in the batch course required for batch assignment.',
+            student: createdStudent,
+          };
+        }
+      }
+    }
+    const { error: batchErr } = await supabase
+      .from('skyline_students')
+      .update({ batch_id: pendingBatchId, updated_by: getAuditFields().updated_by })
+      .eq('id', createdStudent.id);
+    if (batchErr) {
+      console.error('createStudent batch_id assignment error', batchErr);
+      return {
+        ok: false,
+        error: batchErr.message || 'Student was created but could not be assigned to the selected batch.',
+        student: createdStudent,
+      };
+    }
+    createdStudent.batch_id = Number(pendingBatchId);
+  }
+
+  return { ok: true, student: createdStudent };
 }
 
 export type UpdateStudentInput = Partial<Omit<CreateStudentInput, 'email'>> & { email?: string };
@@ -5005,8 +5095,14 @@ export async function updateStudent(id: number, input: UpdateStudentInput): Prom
       if (batch?.course_id) {
         const enrolled = await getActiveCourseIdsForStudent(id);
         if (!enrolled.includes(batch.course_id)) {
-          console.error('updateStudent batch course mismatch', { studentId: id, batchId: bid });
-          return null;
+          const enrolRes = await ensureStudentEnrolledInCourse(id, batch.course_id);
+          if (!enrolRes.ok) {
+            console.error('updateStudent batch course enrol failed', enrolRes.error);
+            throw new Error(
+              enrolRes.error ||
+                'Student could not be enrolled in the batch course required for batch assignment.'
+            );
+          }
         }
       }
     }

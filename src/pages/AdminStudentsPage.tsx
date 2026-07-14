@@ -16,7 +16,6 @@ import {
   extendInstanceAccessTokensToDate,
   getStudentsByEmails,
   getStudentsByStudentIds,
-  getActiveCourseIdsForStudent,
   listCoursesPaged,
   getBatchById,
   getCoursesByQualificationCodes,
@@ -40,6 +39,7 @@ import {
   normalizeCourseLifecycleStatus,
   COURSE_LIFECYCLE_LABELS,
   defaultStatusForNewCourse,
+  defaultStatusForNewCourseEnrollment,
   findCourseOverlapConflicts,
   formatOverlapError,
   courseLifecycleLabel,
@@ -403,7 +403,7 @@ export const AdminStudentsPage: React.FC = () => {
       course_ids: studentDraft.course_ids,
       status: studentDraft.status,
     });
-    if (created) {
+    if (created.ok) {
       setCurrentPage(1);
       const res = await listStudentsPaged(1, PAGE_SIZE, searchTerm, statusFilter || undefined, {
         batchId: batchFilterId ? Number(batchFilterId) : null,
@@ -423,9 +423,13 @@ export const AdminStudentsPage: React.FC = () => {
         status: 'active',
       });
       setIsCreateOpen(false);
-      toast.success('Student added');
+      toast.success(
+        created.student.batch_id
+          ? 'Student added and assigned to batch'
+          : 'Student added'
+      );
     } else {
-      toast.error('Failed to add student');
+      toast.error(created.error || 'Failed to add student');
     }
     setCreating(false);
   };
@@ -1238,9 +1242,9 @@ export const AdminStudentsPage: React.FC = () => {
             email: studentEmail,
             phone: String(firstRow.phone ?? '') || undefined,
           });
-          if (!created) {
+          if (!created.ok || !created.student) {
             const dup = await getStudentsByStudentIds([candidateIdKey]);
-            student = dup[0] ?? null;
+            student = dup[0] ?? created.student ?? null;
             if (!student) {
               failed += rows.length;
               done += rows.length;
@@ -1248,7 +1252,7 @@ export const AdminStudentsPage: React.FC = () => {
               continue;
             }
           } else {
-            student = created;
+            student = created.student;
           }
         } else {
           const decision = importIdDecisionByEmail[emailKey] ?? 'keep_existing';
@@ -1407,10 +1411,25 @@ export const AdminStudentsPage: React.FC = () => {
         }
 
         const batchId = importBatchId ? Number(importBatchId) : null;
-        if (batchId && Number.isFinite(batchId) && importBatchCourseId != null) {
-          const enrolled = await getActiveCourseIdsForStudent(student.id);
-          if (enrolled.includes(importBatchCourseId)) {
-            await updateStudent(student.id, { batch_id: batchId });
+        if (batchId && Number.isFinite(batchId) && batchId > 0) {
+          if (importBatchCourseId == null) {
+            throw new Error(
+              `Selected import batch has no course assigned. Assign a course to the batch before importing student ${candidateIdKey}.`
+            );
+          }
+          try {
+            const withBatch = await updateStudent(student.id, { batch_id: batchId });
+            if (!withBatch) {
+              throw new Error(
+                `Student ${candidateIdKey} was created/updated but could not be assigned to the selected batch.`
+              );
+            }
+          } catch (batchErr) {
+            const msg =
+              batchErr instanceof Error && batchErr.message
+                ? batchErr.message
+                : `Student ${candidateIdKey} could not be assigned to the selected batch.`;
+            throw new Error(msg);
           }
         }
 
@@ -1543,11 +1562,12 @@ export const AdminStudentsPage: React.FC = () => {
       console.error('handleBulkImport error', e);
       setImporting(false);
       setImportProgress(null);
+      const detail = e instanceof Error && e.message ? e.message : 'Unknown error';
       setImportResultModal({
         title: 'Import error',
         error: true,
         message:
-          'Import stopped due to an error. Some rows may have been processed.\n\nClick OK to close this message and the import dialog.',
+          `Import stopped due to an error.\n\n${detail}\n\nSome rows may have been processed.\n\nClick OK to close this message and the import dialog.`,
       });
       return;
     }
@@ -1721,49 +1741,60 @@ export const AdminStudentsPage: React.FC = () => {
       editForm.email_local?.trim() || editForm.student_id,
       editForm.email_domain
     );
-    const updated = await updateStudent(editingId, {
-      student_id: editForm.student_id,
-      first_name: editForm.first_name,
-      last_name: editForm.last_name || undefined,
-      phone: editForm.phone || undefined,
-      email,
-      status: editForm.status,
-    });
-    if (updated) {
-      const hasInProgress = Object.entries(editEnrollmentDrafts).some(
-        ([cid, d]) =>
-          editForm.course_ids.includes(Number(cid)) && d.enrollment_status === 'in_progress'
-      );
-      const courseRes = await setStudentCourses(updated.id, editForm.course_ids, {
-        cancelInsteadOfDelete: true,
-        enrollments: editForm.course_ids.map((courseId) => {
-          const d = editEnrollmentDrafts[courseId];
-          return {
-            course_id: courseId,
-            start_date: d?.start_date || null,
-            end_date: d?.end_date || null,
-            enrollment_status:
-              d?.enrollment_status ?? defaultStatusForNewCourse(hasInProgress),
-          };
-        }),
+    let updated: Student | null = null;
+    try {
+      updated = await updateStudent(editingId, {
+        student_id: editForm.student_id,
+        first_name: editForm.first_name,
+        last_name: editForm.last_name || undefined,
+        phone: editForm.phone || undefined,
+        email,
+        status: editForm.status,
       });
-      if (!courseRes.ok) {
-        setSavingEdit(false);
-        toast.error(courseRes.error ?? 'Could not update course enrolments');
-        return;
-      }
-      if (batchId != null) {
-        const withBatch = await updateStudent(updated.id, { batch_id: batchId });
-        if (!withBatch) {
+      if (updated) {
+        const hasInProgress = Object.entries(editEnrollmentDrafts).some(
+          ([cid, d]) =>
+            editForm.course_ids.includes(Number(cid)) && d.enrollment_status === 'in_progress'
+        );
+        const courseRes = await setStudentCourses(updated.id, editForm.course_ids, {
+          cancelInsteadOfDelete: true,
+          enrollments: editForm.course_ids.map((courseId) => {
+            const d = editEnrollmentDrafts[courseId];
+            return {
+              course_id: courseId,
+              start_date: d?.start_date || null,
+              end_date: d?.end_date || null,
+              enrollment_status: defaultStatusForNewCourseEnrollment({
+                hasInProgress,
+                startDate: d?.start_date || null,
+                endDate: d?.end_date || null,
+                explicitStatus: d?.enrollment_status ?? null,
+              }),
+            };
+          }),
+        });
+        if (!courseRes.ok) {
           setSavingEdit(false);
-          toast.error(
-            'Student cannot be added to this batch because the student is not enrolled in the batch course.'
-          );
+          toast.error(courseRes.error ?? 'Could not update course enrolments');
           return;
         }
-      } else {
-        await updateStudent(updated.id, { batch_id: null });
+        if (batchId != null) {
+          const withBatch = await updateStudent(updated.id, { batch_id: batchId });
+          if (!withBatch) {
+            setSavingEdit(false);
+            toast.error(
+              'Student could not be added to this batch. Ensure the batch course can be enrolled (or enrol the student in that course first).'
+            );
+            return;
+          }
+        } else {
+          await updateStudent(updated.id, { batch_id: null });
+        }
       }
+    } catch (e) {
+      setSavingEdit(false);
+      toast.error(e instanceof Error && e.message ? e.message : 'Could not save student');
+      return;
     }
     setSavingEdit(false);
     if (updated) {
@@ -2292,7 +2323,11 @@ export const AdminStudentsPage: React.FC = () => {
                 placeholder="Select course(s)"
                 className="w-full"
               />
-              <p className="text-xs text-gray-500 mt-1">A student can be assigned to multiple courses.</p>
+              <p className="text-xs text-gray-500 mt-1">
+                A student can be assigned to multiple courses. New courses start as Tentative until you set course dates
+                (and move them to In Progress). Choosing a batch also enrols the student in that batch’s course
+                automatically.
+              </p>
             </div>
             <div className="md:col-span-2">
               <EmailWithDomainPicker
@@ -2761,7 +2796,11 @@ export const AdminStudentsPage: React.FC = () => {
                             qualification_code: null,
                             start_date: '',
                             end_date: '',
-                            enrollment_status: defaultStatusForNewCourse(hasInProgress),
+                            enrollment_status: defaultStatusForNewCourseEnrollment({
+                              hasInProgress,
+                              startDate: '',
+                              endDate: '',
+                            }),
                           };
                         }
                       }
@@ -2773,7 +2812,8 @@ export const AdminStudentsPage: React.FC = () => {
                   className="w-full"
                 />
                 <p className="text-xs text-gray-500 mt-1">
-                  Each course has its own start/end dates and lifecycle status. Deselecting a course cancels/deactivates
+                  Each course has its own start/end dates and lifecycle status. Without dates, new courses start as
+                  Tentative. Set dates before changing status to In Progress. Deselecting a course cancels/deactivates
                   it — assessments are not deleted.
                 </p>
                 {editForm.course_ids.length > 0 ? (
