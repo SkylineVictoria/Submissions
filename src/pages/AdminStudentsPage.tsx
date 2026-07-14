@@ -1398,6 +1398,7 @@ export const AdminStudentsPage: React.FC = () => {
           }
 
           const appendRes = await appendStudentCourses(student.id, uniqueCourseIds, {
+            updateExisting: true,
             enrollments: provisionalDrafts.map((d) => ({
               course_id: d.course_id,
               start_date: d.start_date,
@@ -1501,13 +1502,27 @@ export const AdminStudentsPage: React.FC = () => {
             }
             if (!draft.explicitStatus) {
               if (!existing) {
-                status = draft.enrollment_status;
+                status = defaultStatusForNewCourseEnrollment({
+                  hasInProgress: latestEnrollments.some((e) => e.enrollment_status === 'in_progress'),
+                  startDate: resolved.startDate,
+                  endDate: resolved.endDate,
+                  explicitStatus: draft.enrollment_status,
+                });
               } else if (
                 (!resolved.startDate || !resolved.endDate) &&
                 existing.enrollment_status === 'in_progress'
               ) {
                 status = 'tentative';
               }
+            } else if (draft.enrollment_status === 'in_progress') {
+              status = defaultStatusForNewCourseEnrollment({
+                hasInProgress: latestEnrollments.some(
+                  (e) => e.course_id !== draft.course_id && e.enrollment_status === 'in_progress'
+                ),
+                startDate: resolved.startDate,
+                endDate: resolved.endDate,
+                explicitStatus: 'in_progress',
+              });
             }
             if (resolved.startDate && resolved.endDate && (status ?? existing?.enrollment_status) !== 'cancelled') {
               const conflicts = findCourseOverlapConflicts(
@@ -1533,6 +1548,8 @@ export const AdminStudentsPage: React.FC = () => {
                 );
               }
             }
+            // allowCreate: true — import must not die with "Enrolment not found" if append
+            // skipped / raced; create-or-update keeps unit date recompute resilient.
             const upsertRes = await upsertStudentCourseEnrollment({
               studentId: student.id,
               courseId: draft.course_id,
@@ -1540,7 +1557,7 @@ export const AdminStudentsPage: React.FC = () => {
               end_date: resolved.endDate,
               enrollment_status: status,
               link_status: 'active',
-              allowCreate: false,
+              allowCreate: true,
             });
             if (!upsertRes.ok) {
               throw new Error(upsertRes.error ?? 'Failed to update course dates after import');

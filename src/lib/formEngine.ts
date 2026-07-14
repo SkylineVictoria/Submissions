@@ -4634,7 +4634,7 @@ export async function appendStudentCourses(
         end_date: draft.end_date !== undefined ? draft.end_date : undefined,
         enrollment_status: draft.enrollment_status,
         link_status: 'active',
-        allowCreate: false,
+        allowCreate: true,
       });
       if (!res.ok) return res;
     }
