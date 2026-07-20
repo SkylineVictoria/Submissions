@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SortDirection } from '../components/admin/SortableTh';
 import { SortableTh } from '../components/admin/SortableTh';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { CheckCircle, Copy, Phone, Mail, ArrowLeft, RotateCcw, Download, Trash2, PencilLine } from 'lucide-react';
+import { CheckCircle, Copy, Phone, Mail, ArrowLeft, RotateCcw, Download, Trash2, PencilLine, Pencil } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -56,6 +56,7 @@ import {
   resolveNeedsResetPrompt,
 } from '../utils/assessmentDateChange';
 import { StudentQualificationsPanel } from '../components/students/StudentQualificationsPanel';
+import { StudentEditModal } from '../components/students/StudentEditModal';
 import type { Student, SubmittedInstanceRow } from '../lib/formEngine';
 import { STUDENT_DASHBOARD_AUTH_STORAGE_KEY } from '../lib/formEngine';
 import { FormDocumentsPanel } from '../components/documents/FormDocumentsPanel';
@@ -252,6 +253,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
   } | null>(null);
   const [deleteStudentOpen, setDeleteStudentOpen] = useState(false);
   const [deletingStudent, setDeletingStudent] = useState(false);
+  const [editStudentOpen, setEditStudentOpen] = useState(false);
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [unitSearch, setUnitSearch] = useState('');
   const [selectedFormFilter, setSelectedFormFilter] = useState('');
@@ -1401,6 +1403,18 @@ export const AdminStudentDetailsPage: React.FC = () => {
                     </div>
                   </div>
 
+                  <div className="border-t border-gray-100 pt-3 space-y-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full"
+                      onClick={() => setEditStudentOpen(true)}
+                    >
+                      <Pencil className="w-4 h-4 mr-2 inline" />
+                      Edit student
+                    </Button>
+                  </div>
+
                   {viewerCanLoginAsStudent || canDeleteStudent ? (
                     <div className="border-t border-gray-100 pt-3 space-y-2">
                       {viewerCanLoginAsStudent ? (
@@ -1588,6 +1602,16 @@ export const AdminStudentDetailsPage: React.FC = () => {
           ) : null}
         </div>
       </Modal>
+
+      <StudentEditModal
+        student={student}
+        isOpen={editStudentOpen}
+        onClose={() => setEditStudentOpen(false)}
+        onSaved={(updated) => {
+          setStudent(updated);
+          void reloadStudentData();
+        }}
+      />
 
       <Modal
         isOpen={deleteStudentOpen}

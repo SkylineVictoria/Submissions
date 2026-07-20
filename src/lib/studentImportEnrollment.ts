@@ -60,6 +60,37 @@ export function hasOtherInProgress(
   return otherInProgressEnrollments(existing, excludeCourseId).length > 0;
 }
 
+/** True when the student has/will have exactly one non-cancelled course (existing + this import). */
+export function isSingleCourseImportStudent(
+  existingEnrollments: ExistingEnrollmentLite[],
+  importCourseIds: number[]
+): boolean {
+  const ids = new Set<number>();
+  for (const e of existingEnrollments) {
+    if (e.enrollment_status === 'cancelled') continue;
+    ids.add(e.course_id);
+  }
+  for (const id of importCourseIds) {
+    const n = Number(id);
+    if (Number.isFinite(n) && n > 0) ids.add(n);
+  }
+  return ids.size === 1;
+}
+
+function canDefaultSingleCourseInProgress(input: {
+  singleCourseStudent?: boolean;
+  fileStartDate: string | null;
+  fileEndDate: string | null;
+  otherInProgress: boolean;
+}): boolean {
+  return Boolean(
+    input.singleCourseStudent &&
+      input.fileStartDate &&
+      input.fileEndDate &&
+      !input.otherInProgress
+  );
+}
+
 export function formatAlreadyInProgressError(
   studentLabel: string,
   blocking: ExistingEnrollmentLite,
@@ -105,6 +136,8 @@ export function resolveImportCourseDraft(input: {
   courseLabel?: string;
   /** When assigning defaults among multiple NEW courses in one file, whether another (new or existing) is already In Progress. */
   treatOtherInProgress?: boolean;
+  /** Student has only one course (existing + import) — default that course to In Progress when dates exist. */
+  singleCourseStudent?: boolean;
 }): ImportCourseDraftResolution {
   const courseId = Number(input.courseId);
   const existing = input.existingEnrollments.find((e) => e.course_id === courseId) ?? null;
@@ -128,10 +161,29 @@ export function resolveImportCourseDraft(input: {
   const otherIP =
     input.treatOtherInProgress ?? hasOtherInProgress(input.existingEnrollments, courseId);
   const courseLabel = input.courseLabel ?? `course ${courseId}`;
+  const defaultSingleActive = canDefaultSingleCourseInProgress({
+    singleCourseStudent: input.singleCourseStudent,
+    fileStartDate: input.fileStartDate,
+    fileEndDate: input.fileEndDate,
+    otherInProgress: otherIP,
+  });
 
   // ---- Existing same-course timetable update ----
   if (existing) {
     if (!normalized) {
+      if (defaultSingleActive && existing.enrollment_status === 'tentative') {
+        return {
+          course_id: courseId,
+          isExisting: true,
+          enrollment_status: 'in_progress',
+          explicitStatus: true,
+          file_start_date: input.fileStartDate,
+          file_end_date: input.fileEndDate,
+          action: 'update_existing_timetable',
+          actionLabel: 'Update Existing Course Timetable',
+          proposedStatusLabel: 'In Progress',
+        };
+      }
       return {
         course_id: courseId,
         isExisting: true,
@@ -284,16 +336,18 @@ export function resolveImportCourseDraft(input: {
     };
   }
 
-  const status = defaultStatusForNewCourseEnrollment({
-    hasInProgress: otherIP,
-    startDate: input.fileStartDate,
-    endDate: input.fileEndDate,
-  });
+  const status = defaultSingleActive
+    ? 'in_progress'
+    : defaultStatusForNewCourseEnrollment({
+        hasInProgress: otherIP,
+        startDate: input.fileStartDate,
+        endDate: input.fileEndDate,
+      });
   return {
     course_id: courseId,
     isExisting: false,
     enrollment_status: status,
-    explicitStatus: false,
+    explicitStatus: defaultSingleActive,
     file_start_date: input.fileStartDate,
     file_end_date: input.fileEndDate,
     action: status === 'in_progress' ? 'create_new_in_progress' : 'create_new_tentative',
@@ -319,6 +373,8 @@ export function resolveImportCourseDraftsForStudent(input: {
   }>;
 }): ImportCourseDraftResolution[] {
   const results: ImportCourseDraftResolution[] = [];
+  const importCourseIds = input.courses.map((c) => c.courseId);
+  const singleCourseStudent = isSingleCourseImportStudent(input.existingEnrollments, importCourseIds);
   // Track In Progress after applying existing + already-resolved drafts in this file
   const inProgressCourseIds = new Set(
     input.existingEnrollments
@@ -343,6 +399,7 @@ export function resolveImportCourseDraftsForStudent(input: {
       studentLabel: input.studentLabel,
       courseLabel: c.courseLabel,
       treatOtherInProgress: otherIP,
+      singleCourseStudent,
     });
     results.push(resolved);
     if (resolved.error) continue;

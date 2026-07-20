@@ -256,7 +256,8 @@ BEGIN
   END IF;
 
   -- New course with dates and no other IP may become in_progress when caller did not force status
-  IF v_is_new AND NOT p_explicit_status AND v_course_start IS NOT NULL AND v_course_end IS NOT NULL THEN
+  -- Also promote single-course students (only 1 non-cancelled course total) to in_progress
+  IF NOT p_explicit_status AND v_course_start IS NOT NULL AND v_course_end IS NOT NULL AND v_status = 'tentative' THEN
     v_other_ip := NULL;
     SELECT sc.course_id INTO v_other_ip
     FROM public.skyline_student_courses sc
@@ -266,7 +267,17 @@ BEGIN
       AND sc.course_id IS DISTINCT FROM p_course_id
     LIMIT 1;
     IF v_other_ip IS NULL THEN
-      v_status := 'in_progress';
+      -- Check if student has only this one non-cancelled course (single-course student → default active)
+      IF (SELECT COUNT(*) FROM public.skyline_student_courses sc2
+          WHERE sc2.student_id = p_student_id
+            AND sc2.status = 'active'
+            AND sc2.enrollment_status IS DISTINCT FROM 'cancelled'
+            AND sc2.course_id IS DISTINCT FROM p_course_id
+         ) = 0 THEN
+        v_status := 'in_progress';
+      ELSIF v_is_new THEN
+        v_status := 'in_progress';
+      END IF;
     END IF;
   END IF;
 

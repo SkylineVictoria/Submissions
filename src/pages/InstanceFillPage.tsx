@@ -506,6 +506,7 @@ export const InstanceFillPage: React.FC = () => {
   const { instanceId } = useParams<{ instanceId: string }>();
   const [searchParams] = useSearchParams();
   const isAdminEditMode = searchParams.get('admin') === '1';
+  const [adminSkipSavePrompt, setAdminSkipSavePrompt] = useState<'validation' | 'save' | null>(null);
   const [template, setTemplate] = useState<FormTemplate | null>(null);
   const [answers, setAnswers] = useState<Record<string, string | number | boolean | Record<string, unknown> | string[]>>({});
   const [trainerAssessments, setTrainerAssessments] = useState<Record<number, string>>({});
@@ -631,6 +632,11 @@ export const InstanceFillPage: React.FC = () => {
   /** Debounce saves per answer key (questionId + rowId). A single shared timer causes grid tables to only persist the last row edited. */
   const saveTimeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const formScrollRef = useRef<HTMLFormElement>(null);
+
+  const cancelPendingDebouncedAnswerSaves = useCallback(() => {
+    for (const t of saveTimeoutsRef.current.values()) clearTimeout(t);
+    saveTimeoutsRef.current.clear();
+  }, []);
 
   const id = instanceId ? Number(instanceId) : 0;
   const accessToken = searchParams.get('token')?.trim() || '';
@@ -2326,18 +2332,6 @@ export const InstanceFillPage: React.FC = () => {
     ]
   );
 
-  const validateStep = useCallback(
-    (stepNumber: number): boolean => {
-      const stepErrors = getStepValidationErrors(stepNumber);
-      setErrors(stepErrors);
-      if (Object.keys(stepErrors).length > 0) {
-        toast.error(Object.values(stepErrors)[0]);
-      }
-      return Object.keys(stepErrors).length === 0;
-    },
-    [getStepValidationErrors]
-  );
-
   /** Every content step must validate before trainer can submit (not only the last step). */
   const validateAllStepsForTrainerSubmit = useCallback((): boolean => {
     if (!template || role !== 'trainer') return true;
@@ -2589,6 +2583,17 @@ export const InstanceFillPage: React.FC = () => {
     }
   }, [role, workflowStatus, isAdminEditMode, trainerCanFinaliseReview]);
 
+  const advanceToNextStepWithoutSave = useCallback(() => {
+    if (!template) return;
+    cancelPendingDebouncedAnswerSaves();
+    const visibleStepsForNav = getVisibleStepsForRole(template, role);
+    const totalSteps = 1 + visibleStepsForNav.length;
+    setErrors({});
+    setCurrentStep((s) => Math.min(totalSteps, s + 1));
+    formScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [template, role, cancelPendingDebouncedAnswerSaves]);
+
   const handlePreviousStep = useCallback(async () => {
     if (stepNavSaving || currentStep <= 1) return;
     if (canRoleEditCurrentWorkflow) {
@@ -2608,7 +2613,17 @@ export const InstanceFillPage: React.FC = () => {
 
   const handleNextStep = useCallback(async () => {
     if (stepNavSaving || !template) return;
-    if (!validateStep(currentStep)) return;
+
+    const stepErrors = getStepValidationErrors(currentStep);
+    if (Object.keys(stepErrors).length > 0) {
+      setErrors(stepErrors);
+      if (isAdminEditMode) {
+        setAdminSkipSavePrompt('validation');
+        return;
+      }
+      toast.error(Object.values(stepErrors)[0]);
+      return;
+    }
 
     const visibleStepsForNav = getVisibleStepsForRole(template, role);
     const totalSteps = 1 + visibleStepsForNav.length;
@@ -2621,12 +2636,20 @@ export const InstanceFillPage: React.FC = () => {
         try {
           await flushPendingDebouncedAnswerSaves();
         } catch {
+          if (isAdminEditMode) {
+            setAdminSkipSavePrompt('save');
+            return;
+          }
           toast.error('Could not save answers. Please try again.');
           return;
         }
         if (stepSections.length > 0) {
           const ok = await saveStepAnswersSequential(stepSections);
           if (!ok) {
+            if (isAdminEditMode) {
+              setAdminSkipSavePrompt('save');
+              return;
+            }
             toast.error('Could not save answers. Please try again.');
             return;
           }
@@ -2644,8 +2667,9 @@ export const InstanceFillPage: React.FC = () => {
     stepNavSaving,
     template,
     role,
-    validateStep,
+    getStepValidationErrors,
     currentStep,
+    isAdminEditMode,
     canRoleEditCurrentWorkflow,
     saveStepAnswersSequential,
     flushPendingDebouncedAnswerSaves,
@@ -2811,6 +2835,11 @@ export const InstanceFillPage: React.FC = () => {
             <h1 className="min-w-0 text-lg sm:text-xl font-bold text-[var(--text)] break-words">{template.form.name}</h1>
             <div className="flex items-center gap-2 flex-wrap justify-end">
               <span className="text-xs px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200">{workflowLabel}</span>
+              {isAdminEditMode ? (
+                <span className="text-xs px-2.5 py-1 rounded-full bg-amber-50 text-amber-800 border border-amber-200">
+                  Admin edit
+                </span>
+              ) : null}
               {canRoleEditCurrentWorkflow ? (
                 <Button
                   type="button"
@@ -5480,6 +5509,23 @@ export const InstanceFillPage: React.FC = () => {
         message={confirmConfig?.message || ''}
         confirmLabel={confirmConfig?.confirmLabel || 'Confirm'}
         cancelLabel="Cancel"
+        variant="default"
+      />
+      <ConfirmDialog
+        isOpen={adminSkipSavePrompt != null}
+        onClose={() => setAdminSkipSavePrompt(null)}
+        onConfirm={() => {
+          setAdminSkipSavePrompt(null);
+          advanceToNextStepWithoutSave();
+        }}
+        title="Proceed without saving?"
+        message={
+          adminSkipSavePrompt === 'save'
+            ? 'Changes on this step could not be saved. Proceed to the next step without writing them to the database?'
+            : 'This step has incomplete required fields. Proceed to the next step without saving changes on this step?'
+        }
+        confirmLabel="Proceed without saving"
+        cancelLabel="Stay on this step"
         variant="default"
       />
     </div>
