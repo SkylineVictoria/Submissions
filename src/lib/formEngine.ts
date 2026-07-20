@@ -4734,6 +4734,66 @@ export async function upsertStudentCourseEnrollment(
   return { ok: true, data: payload as Record<string, unknown> };
 }
 
+export type ImportTimetableUnitInput = {
+  form_id: number;
+  start_date?: string | null;
+  end_date?: string | null;
+};
+
+export type ImportStudentCourseTimetableResult = {
+  ok: boolean;
+  error?: string;
+  is_new?: boolean;
+  enrollment_status?: string;
+  previous_status?: string;
+  start_date?: string | null;
+  end_date?: string | null;
+  units_created?: number;
+  units_updated?: number;
+  units_unchanged?: number;
+};
+
+/** Atomic timetable import for one student-course (units + enrolment + date recalc). */
+export async function importStudentCourseTimetable(input: {
+  studentId: number;
+  courseId: number;
+  units: ImportTimetableUnitInput[];
+  enrollmentStatus?: StudentCourseEnrollmentStatus | null;
+  explicitStatus?: boolean;
+}): Promise<ImportStudentCourseTimetableResult> {
+  const sid = Number(input.studentId);
+  const cid = Number(input.courseId);
+  if (!Number.isFinite(sid) || sid <= 0 || !Number.isFinite(cid) || cid <= 0) {
+    return { ok: false, error: 'Invalid student or course' };
+  }
+  const { updated_by } = getAuditFields();
+  const units = (input.units ?? [])
+    .map((u) => ({
+      form_id: Number(u.form_id),
+      start_date: u.start_date ?? null,
+      end_date: u.end_date ?? null,
+    }))
+    .filter((u) => Number.isFinite(u.form_id) && u.form_id > 0);
+
+  const { data, error } = await supabase.rpc('skyline_import_student_course_timetable', {
+    p_student_id: sid,
+    p_course_id: cid,
+    p_units: units,
+    p_enrollment_status: input.enrollmentStatus ?? null,
+    p_explicit_status: Boolean(input.explicitStatus && input.enrollmentStatus),
+    p_actor_user_id: updated_by,
+  });
+  if (error) {
+    console.error('importStudentCourseTimetable rpc error', error);
+    return { ok: false, error: error.message };
+  }
+  const payload = (data ?? {}) as ImportStudentCourseTimetableResult;
+  if (!payload.ok) {
+    return { ok: false, error: payload.error ?? 'Timetable import failed' };
+  }
+  return payload;
+}
+
 export async function listStudentCourseEnrollments(studentId: number): Promise<StudentCourseEnrollment[]> {
   const sid = Number(studentId);
   if (!Number.isFinite(sid) || sid <= 0) return [];

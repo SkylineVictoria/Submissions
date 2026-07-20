@@ -8,11 +8,9 @@ import {
   listStudentsPaged,
   createStudent,
   updateStudent,
-  createFormInstance,
   getInstanceForStudentAndForm,
   listForms,
   listBatchesPaged,
-  updateFormInstanceDates,
   extendInstanceAccessTokensToDate,
   getStudentsByEmails,
   getStudentsByStudentIds,
@@ -20,10 +18,9 @@ import {
   getBatchById,
   getCoursesByQualificationCodes,
   setStudentCourses,
-  appendStudentCourses,
   deleteStudentSuperadmin,
   listStudentCourseEnrollments,
-  upsertStudentCourseEnrollment,
+  importStudentCourseTimetable,
 } from '../lib/formEngine';
 import {
   buildEmailFromLocalAndDomain,
@@ -38,18 +35,17 @@ import { normalizeImportStudentId } from '../lib/studentBatchValidation';
 import {
   normalizeCourseLifecycleStatus,
   COURSE_LIFECYCLE_LABELS,
-  defaultStatusForNewCourse,
   defaultStatusForNewCourseEnrollment,
-  findCourseOverlapConflicts,
-  formatOverlapError,
   courseLifecycleLabel,
 } from '../lib/courseLifecycle';
 import {
-  computeCourseDateRangeFromMappedInstances,
   deriveCourseDatesFromActivityRows,
-  resolveCourseDatesAfterImport,
   validateActivityDatePair,
 } from '../lib/studentImportCourseDates';
+import {
+  resolveImportCourseDraftsForStudent,
+  type ExistingEnrollmentLite,
+} from '../lib/studentImportEnrollment';
 import type { Student, StudentCourseEnrollmentStatus } from '../lib/formEngine';
 import { CourseLifecycleBadge } from '../components/students/CourseLifecycleBadge';
 import { DatePicker } from '../components/ui/DatePicker';
@@ -146,6 +142,9 @@ export const AdminStudentsPage: React.FC = () => {
   const [importProgress, setImportProgress] = useState<{ done: number; total: number; success: number; failed: number } | null>(null);
   const [importExistingByEmail, setImportExistingByEmail] = useState<Record<string, Student>>({});
   const [importExistingByStudentId, setImportExistingByStudentId] = useState<Record<string, Student>>({});
+  const [importEnrollmentsByStudentPk, setImportEnrollmentsByStudentPk] = useState<
+    Record<number, ExistingEnrollmentLite[]>
+  >({});
   const [importIdDecisionByEmail, setImportIdDecisionByEmail] = useState<Record<string, 'keep_existing' | 'use_new'>>({});
   const [lastImportLinksPayload, setLastImportLinksPayload] = useState<{
     createdAtIso: string;
@@ -794,6 +793,7 @@ export const AdminStudentsPage: React.FC = () => {
     if (importRows.length === 0) {
       setImportExistingByEmail({});
       setImportExistingByStudentId({});
+      setImportEnrollmentsByStudentPk({});
       setImportIdDecisionByEmail({});
       setImportCourseByQual({});
       return;
@@ -826,7 +826,7 @@ export const AdminStudentsPage: React.FC = () => {
       getStudentsByEmails(emails),
       getStudentsByStudentIds(studentIds),
       qualCodes.length > 0 ? getCoursesByQualificationCodes(qualCodes) : Promise.resolve({}),
-    ]).then(([existingByEmail, existingByStudentId, coursesByQual]) => {
+    ]).then(async ([existingByEmail, existingByStudentId, coursesByQual]) => {
       const emailMap: Record<string, Student> = {};
       for (const s of existingByEmail) {
         if (s.email) emailMap[String(s.email).trim().toLowerCase()] = s;
@@ -846,6 +846,28 @@ export const AdminStudentsPage: React.FC = () => {
         }
         return next;
       });
+      const studentPks = Array.from(
+        new Set(
+          [...existingByEmail, ...existingByStudentId]
+            .map((s) => Number(s.id))
+            .filter((n) => Number.isFinite(n) && n > 0)
+        )
+      );
+      const enrolMap: Record<number, ExistingEnrollmentLite[]> = {};
+      await Promise.all(
+        studentPks.map(async (pk) => {
+          const rows = await listStudentCourseEnrollments(pk);
+          enrolMap[pk] = rows.map((e) => ({
+            course_id: e.course_id,
+            enrollment_status: e.enrollment_status,
+            start_date: e.start_date,
+            end_date: e.end_date,
+            name: e.name,
+            qualification_code: e.qualification_code,
+          }));
+        })
+      );
+      setImportEnrollmentsByStudentPk(enrolMap);
     });
   }, [importRows]);
 
@@ -856,9 +878,11 @@ export const AdminStudentsPage: React.FC = () => {
       studentName: string;
       qualificationCode: string;
       courseName: string;
+      existingEnrolmentId: string;
+      existingStatus: string;
       unitRowCount: number;
-      earliestActivityStart: string | null;
-      latestActivityEnd: string | null;
+      existingCourseStart: string | null;
+      existingCourseEnd: string | null;
       derivedCourseStart: string | null;
       derivedCourseEnd: string | null;
       proposedStatus: string;
@@ -886,7 +910,10 @@ export const AdminStudentsPage: React.FC = () => {
     for (const [contactId, rows] of byStudent.entries()) {
       const first = rows[0];
       const studentName = [first.first_name, first.last_name].filter(Boolean).join(' ').trim() || first.email;
-      const existing = importExistingByStudentId[contactId];
+      const existingStudent = importExistingByStudentId[contactId];
+      const existingEnrollments: ExistingEnrollmentLite[] = existingStudent?.id
+        ? importEnrollmentsByStudentPk[Number(existingStudent.id)] ?? []
+        : [];
       const qualToRows = new Map<string, typeof importRows>();
       for (const r of rows) {
         const codes = splitCodes(r.qualification_code);
@@ -902,6 +929,19 @@ export const AdminStudentsPage: React.FC = () => {
           qualToRows.set(code, list);
         }
       }
+
+      const courseInputs: Array<{
+        courseId: number;
+        courseLabel?: string;
+        fileStartDate: string | null;
+        fileEndDate: string | null;
+        statusRaw?: string | null;
+        qualCode: string;
+        unitRowCount: number;
+        earliestActivityStart: string | null;
+        latestActivityEnd: string | null;
+      }> = [];
+
       for (const [qualCode, courseRows] of qualToRows.entries()) {
         const course = qualCode
           ? importCourseByQual[qualCode] ?? importCourseByQual[qualCode.toUpperCase()]
@@ -910,50 +950,137 @@ export const AdminStudentsPage: React.FC = () => {
         const statuses = Array.from(
           new Set(courseRows.map((r) => String(r.course_status ?? '').trim()).filter(Boolean))
         );
-        let proposed = 'Tentative (default if dates incomplete)';
-        let validation = 'OK';
-        if (statuses.length > 1) {
-          validation = 'Inconsistent Course Status values';
-          proposed = '—';
-        } else if (statuses[0]) {
-          const n = normalizeCourseLifecycleStatus(statuses[0]);
-          proposed = n ? courseLifecycleLabel(n) : `Invalid: ${statuses[0]}`;
-          if (!n) validation = 'Invalid Course Status';
-          if (n === 'in_progress' && (!derived.courseStartDate || !derived.courseEndDate)) {
-            validation = 'In Progress requires derived course start and end dates';
-          }
-        } else if (derived.courseStartDate && derived.courseEndDate) {
-          proposed = existing ? 'Keep existing / update dates' : 'In Progress (if no other) or Tentative';
-        } else {
-          proposed = 'Tentative';
-          validation = 'Course period could not be fully derived from unit dates';
-        }
         const pairErrors = courseRows
           .map((r, idx) =>
             validateActivityDatePair(r.activity_start_date, r.activity_end_date, `Unit row ${idx + 1}`)
           )
           .filter(Boolean);
-        if (pairErrors.length > 0) validation = pairErrors[0] as string;
 
-        out.push({
-          key: `${contactId}::${qualCode || 'none'}`,
-          contactId,
-          studentName,
-          qualificationCode: qualCode || '—',
-          courseName: course?.name ?? (qualCode ? 'Not mapped' : '—'),
+        if (!course?.id) {
+          out.push({
+            key: `${contactId}::${qualCode || 'none'}`,
+            contactId,
+            studentName,
+            qualificationCode: qualCode || '—',
+            courseName: qualCode ? 'Not mapped' : '—',
+            existingEnrolmentId: '—',
+            existingStatus: '—',
+            unitRowCount: courseRows.length,
+            existingCourseStart: null,
+            existingCourseEnd: null,
+            derivedCourseStart: derived.courseStartDate,
+            derivedCourseEnd: derived.courseEndDate,
+            proposedStatus: '—',
+            action: 'Error',
+            validation: qualCode ? 'Qualification not mapped to a course' : 'Missing Qualification Code',
+          });
+          continue;
+        }
+        if (statuses.length > 1) {
+          out.push({
+            key: `${contactId}::${qualCode}`,
+            contactId,
+            studentName,
+            qualificationCode: qualCode,
+            courseName: course.name,
+            existingEnrolmentId: '—',
+            existingStatus: '—',
+            unitRowCount: courseRows.length,
+            existingCourseStart: null,
+            existingCourseEnd: null,
+            derivedCourseStart: derived.courseStartDate,
+            derivedCourseEnd: derived.courseEndDate,
+            proposedStatus: '—',
+            action: 'Error',
+            validation: 'Inconsistent Course Status values',
+          });
+          continue;
+        }
+        if (pairErrors.length > 0) {
+          out.push({
+            key: `${contactId}::${qualCode}`,
+            contactId,
+            studentName,
+            qualificationCode: qualCode,
+            courseName: course.name,
+            existingEnrolmentId: '—',
+            existingStatus: '—',
+            unitRowCount: courseRows.length,
+            existingCourseStart: null,
+            existingCourseEnd: null,
+            derivedCourseStart: derived.courseStartDate,
+            derivedCourseEnd: derived.courseEndDate,
+            proposedStatus: '—',
+            action: 'Error',
+            validation: pairErrors[0] as string,
+          });
+          continue;
+        }
+
+        courseInputs.push({
+          courseId: Number(course.id),
+          courseLabel: `${qualCode} — ${course.name}`,
+          fileStartDate: derived.courseStartDate,
+          fileEndDate: derived.courseEndDate,
+          statusRaw: statuses[0] ?? null,
+          qualCode,
           unitRowCount: courseRows.length,
           earliestActivityStart: derived.earliestActivityStart,
           latestActivityEnd: derived.latestActivityEnd,
-          derivedCourseStart: derived.courseStartDate,
-          derivedCourseEnd: derived.courseEndDate,
-          proposedStatus: proposed,
-          action: existing ? (course ? 'Update' : 'Skip / map course') : 'Create',
-          validation,
+        });
+      }
+
+      const resolved = resolveImportCourseDraftsForStudent({
+        studentLabel: contactId,
+        existingEnrollments,
+        courses: courseInputs.map((c) => ({
+          courseId: c.courseId,
+          courseLabel: c.courseLabel,
+          fileStartDate: c.fileStartDate,
+          fileEndDate: c.fileEndDate,
+          statusRaw: c.statusRaw,
+        })),
+      });
+
+      for (let i = 0; i < courseInputs.length; i++) {
+        const c = courseInputs[i];
+        const r = resolved[i];
+        const existing = existingEnrollments.find((e) => e.course_id === c.courseId);
+        const recalculatedStart =
+          existing?.start_date && c.fileStartDate
+            ? existing.start_date <= c.fileStartDate
+              ? existing.start_date
+              : c.fileStartDate
+            : c.fileStartDate ?? existing?.start_date ?? null;
+        const recalculatedEnd =
+          existing?.end_date && c.fileEndDate
+            ? existing.end_date >= c.fileEndDate
+              ? existing.end_date
+              : c.fileEndDate
+            : c.fileEndDate ?? existing?.end_date ?? null;
+        out.push({
+          key: `${contactId}::${c.qualCode}`,
+          contactId,
+          studentName,
+          qualificationCode: c.qualCode,
+          courseName: c.courseLabel?.split(' — ').slice(1).join(' — ') || c.courseLabel || '—',
+          existingEnrolmentId: existing
+            ? `${existingStudent?.id ?? '?'} / ${existing.course_id}`
+            : '—',
+          existingStatus: existing ? courseLifecycleLabel(existing.enrollment_status) : '—',
+          unitRowCount: c.unitRowCount,
+          existingCourseStart: existing?.start_date ?? null,
+          existingCourseEnd: existing?.end_date ?? null,
+          derivedCourseStart: recalculatedStart,
+          derivedCourseEnd: recalculatedEnd,
+          proposedStatus: r.proposedStatusLabel,
+          action: r.actionLabel,
+          validation: r.error ?? 'OK',
         });
       }
     }
     return out;
-  }, [importRows, importCourseByQual, importExistingByStudentId]);
+  }, [importRows, importCourseByQual, importExistingByStudentId, importEnrollmentsByStudentPk]);
 
   const updateImportRow = (index: number, field: keyof typeof importRows[0], value: string) => {
     setImportRows((prev) =>
@@ -1276,139 +1403,136 @@ export const AdminStudentsPage: React.FC = () => {
         localStudentByEmail.set(emailKey, student);
         localStudentByStudentId.set(candidateIdKey, student);
 
-        // Append course(s) from ALL qualification codes across this student's rows (never replace existing).
+        // Append / update course(s) from ALL qualification codes across this student's rows.
         const allQualCodes = Array.from(new Set(rows.flatMap((r) => splitCodes(r.qualification_code))));
         const courseIds = allQualCodes
           .map((c) => courseByQual[c]?.id)
           .filter((n): n is number => typeof n === 'number' && Number.isFinite(n) && n > 0);
         if (importBatchCourseId != null) courseIds.push(importBatchCourseId);
         const uniqueCourseIds = Array.from(new Set(courseIds));
-        type CourseDraft = {
-          course_id: number;
-          start_date: string | null;
-          end_date: string | null;
-          enrollment_status: StudentCourseEnrollmentStatus;
-          explicitStatus: boolean;
-        };
-        let provisionalDrafts: CourseDraft[] = [];
-        if (uniqueCourseIds.length > 0) {
-          const existingEnrollments = await listStudentCourseEnrollments(student.id);
-          let hasInProgress = existingEnrollments.some((e) => e.enrollment_status === 'in_progress');
 
-          provisionalDrafts = uniqueCourseIds.map((courseId) => {
-            const courseRows = rows.filter((r) => {
-              const codes = splitCodes(r.qualification_code);
-              return codes.some((c) => courseByQual[c]?.id === courseId);
-            });
-            const statuses = Array.from(
-              new Set(courseRows.map((r) => String(r.course_status ?? '').trim()).filter(Boolean))
+        const existingEnrollments = await listStudentCourseEnrollments(student.id);
+        const existingLite: ExistingEnrollmentLite[] = existingEnrollments.map((e) => ({
+          course_id: e.course_id,
+          enrollment_status: e.enrollment_status,
+          start_date: e.start_date,
+          end_date: e.end_date,
+          name: e.name,
+          qualification_code: e.qualification_code,
+        }));
+
+        const courseMeta = uniqueCourseIds.map((courseId) => {
+          const courseRows = rows.filter((r) => {
+            const codes = splitCodes(r.qualification_code);
+            return codes.some((c) => courseByQual[c]?.id === courseId);
+          });
+          // Batch-only course with no matching qual rows still gets an empty timetable update/create.
+          const statuses = Array.from(
+            new Set(courseRows.map((r) => String(r.course_status ?? '').trim()).filter(Boolean))
+          );
+          if (statuses.length > 1) {
+            throw new Error(
+              `Inconsistent Course Status for student ${candidateIdKey} course ${courseId}`
             );
-            if (statuses.length > 1) {
-              throw new Error(
-                `Inconsistent Course Status for student ${candidateIdKey} course ${courseId}`
-              );
-            }
-            const statusRaw = statuses[0];
-            const normalized = statusRaw ? normalizeCourseLifecycleStatus(statusRaw) : null;
-            if (statusRaw && !normalized) {
-              throw new Error(
-                `Invalid Course Status "${statusRaw}" for student ${candidateIdKey} course ${courseId}`
-              );
-            }
-            const fileDerived = deriveCourseDatesFromActivityRows(courseRows);
-            return {
-              course_id: courseId,
-              start_date: fileDerived.courseStartDate,
-              end_date: fileDerived.courseEndDate,
-              enrollment_status: (normalized ?? 'tentative') as StudentCourseEnrollmentStatus,
-              explicitStatus: Boolean(normalized),
-            };
-          });
+          }
+          const statusRaw = statuses[0] ?? null;
+          const fileDerived = deriveCourseDatesFromActivityRows(courseRows);
+          const qual =
+            Object.values(courseByQual).find((c) => c?.id === courseId)?.qualification_code ??
+            String(courseId);
+          const name = Object.values(courseByQual).find((c) => c?.id === courseId)?.name;
+          return {
+            courseId,
+            courseLabel: name ? `${qual} — ${name}` : String(qual),
+            fileStartDate: fileDerived.courseStartDate,
+            fileEndDate: fileDerived.courseEndDate,
+            statusRaw,
+            courseRows,
+          };
+        });
 
-          const chronological = [...provisionalDrafts].sort((a, b) => {
-            const as = a.start_date ?? '9999-99-99';
-            const bs = b.start_date ?? '9999-99-99';
-            return as < bs ? -1 : as > bs ? 1 : a.course_id - b.course_id;
-          });
-          for (const draft of chronological) {
-            if (draft.explicitStatus) {
-              if (draft.enrollment_status === 'in_progress') {
-                if (!draft.start_date || !draft.end_date) {
-                  throw new Error(
-                    `Course Status is In Progress but course dates could not be derived from Activity Start/End for student ${candidateIdKey} course ${draft.course_id}.`
-                  );
-                }
-                if (hasInProgress) {
-                  throw new Error(
-                    `Student ${candidateIdKey} already has a course In Progress. Cannot import another as In Progress.`
-                  );
-                }
-                hasInProgress = true;
-              }
-              continue;
-            }
-            if (!draft.start_date || !draft.end_date) {
-              draft.enrollment_status = 'tentative';
-            } else if (!hasInProgress) {
-              draft.enrollment_status = defaultStatusForNewCourse(false);
-              hasInProgress = true;
-            } else {
-              draft.enrollment_status = defaultStatusForNewCourse(true);
+        const resolvedDrafts = resolveImportCourseDraftsForStudent({
+          studentLabel: candidateIdKey,
+          existingEnrollments: existingLite,
+          courses: courseMeta.map((c) => ({
+            courseId: c.courseId,
+            courseLabel: c.courseLabel,
+            fileStartDate: c.fileStartDate,
+            fileEndDate: c.fileEndDate,
+            statusRaw: c.statusRaw,
+          })),
+        });
+        for (const d of resolvedDrafts) {
+          if (d.error) throw new Error(d.error);
+        }
+
+        // Atomic per student-course: enrol + upsert units + recalc dates (rolls back on failure).
+        for (let i = 0; i < courseMeta.length; i++) {
+          const meta = courseMeta[i];
+          const draft = resolvedDrafts[i];
+          const unitsPayload: Array<{ form_id: number; start_date: string | null; end_date: string | null }> =
+            [];
+          const seenFormIds = new Set<number>();
+          for (const row of meta.courseRows) {
+            const unitCodes = splitCodes(row.unit_code);
+            const qualCodes = splitCodes(row.qualification_code);
+            const matchedFormIds = matchFormIdsForImportRow(qualCodes, unitCodes);
+            const start = String(row.activity_start_date ?? '').trim() || null;
+            const end = String(row.activity_end_date ?? '').trim() || null;
+            for (const formId of matchedFormIds) {
+              if (!Number.isFinite(formId) || formId <= 0) continue;
+              if (seenFormIds.has(formId)) continue;
+              seenFormIds.add(formId);
+              importFormIdsForPdf.add(formId);
+              unitsPayload.push({ form_id: formId, start_date: start, end_date: end });
             }
           }
 
-          for (const draft of provisionalDrafts) {
-            if (!draft.start_date || !draft.end_date) continue;
-            if (draft.enrollment_status === 'cancelled') continue;
-            const others = [
-              ...existingEnrollments
-                .filter((e) => e.course_id !== draft.course_id && e.enrollment_status !== 'cancelled')
-                .map((e) => ({
-                  course_id: e.course_id,
-                  name: e.name,
-                  qualification_code: e.qualification_code,
-                  start_date: e.start_date,
-                  end_date: e.end_date,
-                  enrollment_status: e.enrollment_status,
-                })),
-              ...provisionalDrafts
-                .filter(
-                  (o) =>
-                    o.course_id !== draft.course_id &&
-                    o.start_date &&
-                    o.end_date &&
-                    o.enrollment_status !== 'cancelled'
-                )
-                .map((o) => ({
-                  course_id: o.course_id,
-                  start_date: o.start_date,
-                  end_date: o.end_date,
-                  enrollment_status: o.enrollment_status,
-                })),
-            ];
-            const conflicts = findCourseOverlapConflicts(
-              { course_id: draft.course_id, start_date: draft.start_date, end_date: draft.end_date },
-              others
+          // Also process unit rows that map only via batch course when this is the batch course
+          // and rows had no qual match for this courseId — already handled via courseRows filter.
+
+          const timetableRes = await importStudentCourseTimetable({
+            studentId: student.id,
+            courseId: meta.courseId,
+            units: unitsPayload,
+            enrollmentStatus: draft.enrollment_status,
+            explicitStatus: Boolean(draft.explicitStatus && draft.enrollment_status),
+          });
+          if (!timetableRes.ok) {
+            throw new Error(
+              timetableRes.error ??
+                `Timetable import failed for student ${candidateIdKey} course ${meta.courseLabel}`
             );
-            if (conflicts.length > 0) {
-              throw new Error(
-                `Student ${candidateIdKey}: ${formatOverlapError(conflicts[0])} (derived from unit Activity dates).`
-              );
-            }
           }
 
-          const appendRes = await appendStudentCourses(student.id, uniqueCourseIds, {
-            updateExisting: true,
-            enrollments: provisionalDrafts.map((d) => ({
-              course_id: d.course_id,
-              start_date: d.start_date,
-              end_date: d.end_date,
-              enrollment_status: d.enrollment_status,
-            })),
-          });
-          if (!appendRes.ok) {
-            throw new Error(appendRes.error ?? 'Course enrolment failed');
+          // Best-effort token extension after successful atomic commit (non-mutating for enrolment/units).
+          for (const u of unitsPayload) {
+            if (!u.end_date) continue;
+            const existingInst = await getInstanceForStudentAndForm(u.form_id, student.id);
+            if (existingInst?.id) {
+              await extendInstanceAccessTokensToDate(existingInst.id, 'student', u.end_date);
+            }
           }
+        }
+
+        // Rows with qualification/unit that did not map into uniqueCourseIds still count toward progress;
+        // process any remaining unit rows not covered above (no course id) for form matching only.
+        const coveredRowKeys = new Set<string>();
+        for (const meta of courseMeta) {
+          for (const row of meta.courseRows) {
+            coveredRowKeys.add(
+              `${String(row.student_id)}|${String(row.qualification_code)}|${String(row.unit_code)}|${String(row.activity_start_date)}|${String(row.activity_end_date)}`
+            );
+          }
+        }
+        for (const row of rows) {
+          const key = `${String(row.student_id)}|${String(row.qualification_code)}|${String(row.unit_code)}|${String(row.activity_start_date)}|${String(row.activity_end_date)}`;
+          if (!coveredRowKeys.has(key) && uniqueCourseIds.length === 0) {
+            // No course to attach — skip unit create (mapping consent may have allowed this).
+          }
+          done++;
+          success++;
+          setImportProgress({ done, total: importRows.length, success, failed });
         }
 
         const batchId = importBatchId ? Number(importBatchId) : null;
@@ -1434,137 +1558,6 @@ export const AdminStudentsPage: React.FC = () => {
           }
         }
 
-        // Process each row's assessments (unit/qualification mapping) and dates.
-        for (const row of rows) {
-          const unitCodes = splitCodes(row.unit_code);
-          const qualCodes = splitCodes(row.qualification_code);
-          const matchedFormIds = matchFormIdsForImportRow(qualCodes, unitCodes);
-          const start = String(row.activity_start_date ?? '').trim() || null;
-          const end = String(row.activity_end_date ?? '').trim() || null;
-          const hasActivityDates = Boolean(start || end);
-          if (matchedFormIds.length > 0) {
-            for (const formId of matchedFormIds) {
-              if (!Number.isFinite(formId) || formId <= 0) continue;
-              importFormIdsForPdf.add(formId);
-              const existing = await getInstanceForStudentAndForm(formId, student.id);
-              if (!existing) {
-                const created = await createFormInstance(formId, 'student', student.id, {
-                  start_date: start,
-                  end_date: end,
-                });
-                if (created?.id && end) await extendInstanceAccessTokensToDate(created.id, 'student', end);
-              } else if (hasActivityDates) {
-                // Only overwrite instance dates when the import row provides activity dates.
-                await updateFormInstanceDates(existing.id, { start_date: start, end_date: end });
-                if (end) await extendInstanceAccessTokensToDate(existing.id, 'student', end);
-              }
-            }
-          }
-
-          done++;
-          success++;
-          setImportProgress({ done, total: importRows.length, success, failed });
-        }
-
-        // Recalculate course dates from ALL mapped DB instances (not only this file).
-        if (provisionalDrafts.length > 0) {
-          const latestEnrollments = await listStudentCourseEnrollments(student.id);
-          for (const draft of provisionalDrafts) {
-            const range = await computeCourseDateRangeFromMappedInstances(student.id, draft.course_id);
-            if (range.ambiguous && range.ambiguousFormIds.length > 0 && range.instanceCount === 0) {
-              throw new Error(
-                `Student ${candidateIdKey} course ${draft.course_id}: cannot derive course dates — form(s) map to multiple enrolments (${range.ambiguousFormIds.join(', ')}).`
-              );
-            }
-            if (range.ambiguous) {
-              console.warn('Import course date recompute: some forms ambiguous; using safe forms only', {
-                studentId: student.id,
-                courseId: draft.course_id,
-                ambiguousFormIds: range.ambiguousFormIds,
-              });
-            }
-            const existing = latestEnrollments.find((e) => e.course_id === draft.course_id);
-            const resolved = resolveCourseDatesAfterImport({
-              recomputedStart: range.startDate,
-              recomputedEnd: range.endDate,
-              existingStart: existing?.start_date,
-              existingEnd: existing?.end_date,
-            });
-            let status: StudentCourseEnrollmentStatus | undefined = draft.explicitStatus
-              ? draft.enrollment_status
-              : undefined;
-            if (draft.explicitStatus && draft.enrollment_status === 'in_progress') {
-              if (!resolved.startDate || !resolved.endDate) {
-                throw new Error(
-                  `Course Status is In Progress but complete course dates could not be derived for student ${candidateIdKey} course ${draft.course_id}.`
-                );
-              }
-            }
-            if (!draft.explicitStatus) {
-              if (!existing) {
-                status = defaultStatusForNewCourseEnrollment({
-                  hasInProgress: latestEnrollments.some((e) => e.enrollment_status === 'in_progress'),
-                  startDate: resolved.startDate,
-                  endDate: resolved.endDate,
-                  explicitStatus: draft.enrollment_status,
-                });
-              } else if (
-                (!resolved.startDate || !resolved.endDate) &&
-                existing.enrollment_status === 'in_progress'
-              ) {
-                status = 'tentative';
-              }
-            } else if (draft.enrollment_status === 'in_progress') {
-              status = defaultStatusForNewCourseEnrollment({
-                hasInProgress: latestEnrollments.some(
-                  (e) => e.course_id !== draft.course_id && e.enrollment_status === 'in_progress'
-                ),
-                startDate: resolved.startDate,
-                endDate: resolved.endDate,
-                explicitStatus: 'in_progress',
-              });
-            }
-            if (resolved.startDate && resolved.endDate && (status ?? existing?.enrollment_status) !== 'cancelled') {
-              const conflicts = findCourseOverlapConflicts(
-                {
-                  course_id: draft.course_id,
-                  start_date: resolved.startDate,
-                  end_date: resolved.endDate,
-                },
-                latestEnrollments
-                  .filter((e) => e.course_id !== draft.course_id && e.enrollment_status !== 'cancelled')
-                  .map((e) => ({
-                    course_id: e.course_id,
-                    name: e.name,
-                    qualification_code: e.qualification_code,
-                    start_date: e.start_date,
-                    end_date: e.end_date,
-                    enrollment_status: e.enrollment_status,
-                  }))
-              );
-              if (conflicts.length > 0) {
-                throw new Error(
-                  `Student ${candidateIdKey}: ${formatOverlapError(conflicts[0])} after recalculating course dates from unit instances.`
-                );
-              }
-            }
-            // allowCreate: true — import must not die with "Enrolment not found" if append
-            // skipped / raced; create-or-update keeps unit date recompute resilient.
-            const upsertRes = await upsertStudentCourseEnrollment({
-              studentId: student.id,
-              courseId: draft.course_id,
-              start_date: resolved.startDate,
-              end_date: resolved.endDate,
-              enrollment_status: status,
-              link_status: 'active',
-              allowCreate: true,
-            });
-            if (!upsertRes.ok) {
-              throw new Error(upsertRes.error ?? 'Failed to update course dates after import');
-            }
-          }
-        }
-
         importStudentsForPdf.push({
           id: student.id,
           name: [student.first_name, student.last_name].filter(Boolean).join(' ').trim() || student.email,
@@ -1584,7 +1577,7 @@ export const AdminStudentsPage: React.FC = () => {
         title: 'Import error',
         error: true,
         message:
-          `Import stopped due to an error.\n\n${detail}\n\nSome rows may have been processed.\n\nClick OK to close this message and the import dialog.`,
+          `Import stopped due to an error.\n\n${detail}\n\nNo changes were saved for the failed student–course group (rolled back).\nEarlier successful student–course groups in this run may already be committed.\n\nClick OK to close this message and the import dialog.`,
       });
       return;
     }
@@ -2500,18 +2493,20 @@ export const AdminStudentsPage: React.FC = () => {
                 </p>
                 {importEnrolmentPreview.length > 0 ? (
                   <div className="max-h-[220px] overflow-auto border border-sky-100 rounded bg-white">
-                    <table className="w-full text-xs min-w-[1100px]">
+                    <table className="w-full text-xs min-w-[1400px]">
                       <thead className="bg-sky-50 sticky top-0">
                         <tr>
                           <th className="text-left px-2 py-1.5 font-semibold">Contact ID</th>
                           <th className="text-left px-2 py-1.5 font-semibold">Student Name</th>
                           <th className="text-left px-2 py-1.5 font-semibold">Qualification</th>
                           <th className="text-left px-2 py-1.5 font-semibold">Course</th>
+                          <th className="text-left px-2 py-1.5 font-semibold">Enrolment</th>
+                          <th className="text-left px-2 py-1.5 font-semibold">Existing Status</th>
                           <th className="text-right px-2 py-1.5 font-semibold">Units</th>
-                          <th className="text-left px-2 py-1.5 font-semibold">Earliest Activity Start</th>
-                          <th className="text-left px-2 py-1.5 font-semibold">Latest Activity End</th>
-                          <th className="text-left px-2 py-1.5 font-semibold">Derived Course Start</th>
-                          <th className="text-left px-2 py-1.5 font-semibold">Derived Course End</th>
+                          <th className="text-left px-2 py-1.5 font-semibold">Existing Start</th>
+                          <th className="text-left px-2 py-1.5 font-semibold">Existing End</th>
+                          <th className="text-left px-2 py-1.5 font-semibold">Recalc Start</th>
+                          <th className="text-left px-2 py-1.5 font-semibold">Recalc End</th>
                           <th className="text-left px-2 py-1.5 font-semibold">Proposed Status</th>
                           <th className="text-left px-2 py-1.5 font-semibold">Action</th>
                           <th className="text-left px-2 py-1.5 font-semibold">Validation</th>
@@ -2524,9 +2519,11 @@ export const AdminStudentsPage: React.FC = () => {
                             <td className="px-2 py-1.5">{p.studentName}</td>
                             <td className="px-2 py-1.5">{p.qualificationCode}</td>
                             <td className="px-2 py-1.5">{p.courseName}</td>
+                            <td className="px-2 py-1.5 whitespace-nowrap tabular-nums">{p.existingEnrolmentId}</td>
+                            <td className="px-2 py-1.5">{p.existingStatus}</td>
                             <td className="px-2 py-1.5 text-right tabular-nums">{p.unitRowCount}</td>
-                            <td className="px-2 py-1.5 whitespace-nowrap">{p.earliestActivityStart ?? '—'}</td>
-                            <td className="px-2 py-1.5 whitespace-nowrap">{p.latestActivityEnd ?? '—'}</td>
+                            <td className="px-2 py-1.5 whitespace-nowrap">{p.existingCourseStart ?? '—'}</td>
+                            <td className="px-2 py-1.5 whitespace-nowrap">{p.existingCourseEnd ?? '—'}</td>
                             <td className="px-2 py-1.5 whitespace-nowrap font-medium">{p.derivedCourseStart ?? '—'}</td>
                             <td className="px-2 py-1.5 whitespace-nowrap font-medium">{p.derivedCourseEnd ?? '—'}</td>
                             <td className="px-2 py-1.5">{p.proposedStatus}</td>
