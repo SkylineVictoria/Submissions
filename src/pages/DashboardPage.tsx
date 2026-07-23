@@ -204,7 +204,7 @@ export const DashboardPage: React.FC = () => {
                   setSearchTerm(e.target.value);
                   setCurrentPage(1);
                 }}
-                placeholder="Search student, unit, status…"
+                placeholder="Search student, ID, unit, or ID + Unit Code"
               />
             </div>
             <div className="sm:w-[170px]">

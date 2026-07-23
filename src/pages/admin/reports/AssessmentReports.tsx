@@ -243,7 +243,7 @@ export const AssessmentReportsPage: React.FC = () => {
               setSearchTerm(e.target.value);
               setCurrentPage(1);
             }}
-            placeholder="Search student or unit…"
+            placeholder="Search student, Student ID, unit code, or Student ID + Unit Code"
             className="w-full min-w-0 sm:max-w-[min(100%,280px)] sm:flex-[1_1_200px]"
           />
           <div className="w-full min-w-0 sm:w-[14rem]">

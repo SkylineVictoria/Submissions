@@ -962,7 +962,7 @@ export const AdminAssessmentsPage: React.FC = () => {
                     setSearchTerm(e.target.value);
                     setCurrentPage(1);
                   }}
-                  placeholder="Search student, form, or workflow..."
+                  placeholder="Search student, Student ID, unit code, or Student ID + Unit Code"
                   className="w-full min-w-0 sm:max-w-[min(100%,280px)] sm:flex-[1_1_200px]"
                 />
                 <div className="w-full min-w-0 sm:w-[13rem] sm:max-w-[14rem] sm:flex-shrink-0">

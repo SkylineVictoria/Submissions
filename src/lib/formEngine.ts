@@ -25,6 +25,7 @@ import {
   studentMayOpenAssessment,
   type StudentAssessmentAccessResult,
 } from './studentAssessmentAccess';
+import { parseAssessmentSearch } from './assessmentSearch';
 
 export { nextAssessmentTaskLabel, nextAssessmentTaskNumber } from './assessmentTaskSteps';
 import type {
@@ -3566,10 +3567,13 @@ export async function listSubmittedInstancesPaged(
   const endDateTo =
     endDateToIso && /^\d{4}-\d{2}-\d{2}$/.test(String(endDateToIso).trim()) ? String(endDateToIso).trim() : null;
   const wf = workflowStatus && workflowStatus !== 'all' ? workflowStatus : null;
+  // Pass the raw search string. The RPC parses Student ID + Unit Code (AND) itself so
+  // Admin Directory works even when PostgREST has a stale schema cache for extra args.
+  const rawSearch = (search ?? '').trim() || null;
   const { data, error } = await supabase.rpc('skyline_list_submitted_instances_paged', {
     p_page: page,
     p_page_size: pageSize,
-    p_search: (search ?? '').trim() || null,
+    p_search: rawSearch,
     p_course_id: Number.isFinite(Number(courseId)) && Number(courseId) > 0 ? Number(courseId) : null,
     p_form_id: Number.isFinite(Number(formId)) && Number(formId) > 0 ? Number(formId) : null,
     p_student_id: Number.isFinite(Number(studentId)) && Number(studentId) > 0 ? Number(studentId) : null,
@@ -3695,6 +3699,36 @@ export async function listDashboardInstances(
     if (eligibleStudentIds.length === 0) return { data: [], total: 0, page, pageSize };
   }
 
+  const parsedSearch = parseAssessmentSearch(search);
+
+  // Exact external Student ID within authorised students (AND with other filters).
+  if (parsedSearch.studentId) {
+    const extId = parsedSearch.studentId.replace(/[%_,]/g, '');
+    const { data: sidRows } = await supabase
+      .from('skyline_students')
+      .select('id')
+      .eq('student_id', extId);
+    const foundIds = ((sidRows as Array<{ id: number }>) || [])
+      .map((s) => Number(s.id))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    const exactIds = foundIds.filter((id) => eligibleStudentIds.includes(id));
+    if (exactIds.length === 0) return { data: [], total: 0, page, pageSize };
+    eligibleStudentIds = exactIds;
+  }
+
+  let unitFormIds: number[] | null = null;
+  if (parsedSearch.unitCode) {
+    const unitEscaped = parsedSearch.unitCode.replace(/[%_,]/g, '');
+    const { data: unitFormRows } = await supabase
+      .from('skyline_forms')
+      .select('id')
+      .or(`unit_code.ilike.%${unitEscaped}%,name.ilike.%${unitEscaped}%`);
+    unitFormIds = ((unitFormRows as Array<Record<string, unknown>>) || [])
+      .map((f) => Number(f.id))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    if (unitFormIds.length === 0) return { data: [], total: 0, page, pageSize };
+  }
+
   const from = Math.max(0, (page - 1) * pageSize);
   const to = from + pageSize - 1;
   let query = supabase
@@ -3705,6 +3739,10 @@ export async function listDashboardInstances(
     )
     .not('student_id', 'is', null)
     .in('student_id', eligibleStudentIds);
+
+  if (unitFormIds) {
+    query = query.in('form_id', unitFormIds);
+  }
 
   if (role === 'trainer') {
     if (pendingOnly) {
@@ -3722,14 +3760,16 @@ export async function listDashboardInstances(
     }
   }
 
-  const q = (search ?? '').trim();
+  const q = parsedSearch.generalQuery;
   if (q) {
     const escaped = q.replace(/[%_,]/g, '');
     const conditions: string[] = [`status.ilike.%${escaped}%`, `role_context.ilike.%${escaped}%`];
     const { data: formRows } = await supabase
       .from('skyline_forms')
       .select('id')
-      .or(`name.ilike.%${escaped}%,version.ilike.%${escaped}%`);
+      .or(
+        `name.ilike.%${escaped}%,version.ilike.%${escaped}%,unit_code.ilike.%${escaped}%,unit_name.ilike.%${escaped}%`
+      );
     const formIds = ((formRows as Array<Record<string, unknown>>) || []).map((f) => Number(f.id)).filter((n) => Number.isFinite(n) && n > 0);
     if (formIds.length > 0) conditions.push(`form_id.in.(${formIds.join(',')})`);
     const { data: studentRows } = await supabase
