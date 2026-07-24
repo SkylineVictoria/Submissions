@@ -1,6 +1,7 @@
 import { supabase } from './supabase';
 import {
   dedupeSupabaseRead,
+  invalidateSupabaseReadCache,
   recordSupabaseError,
   SupabaseBackoffError,
 } from './supabaseRequestGuard';
@@ -26,7 +27,15 @@ import {
   type StudentAssessmentAccessResult,
 } from './studentAssessmentAccess';
 import { parseAssessmentSearch } from './assessmentSearch';
+import {
+  findSharedContentBlockQuestionIds,
+  planSharedContentBlockRepairs,
+  remapPdfMetaQuestionIds,
+  type ContentBlockLike,
+  type PdfMetaLike,
+} from './contentBlockClone';
 
+export { buildContentBlockGridDiagnostic } from './contentBlockClone';
 export { nextAssessmentTaskLabel, nextAssessmentTaskNumber } from './assessmentTaskSteps';
 import type {
   Form,
@@ -6172,6 +6181,8 @@ export async function duplicateForm(formId: number): Promise<Form | null> {
 
   const steps = await fetchFormSteps(formId);
   const rowIdMap = new Map<number, number>();
+  /** Old question id → new question id (required to rewire contentBlocks / isAdditionalBlockOf). */
+  const questionIdMap = new Map<number, number>();
 
   for (const step of steps) {
     const { data: newStepData, error: stepErr } = await supabase
@@ -6238,6 +6249,7 @@ export async function duplicateForm(formId: number): Promise<Form | null> {
             sort_order: q.sort_order,
             role_visibility: q.role_visibility ?? {},
             role_editability: q.role_editability ?? {},
+            // Temporary: contentBlocks / isAdditionalBlockOf still point at OLD ids until remap pass.
             pdf_meta: q.pdf_meta ?? {},
           })
           .select('id')
@@ -6247,6 +6259,7 @@ export async function duplicateForm(formId: number): Promise<Form | null> {
           continue;
         }
         const newQuestionId = (newQData as { id: number }).id;
+        questionIdMap.set(q.id, newQuestionId);
 
         const { data: options } = await supabase
           .from('skyline_form_question_options')
@@ -6288,6 +6301,24 @@ export async function duplicateForm(formId: number): Promise<Form | null> {
             rowIdMap.set(row.id, (newRowData as { id: number }).id);
           }
         }
+      }
+    }
+  }
+
+  // Rewire contentBlocks.questionId + isAdditionalBlockOf so each cloned table keeps a unique child id.
+  // Without this, every parent that embedded the same child grid would share answers (data corruption).
+  if (questionIdMap.size > 0) {
+    const newQuestionIds = Array.from(questionIdMap.values());
+    const { data: clonedQuestions } = await supabase
+      .from('skyline_form_questions')
+      .select('id, pdf_meta')
+      .in('id', newQuestionIds);
+    for (const cq of (clonedQuestions as Array<{ id: number; pdf_meta: unknown }>) || []) {
+      // pdf_meta was copied from the SOURCE question; map using old→new by reversing via source meta.
+      // The cloned row still has OLD ids in pdf_meta — remap those through questionIdMap.
+      const remapped = remapPdfMetaQuestionIds(cq.pdf_meta, questionIdMap);
+      if (remapped) {
+        await supabase.from('skyline_form_questions').update({ pdf_meta: remapped }).eq('id', cq.id);
       }
     }
   }
@@ -6351,6 +6382,384 @@ export async function deleteFormSuperadmin(formId: number): Promise<{ ok: true }
   const { error } = await supabase.from('skyline_forms').delete().eq('id', fid);
   if (error) return { ok: false, error: error.message };
   return { ok: true };
+}
+
+export type SharedContentBlockDiagnosis = {
+  formId: number;
+  sharedChildCount: number;
+  plans: Array<{
+    sharedChildId: number;
+    ownerParentId: number | null;
+    parentsNeedingClone: number[];
+  }>;
+  /** Flat diagnostic rows for admin/dev (parent → child → usage). */
+  blocks?: Array<{
+    parent_question_id: number;
+    parent_question_label: string;
+    parent_display_order: number;
+    block_index: number;
+    block_type: string | null;
+    referenced_child_question_id: number;
+    child_question_exists: boolean;
+    child_question_type: string | null;
+    is_additional_block_of: string | null;
+    duplicate_reference_count: number;
+    row_ids?: number[];
+  }>;
+};
+
+export type SharedContentBlockRepairResult =
+  | {
+      ok: true;
+      formId: number;
+      clonesCreated: number;
+      rewiredParents: number;
+      duplicatesFound: number;
+      remainingDuplicates: number;
+      diagnosis: SharedContentBlockDiagnosis;
+      projectRef?: string;
+    }
+  | { ok: false; error: string; remainingDuplicates?: number; diagnosis?: SharedContentBlockDiagnosis };
+
+function supabaseProjectRef(): string | undefined {
+  try {
+    const url = (import.meta as { env?: { VITE_SUPABASE_URL?: string } }).env?.VITE_SUPABASE_URL;
+    if (!url) return undefined;
+    return new URL(url).hostname.split('.')[0];
+  } catch {
+    return undefined;
+  }
+}
+
+function diagnosisFromQuestions(
+  formId: number,
+  questions: Array<{ id: number; label?: string | null; type?: string; sort_order?: number; pdf_meta?: unknown; rows?: Array<{ id: number }> }>
+): SharedContentBlockDiagnosis {
+  const shared = findSharedContentBlockQuestionIds(questions);
+  const plans = planSharedContentBlockRepairs(questions, shared);
+  const byId = new Map(questions.map((q) => [q.id, q]));
+  const blocks: NonNullable<SharedContentBlockDiagnosis['blocks']> = [];
+  for (const q of questions) {
+    const pm = q.pdf_meta as PdfMetaLike | null | undefined;
+    const contentBlocks = Array.isArray(pm?.contentBlocks) ? pm!.contentBlocks! : [];
+    contentBlocks.forEach((b, blockIndex) => {
+      const cid = Number(b?.questionId);
+      if (!Number.isFinite(cid) || cid <= 0) return;
+      const child = byId.get(cid);
+      let usage = 0;
+      for (const other of questions) {
+        const opm = other.pdf_meta as PdfMetaLike | null | undefined;
+        const obs = Array.isArray(opm?.contentBlocks) ? opm!.contentBlocks! : [];
+        if (obs.some((x) => Number(x?.questionId) === cid)) usage += 1;
+      }
+      blocks.push({
+        parent_question_id: q.id,
+        parent_question_label: String(q.label ?? '').slice(0, 120),
+        parent_display_order: Number(q.sort_order ?? 0),
+        block_index: blockIndex,
+        block_type: typeof b?.type === 'string' ? b.type : null,
+        referenced_child_question_id: cid,
+        child_question_exists: !!child,
+        child_question_type: child?.type ?? null,
+        is_additional_block_of:
+          pm?.isAdditionalBlockOf != null ? String(pm.isAdditionalBlockOf) : null,
+        duplicate_reference_count: usage,
+        row_ids: (child?.rows ?? []).map((r) => r.id),
+      });
+    });
+  }
+  blocks.sort(
+    (a, b) =>
+      b.duplicate_reference_count - a.duplicate_reference_count ||
+      a.referenced_child_question_id - b.referenced_child_question_id ||
+      a.parent_display_order - b.parent_display_order
+  );
+  return { formId, sharedChildCount: shared.size, plans, blocks };
+}
+
+/** Read-only: detect contentBlocks.questionId values shared by multiple parents (answer cross-talk). */
+export async function diagnoseSharedContentBlockGrids(
+  formId: number
+): Promise<SharedContentBlockDiagnosis | { ok: false; error: string }> {
+  const fid = Number(formId);
+  if (!Number.isFinite(fid) || fid <= 0) return { ok: false, error: 'Invalid form id.' };
+
+  const { data: rpcData, error: rpcErr } = await supabase.rpc('skyline_diagnose_shared_content_block_grids', {
+    p_form_id: fid,
+  });
+  if (!rpcErr && rpcData && typeof rpcData === 'object') {
+    const raw = rpcData as {
+      ok?: boolean;
+      error?: string;
+      formId?: number;
+      sharedChildCount?: number;
+      blocks?: SharedContentBlockDiagnosis['blocks'];
+    };
+    if (raw.ok === false) return { ok: false, error: raw.error ?? 'Diagnose failed.' };
+    const tpl = await fetchTemplateForForm(fid, { skipEnsureTaskSections: true });
+    const questions = tpl
+      ? tpl.steps.flatMap((st) => st.sections.flatMap((sec) => sec.questions))
+      : [];
+    const shared = findSharedContentBlockQuestionIds(questions);
+    const plans = planSharedContentBlockRepairs(questions, shared);
+    return {
+      formId: fid,
+      sharedChildCount: Number(raw.sharedChildCount ?? shared.size),
+      plans,
+      blocks: Array.isArray(raw.blocks) ? raw.blocks : undefined,
+    };
+  }
+
+  const tpl = await fetchTemplateForForm(fid, { skipEnsureTaskSections: true });
+  if (!tpl) return { ok: false, error: 'Form not found.' };
+  const questions = tpl.steps.flatMap((st) => st.sections.flatMap((sec) => sec.questions));
+  return diagnosisFromQuestions(fid, questions);
+}
+
+/**
+ * Repair forms where multiple parents embed the same child grid_table questionId.
+ * Prefers atomic DB RPC; fails if any shared references remain after repair.
+ * Does NOT copy student answers onto clones (historical shared answers stay on the owner child only).
+ */
+export async function repairSharedContentBlockGrids(
+  formId: number
+): Promise<SharedContentBlockRepairResult> {
+  const fid = Number(formId);
+  if (!Number.isFinite(fid) || fid <= 0) return { ok: false, error: 'Invalid form id.' };
+  const projectRef = supabaseProjectRef();
+
+  const { data: rpcData, error: rpcErr } = await supabase.rpc('skyline_repair_shared_content_block_grids', {
+    p_form_id: fid,
+  });
+  if (!rpcErr && rpcData && typeof rpcData === 'object') {
+    const raw = rpcData as {
+      ok?: boolean;
+      error?: string;
+      formId?: number;
+      childrenCreated?: number;
+      parentsRemapped?: number;
+      duplicatesFound?: number;
+      remainingDuplicates?: number;
+      after?: { sharedChildCount?: number; blocks?: SharedContentBlockDiagnosis['blocks'] };
+    };
+    invalidateSupabaseReadCache();
+    const remaining = Number(raw.remainingDuplicates ?? raw.after?.sharedChildCount ?? 0);
+    if (raw.ok === false || remaining > 0) {
+      const afterDiag = await diagnoseSharedContentBlockGrids(fid);
+      return {
+        ok: false,
+        error: raw.error ?? `Repair incomplete: ${remaining} shared child reference(s) remain.`,
+        remainingDuplicates: remaining,
+        diagnosis: 'ok' in afterDiag && afterDiag.ok === false ? undefined : (afterDiag as SharedContentBlockDiagnosis),
+      };
+    }
+    const afterDiag = await diagnoseSharedContentBlockGrids(fid);
+    const diagnosis =
+      'ok' in afterDiag && afterDiag.ok === false
+        ? {
+            formId: fid,
+            sharedChildCount: 0,
+            plans: [],
+            blocks: raw.after?.blocks,
+          }
+        : (afterDiag as SharedContentBlockDiagnosis);
+    if (import.meta.env.DEV) {
+      console.info('[repairSharedContentBlockGrids]', {
+        formId: fid,
+        projectRef,
+        duplicatesFound: Number(raw.duplicatesFound ?? 0),
+        childrenCreated: Number(raw.childrenCreated ?? 0),
+        parentsRemapped: Number(raw.parentsRemapped ?? 0),
+        remainingDuplicates: remaining,
+      });
+    }
+    return {
+      ok: true,
+      formId: fid,
+      clonesCreated: Number(raw.childrenCreated ?? 0),
+      rewiredParents: Number(raw.parentsRemapped ?? 0),
+      duplicatesFound: Number(raw.duplicatesFound ?? 0),
+      remainingDuplicates: remaining,
+      diagnosis,
+      projectRef,
+    };
+  }
+
+  // Fallback: client-side repair (pre-RPC environments). Check every write error and verify.
+  const diagnosis = await diagnoseSharedContentBlockGrids(fid);
+  if ('ok' in diagnosis && diagnosis.ok === false) return diagnosis;
+  const d = diagnosis as SharedContentBlockDiagnosis;
+  if (d.plans.length === 0) {
+    return {
+      ok: true,
+      formId: fid,
+      clonesCreated: 0,
+      rewiredParents: 0,
+      duplicatesFound: 0,
+      remainingDuplicates: 0,
+      diagnosis: d,
+      projectRef,
+    };
+  }
+
+  const tpl = await fetchTemplateForForm(fid, { skipEnsureTaskSections: true });
+  if (!tpl) return { ok: false, error: 'Form not found.' };
+  const questions = tpl.steps.flatMap((st) => st.sections.flatMap((sec) => sec.questions));
+  const byId = new Map(questions.map((q) => [q.id, q]));
+
+  let clonesCreated = 0;
+  let rewiredParents = 0;
+
+  for (const plan of d.plans) {
+    const sourceChild = byId.get(plan.sharedChildId);
+    if (!sourceChild) continue;
+
+    let sectionId: number | null = null;
+    for (const st of tpl.steps) {
+      for (const sec of st.sections) {
+        if (sec.questions.some((q) => q.id === plan.sharedChildId || q.id === plan.ownerParentId)) {
+          sectionId = sec.id;
+          break;
+        }
+      }
+      if (sectionId != null) break;
+    }
+    if (sectionId == null || !Number.isFinite(sectionId)) {
+      return { ok: false, error: `Could not resolve section for shared child ${plan.sharedChildId}` };
+    }
+
+    const { data: childOpts, error: optsErr } = await supabase
+      .from('skyline_form_question_options')
+      .select('*')
+      .eq('question_id', plan.sharedChildId)
+      .order('sort_order');
+    if (optsErr) return { ok: false, error: optsErr.message };
+    const { data: childRows, error: rowsErr } = await supabase
+      .from('skyline_form_question_rows')
+      .select('*')
+      .eq('question_id', plan.sharedChildId)
+      .order('sort_order');
+    if (rowsErr) return { ok: false, error: rowsErr.message };
+
+    for (const parentId of plan.parentsNeedingClone) {
+      const parent = byId.get(parentId);
+      if (!parent) continue;
+      const parentPm = { ...((parent.pdf_meta ?? {}) as PdfMetaLike) };
+      const blocks = Array.isArray(parentPm.contentBlocks) ? [...parentPm.contentBlocks!] : [];
+
+      const maxSortRes = await supabase
+        .from('skyline_form_questions')
+        .select('sort_order')
+        .eq('section_id', sectionId)
+        .order('sort_order', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (maxSortRes.error) return { ok: false, error: maxSortRes.error.message };
+      const nextSort = Number((maxSortRes.data as { sort_order?: number } | null)?.sort_order ?? 0) + 1;
+
+      const childPm = { ...((sourceChild.pdf_meta ?? {}) as PdfMetaLike), isAdditionalBlockOf: parentId };
+      const { data: newChild, error: childErr } = await supabase
+        .from('skyline_form_questions')
+        .insert({
+          section_id: sectionId,
+          type: sourceChild.type,
+          code: sourceChild.code,
+          label: sourceChild.label,
+          help_text: sourceChild.help_text ?? null,
+          required: sourceChild.required ?? false,
+          sort_order: nextSort,
+          role_visibility: sourceChild.role_visibility ?? {},
+          role_editability: sourceChild.role_editability ?? {},
+          pdf_meta: childPm,
+        })
+        .select('id')
+        .single();
+      if (childErr || !newChild) {
+        return { ok: false, error: childErr?.message ?? `Failed to clone child for parent ${parentId}` };
+      }
+      const newChildId = Number((newChild as { id: number }).id);
+      clonesCreated += 1;
+
+      const optsList = (childOpts as FormQuestionOption[]) || [];
+      if (optsList.length > 0) {
+        const { error: insOptsErr } = await supabase.from('skyline_form_question_options').insert(
+          optsList.map((o) => ({
+            question_id: newChildId,
+            value: o.value,
+            label: o.label,
+            sort_order: o.sort_order,
+          }))
+        );
+        if (insOptsErr) return { ok: false, error: insOptsErr.message };
+      }
+      const rowInserts = ((childRows as FormQuestionRow[]) || []).map((row) => ({
+        question_id: newChildId,
+        row_label: row.row_label,
+        row_help: row.row_help ?? null,
+        row_image_url: row.row_image_url ?? null,
+        row_meta: row.row_meta ?? null,
+        sort_order: row.sort_order,
+      }));
+      if (rowInserts.length > 0) {
+        const { error: insRowsErr } = await supabase.from('skyline_form_question_rows').insert(rowInserts);
+        if (insRowsErr) return { ok: false, error: insRowsErr.message };
+      }
+
+      const nextBlocks: ContentBlockLike[] = blocks.map((b) => {
+        if (Number(b?.questionId) === plan.sharedChildId) {
+          return { ...b, questionId: newChildId };
+        }
+        return b;
+      });
+      const { error: parentUpdErr } = await supabase
+        .from('skyline_form_questions')
+        .update({ pdf_meta: { ...parentPm, contentBlocks: nextBlocks } })
+        .eq('id', parentId);
+      if (parentUpdErr) return { ok: false, error: parentUpdErr.message };
+      rewiredParents += 1;
+      byId.set(parentId, {
+        ...parent,
+        pdf_meta: { ...parentPm, contentBlocks: nextBlocks } as FormQuestion['pdf_meta'],
+      });
+    }
+
+    if (plan.ownerParentId != null) {
+      const ownerChildPm = {
+        ...((sourceChild.pdf_meta ?? {}) as PdfMetaLike),
+        isAdditionalBlockOf: plan.ownerParentId,
+      };
+      const { error: ownerErr } = await supabase
+        .from('skyline_form_questions')
+        .update({ pdf_meta: ownerChildPm })
+        .eq('id', plan.sharedChildId);
+      if (ownerErr) return { ok: false, error: ownerErr.message };
+    }
+  }
+
+  invalidateSupabaseReadCache();
+  const after = await diagnoseSharedContentBlockGrids(fid);
+  if ('ok' in after && after.ok === false) {
+    return { ok: false, error: after.error };
+  }
+  const afterDiag = after as SharedContentBlockDiagnosis;
+  if (afterDiag.sharedChildCount > 0) {
+    return {
+      ok: false,
+      error: `Repair incomplete: ${afterDiag.sharedChildCount} shared child reference(s) remain.`,
+      remainingDuplicates: afterDiag.sharedChildCount,
+      diagnosis: afterDiag,
+    };
+  }
+  return {
+    ok: true,
+    formId: fid,
+    clonesCreated,
+    rewiredParents,
+    duplicatesFound: d.sharedChildCount,
+    remainingDuplicates: 0,
+    diagnosis: afterDiag,
+    projectRef,
+  };
 }
 
 export async function updateInstanceRole(instanceId: number, roleContext: string): Promise<void> {

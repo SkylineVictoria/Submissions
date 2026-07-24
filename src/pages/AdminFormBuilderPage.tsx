@@ -1422,6 +1422,13 @@ export const AdminFormBuilderPage: React.FC = () => {
         await supabase.from('skyline_form_questions').update({ sort_order: (other.sort_order ?? 0) + 1 }).eq('id', other.id);
       }
     }
+
+    const sourcePm = (q.pdf_meta ?? {}) as Record<string, unknown>;
+    const sourceBlocks = Array.isArray(sourcePm.contentBlocks)
+      ? ([...(sourcePm.contentBlocks as ContentBlock[])] as ContentBlock[])
+      : [];
+
+    // Insert parent without shared contentBlock questionIds first — rewire after cloning children.
     const { data: newQ } = await supabase
       .from('skyline_form_questions')
       .insert({
@@ -1434,16 +1441,18 @@ export const AdminFormBuilderPage: React.FC = () => {
         sort_order: newSortOrder,
         role_visibility: q.role_visibility ?? {},
         role_editability: q.role_editability ?? {},
-        pdf_meta: q.pdf_meta ?? {},
+        pdf_meta: { ...sourcePm, contentBlocks: sourceBlocks.map((b) => ({ ...b, questionId: undefined })) },
       })
       .select('*')
       .single();
     if (!newQ) return;
+    const newParentId = (newQ as FormQuestion).id;
+
     const { data: opts } = await supabase.from('skyline_form_question_options').select('*').eq('question_id', q.id).order('sort_order');
     if ((opts as { value: string; label: string; sort_order: number }[])?.length) {
       await supabase.from('skyline_form_question_options').insert(
         (opts as { value: string; label: string; sort_order: number }[]).map((o) => ({
-          question_id: (newQ as FormQuestion).id,
+          question_id: newParentId,
           value: o.value,
           label: o.label,
           sort_order: o.sort_order,
@@ -1453,7 +1462,7 @@ export const AdminFormBuilderPage: React.FC = () => {
     const { data: rows } = await supabase.from('skyline_form_question_rows').select('*').eq('question_id', q.id).order('sort_order');
     for (const r of (rows as { row_label: string; row_help: string | null; row_image_url: string | null; row_meta: unknown; sort_order: number }[]) || []) {
       await supabase.from('skyline_form_question_rows').insert({
-        question_id: (newQ as FormQuestion).id,
+        question_id: newParentId,
         row_label: r.row_label,
         row_help: r.row_help,
         row_image_url: r.row_image_url,
@@ -1461,18 +1470,108 @@ export const AdminFormBuilderPage: React.FC = () => {
         sort_order: r.sort_order,
       });
     }
-    const nextQuestions = [...selectedSection.questions];
-    const insertAt = nextQuestions.findIndex((x) => x.id === questionId) + 1;
-    nextQuestions.splice(insertAt, 0, newQ as FormQuestion);
+
+    // Deep-clone content-block children (grid_table / short_text / long_text) so the copy
+    // does NOT share answer identity with the original table blocks.
+    const remappedBlocks: ContentBlock[] = [];
+    let nextChildSort =
+      selectedSection.questions.reduce((m, qq) => Math.max(m, qq.sort_order ?? 0), newSortOrder) + 1;
+    for (const block of sourceBlocks) {
+      const srcChildId = Number(block.questionId);
+      if (!Number.isFinite(srcChildId) || srcChildId <= 0) {
+        remappedBlocks.push({ ...block });
+        continue;
+      }
+      const srcChild = selectedSection.questions.find((x) => x.id === srcChildId);
+      if (!srcChild) {
+        remappedBlocks.push({ ...block, questionId: undefined });
+        continue;
+      }
+      const srcChildPm = { ...((srcChild.pdf_meta ?? {}) as Record<string, unknown>) };
+      srcChildPm.isAdditionalBlockOf = newParentId;
+      const { data: newChild } = await supabase
+        .from('skyline_form_questions')
+        .insert({
+          section_id: selectedSectionId,
+          type: srcChild.type,
+          code: srcChild.code,
+          label: srcChild.label,
+          help_text: srcChild.help_text,
+          required: srcChild.required ?? false,
+          sort_order: nextChildSort++,
+          role_visibility: srcChild.role_visibility ?? {},
+          role_editability: srcChild.role_editability ?? {},
+          pdf_meta: srcChildPm,
+        })
+        .select('*')
+        .single();
+      if (!newChild) {
+        remappedBlocks.push({ ...block, questionId: undefined });
+        continue;
+      }
+      const newChildId = (newChild as FormQuestion).id;
+      const { data: childOpts } = await supabase
+        .from('skyline_form_question_options')
+        .select('*')
+        .eq('question_id', srcChildId)
+        .order('sort_order');
+      if ((childOpts as { value: string; label: string; sort_order: number }[])?.length) {
+        await supabase.from('skyline_form_question_options').insert(
+          (childOpts as { value: string; label: string; sort_order: number }[]).map((o) => ({
+            question_id: newChildId,
+            value: o.value,
+            label: o.label,
+            sort_order: o.sort_order,
+          }))
+        );
+      }
+      const { data: childRows } = await supabase
+        .from('skyline_form_question_rows')
+        .select('*')
+        .eq('question_id', srcChildId)
+        .order('sort_order');
+      for (const r of (childRows as {
+        row_label: string;
+        row_help: string | null;
+        row_image_url: string | null;
+        row_meta: unknown;
+        sort_order: number;
+      }[]) || []) {
+        await supabase.from('skyline_form_question_rows').insert({
+          question_id: newChildId,
+          row_label: r.row_label,
+          row_help: r.row_help,
+          row_image_url: r.row_image_url,
+          row_meta: r.row_meta,
+          sort_order: r.sort_order,
+        });
+      }
+      remappedBlocks.push({ ...block, questionId: newChildId });
+    }
+
+    const finalPm = { ...sourcePm, contentBlocks: remappedBlocks };
+    await supabase.from('skyline_form_questions').update({ pdf_meta: finalPm as unknown as Json }).eq('id', newParentId);
+    const parentWithMeta = { ...(newQ as FormQuestion), pdf_meta: finalPm as unknown as FormQuestion['pdf_meta'] };
+
+    // Reload section questions so cloned children appear in local state.
+    const { data: refreshedQs } = await supabase
+      .from('skyline_form_questions')
+      .select('*')
+      .eq('section_id', selectedSectionId)
+      .order('sort_order');
+    const refreshedList = ((refreshedQs as FormQuestion[]) || []).map((qq) =>
+      qq.id === newParentId ? parentWithMeta : qq
+    );
+
     setSteps((prev) =>
       prev.map((s) => ({
         ...s,
         sections: s.sections.map((sec) =>
-          sec.id === selectedSectionId ? { ...sec, questions: nextQuestions } : sec
+          sec.id === selectedSectionId ? { ...sec, questions: refreshedList } : sec
         ),
       }))
     );
-    setEditingQuestionId((newQ as FormQuestion).id);
+    setEditingQuestionId(newParentId);
     setOpenQuestionMenuId(null);
   };
 
