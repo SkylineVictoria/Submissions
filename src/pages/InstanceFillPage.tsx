@@ -36,6 +36,18 @@ import type { FormRole } from '../utils/roleGuard';
 import { isRoleVisible, isRoleEditable } from '../utils/roleGuard';
 import { legacyGridCountsAsFilled, mergeGridTableAnswers } from '../utils/gridTableAnswers';
 import {
+  describeContentBlockRequiredGaps,
+  describeGridRequiredGap,
+  describeSignatureRequiredGap,
+  summarizeContentBlockGaps,
+} from '../utils/assessmentRequiredGaps';
+import {
+  formatAssessmentValidationError,
+  pickAssessmentValidationToast,
+  scrollToAssessmentQuestion,
+  type AssessmentQuestionErrorMeta,
+} from '../utils/assessmentValidationMessages';
+import {
   collectOrderedQuestionIdsFromSections,
   collectStepAnswerSaveTargets,
   groupSaveTargetsByQuestion,
@@ -629,6 +641,8 @@ export const InstanceFillPage: React.FC = () => {
   const [courseRunningAccess, setCourseRunningAccess] = useState<StudentAssessmentAccessResult | null>(null);
   const [studentCourseMutationAllowed, setStudentCourseMutationAllowed] = useState(true);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  /** Ordered top-level question failures from the last validation pass (for toast summary + scroll). */
+  const questionValidationMetaRef = useRef<AssessmentQuestionErrorMeta[]>([]);
   /** Debounce saves per answer key (questionId + rowId). A single shared timer causes grid tables to only persist the last row edited. */
   const saveTimeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const formScrollRef = useRef<HTMLFormElement>(null);
@@ -1529,6 +1543,26 @@ export const InstanceFillPage: React.FC = () => {
     (questionId: number, rowId: number | null, value: string | number | boolean | Record<string, unknown> | string[], immediate = false) => {
       const key = getAnswerKey(questionId, rowId);
       setAnswers((prev) => ({ ...prev, [key]: value }));
+      setErrors((prev) => {
+        if (!prev[`q-${questionId}`] && Object.keys(prev).length === 0) return prev;
+        const next = { ...prev };
+        delete next[`q-${questionId}`];
+        // Content-block children surface errors on the visible parent — clear that too.
+        if (template) {
+          for (const st of template.steps ?? []) {
+            for (const sec of st.sections) {
+              for (const pq of sec.questions) {
+                const pm = (pq.pdf_meta as Record<string, unknown>) || {};
+                const blocks = pm.contentBlocks as Array<{ questionId?: number }> | undefined;
+                if (Array.isArray(blocks) && blocks.some((b) => Number(b?.questionId) === questionId)) {
+                  delete next[`q-${pq.id}`];
+                }
+              }
+            }
+          }
+        }
+        return next;
+      });
       setQuestionSaveStatus((prev) => {
         if (prev[questionId] === 'saved' || prev[questionId] === 'error') {
           return { ...prev, [questionId]: 'idle' };
@@ -1549,7 +1583,7 @@ export const InstanceFillPage: React.FC = () => {
         debouncedSave(questionId, rowId, value);
       }
     },
-    [debouncedSave, id, clearPendingSave]
+    [debouncedSave, id, clearPendingSave, template]
   );
 
   const handleTrainerAssessmentChange = useCallback(
@@ -1971,6 +2005,7 @@ export const InstanceFillPage: React.FC = () => {
       if (!stepData) return {};
       if (isPostSummaryAssessmentTaskStep(template, stepData.id)) return {};
       const stepErrors: Record<string, string> = {};
+      const questionErrorMetas: AssessmentQuestionErrorMeta[] = [];
       const assessmentSubmissionHasDeclSig = stepData.sections.some(
         (s) => s.pdf_render_mode === 'assessment_submission' && s.questions.some((q) => q.code === 'student.declarationSignature')
       );
@@ -2195,6 +2230,10 @@ export const InstanceFillPage: React.FC = () => {
             ? true
             : submissionWave < 2 && !secondOrThirdHasDataAppendixVal;
 
+        const taskStyleSection =
+          section.pdf_render_mode === 'task_questions' || section.pdf_render_mode === 'assessment_tasks';
+        const qNumbers = taskStyleSection ? getTaskQuestionDisplayNumbers(section.questions) : null;
+
         for (const q of section.questions) {
           if (q.type === 'instruction_block' || q.type === 'page_break') continue;
           if ((q.pdf_meta as Record<string, unknown>)?.isAdditionalBlockOf) continue;
@@ -2211,14 +2250,33 @@ export const InstanceFillPage: React.FC = () => {
           const baseEditable = isQuestionEditableForRole((q.role_editability as Record<string, boolean>) || {}) && canRoleEditCurrentWorkflow;
           const editable = baseEditable && !isQuestionReadOnlyByTrainer(q.id);
           const effectiveEditable = editable && appendixFirstCycleEditableForStep;
-          const taskStyleSection =
-            section.pdf_render_mode === 'task_questions' || section.pdf_render_mode === 'assessment_tasks';
+          const displayQn = qNumbers?.get(q.id) ?? null;
           const trainerSat = getTrainerSatisfactoryForQuestion(section, q.id, trainerAssessments);
           const trainerReviewingTaskQuestions =
             (role === 'trainer' || role === 'office') &&
             taskStyleSection &&
             workflowStatus !== 'completed' &&
             workflowStatus !== 'failed';
+
+          const assignStudentRequiredError = (detail: {
+            fieldLabel?: string | null;
+            missingCount?: number | null;
+          }) => {
+            const message = formatAssessmentValidationError({
+              questionNumber: displayQn,
+              questionTitle: q.label,
+              fieldLabel: detail.fieldLabel,
+              missingCount: detail.missingCount,
+            });
+            stepErrors[`q-${q.id}`] = message;
+            questionErrorMetas.push({
+              errorKey: `q-${q.id}`,
+              questionId: q.id,
+              questionNumber: displayQn,
+              questionTitle: q.label,
+              message,
+            });
+          };
 
           // Trainer review on task questions: never require student fill; only Yes/No (or likert skip).
           if (trainerReviewingTaskQuestions && q.required) {
@@ -2238,29 +2296,34 @@ export const InstanceFillPage: React.FC = () => {
 
           if (q.type === 'grid_table' && q.rows?.length) {
             if (!trainerHasChecked && !isGridTableFilled(q, answers)) {
-              stepErrors[`q-${q.id}`] = `${q.label} is required`;
+              assignStudentRequiredError(describeGridRequiredGap(q, answers));
             }
             continue;
           }
           if (q.type === 'likert_5' && q.rows?.length) {
             if (!trainerHasChecked && !isLikertFilled(q, answers)) {
-              stepErrors[`q-${q.id}`] = `${q.label} is required`;
+              assignStudentRequiredError({ missingCount: 1 });
             }
             continue;
           }
           // Checklists are stored per-row (row_id) but are rendered as `single_choice` with rows.
           // Validate that every visible row has a selected option when required.
           if (q.type === 'single_choice' && q.rows?.length) {
-            let allRowsAnswered = true;
-            for (const r of q.rows) {
-              const rowKey = getAnswerKey(q.id, r.id);
+            let missingRows = 0;
+            let firstMissingRow = -1;
+            for (let ri = 0; ri < q.rows.length; ri++) {
+              const rowKey = getAnswerKey(q.id, q.rows[ri].id);
               if (!rowAnswerHasContent(answers[rowKey] as AnswersMap[string] | undefined)) {
-                allRowsAnswered = false;
-                break;
+                missingRows += 1;
+                if (firstMissingRow < 0) firstMissingRow = ri;
               }
             }
-            if (!trainerHasChecked && !allRowsAnswered) {
-              stepErrors[`q-${q.id}`] = `${q.label} is required`;
+            if (!trainerHasChecked && missingRows > 0) {
+              assignStudentRequiredError(
+                missingRows === 1
+                  ? { fieldLabel: `Row ${firstMissingRow + 1}`, missingCount: 1 }
+                  : { missingCount: missingRows }
+              );
             }
             continue;
           }
@@ -2268,7 +2331,18 @@ export const InstanceFillPage: React.FC = () => {
           const byBlocks = isRequiredSatisfiedByContentBlocks(q, section, answers);
           if (byBlocks !== null) {
             if (!trainerHasChecked && !byBlocks) {
-              stepErrors[`q-${q.id}`] = `${q.label} is required`;
+              const gaps = describeContentBlockRequiredGaps(
+                q,
+                section.questions,
+                answers,
+                (child, ans) => isGridTableFilled(child, ans as AnswersMap)
+              );
+              const summary = summarizeContentBlockGaps(gaps);
+              assignStudentRequiredError(
+                summary.missingCount > 0
+                  ? summary
+                  : { missingCount: 1 }
+              );
             }
             continue;
           }
@@ -2282,13 +2356,11 @@ export const InstanceFillPage: React.FC = () => {
             const sig = obj ? (obj.signature ?? obj.imageDataUrl ?? null) : (typeof val === 'string' ? val : null);
             const dateVal = obj ? String(obj.date ?? obj.signedAtDate ?? '') : '';
             const needsDate = ((q.pdf_meta as { showDateField?: boolean } | undefined)?.showDateField ?? false) === true;
-            if (!trainerHasChecked && !String(sig ?? '').trim()) {
-              stepErrors[`q-${q.id}`] = `${q.label} is required`;
-            } else if (!trainerHasChecked && needsDate && !String(dateVal ?? '').trim()) {
-              stepErrors[`q-${q.id}`] = `${q.label}: date is required`;
+            if (!trainerHasChecked && (!String(sig ?? '').trim() || (needsDate && !String(dateVal ?? '').trim()))) {
+              assignStudentRequiredError(describeSignatureRequiredGap(q, answers));
             }
           } else if (!trainerHasChecked && !rowAnswerHasContent(val as AnswersMap[string] | undefined)) {
-            stepErrors[`q-${q.id}`] = `${q.label} is required`;
+            assignStudentRequiredError({ missingCount: 1 });
           } else if (
             q.code === 'evaluation.evaluationDate' &&
             rowAnswerHasContent(val as AnswersMap[string] | undefined)
@@ -2311,6 +2383,7 @@ export const InstanceFillPage: React.FC = () => {
           }
         }
       }
+      questionValidationMetaRef.current = questionErrorMetas;
       return stepErrors;
     },
     [
@@ -2330,6 +2403,21 @@ export const InstanceFillPage: React.FC = () => {
       studentDeclarationDateMinIso,
       isAdminEditMode,
     ]
+  );
+
+  const presentStepValidationFeedback = useCallback(
+    (stepErrors: Record<string, string>, metas?: AssessmentQuestionErrorMeta[]) => {
+      setErrors(stepErrors);
+      const questionMetas = metas ?? questionValidationMetaRef.current;
+      if (questionMetas.length > 0) {
+        toast.error(pickAssessmentValidationToast(questionMetas));
+        scrollToAssessmentQuestion(questionMetas[0].questionId);
+        return;
+      }
+      const first = Object.values(stepErrors)[0];
+      if (first) toast.error(first);
+    },
+    []
   );
 
   /** Every content step must validate before trainer can submit (not only the last step). */
@@ -2356,16 +2444,18 @@ export const InstanceFillPage: React.FC = () => {
     const visibleStepsForValidation = template.steps ?? [];
     const totalSteps = 1 + visibleStepsForValidation.length;
     const merged: Record<string, string> = {};
+    const allMetas: AssessmentQuestionErrorMeta[] = [];
     for (let stepNumber = 2; stepNumber <= totalSteps; stepNumber++) {
       Object.assign(merged, getStepValidationErrors(stepNumber, { forSubmit: true }));
+      allMetas.push(...questionValidationMetaRef.current);
     }
-    setErrors(merged);
+    questionValidationMetaRef.current = allMetas;
     if (Object.keys(merged).length > 0) {
-      toast.error(Object.values(merged)[0]);
+      presentStepValidationFeedback(merged, allMetas.length > 0 ? allMetas : undefined);
       return false;
     }
     return true;
-  }, [template, role, getStepValidationErrors, resultsData, assessmentSummary]);
+  }, [template, role, getStepValidationErrors, resultsData, assessmentSummary, presentStepValidationFeedback]);
 
   const runFinalSubmitByRole = useCallback(async () => {
     if (!id) return;
@@ -2380,6 +2470,33 @@ export const InstanceFillPage: React.FC = () => {
         }
       }
       if (role === 'student' && workflowStatus === 'draft') {
+        const visibleStepsForValidation = getVisibleStepsForRole(template!, role);
+        const totalSteps = 1 + visibleStepsForValidation.length;
+        const merged: Record<string, string> = {};
+        const allMetas: AssessmentQuestionErrorMeta[] = [];
+        for (let stepNumber = 2; stepNumber <= totalSteps; stepNumber++) {
+          Object.assign(merged, getStepValidationErrors(stepNumber, { forSubmit: true }));
+          allMetas.push(...questionValidationMetaRef.current);
+        }
+        questionValidationMetaRef.current = allMetas;
+        if (Object.keys(merged).length > 0) {
+          presentStepValidationFeedback(merged, allMetas);
+          // Jump to the step that contains the first incomplete question when possible.
+          if (allMetas[0] && template) {
+            const firstId = allMetas[0].questionId;
+            const visible = getVisibleStepsForRole(template, role);
+            const stepIdx = visible.findIndex((st) =>
+              st.sections.some((sec) => sec.questions.some((q) => q.id === firstId))
+            );
+            if (stepIdx >= 0) {
+              setCurrentStep(stepIdx + 2);
+              window.setTimeout(() => scrollToAssessmentQuestion(firstId), 120);
+            }
+          }
+          setWorkflowSubmitting(false);
+          setConfirmConfig(null);
+          return;
+        }
         const handoff = await submitInstanceToTrainerViaRpc(id);
         if (!handoff.ok) {
           toast.error(handoff.error ?? 'Could not submit. Check your connection and try again.');
@@ -2555,6 +2672,8 @@ export const InstanceFillPage: React.FC = () => {
     trainerCanFinaliseReview,
     canRoleEditCurrentWorkflow,
     flushPendingDebouncedAnswerSaves,
+    getStepValidationErrors,
+    presentStepValidationFeedback,
   ]);
 
   const handleFinalSubmitByRole = useCallback(() => {
@@ -2616,12 +2735,12 @@ export const InstanceFillPage: React.FC = () => {
 
     const stepErrors = getStepValidationErrors(currentStep);
     if (Object.keys(stepErrors).length > 0) {
-      setErrors(stepErrors);
       if (isAdminEditMode) {
+        setErrors(stepErrors);
         setAdminSkipSavePrompt('validation');
         return;
       }
-      toast.error(Object.values(stepErrors)[0]);
+      presentStepValidationFeedback(stepErrors);
       return;
     }
 
@@ -2657,6 +2776,7 @@ export const InstanceFillPage: React.FC = () => {
       }
 
       setErrors({});
+      questionValidationMetaRef.current = [];
       setCurrentStep((s) => Math.min(totalSteps, s + 1));
       formScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -2673,6 +2793,7 @@ export const InstanceFillPage: React.FC = () => {
     canRoleEditCurrentWorkflow,
     saveStepAnswersSequential,
     flushPendingDebouncedAnswerSaves,
+    presentStepValidationFeedback,
   ]);
 
   if (loading) {
@@ -3895,7 +4016,19 @@ export const InstanceFillPage: React.FC = () => {
                                         return null;
                                       };
                                       return (
-                                        <div key={q.id} className="border border-gray-200 rounded-lg overflow-hidden">
+                                        <div
+                                          key={q.id}
+                                          data-question-id={q.id}
+                                          data-question-number={taskQNumbers.get(q.id) ?? undefined}
+                                          className={`border border-gray-200 rounded-lg overflow-hidden ${
+                                            errors[`q-${q.id}`] ? 'ring-2 ring-red-400 bg-red-50/40' : ''
+                                          }`}
+                                        >
+                                          {errors[`q-${q.id}`] ? (
+                                            <p className="bg-red-50 text-red-700 text-sm px-4 py-2 border-b border-red-200" role="alert">
+                                              {errors[`q-${q.id}`]}
+                                            </p>
+                                          ) : null}
                                           <div className="bg-gray-100 font-semibold text-gray-800 px-4 py-2 border-b border-gray-200">
                                             {(() => {
                                               const qn = taskQNumbers.get(q.id);
@@ -4109,8 +4242,15 @@ export const InstanceFillPage: React.FC = () => {
                                     const sat = trainerAssessments[q.id];
                                     const satYes = sat === 'yes';
                                     const satNo = sat === 'no';
-                                    return (
-                                      <tr key={q.id} className={qIdx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                                      return (
+                                        <tr
+                                          key={q.id}
+                                          data-question-id={q.id}
+                                          data-question-number={taskQNumbers.get(q.id) ?? undefined}
+                                          className={`${qIdx % 2 === 0 ? 'bg-white' : 'bg-gray-50'} ${
+                                            errors[`q-${q.id}`] ? 'ring-2 ring-inset ring-red-400' : ''
+                                          }`}
+                                        >
                                         <td className="p-3 border border-gray-300 align-top">
                                           {(() => {
                                             const pm = (q.pdf_meta as Record<string, unknown>) || {};
@@ -5144,8 +5284,15 @@ export const InstanceFillPage: React.FC = () => {
                                 const minDeclDate = getStudentResubDeclarationMinDate(firstTaskRdForDecl, submissionCount);
                                 const effectiveEditable = getStudentDeclarationEditable(editable, q.code ?? undefined);
                                 return (
-                                  <div key={q.id} className="space-y-2">
+                                  <div
+                                    key={q.id}
+                                    data-question-id={q.id}
+                                    className={`space-y-2 rounded-md ${errors[`q-${q.id}`] ? 'ring-2 ring-red-400 bg-red-50/40 p-2' : ''}`}
+                                  >
                                     <div className="text-sm font-semibold text-gray-700">{q.label}{q.required ? ' *' : ''}</div>
+                                    {errors[`q-${q.id}`] ? (
+                                      <p className="text-sm text-red-700" role="alert">{errors[`q-${q.id}`]}</p>
+                                    ) : null}
                                     <div className="flex items-center gap-4 flex-wrap">
                                       <div className="flex-1 min-w-[200px]">
                                         <SignatureField
@@ -5335,8 +5482,15 @@ export const InstanceFillPage: React.FC = () => {
                             const minDeclDate = getStudentResubDeclarationMinDate(firstTaskRdForDecl, submissionCount);
                             const effectiveEditable = getStudentDeclarationEditable(editable, q.code ?? undefined);
                             return (
-                              <div key={q.id} className="space-y-2">
+                              <div
+                                key={q.id}
+                                data-question-id={q.id}
+                                className={`space-y-2 rounded-md ${errors[`q-${q.id}`] ? 'ring-2 ring-red-400 bg-red-50/40 p-2' : ''}`}
+                              >
                                 <div className="text-sm font-semibold text-gray-700">{q.label}{q.required ? ' *' : ''}</div>
+                                {errors[`q-${q.id}`] ? (
+                                  <p className="text-sm text-red-700" role="alert">{errors[`q-${q.id}`]}</p>
+                                ) : null}
                                 <div className="flex items-center gap-4 flex-wrap">
                                   <div className="flex-1 min-w-[200px]">
                                     <SignatureField
