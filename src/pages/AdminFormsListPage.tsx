@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Plus, FileText, Edit, Eye, MoreVertical, Copy, ToggleLeft, ToggleRight, Search, Trash2 } from 'lucide-react';
-import { listFormsPaged, createForm, duplicateForm, updateForm, listCoursesPaged, getCoursesForForms, deleteFormSuperadmin, repairSharedContentBlockGrids } from '../lib/formEngine';
+import { listFormsPaged, createForm, duplicateForm, updateForm, listCoursesPaged, getCoursesForForms, deleteFormSuperadmin } from '../lib/formEngine';
 import type { Form } from '../types/database';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -33,7 +33,6 @@ export const AdminFormsListPage: React.FC = () => {
   const [creating, setCreating] = useState(false);
   const [previewing, setPreviewing] = useState<number | null>(null);
   const [duplicating, setDuplicating] = useState<number | null>(null);
-  const [repairingSharedTables, setRepairingSharedTables] = useState<number | null>(null);
   const [togglingActive, setTogglingActive] = useState<number | null>(null);
   const [openMenuId, setOpenMenuId] = useState<number | null>(null);
   const [openMenuPlacement, setOpenMenuPlacement] = useState<'up' | 'down'>('down');
@@ -125,45 +124,6 @@ export const AdminFormsListPage: React.FC = () => {
     if (duplicated) {
       setCurrentPage(1);
       await loadFormsPage(1, courseFilter ? Number(courseFilter) : undefined);
-    }
-  };
-
-  const handleRepairSharedTables = async (formId: number) => {
-    setOpenMenuId(null);
-    setRepairingSharedTables(formId);
-    try {
-      const res = await repairSharedContentBlockGrids(formId);
-      if (!res.ok) {
-        const remaining = res.remainingDuplicates ?? res.diagnosis?.sharedChildCount;
-        toast.error(
-          remaining != null && remaining > 0
-            ? `Repair failed — ${remaining} shared table reference(s) remain. ${res.error}`
-            : res.error
-        );
-        return;
-      }
-      if (res.remainingDuplicates > 0) {
-        toast.error(`Repair incomplete — ${res.remainingDuplicates} shared table reference(s) remain.`);
-        return;
-      }
-      const detail = {
-        formId: res.formId,
-        projectRef: res.projectRef,
-        duplicatesFound: res.duplicatesFound,
-        childrenCreated: res.clonesCreated,
-        parentsRemapped: res.rewiredParents,
-        remainingDuplicates: res.remainingDuplicates,
-      };
-      if (import.meta.env.DEV) console.info('[Repair shared tables]', detail);
-      if (res.clonesCreated === 0) {
-        toast.success(`No shared table blocks found — form ${formId} already OK (remaining: 0)`);
-      } else {
-        toast.success(
-          `Repaired form ${formId}: created ${res.clonesCreated} child table(s), remapped ${res.rewiredParents} parent(s), remaining shared refs: 0. Reload any open assessments.`
-        );
-      }
-    } finally {
-      setRepairingSharedTables(null);
     }
   };
 
@@ -417,26 +377,6 @@ export const AdminFormsListPage: React.FC = () => {
                               <Button
                                 variant="outline"
                                 size="sm"
-                                className="w-full justify-center"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  void handleRepairSharedTables(form.id);
-                                }}
-                                disabled={repairingSharedTables !== null}
-                                title="Fix duplicated questions that incorrectly share the same table"
-                              >
-                                {repairingSharedTables === form.id ? (
-                                  <Loader variant="dots" size="sm" inline className="mr-2" />
-                                ) : (
-                                  <FileText className="mr-2 h-4 w-4 shrink-0" />
-                                )}
-                                Repair shared tables
-                              </Button>
-                            ) : null}
-                            {canManageForms ? (
-                              <Button
-                                variant="outline"
-                                size="sm"
                                 className="w-full justify-center border-red-200 text-red-700 hover:bg-red-50"
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -579,21 +519,6 @@ export const AdminFormsListPage: React.FC = () => {
                                         >
                                           <Copy className="w-4 h-4" />
                                           Duplicate
-                                        </button>
-                                        <button
-                                          type="button"
-                                          className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--text)] hover:bg-gray-100 disabled:opacity-50"
-                                          onClick={() => void handleRepairSharedTables(form.id)}
-                                          role="menuitem"
-                                          disabled={repairingSharedTables === form.id}
-                                          title="Fix duplicated questions that incorrectly share the same table (answer cross-talk)"
-                                        >
-                                          {repairingSharedTables === form.id ? (
-                                            <Loader variant="dots" size="sm" inline />
-                                          ) : (
-                                            <FileText className="w-4 h-4 shrink-0" />
-                                          )}
-                                          Repair shared tables
                                         </button>
                                         <div className="my-1 h-px bg-gray-100" />
                                         <button

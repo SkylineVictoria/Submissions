@@ -10,6 +10,7 @@ import { isDidNotAttemptAnyFailure } from '../utils/assessmentRowUi';
 import { mergeSaveValuePreservingExisting } from '../utils/formAnswerMerge';
 import {
   findDuplicateAssessmentTaskStepsByRowId,
+  planFormScopedAssessmentTaskLabelRepair,
   type AssessmentTaskStepLink,
 } from './assessmentTaskSteps';
 import {
@@ -36,7 +37,11 @@ import {
 } from './contentBlockClone';
 
 export { buildContentBlockGridDiagnostic } from './contentBlockClone';
-export { nextAssessmentTaskLabel, nextAssessmentTaskNumber } from './assessmentTaskSteps';
+export {
+  nextAssessmentTaskLabel,
+  nextAssessmentTaskNumber,
+  planFormScopedAssessmentTaskLabelRepair,
+} from './assessmentTaskSteps';
 import type {
   Form,
   FormStep,
@@ -6323,54 +6328,113 @@ export async function duplicateForm(formId: number): Promise<Form | null> {
     }
   }
 
-  // Renumber assessment tasks in duplicated form (e.g. 1,2 -> 3,4)
-  const { data: newSteps } = await supabase.from('skyline_form_steps').select('id').eq('form_id', newFormId).order('sort_order');
-  const newStepIds = (newSteps as { id: number }[])?.map((s) => s.id) ?? [];
-  const { data: assessmentSecs } = await supabase
-    .from('skyline_form_sections')
+  // Assessment task labels (Assessment Task - 1, Assessment Task - 2, …) are LOCAL to each form.
+  // Rows and step titles were already cloned with the source labels — do NOT renumber them
+  // based on max(task number) inside the copy (that produced 3/4, 5/6, … across duplicates).
+
+  return newForm;
+}
+
+/**
+ * Read-only: plan form-scoped renumber of default "Assessment Task N" labels
+ * (e.g. bad duplicates that ended up as Task 3/4). Does not write.
+ */
+export async function diagnoseAssessmentTaskLabelScope(
+  formId: number
+): Promise<
+  | { ok: true; formId: number; plans: Array<{ id: number; from: string; to: string }> }
+  | { ok: false; error: string }
+> {
+  const fid = Number(formId);
+  if (!Number.isFinite(fid) || fid <= 0) return { ok: false, error: 'Invalid form id.' };
+  const rows = await loadAssessmentTaskRowsForForm(fid);
+  if (rows == null) return { ok: false, error: 'Assessment tasks grid not found on this form.' };
+  return { ok: true, formId: fid, plans: planFormScopedAssessmentTaskLabelRepair(rows) };
+}
+
+/**
+ * Opt-in repair: renumber default Assessment Task labels to 1..N by local sort_order.
+ * Preserves custom suffixes; never changes IDs, questions, answers, or other forms.
+ */
+export async function repairAssessmentTaskLabelsToLocalOrder(
+  formId: number
+): Promise<
+  | { ok: true; formId: number; updated: number; plans: Array<{ id: number; from: string; to: string }> }
+  | { ok: false; error: string }
+> {
+  const diagnosis = await diagnoseAssessmentTaskLabelScope(formId);
+  if (!diagnosis.ok) return diagnosis;
+  const { plans } = diagnosis;
+  if (plans.length === 0) {
+    return { ok: true, formId: diagnosis.formId, updated: 0, plans: [] };
+  }
+
+  const { data: steps } = await supabase
+    .from('skyline_form_steps')
     .select('id')
-    .in('step_id', newStepIds)
-    .eq('pdf_render_mode', 'assessment_tasks');
-  const assessmentSecId = (assessmentSecs as { id: number }[])?.[0]?.id;
-  if (assessmentSecId) {
-    const { data: assessmentQ } = await supabase
-      .from('skyline_form_questions')
-      .select('id')
-      .eq('section_id', assessmentSecId)
-      .eq('code', 'assessment.tasks')
-      .single();
-    if (assessmentQ) {
-      const qid = (assessmentQ as { id: number }).id;
-      const { data: taskRows } = await supabase
-        .from('skyline_form_question_rows')
-        .select('id, row_label, sort_order')
-        .eq('question_id', qid)
-        .order('sort_order');
-      const rows = (taskRows as { id: number; row_label: string; sort_order: number }[]) ?? [];
-      const match = /Assessment\s+Task\s*-?\s*(\d+)/i;
-      let maxNum = 0;
-      for (const r of rows) {
-        const m = r.row_label.match(match);
-        if (m) maxNum = Math.max(maxNum, parseInt(m[1], 10));
-      }
-      const startNew = maxNum + 1;
-      for (let i = 0; i < rows.length; i++) {
-        const newLabel = `Assessment Task - ${startNew + i}`;
-        await supabase.from('skyline_form_question_rows').update({ row_label: newLabel }).eq('id', rows[i].id);
-        const { data: sectionsWithRow } = await supabase
-          .from('skyline_form_sections')
-          .select('step_id')
-          .in('step_id', newStepIds)
-          .eq('assessment_task_row_id', rows[i].id);
-        const stepIdsToUpdate = [...new Set(((sectionsWithRow as { step_id: number }[]) ?? []).map((s) => s.step_id))];
-        for (const sid of stepIdsToUpdate) {
-          await supabase.from('skyline_form_steps').update({ title: newLabel }).eq('id', sid);
-        }
+    .eq('form_id', diagnosis.formId);
+  const stepIds = ((steps as { id: number }[]) ?? []).map((s) => s.id);
+
+  let updated = 0;
+  for (const plan of plans) {
+    const { error } = await supabase
+      .from('skyline_form_question_rows')
+      .update({ row_label: plan.to })
+      .eq('id', plan.id);
+    if (error) return { ok: false, error: error.message };
+    updated += 1;
+    if (stepIds.length > 0) {
+      const { data: linked } = await supabase
+        .from('skyline_form_sections')
+        .select('step_id')
+        .in('step_id', stepIds)
+        .eq('assessment_task_row_id', plan.id);
+      const linkedStepIds = [
+        ...new Set(((linked as { step_id: number }[]) ?? []).map((s) => s.step_id)),
+      ];
+      for (const sid of linkedStepIds) {
+        const { error: stepErr } = await supabase
+          .from('skyline_form_steps')
+          .update({ title: plan.to })
+          .eq('id', sid);
+        if (stepErr) return { ok: false, error: stepErr.message };
       }
     }
   }
+  return { ok: true, formId: diagnosis.formId, updated, plans };
+}
 
-  return newForm;
+async function loadAssessmentTaskRowsForForm(
+  formId: number
+): Promise<Array<{ id: number; row_label: string; sort_order: number }> | null> {
+  const { data: steps } = await supabase
+    .from('skyline_form_steps')
+    .select('id')
+    .eq('form_id', formId)
+    .order('sort_order');
+  const stepIds = ((steps as { id: number }[]) ?? []).map((s) => s.id);
+  if (stepIds.length === 0) return null;
+  const { data: assessmentSecs } = await supabase
+    .from('skyline_form_sections')
+    .select('id')
+    .in('step_id', stepIds)
+    .eq('pdf_render_mode', 'assessment_tasks');
+  const assessmentSecId = (assessmentSecs as { id: number }[])?.[0]?.id;
+  if (!assessmentSecId) return null;
+  const { data: assessmentQ } = await supabase
+    .from('skyline_form_questions')
+    .select('id')
+    .eq('section_id', assessmentSecId)
+    .eq('code', 'assessment.tasks')
+    .maybeSingle();
+  if (!assessmentQ) return null;
+  const qid = (assessmentQ as { id: number }).id;
+  const { data: taskRows } = await supabase
+    .from('skyline_form_question_rows')
+    .select('id, row_label, sort_order')
+    .eq('question_id', qid)
+    .order('sort_order');
+  return (taskRows as { id: number; row_label: string; sort_order: number }[]) ?? [];
 }
 
 /**
