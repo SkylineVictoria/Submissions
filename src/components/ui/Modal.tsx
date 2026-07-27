@@ -7,7 +7,7 @@ interface ModalProps {
   onClose: () => void;
   title: string;
   children: React.ReactNode;
-  size?: 'sm' | 'md' | 'lg' | 'xl';
+  size?: 'sm' | 'md' | 'lg' | 'xl' | 'full';
   /** Overlay z-index / tint (e.g. `!z-[60]` when opening above another modal). */
   overlayClassName?: string;
 }
@@ -32,6 +32,7 @@ export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, 
     md: 'w-full max-w-[100vw] sm:max-w-xl',
     lg: 'w-full max-w-[100vw] sm:max-w-3xl',
     xl: 'w-full max-w-[100vw] sm:max-w-5xl',
+    full: 'w-full max-w-[100vw] sm:w-[95vw] sm:max-w-7xl',
   };
 
   return (

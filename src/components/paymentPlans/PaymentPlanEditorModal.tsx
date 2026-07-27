@@ -9,7 +9,7 @@ import { Card } from '../ui/Card';
 import { Loader } from '../ui/Loader';
 import { toast } from '../../utils/toast';
 import {
-  addMonthsIso,
+  addPeriodIso,
   calculateEqualInstallments,
   calculateUnevenInstallments,
   formatCurrencyAud,
@@ -39,7 +39,7 @@ import type {
   PaymentPlanTemplateInstallment,
   StudentPaymentPlanSummary,
 } from '../../types/paymentPlans';
-import { CALCULATION_MODE_OPTIONS } from '../../types/paymentPlans';
+import { CALCULATION_MODE_OPTIONS, PAYMENT_PERIOD_OPTIONS } from '../../types/paymentPlans';
 import { PaymentPlanConfirmModal } from './PaymentPlanConfirmModal';
 import {
   PaymentPlanInstallmentsTable,
@@ -56,6 +56,7 @@ function defaultFormValues(): PaymentPlanFormValues {
     installment_count: '12',
     start_date: isoToPickerDate(isoToday()),
     calculation_mode: 'equal',
+    payment_period: 'monthly',
     regular_monthly_amount: '',
     notes: '',
   };
@@ -70,12 +71,12 @@ function templateToEditable(row: PaymentPlanTemplateInstallment): EditableTempla
   };
 }
 
-function buildCustomSkeleton(count: number, startDatePicker: string, total: number): EditableTemplateInstallmentRow[] {
+function buildCustomSkeleton(count: number, startDatePicker: string, total: number, period: PaymentPlanFormValues['payment_period'] = 'monthly'): EditableTemplateInstallmentRow[] {
   const startIso = pickerToIsoDate(startDatePicker);
   const base = count > 0 ? roundCurrency(total / count) : 0;
   return Array.from({ length: count }, (_, i) => ({
     installment_number: i + 1,
-    due_date: isoToPickerDate(addMonthsIso(startIso, i)),
+    due_date: isoToPickerDate(addPeriodIso(startIso, period, i)),
     amount: String(base),
   }));
 }
@@ -132,6 +133,7 @@ export const PaymentPlanEditorModal: React.FC<PaymentPlanEditorModalProps> = ({
         installment_count: String(plan.installment_count),
         start_date: isoToPickerDate(plan.start_date),
         calculation_mode: plan.calculation_mode,
+        payment_period: plan.payment_period ?? 'monthly',
         regular_monthly_amount:
           plan.regular_monthly_amount != null ? String(plan.regular_monthly_amount) : '',
         notes: plan.notes ?? '',
@@ -166,11 +168,11 @@ export const PaymentPlanEditorModal: React.FC<PaymentPlanEditorModalProps> = ({
     if (!totalAmount || !count) return null;
     try {
       if (form.calculation_mode === 'equal') {
-        calculateEqualInstallments(totalAmount, count, startIso);
+        calculateEqualInstallments(totalAmount, count, startIso, form.payment_period);
       } else {
         const regular = parseAmountInput(form.regular_monthly_amount);
         if (!regular) return 'Enter a regular monthly amount.';
-        calculateUnevenInstallments(totalAmount, count, startIso, regular);
+        calculateUnevenInstallments(totalAmount, count, startIso, regular, form.payment_period);
       }
       return null;
     } catch (e) {
@@ -189,6 +191,7 @@ export const PaymentPlanEditorModal: React.FC<PaymentPlanEditorModalProps> = ({
       installment_count: Number.isFinite(count) ? count : 0,
       start_date: pickerToIsoDate(form.start_date),
       calculation_mode: form.calculation_mode,
+      payment_period: form.payment_period,
       regular_monthly_amount:
         form.calculation_mode === 'uneven' ? parseAmountInput(form.regular_monthly_amount) : null,
       notes: form.notes.trim() || null,
@@ -362,7 +365,7 @@ export const PaymentPlanEditorModal: React.FC<PaymentPlanEditorModalProps> = ({
       toast.error('Enter total amount and installment count first.');
       return;
     }
-    const build = () => setInstallments(buildCustomSkeleton(count, form.start_date, totalAmount));
+    const build = () => setInstallments(buildCustomSkeleton(count, form.start_date, totalAmount, form.payment_period));
     if (hasInstallments) {
       openConfirm('overwrite', async () => {
         build();
@@ -383,12 +386,13 @@ export const PaymentPlanEditorModal: React.FC<PaymentPlanEditorModalProps> = ({
     const startIso = pickerToIsoDate(form.start_date);
     const preview =
       form.calculation_mode === 'equal'
-        ? calculateEqualInstallments(totalAmount, count, startIso)
+        ? calculateEqualInstallments(totalAmount, count, startIso, form.payment_period)
         : calculateUnevenInstallments(
             totalAmount,
             count,
             startIso,
-            parseAmountInput(form.regular_monthly_amount) ?? 0
+            parseAmountInput(form.regular_monthly_amount) ?? 0,
+            form.payment_period
           );
     setInstallments(
       preview.map((p) => ({
@@ -466,6 +470,15 @@ export const PaymentPlanEditorModal: React.FC<PaymentPlanEditorModalProps> = ({
                     patchForm({ calculation_mode: v as PaymentPlanFormValues['calculation_mode'] })
                   }
                   options={CALCULATION_MODE_OPTIONS}
+                  disabled={isConfirmed}
+                />
+                <Select
+                  label="Payment period"
+                  value={form.payment_period}
+                  onChange={(v) =>
+                    patchForm({ payment_period: v as PaymentPlanFormValues['payment_period'] })
+                  }
+                  options={PAYMENT_PERIOD_OPTIONS}
                   disabled={isConfirmed}
                 />
               </div>
@@ -641,6 +654,7 @@ export const PaymentPlanEditorModal: React.FC<PaymentPlanEditorModalProps> = ({
         assignment={viewAssignment}
         onClose={() => setViewAssignment(null)}
         onSaved={onSaved}
+        userId={userId}
       />
 
       <AssignPaymentPlanModal

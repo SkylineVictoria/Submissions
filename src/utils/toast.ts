@@ -45,9 +45,20 @@ class ToastManager {
 
 export const toastManager = new ToastManager();
 
+let lastErrorToastMessage = '';
+let lastErrorToastAt = 0;
+
 export const toast = {
   success: (message: string, duration?: number) => toastManager.show(message, 'success', duration),
-  error: (message: string, duration?: number) => toastManager.show(message, 'error', duration),
+  error: (message: string, duration?: number) => {
+    const now = Date.now();
+    if (message === lastErrorToastMessage && now - lastErrorToastAt < 2500) {
+      return '';
+    }
+    lastErrorToastMessage = message;
+    lastErrorToastAt = now;
+    return toastManager.show(message, 'error', duration);
+  },
   info: (message: string, duration?: number) => toastManager.show(message, 'info', duration),
   persistent: (message: string, type: Toast['type'] = 'info') => toastManager.show(message, type, undefined, true),
   update: (id: string, message: string, type?: Toast['type']) => toastManager.update(id, message, type),

@@ -134,6 +134,7 @@ export const StudentPaymentPlansSection: React.FC<StudentPaymentPlansSectionProp
         assignment={viewAssignment}
         onClose={() => setViewAssignment(null)}
         onSaved={() => void load()}
+        userId={userId}
       />
     </>
   );

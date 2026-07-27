@@ -2,6 +2,8 @@ export type PaymentPlanStatus = 'draft' | 'confirmed';
 
 export type PaymentPlanCalculationMode = 'equal' | 'uneven' | 'custom';
 
+export type PaymentPeriod = 'weekly' | 'fortnightly' | 'monthly' | 'custom';
+
 export type PaymentPlanInstallmentStatus = 'pending' | 'paid' | 'partial' | 'overdue' | 'waived';
 
 /** Reusable payment plan template (like a course). */
@@ -13,6 +15,7 @@ export interface PaymentPlanSummary {
   installment_count: number;
   start_date: string;
   calculation_mode: PaymentPlanCalculationMode;
+  payment_period: PaymentPeriod;
   regular_monthly_amount: number | null;
   notes: string | null;
   status: PaymentPlanStatus;
@@ -49,17 +52,29 @@ export interface StudentPaymentPlanSummary {
   assignment_status: 'active' | 'inactive';
   assigned_at: string;
   assigned_by: number | null;
+  template_total_amount: number | null;
+  assigned_total_amount: number | null;
+  adjustment_amount: number;
+  adjustment_reason: string | null;
+  payment_period: PaymentPeriod;
+  is_finalized: boolean;
+  finalized_at: string | null;
   plan_name: string;
   total_amount: number;
+  template_plan_total: number | null;
   currency: string;
+  /** Student-specific instalment count (may differ from template; locked after finalisation). */
   installment_count: number;
+  template_installment_count: number | null;
   calculation_mode: PaymentPlanCalculationMode;
+  template_payment_period: PaymentPeriod | null;
   plan_status: PaymentPlanStatus;
   display_student_name: string | null;
   display_student_email: string | null;
   installment_row_count: number;
   installment_total: number;
   total_paid: number;
+  total_waived: number;
   paid_count: number;
   pending_count: number;
 }
@@ -75,6 +90,9 @@ export interface StudentPaymentPlanInstallment {
   paid_amount: number;
   payment_date: string | null;
   notes: string | null;
+  waived_amount: number;
+  waiver_reason: string | null;
+  payment_reference: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -86,6 +104,7 @@ export interface PaymentPlanFormValues {
   installment_count: string;
   start_date: string;
   calculation_mode: PaymentPlanCalculationMode;
+  payment_period: PaymentPeriod;
   regular_monthly_amount: string;
   notes: string;
 }
@@ -118,16 +137,23 @@ export const PAYMENT_PLAN_CONFIRM_MESSAGES: Record<PaymentPlanConfirmAction, str
 
 export const INSTALLMENT_STATUS_OPTIONS: { value: PaymentPlanInstallmentStatus; label: string }[] = [
   { value: 'pending', label: 'Pending' },
-  { value: 'paid', label: 'Paid' },
   { value: 'partial', label: 'Partial' },
-  { value: 'overdue', label: 'Overdue' },
+  { value: 'paid', label: 'Paid' },
   { value: 'waived', label: 'Waived' },
+  { value: 'overdue', label: 'Overdue' },
 ];
 
 export const CALCULATION_MODE_OPTIONS: { value: PaymentPlanCalculationMode; label: string }[] = [
   { value: 'equal', label: 'Equally divided' },
   { value: 'uneven', label: 'Uneven monthly amount' },
   { value: 'custom', label: 'Custom editable installments' },
+];
+
+export const PAYMENT_PERIOD_OPTIONS: { value: PaymentPeriod; label: string }[] = [
+  { value: 'weekly', label: 'Weekly' },
+  { value: 'fortnightly', label: 'Fortnightly' },
+  { value: 'monthly', label: 'Monthly' },
+  { value: 'custom', label: 'Custom' },
 ];
 
 /** Minimal student context for payment plan assignment UI. */
@@ -144,6 +170,7 @@ export interface AssignInstallmentDraft {
   amount: string;
   waived: boolean;
   notes: string;
+  /** @deprecated Assignment never records payment; kept for type compatibility. */
   record_payment: boolean;
   paid_amount: string;
   payment_date: string;
@@ -158,7 +185,50 @@ export interface AssignInstallmentInput {
   paid_amount: number;
   payment_date: string | null;
   notes: string | null;
+  waived_amount?: number;
+  waiver_reason?: string | null;
+  payment_reference?: string | null;
 }
 
 /** @deprecated Use PaymentPlanTemplateInstallment for template rows. */
 export type PaymentPlanInstallment = StudentPaymentPlanInstallment & { payment_plan_id?: number };
+
+// ---------------------------------------------------------------------------
+// Payment receipt linking (per payment event)
+// ---------------------------------------------------------------------------
+
+/** Immutable payment event for an instalment (supports multiple partial payments). */
+export interface StudentPaymentPlanInstallmentTransaction {
+  id: number;
+  installment_id: number;
+  student_payment_plan_id: number;
+  student_id: number;
+  /** Cash amount of this payment event (not the instalment running total). */
+  amount: number;
+  status: 'paid' | 'partial' | 'waived';
+  payment_date: string | null;
+  payment_reference: string | null;
+  notes: string | null;
+  waived_amount: number;
+  waiver_reason: string | null;
+  created_by: number | null;
+  created_at: string;
+}
+
+export interface PaymentReceipt {
+  id: number;
+  payment_transaction_id: number;
+  student_id: number;
+  sharepoint_item_id: string;
+  sharepoint_drive_id: string;
+  sharepoint_site_id: string;
+  file_name: string;
+  original_file_name: string;
+  mime_type: string;
+  file_size: number;
+  web_url: string;
+  sharepoint_path: string;
+  uploaded_by: number | null;
+  uploaded_at: string;
+  is_active: boolean;
+}
