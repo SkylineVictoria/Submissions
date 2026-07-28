@@ -46,6 +46,12 @@ import { TaskInstructionsModal, type TaskInstructionsData } from '../components/
 import { SectionInstructionsEditor } from '../components/form-fill/SectionInstructionsEditor';
 import { AdditionalInstructionsEditor } from '../components/form-fill/AdditionalInstructionsEditor';
 import { QuestionInstructionEditor } from '../components/form-fill/QuestionInstructionEditor';
+import {
+  buildQuestionDuplicateInsertPayload,
+  applyQuestionFieldUpdate,
+  deepCloneJson,
+} from '../lib/questionDuplicate';
+import { remapPdfMetaQuestionIds } from '../lib/contentBlockClone';
 import { getQuestionInstructionListLabel } from '../utils/questionInstructionLabel';
 import { getTaskQuestionDisplayNumbers } from '../lib/taskQuestionsNumbering';
 import { TableLayoutSelect } from '../components/form-fill/TableLayoutSelect';
@@ -1127,29 +1133,30 @@ export const AdminFormBuilderPage: React.FC = () => {
       if (!newSec) continue;
       const newSecWithQs = { ...newSec, questions: [] as FormQuestion[] };
       const { data: questions } = await supabase.from('skyline_form_questions').select('*').eq('section_id', sec.id).order('sort_order');
+      const questionIdMap = new Map<number, number>();
       for (const q of (questions as FormQuestion[]) || []) {
+        const insertPayload = buildQuestionDuplicateInsertPayload(q, {
+          sectionId: (newSec as FormSection).id,
+          sortOrder: q.sort_order ?? 0,
+          clearContentBlockQuestionIds: false,
+          clearCode: false,
+        });
+        // Keep original labels when duplicating a whole assessment task step.
+        insertPayload.label = q.label;
+        insertPayload.code = q.code ?? null;
         const { data: newQ } = await supabase
           .from('skyline_form_questions')
-          .insert({
-            section_id: (newSec as FormSection).id,
-            type: q.type,
-            code: q.code,
-            label: q.label,
-            help_text: q.help_text,
-            required: q.required ?? false,
-            sort_order: q.sort_order,
-            role_visibility: q.role_visibility ?? {},
-            role_editability: q.role_editability ?? {},
-            pdf_meta: q.pdf_meta ?? {},
-          })
+          .insert(insertPayload)
           .select('*')
           .single();
         if (!newQ) continue;
+        const newQuestionId = (newQ as FormQuestion).id;
+        questionIdMap.set(q.id, newQuestionId);
         const { data: opts } = await supabase.from('skyline_form_question_options').select('*').eq('question_id', q.id).order('sort_order');
         if ((opts as { value: string; label: string; sort_order: number }[])?.length) {
           await supabase.from('skyline_form_question_options').insert(
             (opts as { value: string; label: string; sort_order: number }[]).map((o) => ({
-              question_id: (newQ as FormQuestion).id,
+              question_id: newQuestionId,
               value: o.value,
               label: o.label,
               sort_order: o.sort_order,
@@ -1159,15 +1166,22 @@ export const AdminFormBuilderPage: React.FC = () => {
         const { data: rows } = await supabase.from('skyline_form_question_rows').select('*').eq('question_id', q.id).order('sort_order');
         for (const r of (rows as { row_label: string; row_help: string | null; row_image_url: string | null; row_meta: unknown; sort_order: number }[]) || []) {
           await supabase.from('skyline_form_question_rows').insert({
-            question_id: (newQ as FormQuestion).id,
+            question_id: newQuestionId,
             row_label: r.row_label,
             row_help: r.row_help,
             row_image_url: r.row_image_url,
-            row_meta: r.row_meta,
+            row_meta: deepCloneJson(r.row_meta ?? {}),
             sort_order: r.sort_order,
           });
         }
         newSecWithQs.questions.push(newQ as FormQuestion);
+      }
+      // Rewire contentBlocks / isAdditionalBlockOf onto the newly inserted question IDs.
+      for (const cq of newSecWithQs.questions) {
+        const remapped = remapPdfMetaQuestionIds(cq.pdf_meta, questionIdMap);
+        if (!remapped) continue;
+        await supabase.from('skyline_form_questions').update({ pdf_meta: remapped as unknown as Json }).eq('id', cq.id);
+        cq.pdf_meta = remapped as unknown as FormQuestion['pdf_meta'];
       }
       newStepWithSections.sections.push(newSecWithQs);
     }
@@ -1416,6 +1430,7 @@ export const AdminFormBuilderPage: React.FC = () => {
     if (!selectedSectionId || !selectedSection) return;
     const q = selectedSection.questions.find((x) => x.id === questionId);
     if (!q) return;
+    const sourceId = q.id;
     const newSortOrder = (q.sort_order ?? 0) + 1;
     for (const other of selectedSection.questions) {
       if ((other.sort_order ?? 0) >= newSortOrder) {
@@ -1423,32 +1438,36 @@ export const AdminFormBuilderPage: React.FC = () => {
       }
     }
 
-    const sourcePm = (q.pdf_meta ?? {}) as Record<string, unknown>;
+    const sourcePm = deepCloneJson((q.pdf_meta ?? {}) as Record<string, unknown>);
     const sourceBlocks = Array.isArray(sourcePm.contentBlocks)
-      ? ([...(sourcePm.contentBlocks as ContentBlock[])] as ContentBlock[])
+      ? (sourcePm.contentBlocks as ContentBlock[])
       : [];
 
+    const insertPayload = buildQuestionDuplicateInsertPayload(q, {
+      sectionId: selectedSectionId,
+      sortOrder: newSortOrder,
+      clearContentBlockQuestionIds: true,
+      // Keep system codes only for prebuilt checklist questions; free-text questions must not share codes.
+      clearCode: !isPrebuiltQuestion(q),
+    });
+
     // Insert parent without shared contentBlock questionIds first — rewire after cloning children.
-    const { data: newQ } = await supabase
+    const { data: newQ, error: insertErr } = await supabase
       .from('skyline_form_questions')
-      .insert({
-        section_id: selectedSectionId,
-        type: q.type,
-        code: q.code,
-        label: `${(q.label || q.type || 'Question').replace(/\s*\(Copy\)\s*$/, '')} (Copy)`,
-        help_text: q.help_text,
-        required: q.required ?? false,
-        sort_order: newSortOrder,
-        role_visibility: q.role_visibility ?? {},
-        role_editability: q.role_editability ?? {},
-        pdf_meta: { ...sourcePm, contentBlocks: sourceBlocks.map((b) => ({ ...b, questionId: undefined })) },
-      })
+      .insert(insertPayload)
       .select('*')
       .single();
-    if (!newQ) return;
+    if (insertErr || !newQ) {
+      console.error('duplicateQuestion: insert failed', insertErr);
+      return;
+    }
     const newParentId = (newQ as FormQuestion).id;
+    if (!Number.isFinite(newParentId) || newParentId <= 0 || newParentId === sourceId) {
+      console.error('duplicateQuestion: invalid new id', { sourceId, newParentId });
+      return;
+    }
 
-    const { data: opts } = await supabase.from('skyline_form_question_options').select('*').eq('question_id', q.id).order('sort_order');
+    const { data: opts } = await supabase.from('skyline_form_question_options').select('*').eq('question_id', sourceId).order('sort_order');
     if ((opts as { value: string; label: string; sort_order: number }[])?.length) {
       await supabase.from('skyline_form_question_options').insert(
         (opts as { value: string; label: string; sort_order: number }[]).map((o) => ({
@@ -1459,14 +1478,14 @@ export const AdminFormBuilderPage: React.FC = () => {
         }))
       );
     }
-    const { data: rows } = await supabase.from('skyline_form_question_rows').select('*').eq('question_id', q.id).order('sort_order');
+    const { data: rows } = await supabase.from('skyline_form_question_rows').select('*').eq('question_id', sourceId).order('sort_order');
     for (const r of (rows as { row_label: string; row_help: string | null; row_image_url: string | null; row_meta: unknown; sort_order: number }[]) || []) {
       await supabase.from('skyline_form_question_rows').insert({
         question_id: newParentId,
         row_label: r.row_label,
         row_help: r.row_help,
         row_image_url: r.row_image_url,
-        row_meta: r.row_meta,
+        row_meta: deepCloneJson(r.row_meta ?? {}),
         sort_order: r.sort_order,
       });
     }
@@ -1479,34 +1498,34 @@ export const AdminFormBuilderPage: React.FC = () => {
     for (const block of sourceBlocks) {
       const srcChildId = Number(block.questionId);
       if (!Number.isFinite(srcChildId) || srcChildId <= 0) {
-        remappedBlocks.push({ ...block });
+        remappedBlocks.push(deepCloneJson(block));
         continue;
       }
       const srcChild = selectedSection.questions.find((x) => x.id === srcChildId);
       if (!srcChild) {
-        remappedBlocks.push({ ...block, questionId: undefined });
+        remappedBlocks.push({ ...deepCloneJson(block), questionId: undefined });
         continue;
       }
-      const srcChildPm = { ...((srcChild.pdf_meta ?? {}) as Record<string, unknown>) };
+      const srcChildPm = deepCloneJson((srcChild.pdf_meta ?? {}) as Record<string, unknown>);
       srcChildPm.isAdditionalBlockOf = newParentId;
       const { data: newChild } = await supabase
         .from('skyline_form_questions')
         .insert({
           section_id: selectedSectionId,
           type: srcChild.type,
-          code: srcChild.code,
+          code: null,
           label: srcChild.label,
           help_text: srcChild.help_text,
           required: srcChild.required ?? false,
           sort_order: nextChildSort++,
-          role_visibility: srcChild.role_visibility ?? {},
-          role_editability: srcChild.role_editability ?? {},
+          role_visibility: deepCloneJson(srcChild.role_visibility ?? {}),
+          role_editability: deepCloneJson(srcChild.role_editability ?? {}),
           pdf_meta: srcChildPm,
         })
         .select('*')
         .single();
       if (!newChild) {
-        remappedBlocks.push({ ...block, questionId: undefined });
+        remappedBlocks.push({ ...deepCloneJson(block), questionId: undefined });
         continue;
       }
       const newChildId = (newChild as FormQuestion).id;
@@ -1542,26 +1561,24 @@ export const AdminFormBuilderPage: React.FC = () => {
           row_label: r.row_label,
           row_help: r.row_help,
           row_image_url: r.row_image_url,
-          row_meta: r.row_meta,
+          row_meta: deepCloneJson(r.row_meta ?? {}),
           sort_order: r.sort_order,
         });
       }
-      remappedBlocks.push({ ...block, questionId: newChildId });
+      remappedBlocks.push({ ...deepCloneJson(block), questionId: newChildId });
     }
 
     const finalPm = { ...sourcePm, contentBlocks: remappedBlocks };
     await supabase.from('skyline_form_questions').update({ pdf_meta: finalPm as unknown as Json }).eq('id', newParentId);
-    const parentWithMeta = { ...(newQ as FormQuestion), pdf_meta: finalPm as unknown as FormQuestion['pdf_meta'] };
 
-    // Reload section questions so cloned children appear in local state.
+    // Reload section questions from DB so every row (including nested JSON) is a fresh object.
+    // Do NOT re-attach source pdf_meta references into React state.
     const { data: refreshedQs } = await supabase
       .from('skyline_form_questions')
       .select('*')
       .eq('section_id', selectedSectionId)
       .order('sort_order');
-    const refreshedList = ((refreshedQs as FormQuestion[]) || []).map((qq) =>
-      qq.id === newParentId ? parentWithMeta : qq
-    );
+    const refreshedList = deepCloneJson(((refreshedQs as FormQuestion[]) || []).map((qq) => ({ ...qq })));
 
     setSteps((prev) =>
       prev.map((s) => ({
@@ -1586,7 +1603,7 @@ export const AdminFormBuilderPage: React.FC = () => {
     const maxSort = selectedSection?.questions?.length
       ? Math.max(...selectedSection.questions.map((q) => (q.sort_order ?? 0) as number), -1)
       : -1;
-    const parentPm = parentQuestion.pdf_meta as Record<string, unknown> | undefined;
+    const parentPm = deepCloneJson((parentQuestion.pdf_meta as Record<string, unknown> | undefined) || {});
 
     let insertPayload: Record<string, unknown>;
     if (blockType === 'grid_table') {
@@ -1696,20 +1713,33 @@ export const AdminFormBuilderPage: React.FC = () => {
   }, []);
 
   const updateQuestion = useCallback((questionId: number, updates: Partial<FormQuestion>) => {
+    if (!Number.isFinite(questionId) || questionId <= 0) return;
+
+    // Deep-clone nested JSON in the patch so callers cannot accidentally share
+    // pdf_meta / role maps across questions after a shallow duplicate.
+    const safeUpdates = { ...updates } as Partial<FormQuestion>;
+    if (safeUpdates.pdf_meta != null) {
+      safeUpdates.pdf_meta = deepCloneJson(safeUpdates.pdf_meta) as FormQuestion['pdf_meta'];
+    }
+    if (safeUpdates.role_visibility != null) {
+      safeUpdates.role_visibility = deepCloneJson(safeUpdates.role_visibility) as FormQuestion['role_visibility'];
+    }
+    if (safeUpdates.role_editability != null) {
+      safeUpdates.role_editability = deepCloneJson(safeUpdates.role_editability) as FormQuestion['role_editability'];
+    }
+
     setSteps((prev) =>
       prev.map((s) => ({
         ...s,
         sections: s.sections.map((sec) => ({
           ...sec,
-          questions: sec.questions.map((q) =>
-            q.id === questionId ? { ...q, ...updates } : q
-          ),
+          questions: applyQuestionFieldUpdate(sec.questions, questionId, safeUpdates),
         })),
       }))
     );
     questionPendingUpdates.current[questionId] = {
       ...questionPendingUpdates.current[questionId],
-      ...updates,
+      ...safeUpdates,
     };
     const existing = questionSaveTimers.current[questionId];
     if (existing) clearTimeout(existing);
@@ -2135,7 +2165,8 @@ export const AdminFormBuilderPage: React.FC = () => {
               }
               const rv = (q.role_visibility as Record<string, boolean>) || {};
               const re = (q.role_editability as Record<string, boolean>) || {};
-              const pm = (q.pdf_meta as Record<string, unknown>) || {};
+              // Always work from a deep clone so editor spreads cannot mutate another question's nested pdf_meta.
+              const pm = deepCloneJson(((q.pdf_meta as Record<string, unknown>) || {}));
               const gridColumnsMeta = getGridColumnsMeta(pm);
               const questionWordLimit = normalizeWordLimit(pm.wordLimit);
               const gridColumnWordLimits = gridColumnsMeta.map((_, idx) =>
@@ -2144,7 +2175,7 @@ export const AdminFormBuilderPage: React.FC = () => {
               const layout = (pm.layout as string) || 'no_image';
               const isNoImageNoHeader = layout === 'no_image_no_header';
               return (
-                <Card>
+                <Card key={q.id}>
                   <h3 className="font-bold mb-4">Edit Question</h3>
                   <div className="space-y-4">
                     {q.type === 'page_break' ? (
@@ -2154,6 +2185,7 @@ export const AdminFormBuilderPage: React.FC = () => {
                     ) : (
                       <>
                         <Textarea
+                          key={`label-${q.id}`}
                           label="Label"
                           value={q.label}
                           onChange={(e) => updateQuestion(q.id, { label: e.target.value })}
@@ -2162,6 +2194,7 @@ export const AdminFormBuilderPage: React.FC = () => {
                           placeholder="Use multiple lines for sub-questions (e.g. 11.1, 11.2)"
                         />
                         <Textarea
+                          key={`help-${q.id}`}
                           label="Help Text"
                           value={q.help_text || ''}
                           onChange={(e) => updateQuestion(q.id, { help_text: e.target.value })}

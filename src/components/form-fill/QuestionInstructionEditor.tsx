@@ -4,6 +4,7 @@ import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { TaskInstructionsModal, type TaskInstructionsData } from './TaskInstructionsModal';
 import { getQuestionInstructionListLabel, getQuestionInstructionsData } from '../../utils/questionInstructionLabel';
+import { deepCloneJson } from '../../lib/questionDuplicate';
 import type { FormQuestion } from '../../types/database';
 import type { Json } from '../../types/database';
 
@@ -35,7 +36,10 @@ export function QuestionInstructionEditor({
   };
 
   const handleSave = async (data: TaskInstructionsData) => {
-    const pm = { ...((question.pdf_meta as Record<string, unknown>) || {}), instructions: data };
+    const pm = {
+      ...deepCloneJson(((question.pdf_meta as Record<string, unknown>) || {})),
+      instructions: deepCloneJson(data),
+    };
     const label = getQuestionInstructionListLabel({ ...question, pdf_meta: pm });
     const updates: Partial<FormQuestion> = { pdf_meta: pm as unknown as Json, label };
     await supabase.from('skyline_form_questions').update(updates).eq('id', question.id);
