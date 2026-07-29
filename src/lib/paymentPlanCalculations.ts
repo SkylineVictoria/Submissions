@@ -340,9 +340,16 @@ export function assignmentScheduleHasManualEdits(
   return false;
 }
 
-export function outstandingAmount(amountDue: number, paidAmount: number, status?: PaymentPlanInstallmentStatus): number {
+export function outstandingAmount(
+  amountDue: number,
+  paidAmount: number,
+  status?: PaymentPlanInstallmentStatus,
+  waivedAmount = 0
+): number {
   if (status === 'waived') return 0;
-  return roundCurrency(Math.max(0, roundCurrency(amountDue) - roundCurrency(paidAmount)));
+  return roundCurrency(
+    Math.max(0, roundCurrency(amountDue) - roundCurrency(paidAmount) - roundCurrency(waivedAmount))
+  );
 }
 
 export function isInformationalOverdue(

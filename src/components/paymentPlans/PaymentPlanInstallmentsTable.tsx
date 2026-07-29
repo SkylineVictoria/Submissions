@@ -62,6 +62,8 @@ interface StudentInstallmentsTableProps {
   rows: EditableStudentInstallmentRow[];
   currency: string;
   isDraft: boolean;
+  /** When true, cash fields are read-only; use Record Payment instead. Waiver still editable. */
+  scheduleView?: boolean;
   onChangeRow: (index: number, patch: Partial<EditableStudentInstallmentRow>) => void;
   onReorderPending?: (fromIndex: number, toIndex: number) => void;
 }
@@ -73,6 +75,7 @@ function SortableStudentRow({
   index,
   currency,
   isDraft,
+  scheduleView,
   canDrag,
   onChangeRow,
 }: {
@@ -80,6 +83,7 @@ function SortableStudentRow({
   index: number;
   currency: string;
   isDraft: boolean;
+  scheduleView: boolean;
   canDrag: boolean;
   onChangeRow: (index: number, patch: Partial<EditableStudentInstallmentRow>) => void;
 }) {
@@ -98,8 +102,10 @@ function SortableStudentRow({
 
   const paid = Number(row.paid_amount) || 0;
   const due = Number(row.amount) || 0;
-  const outstanding = outstandingAmount(due, paid, row.status);
+  const waived = Number(row.waived_amount) || 0;
+  const outstanding = outstandingAmount(due, paid, row.status, waived);
   const overdueHint = isInformationalOverdue(row.status, pickerToIsoDate(row.due_date));
+  const cashLocked = scheduleView;
 
   return (
     <tr ref={setNodeRef} style={style} className="border-b border-gray-100">
@@ -147,51 +153,82 @@ function SortableStudentRow({
         )}
       </td>
       <td className="px-2 py-2 min-w-[120px]">
-        <Select
-          value={row.status}
-          onChange={(v) => onChangeRow(index, { status: v as PaymentPlanInstallmentStatus })}
-          options={INSTALLMENT_STATUS_OPTIONS}
-          compact
-        />
+        {cashLocked ? (
+          <Select
+            value={row.status}
+            onChange={(v) => onChangeRow(index, { status: v as PaymentPlanInstallmentStatus })}
+            options={INSTALLMENT_STATUS_OPTIONS.filter((o) => {
+              // Cash statuses are derived from allocations — only allow waiver transitions here.
+              if (o.value === 'waived') return true;
+              if (o.value === row.status) return true;
+              if (row.status === 'waived' && o.value === 'pending' && paid <= 0) return true;
+              return false;
+            })}
+            compact
+          />
+        ) : (
+          <Select
+            value={row.status}
+            onChange={(v) => onChangeRow(index, { status: v as PaymentPlanInstallmentStatus })}
+            options={INSTALLMENT_STATUS_OPTIONS}
+            compact
+          />
+        )}
       </td>
-      <td className="px-2 py-2 min-w-[100px]">
-        <Input
-          type="number"
-          step="0.01"
-          min="0"
-          value={row.paid_amount}
-          onChange={(e) => onChangeRow(index, { paid_amount: e.target.value })}
-        />
+      <td className="px-2 py-2 min-w-[100px] text-right tabular-nums">
+        {cashLocked ? (
+          formatCurrencyAud(paid, currency)
+        ) : (
+          <Input
+            type="number"
+            step="0.01"
+            min="0"
+            value={row.paid_amount}
+            onChange={(e) => onChangeRow(index, { paid_amount: e.target.value })}
+          />
+        )}
       </td>
       <td className="px-2 py-2 min-w-[100px] text-right tabular-nums">
         {formatCurrencyAud(outstanding, currency)}
       </td>
       <td className="px-2 py-2 min-w-[130px]">
-        <DatePicker
-          value={row.payment_date}
-          onChange={(v) => onChangeRow(index, { payment_date: v })}
-        />
+        {cashLocked ? (
+          <span>{row.payment_date || '—'}</span>
+        ) : (
+          <DatePicker
+            value={row.payment_date}
+            onChange={(v) => onChangeRow(index, { payment_date: v })}
+          />
+        )}
       </td>
       <td className="px-2 py-2 min-w-[120px]">
-        <Input
-          value={row.payment_reference ?? ''}
-          onChange={(e) => onChangeRow(index, { payment_reference: e.target.value })}
-          placeholder="Ref / receipt"
-        />
+        {cashLocked ? (
+          <span className="text-xs text-gray-600">{row.payment_reference || '—'}</span>
+        ) : (
+          <Input
+            value={row.payment_reference ?? ''}
+            onChange={(e) => onChangeRow(index, { payment_reference: e.target.value })}
+            placeholder="Ref / receipt"
+          />
+        )}
       </td>
       <td className="px-2 py-2 min-w-[150px]">
-        <Input
-          value={row.status === 'waived' ? (row.waiver_reason ?? row.notes) : row.notes}
-          onChange={(e) =>
-            onChangeRow(
-              index,
-              row.status === 'waived'
-                ? { waiver_reason: e.target.value, notes: e.target.value }
-                : { notes: e.target.value }
-            )
-          }
-          placeholder={row.status === 'waived' ? 'Waiver reason (required)' : 'Notes'}
-        />
+        {cashLocked && row.status !== 'waived' ? (
+          <span className="text-xs text-gray-600">{row.notes || '—'}</span>
+        ) : (
+          <Input
+            value={row.status === 'waived' ? (row.waiver_reason ?? row.notes) : row.notes}
+            onChange={(e) =>
+              onChangeRow(
+                index,
+                row.status === 'waived'
+                  ? { waiver_reason: e.target.value, notes: e.target.value }
+                  : { notes: e.target.value }
+              )
+            }
+            placeholder={row.status === 'waived' ? 'Waiver reason (required)' : 'Notes'}
+          />
+        )}
       </td>
     </tr>
   );
@@ -279,7 +316,7 @@ export const PaymentPlanInstallmentsTable: React.FC<PaymentPlanInstallmentsTable
               <th className="px-2 py-2 font-semibold w-8" aria-label="Reorder" />
               <th className="px-2 py-2 font-semibold">#</th>
               <th className="px-2 py-2 font-semibold">Due date</th>
-              <th className="px-2 py-2 font-semibold">Amount</th>
+              <th className="px-2 py-2 font-semibold">Scheduled</th>
               <th className="px-2 py-2 font-semibold">Status</th>
               <th className="px-2 py-2 font-semibold">Paid</th>
               <th className="px-2 py-2 font-semibold">Outstanding</th>
@@ -297,7 +334,8 @@ export const PaymentPlanInstallmentsTable: React.FC<PaymentPlanInstallmentsTable
                   index={index}
                   currency={currency}
                   isDraft={isDraft}
-                  canDrag={row.status === 'pending'}
+                  scheduleView={Boolean(props.scheduleView)}
+                  canDrag={!props.scheduleView && row.status === 'pending'}
                   onChangeRow={onChangeRow}
                 />
               ))}

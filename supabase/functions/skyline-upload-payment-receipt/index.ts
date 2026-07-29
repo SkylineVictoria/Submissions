@@ -39,6 +39,7 @@ type UploadReceiptFormData = {
   paymentTransactionId?: string | null;
   studentId?: string | null;
   replaceExistingReceipt?: string | null;
+  replaceReason?: string | null;
   staffUserId?: string | null;
 };
 
@@ -166,6 +167,7 @@ Deno.serve(async (req) => {
       paymentTransactionId: fd.get('paymentTransactionId')?.toString() ?? null,
       studentId: fd.get('studentId')?.toString() ?? null,
       replaceExistingReceipt: fd.get('replaceExistingReceipt')?.toString() ?? null,
+      replaceReason: fd.get('replaceReason')?.toString() ?? null,
       staffUserId: fd.get('staffUserId')?.toString() ?? null,
     };
   } catch {
@@ -207,6 +209,30 @@ Deno.serve(async (req) => {
   }
 
   const replaceExistingReceipt = String(form.replaceExistingReceipt ?? '').toLowerCase() === 'true';
+  const replaceReason = form.replaceReason ?? null;
+
+  if (replaceExistingReceipt) {
+    if (staffRole !== 'superadmin') {
+      return jsonResponse(
+        {
+          success: false,
+          code: 'FORBIDDEN',
+          message: 'Only Super Admin can correct a posted payment.',
+        },
+        403
+      );
+    }
+    if (!String(replaceReason ?? '').trim()) {
+      return jsonResponse(
+        {
+          success: false,
+          code: 'REPLACE_REASON_REQUIRED',
+          message: 'Replacement reason is required.',
+        },
+        400
+      );
+    }
+  }
 
   const file = form.file;
   if (!file) {
@@ -425,6 +451,7 @@ Deno.serve(async (req) => {
       p_sharepoint_path: sharepointPath,
       p_uploaded_by: currentUserId,
       p_replace_existing: replaceExistingReceipt,
+      p_replace_reason: replaceExistingReceipt ? String(replaceReason ?? '').trim() : null,
     });
 
     const receiptError = (receiptUploaded as any).error as unknown;

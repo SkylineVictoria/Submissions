@@ -197,10 +197,11 @@ export type PaymentPlanInstallment = StudentPaymentPlanInstallment & { payment_p
 // Payment receipt linking (per payment event)
 // ---------------------------------------------------------------------------
 
-/** Immutable payment event for an instalment (supports multiple partial payments). */
+/** Immutable payment event (may allocate across multiple instalments). */
 export interface StudentPaymentPlanInstallmentTransaction {
   id: number;
-  installment_id: number;
+  /** Primary/legacy instalment link; may be null for multi-allocation payments. */
+  installment_id: number | null;
   student_payment_plan_id: number;
   student_id: number;
   /** Cash amount of this payment event (not the instalment running total). */
@@ -213,6 +214,25 @@ export interface StudentPaymentPlanInstallmentTransaction {
   waiver_reason: string | null;
   created_by: number | null;
   created_at: string;
+  posting_status?: 'draft' | 'posted' | 'corrected' | 'reversed';
+  posted_at?: string | null;
+  posted_by?: number | null;
+  correction_of_transaction_id?: number | null;
+  correction_reason?: string | null;
+  corrected_at?: string | null;
+  corrected_by?: number | null;
+  is_active?: boolean;
+  idempotency_key?: string | null;
+}
+
+export interface StudentPaymentAllocation {
+  id: number;
+  payment_transaction_id: number;
+  installment_id: number;
+  allocated_amount: number;
+  is_active: boolean;
+  created_at: string;
+  installment_number?: number;
 }
 
 export interface PaymentReceipt {
