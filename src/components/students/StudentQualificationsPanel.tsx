@@ -231,10 +231,13 @@ export const StudentQualificationsPanel: React.FC<StudentQualificationsPanelProp
     onRefresh?.();
   };
 
+  // Qualification column must not shrink to 0. Actions are max-content so the
+  // row scrolls horizontally instead of wrapping names character-by-character.
   const headerCols = isAdmin
-    ? 'grid-cols-[minmax(0,1fr)_88px_88px_120px_120px_auto]'
-    : 'grid-cols-[minmax(0,1fr)_88px_88px_120px_120px]';
+    ? 'grid-cols-[minmax(20rem,1.4fr)_5.5rem_5.5rem_7.5rem_8rem_max-content]'
+    : 'grid-cols-[minmax(18rem,1.4fr)_5.5rem_5.5rem_7.5rem_8rem]';
   const rowCols = headerCols;
+  const tableMinWidth = isAdmin ? 'min-w-[78rem]' : 'min-w-[48rem]';
 
   if (loading) {
     return (
@@ -272,15 +275,15 @@ export const StudentQualificationsPanel: React.FC<StudentQualificationsPanelProp
         </p>
       ) : null}
 
-      <div className="overflow-x-auto">
-        <div className="min-w-[800px] overflow-hidden rounded-lg border border-[var(--border)]">
+      <div className="min-w-0 overflow-x-auto">
+        <div className={cn('overflow-hidden rounded-lg border border-[var(--border)]', tableMinWidth)}>
           <div className={cn('grid gap-2 bg-[#ea580c] px-3 py-2 text-xs font-semibold text-white', headerCols)}>
             <span>Qualification / Intake</span>
-            <span>Start</span>
-            <span>End</span>
+            <span className="whitespace-nowrap">Start</span>
+            <span className="whitespace-nowrap">End</span>
             <span>Status</span>
             <span>Progress</span>
-            {isAdmin ? <span className="text-right">Actions</span> : null}
+            {isAdmin ? <span className="text-right whitespace-nowrap">Actions</span> : null}
           </div>
 
           {enrollments.map((course) => {
@@ -308,7 +311,7 @@ export const StudentQualificationsPanel: React.FC<StudentQualificationsPanelProp
                 <div className={cn('grid gap-2 items-center px-3 py-3 bg-white', rowCols)}>
                   <button
                     type="button"
-                    className="flex min-w-0 items-start gap-2 text-left"
+                    className="flex min-w-[20rem] items-start gap-2 text-left"
                     onClick={() => toggleExpanded(course.course_id)}
                   >
                     {isOpen ? (
@@ -317,30 +320,30 @@ export const StudentQualificationsPanel: React.FC<StudentQualificationsPanelProp
                       <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-gray-500" />
                     )}
                     <div className="min-w-0">
-                      <div className="font-semibold text-sm text-[var(--text)] break-words">
+                      <div className="font-semibold text-sm text-[var(--text)] whitespace-normal break-normal [overflow-wrap:normal] [word-break:normal]">
                         {course.qualification_code ? `${course.qualification_code} — ${course.name}` : course.name}
                       </div>
-                      <div className="mt-0.5 flex items-center gap-1.5 text-xs text-gray-600 break-words">
+                      <div className="mt-0.5 flex items-center gap-1.5 text-xs text-gray-600 whitespace-normal break-normal [overflow-wrap:normal] [word-break:normal]">
                         <UserRound className="h-3.5 w-3.5 shrink-0 text-sky-600" />
                         {intake}
                       </div>
                       {accessMsg ? <p className="mt-1 text-xs text-amber-800">{accessMsg}</p> : null}
                     </div>
                   </button>
-                  <span className="text-xs text-gray-700">{formatDDMMYYYY(course.start_date)}</span>
-                  <span className={cn('text-xs', endClass)}>{formatDDMMYYYY(course.end_date)}</span>
+                  <span className="text-xs text-gray-700 whitespace-nowrap tabular-nums">{formatDDMMYYYY(course.start_date)}</span>
+                  <span className={cn('text-xs whitespace-nowrap tabular-nums', endClass)}>{formatDDMMYYYY(course.end_date)}</span>
                   <CourseLifecycleBadge status={course.enrollment_status} />
-                  <div className="flex items-center gap-2">
-                    <div className="h-2 flex-1 min-w-[60px] rounded-full bg-gray-200 overflow-hidden">
+                  <div className="flex min-w-[7.5rem] items-center gap-2">
+                    <div className="h-2 min-w-[60px] flex-1 rounded-full bg-gray-200 overflow-hidden">
                       <div
                         className={cn('h-full rounded-full', progress >= 100 ? 'bg-emerald-500' : 'bg-emerald-400')}
                         style={{ width: `${Math.min(100, progress)}%` }}
                       />
                     </div>
-                    <span className="text-xs text-gray-600 w-8 text-right">{progress}%</span>
+                    <span className="w-8 shrink-0 text-right text-xs text-gray-600 tabular-nums">{progress}%</span>
                   </div>
                   {isAdmin ? (
-                    <div className="flex flex-wrap justify-end gap-1">
+                    <div className="flex flex-nowrap items-center justify-end gap-1 whitespace-nowrap shrink-0">
                       <Button variant="outline" size="sm" className="text-xs px-2 py-1 h-8" onClick={() => openEdit(course)}>
                         Edit
                       </Button>
@@ -396,7 +399,7 @@ export const StudentQualificationsPanel: React.FC<StudentQualificationsPanelProp
                 </div>
 
                 {isOpen ? (
-                  <div className="border-t border-gray-100 bg-[#fafafa] px-4 py-4">
+                  <div className="border-t border-gray-100 bg-[#fafafa] px-4 py-4 min-w-0 overflow-x-auto">
                     {renderExpandedContent ? (
                       renderExpandedContent(course, rows)
                     ) : rows.length === 0 ? (

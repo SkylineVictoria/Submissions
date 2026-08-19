@@ -879,7 +879,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
                 ) : rows.length === 0 ? (
                   <p className="text-gray-600">No assessments match the current search or unit filter.</p>
                 ) : (
-                  <div className="overflow-x-auto">
+                  <div className="min-w-0 overflow-x-auto">
                     <table className="min-w-[1120px] w-full text-sm border border-[var(--border)] rounded-lg overflow-hidden">
                       <thead className="bg-gray-50 text-gray-700">
                         <tr>
@@ -997,11 +997,11 @@ export const AdminStudentDetailsPage: React.FC = () => {
                             <td className="px-3 py-2 border-b border-[var(--border)] align-top">
                               {(() => {
                                 return (
-                                  <div className="min-w-0">
-                                    <div className="font-medium text-[var(--text)] break-words whitespace-normal">
+                                  <div className="min-w-[14rem]">
+                                    <div className="font-medium text-[var(--text)] whitespace-normal break-normal [overflow-wrap:normal] [word-break:normal]">
                                       {row.form_name || '—'}
                                     </div>
-                                    <div className="text-xs text-gray-500 break-words">
+                                    <div className="text-xs text-gray-500">
                                       {row.form_version ? `(v${row.form_version})` : ''}
                                     </div>
                                     <div className="md:hidden mt-1 text-xs text-gray-600 tabular-nums flex flex-wrap gap-x-3 gap-y-0.5">
@@ -1310,8 +1310,8 @@ export const AdminStudentDetailsPage: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-[var(--bg)]">
-      <div className="w-full px-4 md:px-6 lg:px-8 py-6 space-y-4">
+    <div className="min-h-screen min-w-0 bg-[var(--bg)]">
+      <div className="w-full min-w-0 px-4 md:px-6 lg:px-8 py-6 space-y-4">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
@@ -1336,8 +1336,8 @@ export const AdminStudentDetailsPage: React.FC = () => {
             <p className="text-gray-600">Student not found.</p>
           </Card>
         ) : (
-          <div className="flex flex-col lg:flex-row gap-4">
-            <div className="w-full lg:w-[340px] lg:shrink-0">
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(17.5rem,21.25rem)_minmax(0,1fr)]">
+            <div className="min-w-0">
               <Card>
                 <div className="space-y-3">
                   <div>
@@ -1458,8 +1458,8 @@ export const AdminStudentDetailsPage: React.FC = () => {
               ) : null}
             </div>
 
-            <div className="min-w-0 flex-1">
-              <Card>
+            <div className="min-w-0">
+              <Card className="min-w-0">
                 <div className="mb-4">
                   <h3 className="font-bold text-[var(--text)] mb-3">Qualifications</h3>
                   <StudentQualificationsPanel

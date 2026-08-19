@@ -404,7 +404,7 @@ export const StudentDashboardPage: React.FC = () => {
         ) : filteredRows.length === 0 ? (
           <p className="text-sm text-gray-500">No assessments match your search.</p>
         ) : (
-          <div className="overflow-x-auto">
+          <div className="min-w-0 overflow-x-auto">
             <table className="min-w-[940px] w-full text-sm border border-[var(--border)] rounded-lg overflow-hidden">
               <thead className="bg-gray-50 text-gray-700">
                 <tr>
@@ -477,8 +477,8 @@ export const StudentDashboardPage: React.FC = () => {
                         onClick={() => setExpandedId((prev) => (prev === row.id ? null : row.id))}
                         title="Click to expand"
                       >
-                        <td className="px-3 py-2 border-b border-[var(--border)] align-top">
-                          <div className="font-medium text-[var(--text)] break-words whitespace-normal">{row.form_name}</div>
+                        <td className="px-3 py-2 border-b border-[var(--border)] align-top min-w-[14rem]">
+                          <div className="font-medium text-[var(--text)] whitespace-normal break-normal [overflow-wrap:normal] [word-break:normal]">{row.form_name}</div>
                           <div className="text-xs text-gray-500">Version {row.form_version ?? '1.0.0'}</div>
                           <div className="md:hidden mt-1 text-xs text-gray-600 tabular-nums flex flex-wrap gap-x-3 gap-y-0.5">
                             <span>
@@ -653,8 +653,8 @@ export const StudentDashboardPage: React.FC = () => {
   }, [studentId, refreshing, handleRefresh]);
 
   const dashboardBody = (
-    <div className="min-h-screen bg-[var(--bg)]">
-      <div className="w-full px-4 md:px-6 lg:px-8 py-6 space-y-4">
+    <div className="min-h-screen min-w-0 bg-[var(--bg)]">
+      <div className="w-full min-w-0 px-4 md:px-6 lg:px-8 py-6 space-y-4">
         <Card>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -665,7 +665,7 @@ export const StudentDashboardPage: React.FC = () => {
               <p className="text-sm text-gray-600 mt-1">
                 {studentId ? (
                   <>
-                    Signed in as <span className="font-medium text-gray-800 break-all">{studentEmail || 'student'}</span>. Open is only allowed between start date and end date (until 23:59 AEDT).
+                    Signed in as <span className="font-medium text-gray-800 break-words">{studentEmail || 'student'}</span>. Open is only allowed between start date and end date (until 23:59 AEDT).
                   </>
                 ) : (
                   <>Sign in with OTP to see your assessments.</>
@@ -690,8 +690,8 @@ export const StudentDashboardPage: React.FC = () => {
             </div>
           </Card>
         ) : (
-          <div className="flex flex-col lg:flex-row gap-4">
-            <div className="w-full lg:w-[340px] lg:shrink-0">
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(17.5rem,21.25rem)_minmax(0,1fr)]">
+            <div className="min-w-0">
               <Card>
                 {studentLoading ? (
                   <div className="py-10">
@@ -699,7 +699,7 @@ export const StudentDashboardPage: React.FC = () => {
                   </div>
                 ) : !student ? (
                   <div className="space-y-2">
-                    <div className="text-sm text-gray-700 font-medium break-all">{studentEmail}</div>
+                    <div className="text-sm text-gray-700 font-medium break-words">{studentEmail}</div>
                     <div className="text-xs text-gray-500">Profile not available.</div>
                   </div>
                 ) : (
@@ -715,7 +715,7 @@ export const StudentDashboardPage: React.FC = () => {
                     <div className="grid grid-cols-1 gap-2 text-sm">
                       <div className="flex items-center gap-2 text-gray-700">
                         <Mail className="w-4 h-4 text-gray-400" />
-                        <span className="break-all">{student.email}</span>
+                        <span className="min-w-0 break-words">{student.email}</span>
                       </div>
                       <div className="flex items-center gap-2 text-gray-700">
                         <Phone className="w-4 h-4 text-gray-400" />
@@ -738,8 +738,8 @@ export const StudentDashboardPage: React.FC = () => {
               </Card>
             </div>
 
-            <div className="min-w-0 flex-1">
-              <Card>
+            <div className="min-w-0">
+              <Card className="min-w-0">
                 <div className="mb-4">
                   <h2 className="text-lg font-bold text-[var(--text)]">Qualifications</h2>
                   <p className="text-sm text-gray-600 mt-1 mb-3">
