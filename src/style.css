@@ -4,9 +4,22 @@
 @layer base {
   :root {
     --brand: #F47A1F;
-    --bg: #F8FAFC;
-    --border: #E5E7EB;
-    --text: #0F172A;
+    /* Surface hierarchy — keep existing aliases (--bg/--border/--text) in sync */
+    --app-bg: #F6F7F9;
+    --bg: #F6F7F9;
+    --surface: #FFFFFF;
+    --surface-subtle: #FAFBFC;
+    --border: #D5DAE2;
+    --border-strong: #C7CDD6;
+    --workflow-border: #D6DAE1;
+    --text-primary: #101828;
+    --text-secondary: #475467;
+    --text-muted: #667085;
+    --text: #101828;
+    --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.05);
+    --orange-soft: #FFF5EE;
+    --orange-border: #F2D1BE;
+    --icon-muted: #B0B8C4;
   }
 
   body {
@@ -14,7 +27,8 @@
     font-family: 'Inter', system-ui, -apple-system, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    background-color: var(--bg);
+    background-color: var(--app-bg);
+    color: var(--text-primary);
     /* Prevent text size adjustment on iOS */
     -webkit-text-size-adjust: 100%;
     text-size-adjust: 100%;

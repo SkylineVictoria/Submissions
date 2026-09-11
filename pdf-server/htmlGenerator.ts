@@ -4,6 +4,12 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { renderAppendixAMatrixHtml } from './appendixAMatrixData.js';
 import { renderTaskQuestionInstructionHtml } from './instructionBlocksHtml.js';
 import { escapeImgSrc, pdfImageSrc } from './pdfConstants.js';
+import {
+  ASSESSMENT_QUESTION_BLOCK_CSS,
+  questionContentLabelHtml,
+  renderQuestionBlockClose,
+  renderQuestionBlockOpen,
+} from './assessmentQuestionBlock.js';
 import { publicDir } from './paths.js';
 import {
   buildInstancePdfFileName,
@@ -469,44 +475,8 @@ export function buildHtml(data: {
     .grid-table-no-border tbody tr { background: transparent !important; }
     .grid-table-no-border .label-cell, .grid-table-no-border .value-cell { background: transparent !important; white-space: pre-line; }
     .grid-table-no-border .sub-section-header { background: transparent !important; color: #000000 !important; border: 1px solid #000 !important; }
-    .task-q-question-box { border: 1px solid #595959; margin-bottom: 20px; page-break-inside: avoid; break-inside: avoid; }
-    .task-q-question-box.task-q-first-question { page-break-before: avoid; break-before: avoid; }
-    .task-q-question-box:last-child { margin-bottom: 0; }
-    .task-q-question-box .task-questions-table th,
-    .task-q-question-box .task-questions-table td,
-    .task-q-question-box .task-questions-table .task-q-inner-table th,
-    .task-q-question-box .task-questions-table .task-q-inner-table td { border-color: #595959 !important; }
-    .task-questions-table { border: none !important; margin: 0 !important; }
-    .task-q-question-box .task-questions-table .task-q-num-cell { border: 1px solid #000 !important; border-color: #000 !important; }
-    .task-q-question-box .task-questions-table .task-q-satisfactory-cell { border: 1px solid #000 !important; border-left: none !important; border-color: #000 !important; }
-    .task-questions-table .task-q-num-cell { background: #fff !important; padding: 24px 12px 12px 12px !important; vertical-align: top !important; font-weight: bold; font-size: 11pt; width: 5%; }
-    .task-q-question-box .task-questions-table .task-q-question-cell,
-    .task-q-question-box .task-questions-table .task-q-question-label-cell,
-    .task-q-question-box .task-questions-table .task-q-answer-cell { border: 1px solid #000 !important; border-left: none !important; border-color: #000 !important; }
-    .task-questions-table .task-q-question-cell,
-    .task-questions-table .task-q-question-label-cell,
-    .task-questions-table .task-q-answer-cell { background: #fff !important; padding: 24px 12px 12px 12px !important; vertical-align: top !important; }
-    .task-questions-table .task-q-cell-lower { padding: 12px !important; vertical-align: top !important; }
-    .task-questions-table .task-q-answer-cell .task-q-answer-block { border-top: none !important; }
-    .task-questions-table .task-q-answer-full { border-left: 1px solid #000 !important; width: 100%; }
-    .task-questions-table .task-q-question-label { font-weight: bold; font-size: 11pt; margin-bottom: 8px; color: #000; white-space: pre-line; }
-    .task-q-text-above-header { font-weight: bold; font-size: 11pt; margin-bottom: 8px; color: #000; }
-    .task-q-content-block, .task-q-additional-grid { width: 100%; max-width: 100%; box-sizing: border-box; }
-    .task-q-additional-grid table { min-width: 0; width: 100% !important; table-layout: fixed !important; }
-    .task-questions-table .task-q-satisfactory-cell { background: #fff !important; padding: 24px 12px 12px 12px !important; vertical-align: top !important; text-align: center; width: 25%; }
-    .task-questions-table .task-q-satisfactory-header { font-weight: bold; font-size: 10pt; margin-bottom: 8px; }
-    .task-questions-table .task-q-satisfactory-cell .task-q-radio-group { display: flex; flex-direction: row; align-items: center; justify-content: center; gap: 16px; }
-    .task-questions-table .task-q-radio { display: inline-flex; align-items: center; gap: 6px; }
-    .task-questions-table .task-q-radio .radio-circle { width: 12px; height: 12px; border: 1.5px solid #374151; border-radius: 50%; flex-shrink: 0; }
-    .task-questions-table .task-q-radio .radio-circle.filled { background: #000; border-color: #000; }
-    .task-q-answer-block { padding: 12px; min-height: 24px; font-size: 11pt; background: #fff; white-space: pre-line; }
-    .task-q-answer-block.task-q-answer-large { min-height: 80px; }
-    .task-questions-table .task-q-inner-table th, .task-questions-table .task-q-inner-table td,
-    .task-questions-table .task-q-inner-table .label-cell, .task-questions-table .task-q-inner-table .value-cell { background: transparent !important; border: 1px solid #595959 !important; color: #000000; white-space: pre-line; }
-    .task-questions-table .task-q-inner-table th { background: #595959 !important; color: #ffffff !important; font-weight: 700; border: 1px solid #000 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .task-questions-table .label-cell, .task-questions-table .value-cell, .task-questions-table td { background: #fff !important; }
+${ASSESSMENT_QUESTION_BLOCK_CSS}
     .step-page { page-break-after: always; }
-    .task-q-question-box.page-break-after { page-break-after: always; }
     .section-table, .likert-table, .assessment-tasks-table { page-break-inside: auto; }
     .decl-table, .result-sheet-table, .assessment-summary-table { page-break-inside: avoid; }
     .step-page:first-child { padding-top: 20px; }
@@ -1171,23 +1141,17 @@ export function buildHtml(data: {
           const isGridTable = question.type === 'grid_table' && rows.length > 0;
           const isFirstQuestion = qNum === 1;
           const boxClass = 'task-q-question-box' + (isFirstQuestion ? ' task-q-first-question' : '') + (nextIsPageBreak ? ' page-break-after' : '');
-          html += `<div class="${boxClass}">`;
-          html += '<table class="section-table task-questions-table"><tbody>';
-          html += '<tr class="task-q-row-top">';
-          html += `<td class="task-q-num-cell">Q${qNum}:</td>`;
-          html += '<td class="task-q-question-label-cell">';
-          html += `<div class="task-q-question-label">${labelToHtml(question.label)}</div>`;
           const pmTop = (question.pdf_meta as Record<string, unknown>) || {};
           const textAboveHeader = String(pmTop.textAboveHeader ?? '').trim();
-          if (textAboveHeader) html += `<div class="task-q-text-above-header">${labelToHtml(textAboveHeader)}</div>`;
-          html += '</td>';
-          html += '<td class="task-q-satisfactory-cell">';
-          html += '<div class="task-q-satisfactory-header">Satisfactory response</div>';
-          html += '<div class="task-q-radio-group"><div class="task-q-radio"><span class="radio-circle' + (satYes ? ' filled' : '') + '"></span>Yes</div>';
-          html += '<div class="task-q-radio"><span class="radio-circle' + (satNo ? ' filled' : '') + '"></span>No</div></div>';
-          html += '</td></tr>';
-          html += '<tr class="task-q-row-bottom">';
-          html += '<td colspan="3" class="task-q-answer-cell task-q-answer-full">';
+          let contentCellHtml = questionContentLabelHtml(question.label);
+          if (textAboveHeader) contentCellHtml += `<div class="task-q-text-above-header">${labelToHtml(textAboveHeader)}</div>`;
+          html += renderQuestionBlockOpen({
+            qNum,
+            contentCellHtml,
+            satYes,
+            satNo,
+            boxClass,
+          });
           if (isGridTable) {
             const pm = (question.pdf_meta as Record<string, unknown>) || {};
             const cols = (Array.isArray(pm.columns) ? pm.columns : ['Column 1', 'Column 2']) as string[];
@@ -1278,7 +1242,7 @@ export function buildHtml(data: {
                 const qWordLimit = typeof cqPm?.wordLimit === 'number' && cqPm.wordLimit > 0 ? cqPm.wordLimit : null;
                 const blockClass = block.type === 'long_text' ? 'task-q-answer-block task-q-answer-large' : 'task-q-answer-block';
                 const blockStyle = qWordLimit ? `min-height:${heightFromWordLimit(qWordLimit)}px;max-height:${heightFromWordLimit(qWordLimit)}px;height:${heightFromWordLimit(qWordLimit)}px;` : '';
-                html += `<div class="task-q-content-block mt-3">${blockHeaderHtml(block.headerText)}<div class="task-q-question-label">${labelToHtml(cq.label)}</div><div class="${blockClass}"${blockStyle ? ` style="${blockStyle}"` : ''}>${formatShortLongAnswerCellHtml(val as string | number | Record<string, unknown> | undefined)}</div></div>`;
+                html += `<div class="task-q-content-block mt-3">${blockHeaderHtml(block.headerText)}${questionContentLabelHtml(cq.label)}<div class="${blockClass}"${blockStyle ? ` style="${blockStyle}"` : ''}>${formatShortLongAnswerCellHtml(val as string | number | Record<string, unknown> | undefined)}</div></div>`;
               }
               continue;
             }
@@ -1327,10 +1291,7 @@ export function buildHtml(data: {
             }
             }
           }
-          html += '</td>';
-          html += '</tr>';
-          html += '</tbody></table>';
-          html += '</div>';
+          html += renderQuestionBlockClose();
         }
         html += '</div>'; // Close task-questions-page wrapper
       } else if (section.pdf_render_mode === 'task_results') {

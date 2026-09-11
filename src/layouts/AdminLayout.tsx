@@ -132,7 +132,7 @@ export const AdminLayout: React.FC = () => {
           {/* Single navbar/sidebar: crest (sized by expand/collapse) + toggle + nav links */}
           <aside
             className={cn(
-              'fixed bottom-0 left-0 top-0 z-40 flex h-[100dvh] max-h-[100dvh] min-h-0 flex-col overflow-hidden border-r border-[var(--border)] bg-white shadow-sm transition-[width,transform] duration-200 ease-out',
+              'fixed bottom-0 left-0 top-0 z-40 flex h-[100dvh] max-h-[100dvh] min-h-0 flex-col overflow-hidden border-r border-[var(--border-strong)] bg-[var(--surface)] shadow-sm transition-[width,transform] duration-200 ease-out',
               !isMdUp && 'pt-[env(safe-area-inset-top,0px)]',
               !isMdUp && !mobileNavOpen && '-translate-x-full',
               !isMdUp && mobileNavOpen && 'translate-x-0',
@@ -301,7 +301,7 @@ export const AdminLayout: React.FC = () => {
           >
         {/* Mobile top bar — opens drawer nav (sidebar toggle is desktop-only) */}
         {!isMdUp ? (
-          <header className="sticky top-0 z-20 flex shrink-0 items-center gap-2 border-b border-[var(--border)] bg-white px-3 py-2.5 pt-[max(0.625rem,env(safe-area-inset-top,0px))] pl-[max(0.75rem,env(safe-area-inset-left,0px))] pr-[max(0.75rem,env(safe-area-inset-right,0px))] shadow-sm">
+          <header className="sticky top-0 z-20 flex shrink-0 items-center gap-2 border-b border-[var(--border)] bg-[var(--surface)] px-3 py-2.5 pt-[max(0.625rem,env(safe-area-inset-top,0px))] pl-[max(0.75rem,env(safe-area-inset-left,0px))] pr-[max(0.75rem,env(safe-area-inset-right,0px))] shadow-sm">
             <button
               type="button"
               onClick={() => setMobileNavOpen(true)}
@@ -325,7 +325,7 @@ export const AdminLayout: React.FC = () => {
           </header>
         ) : null}
         {isMdUp && user ? (
-          <header className="sticky top-0 z-20 flex shrink-0 items-center justify-end gap-2 border-b border-[var(--border)] bg-white px-4 py-2 shadow-sm">
+          <header className="sticky top-0 z-20 flex shrink-0 items-center justify-end gap-2 border-b border-[var(--border)] bg-[var(--surface)] px-4 py-2 shadow-sm">
             <NotificationBell userId={user.id} />
             <UserMenu
               name={user.full_name}

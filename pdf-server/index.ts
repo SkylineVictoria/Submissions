@@ -6,6 +6,12 @@ import { serverDir } from './paths.js';
 import { createPdfJobId } from './pdfBrowser.js';
 import { logMemory } from './pdfMemory.js';
 import { pdfImageSrc, escapeImgSrc, finalizePdfHtml, MAX_BULK_PDF_EXPORT } from './pdfConstants.js';
+import {
+  ASSESSMENT_QUESTION_BLOCK_CSS,
+  questionContentLabelHtml,
+  renderQuestionBlockClose,
+  renderQuestionBlockOpen,
+} from './assessmentQuestionBlock.js';
 import { resolveSlitLogoDataUrls } from './logoUrls.js';
 import {
   renderHtmlToPdfBuffer,
@@ -683,17 +689,6 @@ function buildHtml(data: {
 }): { html: string; unitCode: string; version: string; headerHtml: string } {
   const { form, steps, answers, taskRowsMap = new Map(), trainerAssessments = new Map(), trainerRowAssessments = new Map(), resultsOffice = new Map(), resultsData = new Map(), assessmentSummaryData = {}, role = 'student' } = data;
 
-  const orderedTaskRowIds: number[] = [];
-  for (const g of steps) {
-    for (const { section: sec, questions: qs } of g.sections) {
-      if (sec.pdf_render_mode === 'assessment_tasks') {
-        const tq = qs.find((x) => x.question.type === 'grid_table' && x.rows.length > 0);
-        if (tq) for (const r of tq.rows) orderedTaskRowIds.push(r.id);
-        break;
-      }
-    }
-    if (orderedTaskRowIds.length > 0) break;
-  }
   // Header images: data URLs for Playwright header/footer templates; https for custom crest
   let crestImg = form.header_asset_url || '';
   const defaultLogos = resolveSlitLogoDataUrls(serverDir);
@@ -968,51 +963,11 @@ function buildHtml(data: {
     .assessment-marking-table .amc-radio { display: inline-flex; align-items: center; justify-content: center; }
     .assessment-marking-table .amc-radio .radio-circle { width: 12px; height: 12px; border: 1.5px solid #374151; border-radius: 50%; display: inline-block; }
     .assessment-marking-table .amc-radio .radio-circle.filled { background: #000; border-color: #000; }
-    .task-q-question-box { border: 1px solid #595959; margin-bottom: 20px; page-break-inside: avoid; break-inside: avoid; }
-    .task-q-question-box.task-q-first-question { page-break-before: avoid; break-before: avoid; }
-    .task-q-question-box:last-child { margin-bottom: 0; }
-    .task-q-question-box .task-questions-table th,
-    .task-q-question-box .task-questions-table td,
-    .task-q-question-box .task-questions-table .task-q-inner-table th,
-    .task-q-question-box .task-questions-table .task-q-inner-table td { border-color: #595959 !important; }
-    .task-questions-table { border: none !important; margin: 0 !important; }
-    .task-q-question-box .task-questions-table .task-q-num-cell { border: 1px solid #000 !important; border-color: #000 !important; }
-    .task-q-question-box .task-questions-table .task-q-satisfactory-cell { border: 1px solid #000 !important; border-left: none !important; border-color: #000 !important; }
-    .task-questions-table .task-q-num-cell { background: #fff !important; padding: 24px 12px 12px 12px !important; vertical-align: top !important; font-weight: bold; font-size: 11pt; width: 5%; }
-    .task-q-question-box .task-questions-table .task-q-question-cell,
-    .task-q-question-box .task-questions-table .task-q-question-label-cell,
-    .task-q-question-box .task-questions-table .task-q-answer-cell { border: 1px solid #000 !important; border-left: none !important; border-color: #000 !important; }
-    .task-questions-table .task-q-question-cell,
-    .task-questions-table .task-q-question-label-cell,
-    .task-questions-table .task-q-answer-cell { background: #fff !important; padding: 24px 12px 12px 12px !important; vertical-align: top !important; }
-    .task-questions-table .task-q-cell-lower { padding: 12px !important; vertical-align: top !important; }
-    .task-questions-table .task-q-answer-cell .task-q-answer-block { border-top: none !important; }
-    .task-questions-table .task-q-answer-full { border-left: 1px solid #000 !important; width: 100%; }
-    .task-questions-table .task-q-question-label { font-weight: bold; font-size: 11pt; margin-bottom: 8px; color: #000; white-space: pre-line; }
-    .task-q-text-above-header { font-weight: bold; font-size: 11pt; margin-bottom: 8px; color: #000; }
-    .task-q-content-block, .task-q-additional-grid { width: 100%; max-width: 100%; box-sizing: border-box; }
-    .task-q-additional-grid table { min-width: 0; width: 100% !important; table-layout: fixed !important; }
-    .task-questions-table .task-q-satisfactory-cell { background: #fff !important; padding: 24px 12px 12px 12px !important; vertical-align: top !important; text-align: center; width: 25%; }
-    .task-questions-table .task-q-satisfactory-header { font-weight: bold; font-size: 10pt; margin-bottom: 8px; }
-    .task-questions-table .task-q-satisfactory-cell .task-q-radio-group { display: flex; flex-direction: row; align-items: center; justify-content: center; gap: 16px; }
-    .task-questions-table .task-q-radio { display: inline-flex; align-items: center; gap: 6px; }
-    .task-questions-table .task-q-radio .radio-circle { width: 12px; height: 12px; border: 1.5px solid #374151; border-radius: 50%; flex-shrink: 0; }
-    .task-questions-table .task-q-radio .radio-circle.filled { background: #000; border-color: #000; }
+${ASSESSMENT_QUESTION_BLOCK_CSS}
     .grid-status-yn-wrap { display: inline-flex !important; flex-direction: row !important; align-items: center !important; justify-content: center !important; gap: 6px !important; white-space: nowrap !important; font-size: 9px !important; font-family: Arial, sans-serif !important; }
     .grid-status-cb { width: 10px !important; height: 10px !important; min-width: 10px !important; min-height: 10px !important; border: 1px solid #000 !important; border-radius: 2px !important; display: inline-flex !important; align-items: center !important; justify-content: center !important; flex-shrink: 0 !important; font-size: 8px !important; line-height: 1 !important; color: #000 !important; background: #fff !important; }
     .grid-status-cb.checked { background: #000 !important; color: #fff !important; }
-    .task-q-satisfactory-top-right { position: absolute; top: 4px; right: 8px; font-size: 15pt; font-weight: 600; white-space: nowrap; }
-    .task-q-satisfactory-top-right .grid-status-cb { width: 16px !important; height: 16px !important; min-width: 16px !important; min-height: 16px !important; font-size: 11px !important; }
-    .task-q-satisfactory-above { display: block; padding: 8px 12px; margin: 0 0 10px 0; text-align: right; font-size: 10pt; font-weight: 600; background: #f9fafb; border-bottom: 1px solid #e5e7eb; }
-    .task-q-satisfactory-above .grid-status-cb { width: 14px !important; height: 14px !important; min-width: 14px !important; min-height: 14px !important; font-size: 10px !important; }
-    .task-q-answer-block { padding: 12px; min-height: 36px; font-size: 11pt; background: #fff; box-sizing: border-box; overflow-wrap: anywhere; word-break: break-word; white-space: pre-line; }
-    .task-q-answer-block.task-q-answer-large { min-height: 96px; }
-    .task-questions-table .task-q-inner-table th, .task-questions-table .task-q-inner-table td,
-    .task-questions-table .task-q-inner-table .label-cell, .task-questions-table .task-q-inner-table .value-cell { background: transparent !important; border: 1px solid #595959 !important; color: #000000; white-space: pre-line; }
-    .task-questions-table .task-q-inner-table th { background: #595959 !important; color: #ffffff !important; font-weight: 700; border: 1px solid #000 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .task-questions-table .label-cell, .task-questions-table .value-cell, .task-questions-table td { background: #fff !important; }
     .step-page { page-break-after: always; }
-    .task-q-question-box.page-break-after { page-break-after: always; }
     .section-table, .likert-table, .assessment-tasks-table { page-break-inside: auto; }
     .decl-table, .result-sheet-table, .assessment-summary-table { page-break-inside: avoid; }
     .step-page:first-child { padding-top: 20px; }
@@ -1785,9 +1740,6 @@ function buildHtml(data: {
         const instr = row?.row_meta?.instructions as Record<string, string> | undefined;
         const assessmentType = instr?.assessment_type ? String(instr.assessment_type).replace(/<[^>]*>/g, '').trim() || (row?.row_help || 'Assessment') : (row?.row_help || 'Assessment');
         const taskHeaderTitle = `${row?.row_label || section.title} – ${assessmentType}`;
-        const assessmentTaskIndex = rowId && orderedTaskRowIds.length > 0 ? (orderedTaskRowIds.indexOf(rowId) + 1) || 1 : 1;
-        const isAssessment2Plus = assessmentTaskIndex >= 2;
-        const useTopRightSatisfactory = isAssessment2Plus;
         html += '<div class="task-questions-page">';
         html += `<div class="task-questions-header">${taskHeaderTitle}</div>`;
         html += `<div class="task-questions-subheader">Provide your response to each question in the box below.</div>`;
@@ -1818,219 +1770,20 @@ function buildHtml(data: {
           const isGridTable = question.type === 'grid_table' && rows.length > 0;
           const isFirstQuestion = qNum === 1;
           const boxClass = 'task-q-question-box' + (isFirstQuestion ? ' task-q-first-question' : '') + (nextIsPageBreak ? ' page-break-after' : '');
-          html += `<div class="${boxClass}">`;
-          if (useTopRightSatisfactory) {
-            html += `<div class="task-q-satisfactory-above"><span style="font-weight:600;margin-right:8px">Satisfactory response:</span><span class="grid-status-cb${satYes ? ' checked' : ''}"></span> Yes <span style="margin-left:12px" class="grid-status-cb${satNo ? ' checked' : ''}"></span> No</div>`;
-          }
-          if (isAssessment2Plus) {
-            html += `<div class="task-q-question-label" style="font-weight:bold;margin-bottom:8px"><span class="task-q-num-inline" style="margin-right:6px">Q${qNum}:</span>${labelToHtml(question.label)}</div>`;
-            const pmTop = (question.pdf_meta as Record<string, unknown>) || {};
-            const textAboveHeader = String(pmTop.textAboveHeader ?? '').trim();
-            if (textAboveHeader) html += `<div class="task-q-text-above-header">${labelToHtml(textAboveHeader)}</div>`;
-            if (isGridTable) {
-              const pm = (question.pdf_meta as Record<string, unknown>) || {};
-              const columnsMeta = getGridColumnsMeta(pm);
-              const cols = columnsMeta.map((c) => c.label);
-              const headerCaseRaw = String(pm.headerCase ?? 'original').toLowerCase();
-              const headerCase: GridHeaderCase = headerCaseRaw === 'uppercase' || headerCaseRaw === 'title' ? headerCaseRaw : 'original';
-              const layout = (pm.layout as string) || 'no_image';
-              const isSplit = layout === 'split' || layout === 'polygon';
-              const isNoImage = layout === 'no_image' || layout === 'no_image_no_header';
-              const isNoHeader = layout === 'no_image_no_header';
-              const noImageIncludeBaseColumns = !isNoImage;
-              const firstCol = (pm.firstColumnLabel as string) || (isNoImage ? 'Item' : layout === 'default' ? 'Shape' : 'Name');
-              const secondCol = (pm.secondColumnLabel as string) || (isNoImage ? 'Description' : 'Image');
-              const firstQuestionColIndex = columnsMeta.findIndex((c) => c.type === 'question');
-              const columnWordLimits = (Array.isArray(pm.columnWordLimits) ? pm.columnWordLimits : []).map((v: unknown) => (typeof v === 'number' && v > 0 ? v : null)) as (number | null)[];
-              html += '<table class="section-table grid-table-no-border task-q-inner-table">';
-              if (!isNoHeader) {
-                html += '<thead><tr>';
-                if (isSplit) html += `<th>${formatGridHeader(secondCol, headerCase)}</th>`;
-                else if (isNoImage && noImageIncludeBaseColumns) html += `<th>${formatGridHeader(firstCol, headerCase)}</th><th>${formatGridHeader(secondCol, headerCase)}</th>`;
-                else if (!isNoImage) html += `<th>${formatGridHeader(firstCol, headerCase)}</th>`;
-                for (const c of cols) html += `<th>${formatGridHeader(c, headerCase)}</th>`;
-                html += '</tr></thead>';
-              }
-              html += '<tbody>';
-              for (const r of rows) {
-                const key = `q-${question.id}-${r.id}`;
-                const val = answers.get(key) as Record<string, string> | undefined;
-                const rowSat = trainerRowAssessments.get(key);
-                const rowYes = rowSat === 'yes';
-                const rowNo = rowSat === 'no';
-                html += '<tr>';
-                if (isSplit) {
-                  html += `<td class="value-cell col-question">${r.row_image_url ? `${gridRowImgHtml(r.row_image_url)}<br/>${r.row_label}` : r.row_label}</td>`;
-                } else if (isNoImage) {
-                  if (noImageIncludeBaseColumns) {
-                    html += `<td class="label-cell col-question">${r.row_label}</td>`;
-                    html += `<td class="value-cell col-question">${r.row_help || '—'}</td>`;
-                  }
-                } else {
-                  html += `<td class="label-cell col-question">${r.row_image_url ? `${gridRowImgHtml(r.row_image_url)}<br/>${r.row_label}` : r.row_label}</td>`;
-                }
-                for (let ci = 0; ci < cols.length; ci++) {
-                  const colType = columnsMeta[ci]?.type === 'question' ? 'question' : 'answer';
-                  const questionCell = isNoImage && !noImageIncludeBaseColumns && ci === firstQuestionColIndex
-                    ? (r.row_label || r.row_help || '—')
-                    : (r.row_help || '—');
-                  const cellVal = colType === 'question' ? questionCell : (val && typeof val === 'object' ? (val[`r${r.id}_c${ci}`] || '') : '');
-                  const cellClass = colType === 'question' ? 'value-cell col-question' : 'value-cell';
-                  const wl = columnWordLimits[ci];
-                  const cellStyle = colType === 'answer' && wl ? `min-height:${heightFromWordLimit(wl)}px;max-height:${heightFromWordLimit(wl)}px;height:${heightFromWordLimit(wl)}px;` : '';
-                  html += `<td class="${cellClass}"${cellStyle ? ` style="${cellStyle}"` : ''}>${cellVal}</td>`;
-                }
-                html += '</tr>';
-              }
-              html += '</tbody></table>';
-              if (!useTopRightSatisfactory) html += '<div class="mt-3" style="margin-top:10px"><span style="font-weight:600;margin-right:8px">Satisfactory response:</span><span class="grid-status-cb' + (satYes ? ' checked' : '') + '"></span> Yes <span style="margin-left:12px" class="grid-status-cb' + (satNo ? ' checked' : '') + '"></span> No</div>';
-            } else {
-              const key = rows[0] ? `q-${question.id}-${rows[0].id}` : `q-${question.id}`;
-              const val = answers.get(key);
-              const qPm = question.pdf_meta as Record<string, unknown> | undefined;
-              const qWordLimit = typeof qPm?.wordLimit === 'number' && qPm.wordLimit > 0 ? qPm.wordLimit : null;
-              const blockClass = question.type === 'long_text' ? 'task-q-answer-block task-q-answer-large' : 'task-q-answer-block';
-              const blockStyle = qWordLimit ? `min-height:${heightFromWordLimit(qWordLimit)}px;max-height:${heightFromWordLimit(qWordLimit)}px;height:${heightFromWordLimit(qWordLimit)}px;` : '';
-              html += `<div class="${blockClass}"${blockStyle ? ` style="${blockStyle}"` : ''}>${formatShortLongAnswerCellHtml(val as string | number | Record<string, unknown> | undefined)}</div>`;
-              if (!useTopRightSatisfactory) html += '<div class="mt-3" style="margin-top:10px"><span style="font-weight:600;margin-right:8px">Satisfactory response:</span><span class="grid-status-cb' + (satYes ? ' checked' : '') + '"></span> Yes <span style="margin-left:12px" class="grid-status-cb' + (satNo ? ' checked' : '') + '"></span> No</div>';
-            }
-            const legacyAb = pmTop?.additionalBlock as Record<string, unknown> | undefined;
-            const contentBlocks: Array<{ type: string; content?: string; questionId?: number; headerText?: string }> = Array.isArray(pmTop?.contentBlocks)
-              ? (pmTop.contentBlocks as Array<{ type: string; content?: string; questionId?: number; headerText?: string }>)
-              : legacyAb ? [{ type: String(legacyAb.type ?? 'instruction_block'), content: legacyAb.content as string, questionId: legacyAb.questionId as number }] : [];
-            const blockHeaderHtml = (ht: string | undefined) => (ht ? `<div class="task-q-text-above-header">${labelToHtml(ht)}</div>` : '');
-            for (const block of contentBlocks) {
-              if (
-                (block.type === 'instruction_block' && ((block.content as string) || (block as { imageUrl?: string }).imageUrl)) ||
-                (block.type === 'image' && (block as { imageUrl?: string }).imageUrl)
-              ) {
-                const isImageOnly = block.type === 'image';
-                const blockContent = isImageOnly ? '' : (block.content as string) || '';
-                const blockImgUrl = (block as { imageUrl?: string }).imageUrl;
-                const blockFull = (block as { imageFullWidth?: boolean }).imageFullWidth === true;
-                const blockLayout = blockFull ? 'above' : ((block as { imageLayout?: string }).imageLayout || (isImageOnly ? 'above' : 'side_by_side'));
-                const blockPct = Math.max(20, Math.min(80, (block as { imageWidthPercent?: number }).imageWidthPercent || 50));
-                const imgTag = blockImgUrl ? `<img src="${escapeImgSrc(blockImgUrl, 'content-block-image')}" alt="" loading="eager" style="max-width:100%;${blockFull ? 'width:100%;display:block;margin:0 auto;' : ''}max-height:${blockFull ? 520 : 280}px;object-fit:contain;border:1px solid #ddd;border-radius:4px" />` : '';
-                let innerHtml = '';
-                if (!imgTag) innerHtml = `<div class="task-q-additional-instruction">${blockContent || ''}</div>`;
-                else if (blockLayout === 'above') innerHtml = `<div style="margin-bottom:8px">${imgTag}</div><div class="task-q-additional-instruction">${blockContent || ''}</div>`;
-                else if (blockLayout === 'below') innerHtml = `<div class="task-q-additional-instruction">${blockContent || ''}</div><div style="margin-top:8px">${imgTag}</div>`;
-                else innerHtml = `<div style="display:flex;gap:16px;align-items:flex-start"><div style="flex:1;min-width:0"><div class="task-q-additional-instruction">${blockContent || ''}</div></div><div style="width:${blockPct}%;flex-shrink:0">${imgTag}</div></div>`;
-                html += `<div class="task-q-content-block mt-3">${blockHeaderHtml(block.headerText)}${innerHtml}</div>`;
-              } else if ((block.type === 'short_text' || block.type === 'long_text') && block.questionId) {
-                const childQ = questions.find((x) => x.question.id === block.questionId);
-                if (childQ) {
-                  const cq = childQ.question;
-                  const key = `q-${cq.id}`;
-                  const val = answers.get(key);
-                  const cqPm = (cq.pdf_meta as Record<string, unknown>) || {};
-                  const qWordLimit = typeof cqPm?.wordLimit === 'number' && cqPm.wordLimit > 0 ? cqPm.wordLimit : null;
-                  const blockClass = block.type === 'long_text' ? 'task-q-answer-block task-q-answer-large' : 'task-q-answer-block';
-                  const blockStyle = qWordLimit ? `min-height:${heightFromWordLimit(qWordLimit)}px;max-height:${heightFromWordLimit(qWordLimit)}px;height:${heightFromWordLimit(qWordLimit)}px;` : '';
-                  const cqImgUrl = cqPm?.imageUrl as string | undefined;
-                  const cqLayout = (cqPm?.imageLayout as string) || 'side_by_side';
-                  const cqPct = Math.max(20, Math.min(80, (cqPm?.imageWidthPercent as number) || 50));
-                  const cqImgTag = cqImgUrl ? `<img src="${escapeImgSrc(cqImgUrl, 'nested-question-image')}" alt="" loading="eager" style="max-width:100%;max-height:280px;object-fit:contain;border:1px solid #ddd;border-radius:4px" />` : '';
-                  const cqDisp = taskQNumById.get(cq.id);
-                  const cqNumPrefix = cqDisp != null ? `<span class="task-q-num-inline" style="margin-right:6px">Q${cqDisp}:</span>` : '';
-                  let labelHtml = `<div class="task-q-question-label">${cqNumPrefix}${labelToHtml(cq.label)}</div>`;
-                  if (cqImgTag) {
-                    if (cqLayout === 'above') labelHtml = `<div style="margin-bottom:8px">${cqImgTag}</div>${labelHtml}`;
-                    else if (cqLayout === 'below') labelHtml += `<div style="margin-top:8px">${cqImgTag}</div>`;
-                    else labelHtml = `<div style="display:flex;gap:16px;align-items:flex-start"><div style="flex:1;min-width:0">${labelHtml}</div><div style="width:${cqPct}%;flex-shrink:0">${cqImgTag}</div></div>`;
-                  }
-                  html += `<div class="task-q-content-block mt-3">${blockHeaderHtml(block.headerText)}${labelHtml}<div class="${blockClass}"${blockStyle ? ` style="${blockStyle}"` : ''}>${formatShortLongAnswerCellHtml(val as string | number | Record<string, unknown> | undefined)}</div></div>`;
-                }
-              } else if (block.type === 'grid_table' && block.questionId) {
-                const childQ = questions.find((x) => x.question.id === block.questionId);
-                if (childQ) {
-                  const { question: cq, rows: cRows } = childQ;
-                  const cqSat = trainerAssessments.get(cq.id);
-                  const cqSatYes = cqSat === 'yes';
-                  const cqSatNo = cqSat === 'no';
-                  const cqPm = (cq.pdf_meta as Record<string, unknown>) || {};
-                  const cColumnsMeta = getGridColumnsMeta(cqPm);
-                  const cCols = cColumnsMeta.map((c) => c.label);
-                  const cHeaderCaseRaw = String(cqPm.headerCase ?? 'original').toLowerCase();
-                  const cHeaderCase: GridHeaderCase = cHeaderCaseRaw === 'uppercase' || cHeaderCaseRaw === 'title' ? cHeaderCaseRaw : 'original';
-                  const cLayout = (cqPm.layout as string) || 'no_image';
-                  const cIsSplit = cLayout === 'split' || cLayout === 'polygon';
-                  const cIsNoImage = cLayout === 'no_image' || cLayout === 'no_image_no_header';
-                  const cNoImageIncludeBaseColumns = !cIsNoImage;
-                  const cFirstCol = (cqPm.firstColumnLabel as string) || (cIsNoImage ? 'Item' : cLayout === 'default' ? 'Shape' : 'Name');
-                  const cSecondCol = (cqPm.secondColumnLabel as string) || (cIsNoImage ? 'Description' : 'Image');
-                  const cFirstQuestionColIndex = cColumnsMeta.findIndex((c) => c.type === 'question');
-                  const cColumnWordLimits = (Array.isArray(cqPm.columnWordLimits) ? cqPm.columnWordLimits : []).map((v: unknown) => (typeof v === 'number' && v > 0 ? v : null)) as (number | null)[];
-                  html += `<div class="task-q-content-block mt-3">${blockHeaderHtml(block.headerText)}`;
-                  html += useTopRightSatisfactory
-                    ? `<div class="task-q-additional-grid"><div class="task-q-satisfactory-above"><span style="font-weight:600;margin-right:8px">Satisfactory response:</span><span class="grid-status-cb${cqSatYes ? ' checked' : ''}"></span> Yes <span style="margin-left:12px" class="grid-status-cb${cqSatNo ? ' checked' : ''}"></span> No</div><table class="section-table grid-table-no-border task-q-inner-table">`
-                    : '<div class="task-q-additional-grid"><table class="section-table grid-table-no-border task-q-inner-table">';
-                  if (cLayout !== 'no_image_no_header') {
-                    html += '<thead><tr>';
-                    if (cIsSplit) html += `<th>${formatGridHeader(cSecondCol, cHeaderCase)}</th>`;
-                    else if (cIsNoImage && cNoImageIncludeBaseColumns) html += `<th>${formatGridHeader(cFirstCol, cHeaderCase)}</th><th>${formatGridHeader(cSecondCol, cHeaderCase)}</th>`;
-                    else if (!cIsNoImage) html += `<th>${formatGridHeader(cFirstCol, cHeaderCase)}</th>`;
-                    for (const c of cCols) html += `<th>${formatGridHeader(c, cHeaderCase)}</th>`;
-                    html += '</tr></thead>';
-                  }
-                  html += '<tbody>';
-                  for (const r of cRows) {
-                    const key = `q-${cq.id}-${r.id}`;
-                    const val = answers.get(key) as Record<string, string> | undefined;
-                    const rowSat = trainerRowAssessments.get(key);
-                    const rowYes = rowSat === 'yes';
-                    const rowNo = rowSat === 'no';
-                    html += '<tr>';
-                    if (cIsSplit) html += `<td class="value-cell col-question">${r.row_image_url ? `${gridRowImgHtml(r.row_image_url)}<br/>${r.row_label}` : r.row_label}</td>`;
-                    else if (cIsNoImage && cNoImageIncludeBaseColumns) { html += `<td class="label-cell col-question">${r.row_label}</td>`;
-                      html += `<td class="value-cell col-question">${r.row_help || '—'}</td>`;
-                    } else if (!cIsNoImage) html += `<td class="label-cell col-question">${r.row_image_url ? `${gridRowImgHtml(r.row_image_url)}<br/>${r.row_label}` : r.row_label}</td>`;
-                    for (let ci = 0; ci < cCols.length; ci++) {
-                      const colType = cColumnsMeta[ci]?.type === 'question' ? 'question' : 'answer';
-                      const questionCell = cIsNoImage && !cNoImageIncludeBaseColumns && ci === cFirstQuestionColIndex ? (r.row_label || r.row_help || '—') : (r.row_help || '—');
-                      const cellVal = colType === 'question' ? questionCell : (val && typeof val === 'object' ? (val[`r${r.id}_c${ci}`] || '') : '');
-                      const cellClass = colType === 'question' ? 'value-cell col-question' : 'value-cell';
-                      const wl = cColumnWordLimits[ci];
-                      const cellStyle = colType === 'answer' && wl ? `min-height:${heightFromWordLimit(wl)}px;max-height:${heightFromWordLimit(wl)}px;height:${heightFromWordLimit(wl)}px;` : '';
-                      html += `<td class="${cellClass}"${cellStyle ? ` style="${cellStyle}"` : ''}>${cellVal}</td>`;
-                    }
-                    html += '</tr>';
-                  }
-                  if (!useTopRightSatisfactory) {
-                    html += '</tbody></table><div class="mt-3" style="margin-top:10px"><span style="font-weight:600;margin-right:8px">Satisfactory response:</span><span class="grid-status-cb' + (cqSatYes ? ' checked' : '') + '"></span> Yes <span style="margin-left:12px" class="grid-status-cb' + (cqSatNo ? ' checked' : '') + '"></span> No</div></div></div>';
-                  } else {
-                    html += '</tbody></table></div></div>';
-                  }
-                }
-              }
-            }
-            html += '</div>';
-          } else {
-          html += '<table class="section-table task-questions-table"><tbody>';
-          html += '<tr class="task-q-row-top">';
-          html += `<td class="task-q-num-cell">Q${qNum}:</td>`;
-          html += '<td class="task-q-question-label-cell">';
           const pmTop = (question.pdf_meta as Record<string, unknown>) || {};
           const textAboveHeader = String(pmTop.textAboveHeader ?? '').trim();
-          let labelCellContent = `<div class="task-q-question-label">${labelToHtml(question.label)}</div>` + (textAboveHeader ? `<div class="task-q-text-above-header">${labelToHtml(textAboveHeader)}</div>` : '');
+          let contentCellHtml = questionContentLabelHtml(question.label) + (textAboveHeader ? `<div class="task-q-text-above-header">${labelToHtml(textAboveHeader)}</div>` : '');
           const qImgUrl = pmTop?.imageUrl as string | undefined;
           const qFull = (pmTop?.imageFullWidth as boolean | undefined) === true;
           const qLayout = qFull ? 'above' : ((pmTop?.imageLayout as string) || 'side_by_side');
           const qPct = Math.max(20, Math.min(80, (pmTop?.imageWidthPercent as number) || 50));
           if (qImgUrl) {
             const qImgTag = `<img src="${escapeImgSrc(qImgUrl, 'question-image')}" alt="" loading="eager" style="max-width:100%;${qFull ? 'width:100%;display:block;margin:0 auto;' : ''}max-height:${qFull ? 520 : 280}px;object-fit:contain;border:1px solid #ddd;border-radius:4px" />`;
-            if (qLayout === 'above') labelCellContent = `<div style="margin-bottom:8px">${qImgTag}</div>${labelCellContent}`;
-            else if (qLayout === 'below') labelCellContent += `<div style="margin-top:8px">${qImgTag}</div>`;
-            else labelCellContent = `<div style="display:flex;gap:16px;align-items:flex-start"><div style="flex:1;min-width:0">${labelCellContent}</div><div style="width:${qPct}%;flex-shrink:0">${qImgTag}</div></div>`;
+            if (qLayout === 'above') contentCellHtml = `<div style="margin-bottom:8px">${qImgTag}</div>${contentCellHtml}`;
+            else if (qLayout === 'below') contentCellHtml += `<div style="margin-top:8px">${qImgTag}</div>`;
+            else contentCellHtml = `<div style="display:flex;gap:16px;align-items:flex-start"><div style="flex:1;min-width:0">${contentCellHtml}</div><div style="width:${qPct}%;flex-shrink:0">${qImgTag}</div></div>`;
           }
-          html += labelCellContent + '</td>';
-          html += '<td class="task-q-satisfactory-cell">';
-          html += '<div class="task-q-satisfactory-header">Satisfactory response</div>';
-          html += '<div class="task-q-radio-group"><div class="task-q-radio"><span class="radio-circle' + (satYes ? ' filled' : '') + '"></span>Yes</div>';
-          html += '<div class="task-q-radio"><span class="radio-circle' + (satNo ? ' filled' : '') + '"></span>No</div></div>';
-          html += '</td></tr>';
-          html += '<tr class="task-q-row-bottom">';
-          html += '<td colspan="3" class="task-q-answer-cell task-q-answer-full">';
+          html += renderQuestionBlockOpen({ qNum, contentCellHtml, satYes, satNo, boxClass });
           if (isGridTable) {
             const pm = (question.pdf_meta as Record<string, unknown>) || {};
             const columnsMeta = getGridColumnsMeta(pm);
@@ -2139,9 +1892,7 @@ function buildHtml(data: {
                 const cqLayout = (cqPm?.imageLayout as string) || 'side_by_side';
                 const cqPct = Math.max(20, Math.min(80, (cqPm?.imageWidthPercent as number) || 50));
                 const cqImgTag = cqImgUrl ? `<img src="${escapeImgSrc(cqImgUrl, 'nested-question-image')}" alt="" loading="eager" style="max-width:100%;max-height:280px;object-fit:contain;border:1px solid #ddd;border-radius:4px" />` : '';
-                const cqDispA1 = taskQNumById.get(cq.id);
-                const cqNumPrefixA1 = cqDispA1 != null ? `<span class="task-q-num-inline" style="margin-right:6px">Q${cqDispA1}:</span>` : '';
-                let labelHtml = `<div class="task-q-question-label">${cqNumPrefixA1}${labelToHtml(cq.label)}</div>`;
+                let labelHtml = questionContentLabelHtml(cq.label);
                 if (cqImgTag) {
                   if (cqLayout === 'above') labelHtml = `<div style="margin-bottom:8px">${cqImgTag}</div>${labelHtml}`;
                   else if (cqLayout === 'below') labelHtml += `<div style="margin-top:8px">${cqImgTag}</div>`;
@@ -2210,11 +1961,8 @@ function buildHtml(data: {
             }
             }
           }
-          html += '</td>';
-          html += '</tr>';
-          html += '</tbody></table>';
-          html += '</div>';
-        }
+
+          html += renderQuestionBlockClose();
         }
         html += '</div>'; // Close task-questions-page wrapper
       } else if (section.pdf_render_mode === 'task_results') {

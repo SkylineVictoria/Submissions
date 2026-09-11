@@ -64,12 +64,12 @@ function Donut({
       type="button"
       onClick={onClick}
       className={`flex w-full items-center gap-3 rounded-lg p-1 text-left transition-colors ${
-        active ? 'bg-[var(--brand)]/5' : 'hover:bg-gray-50/70'
+        active ? '' : 'hover:bg-[var(--surface-subtle)]'
       }`}
       title={label}
     >
       <svg width="84" height="84" viewBox="0 0 84 84" className="shrink-0">
-        <circle cx="42" cy="42" r={r} fill="none" stroke="#e5e7eb" strokeWidth="10" />
+        <circle cx="42" cy="42" r={r} fill="none" stroke="var(--border)" strokeWidth="10" />
         <circle
           cx="42"
           cy="42"
@@ -330,40 +330,40 @@ export const AdminDashboardPage: React.FC = () => {
           </button>
 
           <button type="button" className="text-left" onClick={() => navigate('/admin/students')} title="Go to students">
-            <Card className="hover:bg-gray-50/60">
+            <Card className="hover:bg-[var(--surface-subtle)]">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <p className="text-gray-600 text-sm font-medium">Students</p>
+                  <p className="text-[var(--text-secondary)] text-sm font-medium">Students</p>
                   <p className="text-3xl font-bold text-[var(--text)] mt-1">{stats?.totals.students ?? 0}</p>
-                  <p className="text-gray-500 text-xs mt-1">Active records</p>
+                  <p className="text-[var(--text-muted)] text-xs mt-1">Active records</p>
                 </div>
-                <Users className="w-10 h-10 text-gray-300" />
+                <Users className="w-10 h-10 text-[var(--icon-muted)]" />
               </div>
             </Card>
           </button>
 
           <button type="button" className="text-left" onClick={() => navigate('/admin/users')} title="Go to users (trainers)">
-            <Card className="hover:bg-gray-50/60">
+            <Card className="hover:bg-[var(--surface-subtle)]">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <p className="text-gray-600 text-sm font-medium">Trainers</p>
+                  <p className="text-[var(--text-secondary)] text-sm font-medium">Trainers</p>
                   <p className="text-3xl font-bold text-[var(--text)] mt-1">{stats?.totals.trainers ?? 0}</p>
-                  <p className="text-gray-500 text-xs mt-1">Users with trainer role</p>
+                  <p className="text-[var(--text-muted)] text-xs mt-1">Users with trainer role</p>
                 </div>
-                <UserRoundCheck className="w-10 h-10 text-gray-300" />
+                <UserRoundCheck className="w-10 h-10 text-[var(--icon-muted)]" />
               </div>
             </Card>
           </button>
 
           <button type="button" className="text-left" onClick={() => navigate('/admin/users')} title="Go to users (admins)">
-            <Card className="hover:bg-gray-50/60">
+            <Card className="hover:bg-[var(--surface-subtle)]">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <p className="text-gray-600 text-sm font-medium">Admins</p>
+                  <p className="text-[var(--text-secondary)] text-sm font-medium">Admins</p>
                   <p className="text-3xl font-bold text-[var(--text)] mt-1">{stats?.totals.admins ?? 0}</p>
-                  <p className="text-gray-500 text-xs mt-1">Users with admin or super admin role</p>
+                  <p className="text-[var(--text-muted)] text-xs mt-1">Users with admin or super admin role</p>
                 </div>
-                <ClipboardCheck className="w-10 h-10 text-gray-300" />
+                <ClipboardCheck className="w-10 h-10 text-[var(--icon-muted)]" />
               </div>
             </Card>
           </button>
@@ -374,14 +374,21 @@ export const AdminDashboardPage: React.FC = () => {
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
             <div>
               <h2 className="text-lg font-bold text-[var(--text)]">Workflow (filtered)</h2>
-              <p className="text-xs text-gray-500 mt-1">Awaiting student = draft, awaiting trainer/office = role stage, completed = locked.</p>
+              <p className="text-xs text-[var(--text-muted)] mt-1">Awaiting student = draft, awaiting trainer/office = role stage, completed = locked.</p>
             </div>
-            <div className="text-xs text-gray-600">
-              Total in range: <strong className="text-gray-900">{totalInRange}</strong>
+            <div className="text-xs text-[var(--text-secondary)]">
+              Total in range: <strong className="text-[var(--text-primary)]">{totalInRange}</strong>
             </div>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-            <Card className="border border-gray-100" padding="sm">
+            <Card
+              className={
+                status === 'awaiting_student'
+                  ? 'border border-[var(--orange-border)] bg-[var(--orange-soft)]'
+                  : 'border border-[var(--workflow-border)]'
+              }
+              padding="sm"
+            >
               <Donut
                 value={stats?.workflow.awaiting_student ?? 0}
                 total={totalInRange}
@@ -391,7 +398,14 @@ export const AdminDashboardPage: React.FC = () => {
                 onClick={() => setStatus('awaiting_student')}
               />
             </Card>
-            <Card className="border border-gray-100" padding="sm">
+            <Card
+              className={
+                status === 'awaiting_trainer'
+                  ? 'border border-[var(--orange-border)] bg-[var(--orange-soft)]'
+                  : 'border border-[var(--workflow-border)]'
+              }
+              padding="sm"
+            >
               <Donut
                 value={stats?.workflow.awaiting_trainer ?? 0}
                 total={totalInRange}
@@ -401,7 +415,14 @@ export const AdminDashboardPage: React.FC = () => {
                 onClick={() => setStatus('awaiting_trainer')}
               />
             </Card>
-            <Card className="border border-gray-100" padding="sm">
+            <Card
+              className={
+                status === 'awaiting_office'
+                  ? 'border border-[var(--orange-border)] bg-[var(--orange-soft)]'
+                  : 'border border-[var(--workflow-border)]'
+              }
+              padding="sm"
+            >
               <Donut
                 value={stats?.workflow.awaiting_office ?? 0}
                 total={totalInRange}
@@ -411,7 +432,14 @@ export const AdminDashboardPage: React.FC = () => {
                 onClick={() => setStatus('awaiting_office')}
               />
             </Card>
-            <Card className="border border-gray-100" padding="sm">
+            <Card
+              className={
+                status === 'completed'
+                  ? 'border border-[var(--orange-border)] bg-[var(--orange-soft)]'
+                  : 'border border-[var(--workflow-border)]'
+              }
+              padding="sm"
+            >
               <Donut
                 value={stats?.workflow.completed ?? 0}
                 total={totalInRange}
@@ -446,7 +474,7 @@ export const AdminDashboardPage: React.FC = () => {
             </Button>
           </div>
 
-          <div className="border border-gray-200 rounded-lg overflow-hidden">
+          <div className="border border-[var(--border)] rounded-lg overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full min-w-[760px] text-sm border-collapse">
                 <thead>

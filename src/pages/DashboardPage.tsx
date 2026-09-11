@@ -291,7 +291,7 @@ export const DashboardPage: React.FC = () => {
               </div>
             </div>
             {selectedBatchId && (
-              <div className="border border-gray-100 rounded-lg overflow-hidden">
+              <div className="border border-[var(--border)] rounded-lg overflow-hidden">
                 {batchStudentsLoading ? (
                   <Loader variant="dots" size="md" message="Loading students..." />
                 ) : batchStudents.length === 0 ? (
@@ -347,7 +347,7 @@ export const DashboardPage: React.FC = () => {
             <Loader variant="dots" size="lg" message="Loading assessments..." />
           ) : rows.length === 0 ? (
             <div className="py-12 text-center text-gray-500">
-              <ClipboardCheck className="w-12 h-12 mx-auto text-gray-300 mb-3" />
+              <ClipboardCheck className="w-12 h-12 mx-auto text-[var(--icon-muted)] mb-3" />
               <p>No pending assessments.</p>
               <p className="text-sm mt-1">
                 {role === 'trainer'

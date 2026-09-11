@@ -22,12 +22,12 @@ export const AdminEnrollmentPage: React.FC = () => {
             onClick={() => navigate('/admin/enrollment/induction')}
             className="group text-left"
           >
-            <div className="aspect-square rounded-2xl border border-[var(--border)] bg-white shadow-sm hover:shadow-md transition-shadow p-5 flex flex-col">
+            <div className="aspect-square rounded-2xl border border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow-card)] hover:shadow-md transition-shadow p-5 flex flex-col">
               <div className="flex items-center justify-between">
                 <div className="h-11 w-11 rounded-xl bg-[#f97316]/10 text-[#ea580c] flex items-center justify-center">
                   <ClipboardList className="w-6 h-6" />
                 </div>
-                <GraduationCap className="w-5 h-5 text-gray-300 group-hover:text-[#ea580c] transition-colors" />
+                <GraduationCap className="w-5 h-5 text-[var(--icon-muted)] group-hover:text-[#ea580c] transition-colors" />
               </div>
               <div className="mt-5">
                 <div className="text-base font-semibold text-[var(--text)]">Induction</div>
@@ -42,12 +42,12 @@ export const AdminEnrollmentPage: React.FC = () => {
             onClick={() => navigate('/admin/enrollment/admissions')}
             className="group text-left"
           >
-            <div className="aspect-square rounded-2xl border border-[var(--border)] bg-white shadow-sm hover:shadow-md transition-shadow p-5 flex flex-col">
+            <div className="aspect-square rounded-2xl border border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow-card)] hover:shadow-md transition-shadow p-5 flex flex-col">
               <div className="flex items-center justify-between">
                 <div className="h-11 w-11 rounded-xl bg-[#2563eb]/10 text-[#2563eb] flex items-center justify-center">
                   <FileText className="w-6 h-6" />
                 </div>
-                <GraduationCap className="w-5 h-5 text-gray-300 group-hover:text-[#2563eb] transition-colors" />
+                <GraduationCap className="w-5 h-5 text-[var(--icon-muted)] group-hover:text-[#2563eb] transition-colors" />
               </div>
               <div className="mt-5">
                 <div className="text-base font-semibold text-[var(--text)]">Admissions</div>

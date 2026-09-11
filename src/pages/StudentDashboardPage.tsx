@@ -93,14 +93,14 @@ function WorkflowProgressColumns({
         ? 'text-emerald-600'
         : state === 'pending'
           ? 'text-amber-500'
-          : 'text-gray-300';
+          : 'text-[var(--icon-muted)]';
     const textClass = terminalFailed
       ? 'text-red-700 font-semibold'
       : state === 'done'
         ? 'text-emerald-700 font-medium'
         : state === 'pending'
           ? 'text-amber-700 font-medium'
-          : 'text-gray-500';
+          : 'text-[var(--text-muted)]';
     return (
       <div className="inline-flex items-center gap-1.5 text-xs whitespace-nowrap">
         <CheckCircle className={`w-4 h-4 shrink-0 ${iconClass}`} />
