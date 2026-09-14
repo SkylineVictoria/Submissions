@@ -165,8 +165,8 @@ export const ASSESSMENT_QUESTION_BLOCK_CSS = `
       white-space: nowrap;
     }
     .task-q-satisfactory-cell .task-q-radio .radio-circle {
-      width: 11px;
-      height: 11px;
+      width: 15px;
+      height: 15px;
       border: 1px solid #374151;
       border-radius: 50%;
       flex-shrink: 0;
