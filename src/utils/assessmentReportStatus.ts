@@ -1,4 +1,4 @@
-import { isDidNotAttemptAnyFailure, melDateString } from './assessmentRowUi';
+import { calculateAssessmentDisplayStatus, melDateString } from './assessmentRowUi';
 
 export type AssessmentReportStatus = 'Completed' | 'In Progress' | 'Failed';
 
@@ -10,10 +10,11 @@ export function getAssessmentReportStatus(row: {
   no_attempt_rollovers?: number | null;
 }): AssessmentReportStatus {
   const st = String(row.status ?? '').trim();
-  if (st === 'locked' && !isDidNotAttemptAnyFailure({ didNotAttempt: row.did_not_attempt, noAttemptRollovers: row.no_attempt_rollovers })) {
+  const display = calculateAssessmentDisplayStatus(row);
+  if (st === 'locked' && !display.terminalDidNotAttempt) {
     return 'Completed';
   }
-  if (isDidNotAttemptAnyFailure({ didNotAttempt: row.did_not_attempt, noAttemptRollovers: row.no_attempt_rollovers })) {
+  if (display.terminalDidNotAttempt) {
     return 'Failed';
   }
   const end = String(row.end_date ?? '').trim();

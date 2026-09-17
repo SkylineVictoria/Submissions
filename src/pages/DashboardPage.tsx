@@ -30,6 +30,7 @@ import {
   maskCompetentWhileAwaitingTrainer,
   withinInstanceAccessWindow,
   getAssessmentOutcomeDisplay,
+  calculateAssessmentFinalStatus,
   type AttemptResult,
 } from '../utils/assessmentRowUi';
 import { FormDocumentsPanel } from '../components/documents/FormDocumentsPanel';
@@ -83,7 +84,13 @@ export const DashboardPage: React.FC = () => {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const trainerHighlightCourseId = useTrainerHighlightCourseId();
   const [attemptSummaryByInstanceId, setAttemptSummaryByInstanceId] = useState<
-    Record<number, { final_attempt_1_result: AttemptResult; final_attempt_2_result: AttemptResult; final_attempt_3_result: AttemptResult }>
+    Record<number, {
+      final_attempt_1_result: AttemptResult;
+      final_attempt_2_result: AttemptResult;
+      final_attempt_3_result: AttemptResult;
+      admin_initial_checked?: boolean;
+      admin_updated_checked?: boolean;
+    }>
   >({});
 
   const loadData = useCallback(
@@ -125,7 +132,13 @@ export const DashboardPage: React.FC = () => {
       const m = await fetchAssessmentSummaries(ids);
       if (cancelled) return;
       setAttemptSummaryByInstanceId(
-        m as Record<number, { final_attempt_1_result: AttemptResult; final_attempt_2_result: AttemptResult; final_attempt_3_result: AttemptResult }>
+        m as Record<number, {
+          final_attempt_1_result: AttemptResult;
+          final_attempt_2_result: AttemptResult;
+          final_attempt_3_result: AttemptResult;
+          admin_initial_checked?: boolean;
+          admin_updated_checked?: boolean;
+        }>
       );
     })();
     return () => {
@@ -378,6 +391,14 @@ export const DashboardPage: React.FC = () => {
                       sum?.final_attempt_2_result ?? null,
                       sum?.final_attempt_3_result ?? null,
                     ];
+                    const officeAssessmentCompleted =
+                      Boolean(row.office_assessment_completed) ||
+                      (Boolean(sum?.admin_initial_checked) && Boolean(sum?.admin_updated_checked));
+                    const finalStatus = calculateAssessmentFinalStatus({
+                      ...row,
+                      attempt_results: rawAttemptResults,
+                      office_assessment_completed: officeAssessmentCompleted,
+                    });
                     const attemptResults = maskCompetentWhileAwaitingTrainer(row, rawAttemptResults);
                     const displaySum = sum
                       ? {
@@ -400,6 +421,13 @@ export const DashboardPage: React.FC = () => {
                     const missedAttemptText = getMissedAttemptWindowText({
                       noAttemptRollovers: row.no_attempt_rollovers ?? null,
                       didNotAttempt: row.did_not_attempt ?? null,
+                      status: row.status,
+                      submissionCount: row.submission_count,
+                      submittedAt: row.submitted_at,
+                      answerCount: row.answer_count,
+                      attemptResults: rawAttemptResults,
+                      trainerAssessmentExists: row.trainer_assessment_exists,
+                      endDate: row.end_date,
                     });
                     const ui = computeRowUi({
                       row: {
@@ -407,6 +435,8 @@ export const DashboardPage: React.FC = () => {
                         did_not_attempt: row.did_not_attempt ?? null,
                         status: row.status,
                         role_context: row.role_context,
+                        workflow_status: row.workflow_status,
+                        office_assessment_completed: officeAssessmentCompleted,
                       },
                       attemptResults,
                       ignoreEndDateForAccess: true,
@@ -464,15 +494,27 @@ export const DashboardPage: React.FC = () => {
                                 className={`inline-flex w-fit rounded-full px-2.5 py-1 text-xs font-medium ${getInstanceWorkflowBadgeClass({
                                   status: row.status,
                                   role_context: row.role_context,
+                                  workflow_status: row.workflow_status,
                                   did_not_attempt: row.did_not_attempt ?? null,
                                   no_attempt_rollovers: row.no_attempt_rollovers ?? null,
+                                  submission_count: row.submission_count,
+                                  submitted_at: row.submitted_at,
+                                  answer_count: row.answer_count,
+                                  attempt_results: rawAttemptResults,
+                                  office_assessment_completed: officeAssessmentCompleted,
                                 })}`}
                               >
                                 {getInstanceWorkflowLabel({
                                   status: row.status,
                                   role_context: row.role_context,
+                                  workflow_status: row.workflow_status,
                                   did_not_attempt: row.did_not_attempt ?? null,
                                   no_attempt_rollovers: row.no_attempt_rollovers ?? null,
+                                  submission_count: row.submission_count,
+                                  submitted_at: row.submitted_at,
+                                  answer_count: row.answer_count,
+                                  attempt_results: rawAttemptResults,
+                                  office_assessment_completed: officeAssessmentCompleted,
                                 })}
                               </span>
                               <div
@@ -484,22 +526,24 @@ export const DashboardPage: React.FC = () => {
                                       : outcome.className
                                 }`}
                               >
-                                {ui.kind === 'past_not_competent'
+                                {finalStatus.status === 'completed'
+                                  ? 'Completed'
+                                  : ui.kind === 'past_not_competent'
                                   ? ui.outcomeLabel
                                   : ui.kind === 'past_competent'
                                     ? ui.outcomeLabel
                                     : outcome.label}
                               </div>
-                              {attemptDoneText ? <div className="text-[11px] text-gray-600">{attemptDoneText}</div> : null}
-                              {ui.kind === 'in_progress' && missedAttemptText ? (
+                              {finalStatus.status !== 'completed' && attemptDoneText ? <div className="text-[11px] text-gray-600">{attemptDoneText}</div> : null}
+                              {finalStatus.status !== 'completed' && ui.kind === 'in_progress' && missedAttemptText ? (
                                 <div className="text-[11px] font-medium text-amber-700">{missedAttemptText}</div>
                               ) : null}
-                              {trainerAttemptFailedText ? (
+                              {finalStatus.status !== 'completed' && trainerAttemptFailedText ? (
                                 <div className="text-[11px] font-medium text-red-700">{trainerAttemptFailedText}</div>
                               ) : null}
-                              {disabled && (ui.kind === 'future' || ui.kind === 'expired') ? (
+                              {!finalStatus.suppressExpiry && disabled && (ui.kind === 'future' || ui.kind === 'expired') ? (
                                 <div className="text-xs text-amber-700">{ui.reason}</div>
-                              ) : !win.ok ? (
+                              ) : !finalStatus.suppressExpiry && !win.ok ? (
                                 <div className="text-xs text-amber-700">{win.reason}</div>
                               ) : null}
                             </div>

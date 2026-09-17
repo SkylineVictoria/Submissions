@@ -28,6 +28,8 @@ export function normalizeInstanceWorkflowStatus(inst: InstanceWorkflowInput): In
           ? roleCtx === 'office'
             ? 'waiting_office'
             : 'waiting_trainer'
+          : legacyStatus === 'incomplete'
+            ? 'awaiting_submission'
           : legacyStatus === 'draft' && roleCtx === 'trainer'
             ? 'waiting_trainer'
             : legacyStatus === 'draft' && roleCtx === 'office'

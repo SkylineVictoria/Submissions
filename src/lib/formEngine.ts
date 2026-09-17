@@ -6,7 +6,11 @@ import {
   SupabaseBackoffError,
 } from './supabaseRequestGuard';
 import { createDefaultSectionsToStep } from './defaultFormSteps';
-import { isDidNotAttemptAnyFailure } from '../utils/assessmentRowUi';
+import {
+  isDidNotAttemptAnyFailure,
+  shouldAutoResetTerminalAssessmentOnEndDateChange,
+  type AttemptResult,
+} from '../utils/assessmentRowUi';
 import { mergeSaveValuePreservingExisting } from '../utils/formAnswerMerge';
 import {
   findDuplicateAssessmentTaskStepsByRowId,
@@ -1041,18 +1045,18 @@ export async function fetchAssessmentSummaryData(instanceId: number): Promise<As
   };
 }
 
-export async function fetchAssessmentSummaries(instanceIds: number[]): Promise<Record<number, Pick<AssessmentSummaryDataEntry, 'final_attempt_1_result' | 'final_attempt_2_result' | 'final_attempt_3_result'>>> {
+export async function fetchAssessmentSummaries(instanceIds: number[]): Promise<Record<number, Pick<AssessmentSummaryDataEntry, 'final_attempt_1_result' | 'final_attempt_2_result' | 'final_attempt_3_result' | 'admin_initial_checked' | 'admin_updated_checked'>>> {
   const ids = Array.from(new Set((instanceIds || []).map(Number).filter((n) => Number.isFinite(n) && n > 0)));
   if (ids.length === 0) return {};
   const { data, error } = await supabase
     .from('skyline_form_assessment_summary_data')
-    .select('instance_id, final_attempt_1_result, final_attempt_2_result, final_attempt_3_result')
+    .select('instance_id, final_attempt_1_result, final_attempt_2_result, final_attempt_3_result, admin_initial_checked, admin_updated_checked')
     .in('instance_id', ids);
   if (error) {
     console.error('fetchAssessmentSummaries error', error);
     return {};
   }
-  const out: Record<number, Pick<AssessmentSummaryDataEntry, 'final_attempt_1_result' | 'final_attempt_2_result' | 'final_attempt_3_result'>> = {};
+  const out: Record<number, Pick<AssessmentSummaryDataEntry, 'final_attempt_1_result' | 'final_attempt_2_result' | 'final_attempt_3_result' | 'admin_initial_checked' | 'admin_updated_checked'>> = {};
   for (const r of (data as Array<Record<string, unknown>>) || []) {
     const id = Number(r.instance_id);
     if (!Number.isFinite(id) || id <= 0) continue;
@@ -1060,6 +1064,8 @@ export async function fetchAssessmentSummaries(instanceIds: number[]): Promise<R
       final_attempt_1_result: (r.final_attempt_1_result as string) ?? null,
       final_attempt_2_result: (r.final_attempt_2_result as string) ?? null,
       final_attempt_3_result: (r.final_attempt_3_result as string) ?? null,
+      admin_initial_checked: Boolean(r.admin_initial_checked ?? false),
+      admin_updated_checked: Boolean(r.admin_updated_checked ?? false),
     };
   }
   return out;
@@ -1312,6 +1318,8 @@ export async function clearAssessmentAttemptHistory(instanceId: number): Promise
     student_sig_3: null,
     student_date_3: null,
     student_overall_feedback: null,
+    admin_initial_checked: false,
+    admin_updated_checked: false,
   });
 
   const { error: resultsError } = await supabase
@@ -1332,6 +1340,16 @@ export async function clearAssessmentAttemptHistory(instanceId: number): Promise
   if (resultsError) {
     console.error('clearAssessmentAttemptHistory results_data error', resultsError);
   }
+
+  const resetTables = [
+    'skyline_form_trainer_assessments',
+    'skyline_form_trainer_row_assessments',
+    'skyline_form_results_office',
+  ] as const;
+  for (const table of resetTables) {
+    const { error } = await supabase.from(table).delete().eq('instance_id', instanceId);
+    if (error) console.error(`clearAssessmentAttemptHistory ${table} error`, error);
+  }
 }
 
 export async function updateFormInstanceDates(
@@ -1343,11 +1361,9 @@ export async function updateFormInstanceDates(
   const changingEnd = 'end_date' in updates;
   if (!changingStart && !changingEnd) return;
 
-  const resetAttempts = Boolean(options?.resetAttempts);
-
   const { data: current, error: fetchError } = await supabase
     .from('skyline_form_instances')
-    .select('did_not_attempt, no_attempt_rollovers, status, role_context')
+    .select('did_not_attempt, no_attempt_rollovers, status, role_context, workflow_status')
     .eq('id', instanceId)
     .maybeSingle();
   if (fetchError) {
@@ -1365,10 +1381,19 @@ export async function updateFormInstanceDates(
       didNotAttempt: (current as { did_not_attempt?: boolean | null } | null)?.did_not_attempt,
       noAttemptRollovers: (current as { no_attempt_rollovers?: number | null } | null)?.no_attempt_rollovers,
     });
-  const isTerminalExhausted = isDidNotAttemptAnyFailure({
-    didNotAttempt: (current as { did_not_attempt?: boolean | null } | null)?.did_not_attempt,
-    noAttemptRollovers: (current as { no_attempt_rollovers?: number | null } | null)?.no_attempt_rollovers,
-  });
+  const workflowStatus = String(
+    (current as { workflow_status?: string | null } | null)?.workflow_status ?? '',
+  ).trim();
+  const resetAttempts =
+    Boolean(options?.resetAttempts) ||
+    shouldAutoResetTerminalAssessmentOnEndDateChange(
+      {
+        did_not_attempt: (current as { did_not_attempt?: boolean | null } | null)?.did_not_attempt,
+        no_attempt_rollovers: (current as { no_attempt_rollovers?: number | null } | null)?.no_attempt_rollovers,
+        workflow_status: workflowStatus,
+      },
+      changingEnd,
+    );
 
   if (resetAttempts) {
     payload.status = 'draft';
@@ -1381,8 +1406,6 @@ export async function updateFormInstanceDates(
     payload.trainer_nyc_assessed_on_1 = null;
     payload.trainer_nyc_assessed_on_2 = null;
     payload.trainer_nyc_assessed_on_3 = null;
-  } else if (changingEnd && isTerminalExhausted) {
-    // Exhausted assessments require explicit reset confirmation — only update dates here.
   } else if (changingEnd) {
     payload.did_not_attempt = false;
     payload.no_attempt_rollovers = 0;
@@ -1576,7 +1599,6 @@ export async function issueInstanceAccessLink(
 ): Promise<string | null> {
   const iid = Number(instanceId);
   if (roleContext === 'student' && Number.isFinite(iid) && iid > 0) {
-    await syncNoAttemptRollover([iid]);
     const courseAccess = await getStudentAssessmentAccess({ instanceId: iid });
     if (!studentMayOpenAssessment(courseAccess)) {
       console.warn('issueInstanceAccessLink blocked by course lifecycle', {
@@ -1651,57 +1673,6 @@ export async function studentLoginWithOtp(email: string, otp: string): Promise<{
   return { ok: true, studentId: sid, email: String(rows[0].email ?? e) };
 }
 
-const isIsoDate = (s: string): boolean => /^\d{4}-\d{2}-\d{2}$/.test(String(s || '').trim());
-
-async function syncNoAttemptRollover(
-  instanceIds: number[]
-): Promise<
-  Map<
-    number,
-    {
-      end_date: string | null;
-      no_attempt_rollovers: number;
-      did_not_attempt: boolean;
-      role_context: string | null;
-      status: string | null;
-    }
-  >
-> {
-  const ids = (instanceIds || []).map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0);
-  const out = new Map<
-    number,
-    {
-      end_date: string | null;
-      no_attempt_rollovers: number;
-      did_not_attempt: boolean;
-      role_context: string | null;
-      status: string | null;
-    }
-  >();
-  if (ids.length === 0) return out;
-
-  const { data, error } = await supabase.rpc('skyline_sync_no_attempt_rollover', { p_instance_ids: ids });
-  if (error) {
-    console.warn('syncNoAttemptRollover: skyline_sync_no_attempt_rollover RPC failed', error);
-    return out;
-  }
-
-  const rows = (data as Array<Record<string, unknown>> | null) || [];
-  for (const r of rows) {
-    const id = Number(r.id);
-    if (!Number.isFinite(id) || id <= 0) continue;
-    const end = r.end_date != null ? String(r.end_date).trim() : '';
-    out.set(id, {
-      end_date: end && isIsoDate(end) ? end : null,
-      no_attempt_rollovers: Number(r.no_attempt_rollovers ?? 0) || 0,
-      did_not_attempt: Boolean(r.did_not_attempt ?? false),
-      role_context: r.role_context != null ? String(r.role_context).trim() || null : null,
-      status: r.status != null ? String(r.status).trim() || null : null,
-    });
-  }
-  return out;
-}
-
 export async function listStudentAssessmentsPaged(
   studentId: number,
   page = 1,
@@ -1715,7 +1686,7 @@ export async function listStudentAssessmentsPaged(
   let query = supabase
     .from('skyline_form_instances')
     .select(
-      'id, form_id, student_id, status, role_context, created_at, submitted_at, submission_count, start_date, end_date, no_attempt_rollovers, did_not_attempt, skyline_students!inner(id, first_name, last_name, name, email), skyline_forms!inner(id, name, version)',
+      'id, form_id, student_id, status, role_context, workflow_status, created_at, submitted_at, submission_count, start_date, end_date, no_attempt_rollovers, did_not_attempt, skyline_form_answers(count), skyline_form_trainer_assessments(count), skyline_form_trainer_row_assessments(count), skyline_form_assessment_summary_data(final_attempt_1_result, final_attempt_2_result, final_attempt_3_result, admin_initial_checked, admin_updated_checked), skyline_students!inner(id, first_name, last_name, name, email), skyline_forms!inner(id, name, version)',
       { count: 'exact' }
     )
     .eq('student_id', sid)
@@ -1756,8 +1727,6 @@ export async function listStudentAssessmentsPaged(
     }
   }
 
-  const rolloverMap = await syncNoAttemptRollover(instanceIds);
-
   const mapped = rows.map((r) => {
       const form = (r.skyline_forms as { name?: string | null; version?: string | null } | null) ?? null;
       const stu = (r.skyline_students as { first_name?: string | null; last_name?: string | null; name?: string | null; email?: string | null } | null) ?? null;
@@ -1765,9 +1734,26 @@ export async function listStudentAssessmentsPaged(
       const last = String(stu?.last_name ?? '').trim();
       const student_name = [first, last].filter(Boolean).join(' ').trim() || String(stu?.name ?? '') || 'Student';
       const baseId = Number(r.id);
-      const synced = rolloverMap.get(baseId);
-      const roleCtx = synced?.role_context ?? String(r.role_context ?? 'student');
+      const roleCtx = String(r.role_context ?? 'student');
       const link_expired = tokenMap.get(`${Number(r.id)}:student`) !== false;
+      const relationCount = (value: unknown): number => {
+        const first = Array.isArray(value) ? value[0] : null;
+        return Math.max(0, Number((first as { count?: number } | null)?.count ?? 0) || 0);
+      };
+      const summary = (
+        Array.isArray(r.skyline_form_assessment_summary_data)
+          ? r.skyline_form_assessment_summary_data[0]
+          : r.skyline_form_assessment_summary_data
+      ) as Record<string, unknown> | null;
+      const attemptResults = [
+        summary?.final_attempt_1_result ?? null,
+        summary?.final_attempt_2_result ?? null,
+        summary?.final_attempt_3_result ?? null,
+      ] as AttemptResult[];
+      const trainerAssessmentExists =
+        attemptResults.some((result) => result !== null) ||
+        relationCount(r.skyline_form_trainer_assessments) > 0 ||
+        relationCount(r.skyline_form_trainer_row_assessments) > 0;
       return {
         id: baseId,
         form_id: Number(r.form_id),
@@ -1776,15 +1762,23 @@ export async function listStudentAssessmentsPaged(
         student_id: Number(r.student_id),
         student_name,
         student_email: String(stu?.email ?? ''),
-        status: synced?.status ?? String(r.status ?? 'draft'),
+        status: String(r.status ?? 'draft'),
         role_context: String(roleCtx),
+        workflow_status: r.workflow_status != null ? String(r.workflow_status) : null,
         created_at: String(r.created_at ?? ''),
         submitted_at: r.submitted_at ? String(r.submitted_at) : null,
         submission_count: Number((r as { submission_count?: number | null }).submission_count ?? 0) || 0,
         start_date: (r as { start_date?: string | null }).start_date ? String((r as { start_date?: string | null }).start_date) : null,
-        end_date: synced?.end_date ?? ((r as { end_date?: string | null }).end_date ? String((r as { end_date?: string | null }).end_date) : null),
-        no_attempt_rollovers: synced?.no_attempt_rollovers ?? (r as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
-        did_not_attempt: synced?.did_not_attempt ?? (r as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
+        end_date: (r as { end_date?: string | null }).end_date ? String((r as { end_date?: string | null }).end_date) : null,
+        no_attempt_rollovers: (r as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
+        did_not_attempt: (r as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
+        answer_count: relationCount(r.skyline_form_answers),
+        attempt_results: attemptResults,
+        trainer_result: [...attemptResults].reverse().find((result) => result !== null) ?? null,
+        trainer_assessment_exists: trainerAssessmentExists,
+        office_assessment_completed:
+          String(r.workflow_status ?? '').trim() === 'completed' ||
+          (Boolean(summary?.admin_initial_checked) && Boolean(summary?.admin_updated_checked)),
         link_expired,
       };
     });
@@ -1828,10 +1822,6 @@ export async function validateInstanceAccessToken(
   }
 
   if (role === 'student') {
-    const rid = Number(instanceId);
-    const rolloverMap =
-      Number.isFinite(rid) && rid > 0 ? await syncNoAttemptRollover([rid]) : new Map();
-    const synced = rolloverMap.get(rid);
     const { data: inst } = await supabase
       .from('skyline_form_instances')
       .select('form_id, student_id, start_date, end_date, did_not_attempt')
@@ -1852,8 +1842,7 @@ export async function validateInstanceAccessToken(
         }
       }
 
-      const didNotAttempt =
-        synced?.did_not_attempt ?? Boolean((inst as { did_not_attempt?: boolean | null }).did_not_attempt);
+      const didNotAttempt = Boolean((inst as { did_not_attempt?: boolean | null }).did_not_attempt);
       if (didNotAttempt) {
         return {
           valid: false,
@@ -1864,7 +1853,7 @@ export async function validateInstanceAccessToken(
       }
 
       const startDate = (inst as { start_date?: string | null }).start_date ?? null;
-      const endDateRaw = synced?.end_date ?? (inst as { end_date?: string | null }).end_date ?? null;
+      const endDateRaw = (inst as { end_date?: string | null }).end_date ?? null;
       const endDate = endDateRaw != null ? String(endDateRaw).trim() : null;
       const todayMel = getMelbourneDateStr(new Date());
       const start = (startDate ?? '').trim();
@@ -3043,6 +3032,16 @@ export interface SubmittedInstanceRow {
   end_date: string | null;
   no_attempt_rollovers?: number | null;
   did_not_attempt?: boolean | null;
+  /** Number of persisted student answers returned with dashboard rows. */
+  answer_count?: number;
+  /** Final trainer outcomes, ordered by attempt. */
+  attempt_results?: AttemptResult[];
+  /** Latest non-null final trainer outcome. */
+  trainer_result?: AttemptResult;
+  /** True when any trainer marking row or final trainer outcome exists. */
+  trainer_assessment_exists?: boolean;
+  /** Final office/admin approval inferred from workflow and office checks. */
+  office_assessment_completed?: boolean;
   /** Course IDs this form is linked to (via `skyline_course_forms`). Filled for list queries that need trainer course highlight. */
   form_course_ids?: number[];
   /** True if the link for this role is revoked or past expiry (show Enable); false = active (show Expire) */
@@ -3626,7 +3625,35 @@ export async function listSubmittedInstancesPaged(
   const total = rowsRaw.length > 0 ? Number(rowsRaw[0].total_count ?? rowsRaw.length) : 0;
   const instanceIds = rowsRaw.map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0);
 
-  const rolloverMap = await syncNoAttemptRollover(instanceIds);
+  const instanceStateMap = new Map<
+    number,
+    {
+      status: string | null;
+      role_context: string | null;
+      workflow_status: string | null;
+      no_attempt_rollovers: number | null;
+      did_not_attempt: boolean | null;
+    }
+  >();
+  if (instanceIds.length > 0) {
+    const { data: instanceStates, error: stateError } = await supabase
+      .from('skyline_form_instances')
+      .select('id, status, role_context, workflow_status, no_attempt_rollovers, did_not_attempt')
+      .in('id', instanceIds);
+    if (stateError) {
+      console.error('assessment directory instance state read error', stateError);
+    } else {
+      for (const state of instanceStates ?? []) {
+        instanceStateMap.set(Number(state.id), {
+          status: state.status,
+          role_context: state.role_context,
+          workflow_status: state.workflow_status,
+          no_attempt_rollovers: state.no_attempt_rollovers,
+          did_not_attempt: state.did_not_attempt,
+        });
+      }
+    }
+  }
 
   const now = Date.now();
   const tokenMap = new Map<string, boolean>();
@@ -3644,8 +3671,8 @@ export async function listSubmittedInstancesPaged(
   }
   const mappedDir = rowsRaw.map((r) => {
       const baseId = Number(r.id);
-      const synced = rolloverMap.get(baseId);
-      const roleCtx = synced?.role_context ?? String(r.role_context ?? 'student');
+      const state = instanceStateMap.get(baseId);
+      const roleCtx = state?.role_context ?? String(r.role_context ?? 'student');
       const tokenKey = `${baseId}:${roleCtx}`;
       const link_expired = tokenMap.get(tokenKey) !== false;
       return {
@@ -3656,15 +3683,16 @@ export async function listSubmittedInstancesPaged(
         student_id: r.student_id == null ? null : Number(r.student_id),
         student_name: String(r.student_name ?? 'Unknown student'),
         student_email: String(r.student_email ?? ''),
-        status: synced?.status ?? String(r.status ?? 'draft'),
+        status: state?.status ?? String(r.status ?? 'draft'),
         role_context: String(roleCtx),
+        workflow_status: state?.workflow_status ?? null,
         created_at: String(r.created_at ?? ''),
         submitted_at: r.submitted_at ? String(r.submitted_at) : null,
         submission_count: Number(r.submission_count ?? 0) || 0,
         start_date: r.start_date ? String(r.start_date) : null,
-        end_date: synced?.end_date ?? (r.end_date ? String(r.end_date) : null),
-        no_attempt_rollovers: synced?.no_attempt_rollovers ?? null,
-        did_not_attempt: synced?.did_not_attempt ?? null,
+        end_date: r.end_date ? String(r.end_date) : null,
+        no_attempt_rollovers: state?.no_attempt_rollovers ?? null,
+        did_not_attempt: state?.did_not_attempt ?? null,
         link_expired,
       };
     });
@@ -3748,7 +3776,7 @@ export async function listDashboardInstances(
   let query = supabase
     .from('skyline_form_instances')
     .select(
-      'id, form_id, student_id, status, role_context, created_at, submitted_at, start_date, end_date, submission_count, no_attempt_rollovers, did_not_attempt, skyline_students!inner(status)',
+      'id, form_id, student_id, status, role_context, workflow_status, created_at, submitted_at, start_date, end_date, submission_count, no_attempt_rollovers, did_not_attempt, skyline_form_answers(count), skyline_students!inner(status)',
       { count: 'exact' }
     )
     .not('student_id', 'is', null)
@@ -3882,6 +3910,7 @@ export async function listDashboardInstances(
       const batch = student?.batch_id != null ? batchMap.get(student.batch_id) : undefined;
       const roleCtx = String(r.role_context ?? 'student');
       const link_expired = tokenMap.get(`${Number(r.id)}:${targetRole}`) !== false;
+      const answerCountRelation = Array.isArray(r.skyline_form_answers) ? r.skyline_form_answers[0] : null;
       return {
         id: Number(r.id),
         form_id: formId,
@@ -3897,6 +3926,7 @@ export async function listDashboardInstances(
         trainer_name: batch?.trainer_name ?? null,
         status: String(r.status ?? 'draft'),
         role_context: roleCtx,
+        workflow_status: r.workflow_status != null ? String(r.workflow_status) : null,
         created_at: String(r.created_at ?? ''),
         submitted_at: r.submitted_at ? String(r.submitted_at) : null,
         submission_count: Number(r.submission_count ?? 0) || 0,
@@ -3907,6 +3937,7 @@ export async function listDashboardInstances(
             ? Number(r.no_attempt_rollovers)
             : null,
         did_not_attempt: Boolean(r.did_not_attempt),
+        answer_count: Math.max(0, Number((answerCountRelation as { count?: number } | null)?.count ?? 0) || 0),
         link_expired,
       };
     });
@@ -6831,14 +6862,23 @@ export async function updateInstanceRole(instanceId: number, roleContext: string
   await supabase.from('skyline_form_instances').update({ role_context: roleContext, updated_by }).eq('id', instanceId);
 }
 
-export type InstanceWorkflowStatus = 'draft' | 'waiting_trainer' | 'waiting_office' | 'completed' | 'failed';
+export type InstanceWorkflowStatus =
+  | 'draft'
+  | 'waiting_trainer'
+  | 'waiting_office'
+  | 'completed'
+  | 'failed'
+  | 'awaiting_submission';
 
 /**
  * Atomically moves an instance to the trainer queue (student submit / same semantics as
  * `updateInstanceWorkflowStatus(..., 'waiting_trainer')`) in a single DB round-trip.
  * Prefer this for student final submit to avoid partial state if separate updates fail.
  */
-export async function submitInstanceToTrainerViaRpc(instanceId: number): Promise<{ ok: boolean; error?: string; code?: string }> {
+export async function submitInstanceToTrainerViaRpc(
+  instanceId: number,
+  requestId: string,
+): Promise<{ ok: boolean; error?: string; code?: string; duplicate?: boolean }> {
   try {
     await assertStudentInstanceMutationAllowed(instanceId, {
       actorRole: 'student',
@@ -6852,13 +6892,14 @@ export async function submitInstanceToTrainerViaRpc(instanceId: number): Promise
   }
   const { data, error } = await supabase.rpc('skyline_submit_instance_to_trainer', {
     p_instance_id: instanceId,
+    p_request_id: requestId,
   });
   if (error) return { ok: false, error: error.message };
-  const row = data as { ok?: boolean; error?: string } | null;
+  const row = data as { ok?: boolean; error?: string; duplicate?: boolean } | null;
   if (row && typeof row === 'object' && row.ok === false) {
     return { ok: false, error: typeof row.error === 'string' ? row.error : 'Submit failed' };
   }
-  return { ok: true };
+  return { ok: true, duplicate: Boolean(row?.duplicate) };
 }
 
 /** Hand off an already-submitted instance to the trainer queue without changing submission_count. */
@@ -6909,6 +6950,10 @@ export async function updateInstanceWorkflowStatus(instanceId: number, workflowS
   if (workflowStatus === 'draft') {
     payload.status = 'draft';
     // Instance is back with the student (initial state or post–NYC resubmission).
+    payload.role_context = 'student';
+  }
+  if (workflowStatus === 'awaiting_submission') {
+    payload.status = 'incomplete';
     payload.role_context = 'student';
   }
   if (workflowStatus === 'waiting_trainer' || workflowStatus === 'waiting_office') payload.status = 'submitted';

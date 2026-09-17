@@ -9,8 +9,7 @@ import {
   listStudentAssessmentsPaged,
 } from '../lib/formEngine';
 import {
-  getAssessmentOutcomeDisplay,
-  getMissedAttemptWindowText,
+  calculateAssessmentFinalStatus,
   type AttemptResult,
 } from '../utils/assessmentRowUi';
 import {
@@ -165,23 +164,30 @@ export async function fetchPendingAssessmentAcknowledgments(
           final_attempt_1_result: AttemptResult;
           final_attempt_2_result: AttemptResult;
           final_attempt_3_result: AttemptResult;
+          admin_initial_checked?: boolean;
+          admin_updated_checked?: boolean;
         }
       | undefined;
-    const missedText = getMissedAttemptWindowText({
-      noAttemptRollovers: row.no_attempt_rollovers ?? null,
-      didNotAttempt: row.did_not_attempt ?? null,
-    });
-    const outcome = getAssessmentOutcomeDisplay({
-      status: row.status,
-      role_context: row.role_context,
-      attemptResults: summary
+    const attemptResults = summary
         ? [summary.final_attempt_1_result, summary.final_attempt_2_result, summary.final_attempt_3_result]
-        : [],
-      submissionCount: Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0),
-      submittedAt: row.submitted_at ?? null,
+        : row.attempt_results ?? [];
+    const finalStatus = calculateAssessmentFinalStatus({
+      ...row,
+      attempt_results: attemptResults,
+      office_assessment_completed:
+        Boolean(row.office_assessment_completed) ||
+        (Boolean(summary?.admin_initial_checked) && Boolean(summary?.admin_updated_checked)),
     });
-    const statusLabel = missedText === "Didn't attempt any" ? "Didn't attempt any" : outcome.label;
-    const visual = getAssessmentStatusVisual({ label: statusLabel, className: outcome.className });
+    const statusLabel = finalStatus.comment;
+    const visual = getAssessmentStatusVisual({
+      label: statusLabel,
+      className:
+        finalStatus.rowTone === 'green'
+          ? 'text-emerald-700'
+          : finalStatus.rowTone === 'red'
+            ? 'text-red-700'
+            : 'text-amber-700',
+    });
 
     if (visual.kind === 'update' || visual.kind === 'general') continue;
 
@@ -192,7 +198,7 @@ export async function fetchPendingAssessmentAcknowledgments(
       instanceId,
       formName: row.form_name?.trim() || 'Assessment',
       statusLabel,
-      missedText: missedText && missedText !== "Didn't attempt any" ? missedText : null,
+      missedText: finalStatus.status === 'completed' ? null : finalStatus.status === 'not_submitted' ? finalStatus.comment : null,
       outcomeKind: visual.kind,
     });
   }

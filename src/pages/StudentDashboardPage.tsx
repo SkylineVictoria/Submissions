@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { LayoutDashboard, RefreshCw, Search, Mail, Phone, CheckCircle, ChevronDown } from 'lucide-react';
-import { listStudentAssessmentsPaged, issueInstanceAccessLink, fetchAssessmentSummaries, listStudentCourseEnrollments, type StudentCourseEnrollment } from '../lib/formEngine';
+import { listStudentAssessmentsPaged, issueInstanceAccessLink, listStudentCourseEnrollments, type StudentCourseEnrollment } from '../lib/formEngine';
 import type { Student, SubmittedInstanceRow } from '../lib/formEngine';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -15,10 +15,7 @@ import {
   getTrainerAttemptFailedText,
   getMissedAttemptWindowText,
   computeAttemptTones,
-  computeWorkflowStageChecks,
-  getTrainerWorkflowStageState,
   getAdminOfficeDotTone,
-  isTerminalFailureProgressRow,
   getAssessmentOutcomeDisplay,
   maskCompetentWhileAwaitingTrainer,
   melDateString,
@@ -26,6 +23,8 @@ import {
   withinInstanceAccessWindow,
   type AttemptResult,
   type AttemptDotTone,
+  calculateAssessmentDisplayStatus,
+  calculateAssessmentFinalStatus,
 } from '../utils/assessmentRowUi';
 import { FormDocumentsPanel } from '../components/documents/FormDocumentsPanel';
 import { NotificationBell } from '../components/NotificationBell';
@@ -72,10 +71,13 @@ function WorkflowProgressColumns({
   attemptResults: AttemptResult[];
   submissionCount: number;
 }) {
-  const terminalFailed = isTerminalFailureProgressRow(row as unknown as { did_not_attempt?: boolean | null; no_attempt_rollovers?: number | null });
+  const finalStatus = calculateAssessmentFinalStatus({
+    ...row,
+    attempt_results: attemptResults,
+  });
+  const terminalFailed = finalStatus.terminalDidNotAttempt;
   const stageInput = { status: row.status, role_context: row.role_context, attemptResults };
-  const { studentDone, trainerDone, adminState } = computeWorkflowStageChecks(stageInput);
-  const tones = computeAttemptTones({
+  const calculatedTones = computeAttemptTones({
     submissionCount,
     results: attemptResults,
     terminalDidNotAttempt: terminalFailed,
@@ -84,7 +86,14 @@ function WorkflowProgressColumns({
     did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
     no_attempt_rollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
   });
-  const adminDot = getAdminOfficeDotTone({ ...stageInput, terminalDidNotAttempt: terminalFailed });
+  const tones =
+    finalStatus.status === 'completed'
+      ? { student: ['green', 'green', 'green'] as AttemptDotTone[], trainer: ['green', 'green', 'green'] as AttemptDotTone[] }
+      : calculatedTones;
+  const adminDot =
+    finalStatus.status === 'completed'
+      ? 'green'
+      : getAdminOfficeDotTone({ ...stageInput, terminalDidNotAttempt: terminalFailed });
 
   const StageItem = ({ label, state }: { label: string; state: WorkflowStageState }) => {
     const iconClass = terminalFailed
@@ -109,15 +118,9 @@ function WorkflowProgressColumns({
     );
   };
 
-  const studentStageState: WorkflowStageState = terminalFailed ? 'idle' : studentDone ? 'done' : 'idle';
-  const trainerStageState = getTrainerWorkflowStageState({
-    terminalFailed,
-    trainerDone,
-    role_context: row.role_context,
-    status: row.status,
-    submissionCount,
-  });
-  const adminStageState: WorkflowStageState = terminalFailed ? 'idle' : adminState;
+  const studentStageState: WorkflowStageState = finalStatus.studentProgress;
+  const trainerStageState: WorkflowStageState = finalStatus.trainerProgress;
+  const adminStageState: WorkflowStageState = finalStatus.officeProgress;
 
   return (
     <div className="flex items-start gap-6">
@@ -192,9 +195,20 @@ export const StudentDashboardPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const [attemptSummaryByInstanceId, setAttemptSummaryByInstanceId] = useState<
-    Record<number, { final_attempt_1_result: AttemptResult; final_attempt_2_result: AttemptResult; final_attempt_3_result: AttemptResult }>
-  >({});
+  const attemptSummaryByInstanceId = useMemo(
+    () =>
+      Object.fromEntries(
+        rows.map((row) => [
+          row.id,
+          {
+            final_attempt_1_result: row.attempt_results?.[0] ?? null,
+            final_attempt_2_result: row.attempt_results?.[1] ?? null,
+            final_attempt_3_result: row.attempt_results?.[2] ?? null,
+          },
+        ]),
+      ) as Record<number, { final_attempt_1_result: AttemptResult; final_attempt_2_result: AttemptResult; final_attempt_3_result: AttemptResult }>,
+    [rows],
+  );
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const trainerHighlightCourseId = useTrainerHighlightCourseId();
 
@@ -218,28 +232,25 @@ export const StudentDashboardPage: React.FC = () => {
       if (!studentId) return;
       if (!opts?.silent) setLoading(true);
       const res = await listStudentAssessmentsPaged(studentId, 1, PAGE_SIZE);
+      const debugRow = res.data.find((row) => row.id === 10970);
+      if (debugRow) {
+        console.info('[assessment-debug:10970] StudentDashboard final UI object', {
+          ...debugRow,
+          calculated_display_status: calculateAssessmentDisplayStatus({
+            ...debugRow,
+            attempt_results: debugRow.attempt_results ?? [],
+          }),
+          calculated_final_status: calculateAssessmentFinalStatus({
+            ...debugRow,
+            attempt_results: debugRow.attempt_results ?? [],
+          }),
+        });
+      }
       setRows(res.data);
       setLoading(false);
     },
     [studentId]
   );
-
-  useEffect(() => {
-    if (rows.length === 0) {
-      setAttemptSummaryByInstanceId({});
-      return;
-    }
-    const ids = rows.map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0);
-    let cancelled = false;
-    void (async () => {
-      const m = await fetchAssessmentSummaries(ids);
-      if (cancelled) return;
-      setAttemptSummaryByInstanceId(m as Record<number, { final_attempt_1_result: AttemptResult; final_attempt_2_result: AttemptResult; final_attempt_3_result: AttemptResult }>);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [rows]);
 
   const loadStudentProfile = useCallback(async () => {
     if (!studentId) return;
@@ -424,6 +435,14 @@ export const StudentDashboardPage: React.FC = () => {
                     sum?.final_attempt_2_result ?? null,
                     sum?.final_attempt_3_result ?? null,
                   ];
+                  const displayStatus = calculateAssessmentDisplayStatus({
+                    ...row,
+                    attempt_results: rawAttemptResults,
+                  });
+                  const finalStatus = calculateAssessmentFinalStatus({
+                    ...row,
+                    attempt_results: rawAttemptResults,
+                  });
                   const attemptResults = maskCompetentWhileAwaitingTrainer(row, rawAttemptResults);
                   const displaySum = sum
                     ? {
@@ -446,6 +465,13 @@ export const StudentDashboardPage: React.FC = () => {
                   const missedAttemptText = getMissedAttemptWindowText({
                     noAttemptRollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
                     didNotAttempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
+                    status: row.status,
+                    submissionCount: row.submission_count,
+                    submittedAt: row.submitted_at,
+                    answerCount: row.answer_count,
+                    attemptResults: rawAttemptResults,
+                    trainerAssessmentExists: row.trainer_assessment_exists,
+                    endDate: row.end_date,
                   });
                   const ui = computeRowUi({
                     row: {
@@ -513,12 +539,20 @@ export const StudentDashboardPage: React.FC = () => {
                                     subtextClassName: 'text-[11px] font-medium text-amber-700',
                                   }
                                 : getOutcomeLabel(displaySum, row);
-                            const outcomeClass = outcomeDisplay.className;
-                            const outcomeLabel = outcomeDisplay.label;
+                            const outcomeClass =
+                              displayStatus.status === 'competent'
+                                ? 'text-emerald-700'
+                                : displayStatus.status === 'not_competent' || displayStatus.status === 'did_not_attempt'
+                                  ? 'text-red-700'
+                                  : displayStatus.status === 'saved_answers'
+                                    ? 'text-orange-800'
+                                    : outcomeDisplay.className;
+                            const outcomeLabel = displayStatus.label;
                             const comments: Array<{ text: string; className: string }> = [];
-                            const missedAll = missedAttemptText === "Didn't attempt any";
-                            if (missedAll) {
-                              comments.push({ text: "Didn't attempt any", className: 'text-[11px] font-medium text-red-700' });
+                            if (finalStatus.status === 'completed') {
+                              comments.push({ text: 'Completed', className: 'text-xs font-medium text-emerald-700' });
+                            } else if (displayStatus.terminalDidNotAttempt) {
+                              comments.push({ text: displayStatus.label, className: 'text-[11px] font-medium text-red-700' });
                             } else {
                               comments.push({ text: outcomeLabel, className: `text-xs font-medium ${outcomeClass}` });
                               if (outcomeDisplay.subtext) {
@@ -539,7 +573,7 @@ export const StudentDashboardPage: React.FC = () => {
                               });
                             } else if (disabled && (ui.kind === 'future' || ui.kind === 'expired')) {
                               comments.push({ text: ui.reason, className: 'text-xs text-amber-700' });
-                            } else if (!win.ok) {
+                            } else if (!win.ok && !finalStatus.suppressExpiry) {
                               comments.push({ text: win.reason || '', className: 'text-xs text-amber-700' });
                             }
                             return (

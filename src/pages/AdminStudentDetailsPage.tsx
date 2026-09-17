@@ -20,11 +20,10 @@ import {
   getTrainerAttemptFailedText,
   getMissedAttemptWindowText,
   computeAttemptTones,
-  computeWorkflowStageChecks,
-  getTrainerWorkflowStageState,
   getAdminOfficeDotTone,
   getAssessmentOutcomeDisplay,
-  isTerminalFailureProgressRow,
+  calculateAssessmentDisplayStatus,
+  calculateAssessmentFinalStatus,
   maskCompetentWhileAwaitingTrainer,
   type WorkflowStageState,
   withinInstanceAccessWindow,
@@ -95,15 +94,21 @@ function WorkflowProgressColumns({
   row,
   attemptResults,
   submissionCount,
+  officeAssessmentCompleted,
 }: {
   row: SubmittedInstanceRow;
   attemptResults: AttemptResult[];
   submissionCount: number;
+  officeAssessmentCompleted: boolean;
 }) {
-  const terminalFailed = isTerminalFailureProgressRow(row as unknown as { did_not_attempt?: boolean | null; no_attempt_rollovers?: number | null });
+  const finalStatus = calculateAssessmentFinalStatus({
+    ...row,
+    attempt_results: attemptResults,
+    office_assessment_completed: officeAssessmentCompleted,
+  });
+  const terminalFailed = finalStatus.terminalDidNotAttempt;
   const stageInput = { status: row.status, role_context: row.role_context, attemptResults };
-  const { studentDone, trainerDone, adminState } = computeWorkflowStageChecks(stageInput);
-  const tones = computeAttemptTones({
+  const calculatedTones = computeAttemptTones({
     submissionCount,
     results: attemptResults,
     terminalDidNotAttempt: terminalFailed,
@@ -112,7 +117,14 @@ function WorkflowProgressColumns({
     did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
     no_attempt_rollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
   });
-  const adminDot = getAdminOfficeDotTone({ ...stageInput, terminalDidNotAttempt: terminalFailed });
+  const tones =
+    finalStatus.status === 'completed'
+      ? { student: ['green', 'green', 'green'] as AttemptDotTone[], trainer: ['green', 'green', 'green'] as AttemptDotTone[] }
+      : calculatedTones;
+  const adminDot =
+    finalStatus.status === 'completed'
+      ? 'green'
+      : getAdminOfficeDotTone({ ...stageInput, terminalDidNotAttempt: terminalFailed });
 
   const StageItem = ({ label, state }: { label: string; state: WorkflowStageState }) => {
     const iconClass = terminalFailed
@@ -137,15 +149,9 @@ function WorkflowProgressColumns({
     );
   };
 
-  const studentStageState: WorkflowStageState = terminalFailed ? 'idle' : studentDone ? 'done' : 'idle';
-  const trainerStageState = getTrainerWorkflowStageState({
-    terminalFailed,
-    trainerDone,
-    role_context: row.role_context,
-    status: row.status,
-    submissionCount,
-  });
-  const adminStageState: WorkflowStageState = terminalFailed ? 'idle' : adminState;
+  const studentStageState: WorkflowStageState = finalStatus.studentProgress;
+  const trainerStageState: WorkflowStageState = finalStatus.trainerProgress;
+  const adminStageState: WorkflowStageState = finalStatus.officeProgress;
 
   return (
     <div className="flex items-start gap-6">
@@ -221,7 +227,13 @@ export const AdminStudentDetailsPage: React.FC = () => {
   const [assessments, setAssessments] = useState<SubmittedInstanceRow[]>([]);
   const [assessmentsLoading, setAssessmentsLoading] = useState(false);
   const [attemptSummaryByInstanceId, setAttemptSummaryByInstanceId] = useState<
-    Record<number, { final_attempt_1_result: AttemptResult; final_attempt_2_result: AttemptResult; final_attempt_3_result: AttemptResult }>
+    Record<number, {
+      final_attempt_1_result: AttemptResult;
+      final_attempt_2_result: AttemptResult;
+      final_attempt_3_result: AttemptResult;
+      admin_initial_checked?: boolean;
+      admin_updated_checked?: boolean;
+    }>
   >({});
   const [managingId, setManagingId] = useState<number | null>(null);
   const [quickEditRow, setQuickEditRow] = useState<SubmittedInstanceRow | null>(null);
@@ -927,6 +939,19 @@ export const AdminStudentDetailsPage: React.FC = () => {
                             sum?.final_attempt_2_result ?? null,
                             sum?.final_attempt_3_result ?? null,
                           ];
+                          const officeAssessmentCompleted =
+                            Boolean(row.office_assessment_completed) ||
+                            (Boolean(sum?.admin_initial_checked) && Boolean(sum?.admin_updated_checked));
+                          const displayStatus = calculateAssessmentDisplayStatus({
+                            ...row,
+                            attempt_results: rawAttemptResults,
+                            office_assessment_completed: officeAssessmentCompleted,
+                          });
+                          const finalStatus = calculateAssessmentFinalStatus({
+                            ...row,
+                            attempt_results: rawAttemptResults,
+                            office_assessment_completed: officeAssessmentCompleted,
+                          });
                           const results = maskCompetentWhileAwaitingTrainer(row, rawAttemptResults);
                           const displaySum = sum
                             ? {
@@ -949,6 +974,9 @@ export const AdminStudentDetailsPage: React.FC = () => {
                           const missedAttemptText = getMissedAttemptWindowText({
                             noAttemptRollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
                             didNotAttempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
+                            status: row.status,
+                            submissionCount: row.submission_count,
+                            submittedAt: row.submitted_at,
                           });
                           const accessRole =
                             row.role_context === 'trainer' ? 'trainer' : row.role_context === 'office' ? 'office' : 'student';
@@ -961,6 +989,8 @@ export const AdminStudentDetailsPage: React.FC = () => {
                               no_attempt_rollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
                               status: row.status,
                               role_context: row.role_context,
+                              workflow_status: row.workflow_status,
+                              office_assessment_completed: officeAssessmentCompleted,
                             },
                             attemptResults: results,
                             ignoreEndDateForAccess: accessRole !== 'student',
@@ -1079,6 +1109,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
                                 row={row}
                                 attemptResults={rawAttemptResults}
                                 submissionCount={Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0)}
+                                officeAssessmentCompleted={officeAssessmentCompleted}
                               />
                             </td>
                             <td
@@ -1119,9 +1150,10 @@ export const AdminStudentDetailsPage: React.FC = () => {
                                 const outcomeClass = outcomeDisplay.className;
                                 const outcomeLabel = outcomeDisplay.label;
                                 const comments: Array<{ text: string; className: string }> = [];
-                                const missedAll = missedAttemptText === "Didn't attempt any";
-                                if (missedAll) {
-                                  comments.push({ text: "Didn't attempt any", className: 'text-[11px] font-medium text-red-700' });
+                                if (finalStatus.status === 'completed') {
+                                  comments.push({ text: 'Completed', className: 'text-xs font-medium text-emerald-700' });
+                                } else if (displayStatus.terminalDidNotAttempt) {
+                                  comments.push({ text: displayStatus.label, className: 'text-[11px] font-medium text-red-700' });
                                 } else {
                                   comments.push({ text: outcomeLabel, className: `text-xs font-medium ${outcomeClass}` });
                                   if (outcomeDisplay.subtext) {
@@ -1135,9 +1167,9 @@ export const AdminStudentDetailsPage: React.FC = () => {
                                     comments.push({ text: missedAttemptText, className: 'text-[11px] font-medium text-amber-700' });
                                   }
                                 }
-                                if (studentOpenDisabled && (ui.kind === 'future' || ui.kind === 'expired')) {
+                                if (!finalStatus.suppressExpiry && studentOpenDisabled && (ui.kind === 'future' || ui.kind === 'expired')) {
                                   comments.push({ text: ui.reason, className: 'text-xs text-amber-700' });
-                                } else if (!win.ok) {
+                                } else if (!finalStatus.suppressExpiry && !win.ok) {
                                   comments.push({ text: win.reason || '', className: 'text-xs text-amber-700' });
                                 }
                                 return (

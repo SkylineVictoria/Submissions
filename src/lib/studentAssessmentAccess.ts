@@ -441,7 +441,7 @@ export async function assertStudentInstanceMutationAllowed(
 
   const { data: inst } = await supabase
     .from('skyline_form_instances')
-    .select('student_id, form_id, status, role_context, workflow_status')
+    .select('student_id, form_id, status, role_context, workflow_status, did_not_attempt')
     .eq('id', instanceId)
     .maybeSingle();
   if (!inst) return;
@@ -452,6 +452,19 @@ export async function assertStudentInstanceMutationAllowed(
   const status = String((inst as { status?: string | null }).status ?? '').trim();
   const roleCtx = String((inst as { role_context?: string | null }).role_context ?? '').trim();
   const wf = String((inst as { workflow_status?: string | null }).workflow_status ?? '').trim();
+  const didNotAttempt = Boolean((inst as { did_not_attempt?: boolean | null }).did_not_attempt);
+
+  if (
+    (!role || role === 'student') &&
+    (status === 'locked' || wf === 'failed' || didNotAttempt)
+  ) {
+    throw new StudentCourseAccessError(
+      denied('existing_permission_denied', 'This assessment is closed and can no longer be changed.', {
+        studentId: Number(studentId),
+        formId: Number((inst as { form_id?: number }).form_id),
+      }),
+    );
+  }
 
   // Only gate while the assessment is still with the student (draft).
   const withStudent =

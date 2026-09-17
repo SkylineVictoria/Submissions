@@ -235,6 +235,9 @@ export const TrainerGradeMePanel: React.FC<Props> = ({ trainerUserId }) => {
                         const missedAttemptText = getMissedAttemptWindowText({
                           noAttemptRollovers: row.no_attempt_rollovers ?? null,
                           didNotAttempt: row.did_not_attempt ?? null,
+                          status: row.status,
+                          submissionCount: row.submission_count,
+                          submittedAt: row.submitted_at,
                         });
                         const win = withinInstanceAccessWindow(row, 'trainer');
                         const highlightExtra = rowMatchesTrainerHighlightCourse(row, trainerHighlightCourseId)

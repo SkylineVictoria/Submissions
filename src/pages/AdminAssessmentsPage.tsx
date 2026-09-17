@@ -37,7 +37,7 @@ import {
   getMissedAttemptWindowText,
   getStudentAttemptDoneText,
   getTrainerAttemptFailedText,
-  isDidNotAttemptAnyFailure,
+  calculateAssessmentFinalStatus,
   TERMINAL_DID_NOT_ATTEMPT_ROW_CLASS,
   maskCompetentWhileAwaitingTrainer,
   withinInstanceAccessWindow,
@@ -103,6 +103,11 @@ const getAttemptOutcomeLabel = (
 };
 
 const getExportStatusText = (row: SubmittedInstanceRow, rawAttemptResults: AttemptResult[]): string => {
+  const finalStatus = calculateAssessmentFinalStatus({
+    ...row,
+    attempt_results: rawAttemptResults,
+  });
+  if (finalStatus.status === 'completed') return 'Completed';
   const submittedCount = Math.min(
     3,
     Math.max(0, Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0))
@@ -111,6 +116,9 @@ const getExportStatusText = (row: SubmittedInstanceRow, rawAttemptResults: Attem
   const missedAttemptTextRaw = getMissedAttemptWindowText({
     noAttemptRollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
     didNotAttempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
+    status: row.status,
+    submissionCount: row.submission_count,
+    submittedAt: row.submitted_at,
   });
   const missedAll = missedAttemptTextRaw === "Didn't attempt any";
   if (missedAll) return "Didn't attempt any";
@@ -159,6 +167,8 @@ const getExportStatusText = (row: SubmittedInstanceRow, rawAttemptResults: Attem
       no_attempt_rollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
       status: row.status,
       role_context: row.role_context,
+      workflow_status: row.workflow_status,
+      office_assessment_completed: row.office_assessment_completed,
     },
     attemptResults: masked,
     ignoreEndDateForAccess: accessRole !== 'student',
@@ -176,8 +186,8 @@ const getExportStatusText = (row: SubmittedInstanceRow, rawAttemptResults: Attem
   if (attemptDoneText) parts.push(attemptDoneText);
   // Only show missed attempt messaging when it doesn't contradict submitted attempts.
   if (ui.kind === 'in_progress' && missedAttemptText) parts.push(missedAttemptText);
-  if (studentOpenDisabled && (ui.kind === 'future' || ui.kind === 'expired') && ui.reason) parts.push(ui.reason);
-  else if (!win.ok && win.reason) parts.push(win.reason);
+  if (!finalStatus.suppressExpiry && studentOpenDisabled && (ui.kind === 'future' || ui.kind === 'expired') && ui.reason) parts.push(ui.reason);
+  else if (!finalStatus.suppressExpiry && !win.ok && win.reason) parts.push(win.reason);
 
   return parts.filter((p) => String(p || '').trim().length > 0).join(' | ');
 };
@@ -201,9 +211,16 @@ const getDirectoryRowClass = (row: SubmittedInstanceRow, trainerHighlightCourseI
   let base: string;
   const didNotAttempt = (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null;
   const noAttemptRollovers = (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null;
-  if (isDidNotAttemptAnyFailure({ didNotAttempt, noAttemptRollovers })) {
+  const finalStatus = calculateAssessmentFinalStatus({
+    ...row,
+    did_not_attempt: didNotAttempt,
+    no_attempt_rollovers: noAttemptRollovers,
+  });
+  if (finalStatus.status === 'completed') {
+    base = 'bg-emerald-50/70 hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors';
+  } else if (finalStatus.terminalDidNotAttempt) {
     base = TERMINAL_DID_NOT_ATTEMPT_ROW_CLASS;
-  } else if (row.status === 'locked' && !isDidNotAttemptAnyFailure({ didNotAttempt, noAttemptRollovers })) {
+  } else if (row.status === 'locked') {
     base = 'bg-emerald-50/70 hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors';
   } else {
     const ui = computeRowUi({
@@ -213,6 +230,8 @@ const getDirectoryRowClass = (row: SubmittedInstanceRow, trainerHighlightCourseI
         did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
         status: row.status,
         role_context: row.role_context,
+        workflow_status: row.workflow_status,
+        office_assessment_completed: row.office_assessment_completed,
       },
       ignoreEndDateForAccess: row.role_context === 'trainer' || row.role_context === 'office',
       submissionCount: Number(row.submission_count ?? 0) || (row.submitted_at ? 1 : 0),
@@ -1117,6 +1136,9 @@ export const AdminAssessmentsPage: React.FC = () => {
                   const missedAttemptText = getMissedAttemptWindowText({
                     noAttemptRollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
                     didNotAttempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
+                    status: row.status,
+                    submissionCount: row.submission_count,
+                    submittedAt: row.submitted_at,
                   });
                   return (
                   <div
@@ -1275,6 +1297,9 @@ export const AdminAssessmentsPage: React.FC = () => {
                       const missedAttemptText = getMissedAttemptWindowText({
                         noAttemptRollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
                         didNotAttempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
+                        status: row.status,
+                        submissionCount: row.submission_count,
+                        submittedAt: row.submitted_at,
                       });
                       return (
                         <React.Fragment key={row.id}>

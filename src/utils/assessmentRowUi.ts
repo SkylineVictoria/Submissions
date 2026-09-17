@@ -10,6 +10,7 @@ export type AssessmentRowUiState =
   | { kind: 'past_competent'; disabled: false; rowClassName: string; outcomeLabel: string; outcomeClassName: string }
   | { kind: 'past_not_competent'; disabled: boolean; rowClassName: string; outcomeLabel: string; outcomeClassName: string }
   | { kind: 'did_not_attempt'; disabled: true; reason: string; rowClassName: string; outcomeLabel: string; outcomeClassName: string }
+  | { kind: 'not_submitted'; disabled: true; reason: string; rowClassName: string; outcomeLabel: string; outcomeClassName: string }
   | { kind: 'expired'; disabled: true; reason: string; rowClassName: string; outcomeLabel?: never; outcomeClassName?: never }
   | { kind: 'unknown'; disabled: false; rowClassName: string; outcomeLabel?: never; outcomeClassName?: never };
 
@@ -20,20 +21,35 @@ export type RowWindowInput = {
   no_attempt_rollovers?: number | null;
   status?: string | null;
   role_context?: string | null;
+  answer_count?: number | null;
+  trainer_assessment_exists?: boolean | null;
+  workflow_status?: string | null;
+  office_assessment_completed?: boolean | null;
+  office_status?: string | null;
+  expired?: boolean | null;
 };
 
 /** All three submission windows missed — terminal failure (no competent path). */
 export function isDidNotAttemptAnyFailure(input: {
   didNotAttempt?: boolean | null;
   noAttemptRollovers?: number | null;
+  submissionCount?: number | null;
+  submittedAt?: string | null;
 }): boolean {
   const rollovers = Math.max(0, Number(input.noAttemptRollovers ?? 0) || 0);
-  return Boolean(input.didNotAttempt ?? false) && rollovers >= 2;
+  const submitted = Math.max(
+    0,
+    Number(input.submissionCount ?? 0) || (String(input.submittedAt ?? '').trim() ? 1 : 0),
+  );
+  return Boolean(input.didNotAttempt ?? false) && rollovers >= 2 && submitted === 0;
 }
 
 /** Strong red row when the student exhausted all attempts without a successful submission path. */
 export const TERMINAL_DID_NOT_ATTEMPT_ROW_CLASS =
   'bg-red-100 text-red-950 border-l-4 border-red-600 opacity-95 cursor-not-allowed';
+
+export const NOT_SUBMITTED_ROW_CLASS =
+  'bg-orange-50 text-orange-950 border-l-4 border-orange-500 opacity-95 cursor-not-allowed';
 
 export const ALL_ATTEMPTS_FAILED_TONES: AttemptDotTone[] = ['red', 'red', 'red'];
 
@@ -58,7 +74,229 @@ export type InstanceWorkflowRow = {
   no_attempt_rollovers?: number | null;
   submission_count?: number | null;
   submitted_at?: string | null;
+  answer_count?: number | null;
+  attempt_results?: AttemptResult[] | null;
+  trainer_assessment_exists?: boolean | null;
+  end_date?: string | null;
+  workflow_status?: string | null;
+  office_assessment_completed?: boolean | null;
+  /** Compatibility inputs used by API/UI mappers. */
+  office_status?: string | null;
+  expired?: boolean | null;
 };
+
+export type AssessmentFinalStatus =
+  | 'completed'
+  | 'trainer_completed'
+  | 'pending_review'
+  | 'not_submitted'
+  | 'did_not_attempt'
+  | 'in_progress';
+
+export type AssessmentProgressResolution = {
+  status: AssessmentFinalStatus;
+  comment: string;
+  rowTone: 'green' | 'amber' | 'orange' | 'red';
+  studentProgress: WorkflowStageState;
+  trainerProgress: WorkflowStageState;
+  officeProgress: WorkflowStageState;
+  terminalDidNotAttempt: boolean;
+  suppressExpiry: boolean;
+  trainerResult: Exclude<AttemptResult, null> | null;
+};
+
+/** Final administrative state always outranks historical submission and rollover data. */
+export function calculateAssessmentFinalStatus(input: InstanceWorkflowRow): AssessmentProgressResolution {
+  const results = (input.attempt_results ?? []).filter(
+    (result): result is Exclude<AttemptResult, null> =>
+      result === 'competent' || result === 'not_yet_competent',
+  );
+  const trainerResult = results.length > 0 ? results[results.length - 1] : null;
+  const trainerCompleted = trainerResult !== null;
+  const legacyStatus = String(input.status ?? '').trim();
+  const role = String(input.role_context ?? '').trim();
+  const workflow = String(input.workflow_status ?? '').trim();
+  const officeCompleted =
+    workflow === 'completed' ||
+    String(input.office_status ?? '').trim() === 'completed' ||
+    Boolean(input.office_assessment_completed) ||
+    (legacyStatus === 'locked' && role === 'office' && trainerResult === 'competent');
+  const submitted =
+    getSubmittedAttemptCount({
+      submissionCount: input.submission_count,
+      submittedAt: input.submitted_at,
+    }) > 0;
+  const hasSavedAnswers =
+    Math.max(0, Number(input.answer_count ?? 0) || 0) > 0 || legacyStatus === 'incomplete';
+  const end = String(input.end_date ?? '').trim();
+  const expired =
+    Boolean(input.expired) ||
+    (end ? melDateString() > end : legacyStatus === 'incomplete');
+
+  if (officeCompleted) {
+    return {
+      status: 'completed',
+      comment: 'Completed',
+      rowTone: 'green',
+      studentProgress: 'done',
+      trainerProgress: 'done',
+      officeProgress: 'done',
+      terminalDidNotAttempt: false,
+      suppressExpiry: true,
+      trainerResult,
+    };
+  }
+  if (trainerCompleted) {
+    return {
+      status: 'trainer_completed',
+      comment: trainerResult === 'competent' ? 'Competent' : 'Not competent',
+      rowTone: trainerResult === 'competent' ? 'amber' : 'red',
+      studentProgress: 'done',
+      trainerProgress: 'done',
+      officeProgress: 'pending',
+      terminalDidNotAttempt: false,
+      suppressExpiry: true,
+      trainerResult,
+    };
+  }
+  if (submitted) {
+    return {
+      status: 'pending_review',
+      comment: 'Submitted',
+      rowTone: 'amber',
+      studentProgress: 'done',
+      trainerProgress: 'pending',
+      officeProgress: 'idle',
+      terminalDidNotAttempt: false,
+      suppressExpiry: true,
+      trainerResult,
+    };
+  }
+  if (hasSavedAnswers) {
+    return {
+      status: expired ? 'not_submitted' : 'in_progress',
+      comment: expired ? 'Not submitted by due date' : 'In progress',
+      rowTone: expired ? 'orange' : 'amber',
+      studentProgress: 'idle',
+      trainerProgress: 'idle',
+      officeProgress: 'idle',
+      terminalDidNotAttempt: false,
+      suppressExpiry: false,
+      trainerResult,
+    };
+  }
+  const terminalDidNotAttempt = isDidNotAttemptAnyFailure({
+    didNotAttempt: input.did_not_attempt,
+    noAttemptRollovers: input.no_attempt_rollovers,
+    submissionCount: input.submission_count,
+    submittedAt: input.submitted_at,
+  });
+  if (terminalDidNotAttempt) {
+    return {
+      status: 'did_not_attempt',
+      comment: "Didn't attempt any",
+      rowTone: 'red',
+      studentProgress: 'idle',
+      trainerProgress: 'idle',
+      officeProgress: 'idle',
+      terminalDidNotAttempt: true,
+      suppressExpiry: false,
+      trainerResult,
+    };
+  }
+  return {
+    status: expired ? 'not_submitted' : 'in_progress',
+    comment: expired ? 'Not submitted by due date' : 'In progress',
+    rowTone: expired ? 'orange' : 'amber',
+    studentProgress: 'idle',
+    trainerProgress: 'idle',
+    officeProgress: 'idle',
+    terminalDidNotAttempt: false,
+    suppressExpiry: false,
+    trainerResult,
+  };
+}
+
+export type AssessmentDisplayStatus =
+  | 'competent'
+  | 'not_competent'
+  | 'submitted'
+  | 'saved_answers'
+  | 'did_not_attempt'
+  | 'in_progress';
+
+export type CalculatedAssessmentDisplayStatus = {
+  status: AssessmentDisplayStatus;
+  label: string;
+  trainerResult: Exclude<AttemptResult, null> | null;
+  trainerAssessmentExists: boolean;
+  submitted: boolean;
+  hasSavedAnswers: boolean;
+  terminalDidNotAttempt: boolean;
+};
+
+/**
+ * Canonical assessment status precedence used by dashboard UIs.
+ * A stale rollover flag must never override stronger evidence of activity.
+ */
+export function calculateAssessmentDisplayStatus(input: InstanceWorkflowRow): CalculatedAssessmentDisplayStatus {
+  const final = calculateAssessmentFinalStatus(input);
+  const trainerResult = final.trainerResult;
+  const trainerAssessmentExists = Boolean(input.trainer_assessment_exists) || trainerResult !== null;
+  const submitted =
+    getSubmittedAttemptCount({
+      submissionCount: input.submission_count,
+      submittedAt: input.submitted_at,
+    }) > 0;
+  const hasSavedAnswers =
+    Math.max(0, Number(input.answer_count ?? 0) || 0) > 0 ||
+    String(input.status ?? '').trim() === 'incomplete';
+
+  if (final.status === 'completed') {
+    return { status: 'competent', label: 'Completed', trainerResult, trainerAssessmentExists, submitted, hasSavedAnswers, terminalDidNotAttempt: false };
+  }
+  if (final.status === 'trainer_completed') {
+    return {
+      status: trainerResult === 'competent' ? 'competent' : 'not_competent',
+      label: final.comment,
+      trainerResult,
+      trainerAssessmentExists,
+      submitted,
+      hasSavedAnswers,
+      terminalDidNotAttempt: false,
+    };
+  }
+  if (final.status === 'pending_review') {
+    return { status: 'submitted', label: 'Submitted', trainerResult, trainerAssessmentExists, submitted, hasSavedAnswers, terminalDidNotAttempt: false };
+  }
+  if (final.status === 'not_submitted' && hasSavedAnswers) {
+    return {
+      status: 'saved_answers',
+      label: final.comment,
+      trainerResult,
+      trainerAssessmentExists,
+      submitted,
+      hasSavedAnswers,
+      terminalDidNotAttempt: false,
+    };
+  }
+  if (final.terminalDidNotAttempt) {
+    return { status: 'did_not_attempt', label: "Didn't attempt any", trainerResult, trainerAssessmentExists, submitted, hasSavedAnswers, terminalDidNotAttempt: true };
+  }
+  return { status: 'in_progress', label: final.comment, trainerResult, trainerAssessmentExists, submitted, hasSavedAnswers, terminalDidNotAttempt: false };
+}
+
+export function isNotSubmittedByDueDate(
+  row: Pick<InstanceWorkflowRow, 'status' | 'submission_count' | 'submitted_at'>,
+): boolean {
+  return (
+    String(row.status ?? '').trim() === 'incomplete' &&
+    getSubmittedAttemptCount({
+      submissionCount: row.submission_count,
+      submittedAt: row.submitted_at,
+    }) === 0
+  );
+}
 
 function getSubmittedAttemptCount(input: {
   submissionCount?: number | null;
@@ -93,14 +331,11 @@ export function getInstanceWorkflowLabel(
   row: InstanceWorkflowRow,
   opts?: { submittedFallback?: string },
 ): string {
-  if (
-    isDidNotAttemptAnyFailure({
-      didNotAttempt: row.did_not_attempt,
-      noAttemptRollovers: row.no_attempt_rollovers,
-    })
-  ) {
-    return 'Did not attempt';
+  const display = calculateAssessmentDisplayStatus(row);
+  if (display.status === 'competent' || display.status === 'not_competent' || display.status === 'saved_answers') {
+    return display.label;
   }
+  if (display.terminalDidNotAttempt) return 'Did not attempt';
   const status = String(row.status ?? '').trim();
   const rc = String(row.role_context ?? '').trim();
   if (status === 'locked') return 'Completed';
@@ -118,12 +353,17 @@ export function getInstanceWorkflowBadgeClass(
   opts?: { withBorder?: boolean },
 ): string {
   const border = opts?.withBorder ? 'border border-gray-200/80 ' : '';
-  if (
-    isDidNotAttemptAnyFailure({
-      didNotAttempt: row.did_not_attempt,
-      noAttemptRollovers: row.no_attempt_rollovers,
-    })
-  ) {
+  const display = calculateAssessmentDisplayStatus(row);
+  if (display.status === 'competent') {
+    return `${border}bg-emerald-50 text-emerald-800`.trim();
+  }
+  if (display.status === 'not_competent') {
+    return `${border}bg-red-50 text-red-800`.trim();
+  }
+  if (display.status === 'saved_answers') {
+    return `${border}bg-orange-50 text-orange-900`.trim();
+  }
+  if (display.terminalDidNotAttempt) {
     return `${border}bg-red-50 text-red-800`.trim();
   }
   const status = String(row.status ?? '').trim();
@@ -176,11 +416,6 @@ export function computeRowUi(input: {
   const today = (input.today ?? melDateString()).trim();
   const start = String(input.row.start_date ?? '').trim();
   const end = String(input.row.end_date ?? '').trim();
-  const missedAllWindows = isDidNotAttemptAnyFailure({
-    didNotAttempt: input.row.did_not_attempt,
-    noAttemptRollovers: input.row.no_attempt_rollovers,
-  });
-
   const r = (input.attemptResults ?? []).slice(0, 3);
   const anyCompetent = r.some((x) => x === 'competent');
   const anyNYC = r.some((x) => x === 'not_yet_competent');
@@ -190,21 +425,61 @@ export function computeRowUi(input: {
     submissionCount: input.submissionCount,
     submittedAt: input.submittedAt,
   });
+  const finalStatus = calculateAssessmentFinalStatus({
+    ...input.row,
+    submission_count: submitted,
+    submitted_at: input.submittedAt,
+    attempt_results: r,
+    answer_count: input.row.answer_count,
+    trainer_assessment_exists: input.row.trainer_assessment_exists,
+  });
+  const missedAllWindows = finalStatus.terminalDidNotAttempt;
   const trainerReviewing = rc === 'trainer' && st !== 'locked' && submitted > 0;
 
-  // Terminal missed-all-windows overrides summary NYC/auto-sync — student failed, all attempts gone.
-  if (missedAllWindows) {
+  if (finalStatus.status === 'completed') {
     return {
-      kind: 'did_not_attempt',
-      disabled: true,
-      reason: "Didn't attempt any",
-      rowClassName: TERMINAL_DID_NOT_ATTEMPT_ROW_CLASS,
-      outcomeLabel: "Didn't attempt any",
-      outcomeClassName: 'text-red-800 font-semibold',
+      kind: 'past_competent',
+      disabled: false,
+      rowClassName:
+        'bg-emerald-50/70 hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors',
+      outcomeLabel: 'Completed',
+      outcomeClassName: 'text-emerald-800',
     };
   }
 
-  // Outcome takes precedence over window state.
+  if (finalStatus.status === 'pending_review') {
+    return {
+      kind: 'in_progress',
+      disabled: false,
+      rowClassName:
+        'bg-amber-50/70 hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors',
+    };
+  }
+
+  if (finalStatus.status === 'not_submitted' && finalStatus.rowTone === 'orange') {
+    return {
+      kind: 'not_submitted',
+      disabled: true,
+      reason: finalStatus.comment,
+      rowClassName: NOT_SUBMITTED_ROW_CLASS,
+      outcomeLabel: finalStatus.comment,
+      outcomeClassName: 'text-orange-900 font-semibold',
+    };
+  }
+
+  if (st === 'incomplete' && submitted === 0) {
+    return {
+      kind: 'not_submitted',
+      disabled: true,
+      reason: 'Not submitted by due date',
+      rowClassName: NOT_SUBMITTED_ROW_CLASS,
+      outcomeLabel: 'Not submitted by due date',
+      outcomeClassName: 'text-orange-900 font-semibold',
+    };
+  }
+
+  // A recorded competent result proves that a trainer assessed the work.
+  // Prefer it over stale legacy did_not_attempt flags.
   if (anyCompetent) {
     const isLocked = String(input.row.status ?? '').trim() === 'locked';
     const awaitingOffice = !isLocked;
@@ -218,6 +493,20 @@ export function computeRowUi(input: {
       outcomeClassName: isLocked ? 'text-emerald-800' : 'text-emerald-800',
     };
   }
+
+  // Terminal missed-all-windows overrides NYC/auto-sync where no competent
+  // trainer result exists — the student failed and all attempts are gone.
+  if (missedAllWindows) {
+    return {
+      kind: 'did_not_attempt',
+      disabled: true,
+      reason: "Didn't attempt any",
+      rowClassName: TERMINAL_DID_NOT_ATTEMPT_ROW_CLASS,
+      outcomeLabel: "Didn't attempt any",
+      outcomeClassName: 'text-red-800 font-semibold',
+    };
+  }
+
   if (anyNYC) {
     // Prior NYC exists but trainer is still marking a resubmission — stay in progress, not terminal red.
     if (trainerReviewing) {
@@ -322,6 +611,15 @@ export function getAssessmentOutcomeDisplay(input: {
     submittedAt: input.submittedAt,
   });
   const trainerReviewing = rc === 'trainer' && st !== 'locked' && submitted > 0;
+
+  if (st === 'incomplete' && submitted === 0) {
+    return {
+      label: 'Not submitted by due date',
+      className: 'text-orange-900',
+      subtext: null,
+      subtextClassName: '',
+    };
+  }
 
   if (anyCompetent) {
     if (isLocked) {
@@ -475,8 +773,27 @@ export function getTrainerAttemptFailedText(
 export function getMissedAttemptWindowText(input: {
   noAttemptRollovers?: number | null;
   didNotAttempt?: boolean | null;
+  status?: string | null;
+  submissionCount?: number | null;
+  submittedAt?: string | null;
+  answerCount?: number | null;
+  attemptResults?: AttemptResult[] | null;
+  trainerAssessmentExists?: boolean | null;
+  endDate?: string | null;
 }): string | null {
-  if (isDidNotAttemptAnyFailure(input)) return "Didn't attempt any";
+  const display = calculateAssessmentDisplayStatus({
+    status: input.status,
+    did_not_attempt: input.didNotAttempt,
+    no_attempt_rollovers: input.noAttemptRollovers,
+    submission_count: input.submissionCount,
+    submitted_at: input.submittedAt,
+    answer_count: input.answerCount,
+    attempt_results: input.attemptResults,
+    trainer_assessment_exists: input.trainerAssessmentExists,
+    end_date: input.endDate,
+  });
+  if (display.status === 'did_not_attempt' || display.status === 'saved_answers') return display.label;
+  if (display.trainerAssessmentExists || display.submitted) return null;
 
   const rollovers = Math.max(0, Number(input.noAttemptRollovers ?? 0) || 0);
   if (rollovers <= 0) return null;
@@ -600,14 +917,20 @@ export function getAdminOfficeDotTone(input: {
 }
 
 /** Progress column styling when all three attempt windows were missed. */
-export function isTerminalFailureProgressRow(row: {
-  did_not_attempt?: boolean | null;
-  no_attempt_rollovers?: number | null;
-}): boolean {
-  return isDidNotAttemptAnyFailure({
-    didNotAttempt: row.did_not_attempt,
-    noAttemptRollovers: row.no_attempt_rollovers,
-  });
+export function isTerminalFailureProgressRow(row: InstanceWorkflowRow): boolean {
+  return calculateAssessmentDisplayStatus(row).terminalDidNotAttempt;
+}
+
+/** End-date extension reopens exhausted failures, but never resets a completed assessment. */
+export function shouldAutoResetTerminalAssessmentOnEndDateChange(
+  row: InstanceWorkflowRow,
+  changingEnd: boolean,
+): boolean {
+  return (
+    changingEnd &&
+    calculateAssessmentFinalStatus(row).terminalDidNotAttempt &&
+    String(row.workflow_status ?? '').trim() !== 'completed'
+  );
 }
 
 export type AssessmentRowForAttemptReset = {

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  calculateAssessmentDisplayStatus,
+  calculateAssessmentFinalStatus,
   computeAttemptTones,
   computeRowUi,
   getInstanceWorkflowLabel,
@@ -8,7 +10,10 @@ import {
   getStudentAttemptDoneText,
   hasStudentSubmissionNotSentToTrainer,
   isDidNotAttemptAnyFailure,
+  isNotSubmittedByDueDate,
   isTerminalFailureProgressRow,
+  shouldAutoResetTerminalAssessmentOnEndDateChange,
+  type AttemptResult,
 } from './assessmentRowUi';
 
 describe('isDidNotAttemptAnyFailure', () => {
@@ -26,6 +31,34 @@ describe('isTerminalFailureProgressRow', () => {
   });
 });
 
+describe('end-date terminal reset', () => {
+  it('automatically resets a red exhausted assessment when its end date changes', () => {
+    expect(
+      shouldAutoResetTerminalAssessmentOnEndDateChange(
+        {
+          did_not_attempt: true,
+          no_attempt_rollovers: 2,
+          workflow_status: 'failed',
+        },
+        true,
+      ),
+    ).toBe(true);
+  });
+
+  it('does not reset a completed assessment when its end date changes', () => {
+    expect(
+      shouldAutoResetTerminalAssessmentOnEndDateChange(
+        {
+          did_not_attempt: true,
+          no_attempt_rollovers: 2,
+          workflow_status: 'completed',
+        },
+        true,
+      ),
+    ).toBe(false);
+  });
+});
+
 describe('getMissedAttemptWindowText', () => {
   it('shows specific missed text for partial rollovers', () => {
     expect(getMissedAttemptWindowText({ noAttemptRollovers: 1, didNotAttempt: false })).toBe('Missed 1st attempt');
@@ -33,6 +66,18 @@ describe('getMissedAttemptWindowText', () => {
       'Missed 1st attempt, 2nd attempt',
     );
     expect(getMissedAttemptWindowText({ noAttemptRollovers: 2, didNotAttempt: true })).toBe("Didn't attempt any");
+  });
+
+  it('uses the incomplete status for saved work without a final submission', () => {
+    expect(
+      getMissedAttemptWindowText({
+        status: 'incomplete',
+        submissionCount: 0,
+        submittedAt: null,
+        noAttemptRollovers: 2,
+        didNotAttempt: false,
+      }),
+    ).toBe('Not submitted by due date');
   });
 });
 
@@ -66,6 +111,221 @@ describe('computeRowUi terminal state', () => {
     });
     expect(reset.kind).toBe('in_progress');
     expect(reset.rowClassName).not.toContain('cursor-not-allowed');
+  });
+
+  it('distinguishes incomplete saved work from did-not-attempt', () => {
+    const incomplete = computeRowUi({
+      row: {
+        did_not_attempt: false,
+        no_attempt_rollovers: 2,
+        status: 'incomplete',
+        role_context: 'student',
+      },
+      submissionCount: 0,
+    });
+
+    expect(incomplete.kind).toBe('not_submitted');
+    expect(incomplete.outcomeLabel).toBe('Not submitted by due date');
+    expect(
+      isNotSubmittedByDueDate({
+        status: 'incomplete',
+        submission_count: 0,
+        submitted_at: null,
+      }),
+    ).toBe(true);
+    expect(
+      getInstanceWorkflowLabel({
+        status: 'incomplete',
+        submission_count: 0,
+        submitted_at: null,
+      }),
+    ).toBe('Not submitted by due date');
+  });
+
+  it('shows a trainer-checked competent row instead of stale terminal red', () => {
+    const assessed = computeRowUi({
+      row: {
+        did_not_attempt: true,
+        no_attempt_rollovers: 2,
+        status: 'locked',
+        role_context: 'office',
+      },
+      submissionCount: 1,
+      attemptResults: ['competent', null, null],
+    });
+
+    expect(assessed.kind).toBe('past_competent');
+    expect(assessed.outcomeLabel).toBe('Completed');
+    expect(assessed.rowClassName).toContain('emerald');
+    expect(assessed.rowClassName).not.toContain('red');
+  });
+});
+
+describe('assessment status precedence', () => {
+  const staleRolloverRow = {
+    did_not_attempt: true,
+    no_attempt_rollovers: 2,
+    status: 'submitted',
+    role_context: 'office',
+    end_date: '2020-01-01',
+  };
+
+  it('displays Completed, never did-not-attempt, when trainer and office completed', () => {
+    const display = calculateAssessmentDisplayStatus({
+      ...staleRolloverRow,
+      submission_count: 0,
+      attempt_results: ['competent', null, null],
+      trainer_assessment_exists: true,
+      workflow_status: 'completed',
+    });
+    const ui = computeRowUi({
+      row: staleRolloverRow,
+      submissionCount: 1,
+      attemptResults: ['competent', null, null],
+      today: '2026-09-17',
+    });
+
+    expect(display.label).toBe('Completed');
+    expect(display.label).not.toBe("Didn't attempt any");
+    expect(display.terminalDidNotAttempt).toBe(false);
+    expect(ui.kind).toBe('past_competent');
+  });
+
+  it('makes the full row and all progress indicators green after final office approval', () => {
+    const input = {
+      status: 'locked',
+      role_context: 'office',
+      workflow_status: 'completed',
+      office_assessment_completed: true,
+      did_not_attempt: true,
+      no_attempt_rollovers: 2,
+      submission_count: 0,
+      submitted_at: null,
+      answer_count: 0,
+      attempt_results: ['competent', null, null] as AttemptResult[],
+      trainer_assessment_exists: true,
+      end_date: '2020-01-01',
+    };
+
+    const final = calculateAssessmentFinalStatus(input);
+    const row = computeRowUi({
+      row: input,
+      attemptResults: input.attempt_results,
+      submissionCount: 0,
+      submittedAt: null,
+      today: '2026-09-17',
+    });
+
+    expect(final).toMatchObject({
+      status: 'completed',
+      comment: 'Completed',
+      rowTone: 'green',
+      studentProgress: 'done',
+      trainerProgress: 'done',
+      officeProgress: 'done',
+      terminalDidNotAttempt: false,
+      suppressExpiry: true,
+    });
+    expect(row.kind).toBe('past_competent');
+    expect(row.rowClassName).toContain('emerald');
+    expect(row.outcomeLabel).toBe('Completed');
+    expect(final.comment).not.toMatch(/Not submitted by due date|Expired on|Didn't attempt any/);
+  });
+
+  it('lets office_status completed override stale expiry and submission fields', () => {
+    const result = calculateAssessmentFinalStatus({
+      did_not_attempt: true,
+      submitted_at: null,
+      expired: true,
+      office_status: 'completed',
+    });
+
+    expect({
+      finalStatus: result.status,
+      rowColor: result.rowTone,
+      student: result.studentProgress === 'done' ? 'completed' : result.studentProgress,
+      trainer: result.trainerProgress === 'done' ? 'completed' : result.trainerProgress,
+      office: result.officeProgress === 'done' ? 'completed' : result.officeProgress,
+      comment: result.comment,
+    }).toEqual({
+      finalStatus: 'completed',
+      rowColor: 'green',
+      student: 'completed',
+      trainer: 'completed',
+      office: 'completed',
+      comment: 'Completed',
+    });
+  });
+
+  it('lets a trainer assessment override stale rollover flags', () => {
+    const ui = computeRowUi({
+      row: staleRolloverRow,
+      submissionCount: 1,
+      attemptResults: ['not_yet_competent', null, null],
+      ignoreEndDateForAccess: true,
+    });
+
+    expect(ui.kind).toBe('past_not_competent');
+    expect(ui.outcomeLabel).toBe('Competency Not Achieved');
+    expect(ui.outcomeLabel).not.toBe("Didn't attempt any");
+  });
+
+  it('lets a submitted assessment override stale did_not_attempt', () => {
+    const ui = computeRowUi({
+      row: {
+        ...staleRolloverRow,
+        role_context: 'trainer',
+      },
+      submissionCount: 1,
+      submittedAt: '2026-09-17T01:00:00.000Z',
+      attemptResults: [null, null, null],
+      ignoreEndDateForAccess: true,
+    });
+
+    expect(ui.kind).toBe('in_progress');
+    expect(getMissedAttemptWindowText({
+      didNotAttempt: true,
+      noAttemptRollovers: 2,
+      submissionCount: 1,
+    })).not.toBe("Didn't attempt any");
+  });
+
+  it('shows did-not-attempt only for a completely untouched expired assessment', () => {
+    const untouched = computeRowUi({
+      row: {
+        did_not_attempt: true,
+        no_attempt_rollovers: 2,
+        status: 'locked',
+        role_context: 'office',
+        end_date: '2020-01-01',
+      },
+      submissionCount: 0,
+      submittedAt: null,
+      attemptResults: [null, null, null],
+      today: '2026-09-17',
+    });
+
+    expect(untouched.kind).toBe('did_not_attempt');
+    expect(untouched.outcomeLabel).toBe("Didn't attempt any");
+  });
+
+  it('uses saved answers before stale did-not-attempt flags for production-shaped rows', () => {
+    const display = calculateAssessmentDisplayStatus({
+      status: 'locked',
+      role_context: 'office',
+      did_not_attempt: true,
+      no_attempt_rollovers: 2,
+      submission_count: 0,
+      submitted_at: null,
+      answer_count: 39,
+      attempt_results: [null, null, null],
+      trainer_assessment_exists: false,
+      end_date: '2026-09-16',
+    });
+
+    expect(display.status).toBe('saved_answers');
+    expect(display.label).toBe('Not submitted by due date');
+    expect(display.terminalDidNotAttempt).toBe(false);
   });
 });
 

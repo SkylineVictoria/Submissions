@@ -529,7 +529,10 @@ export const InstanceFillPage: React.FC = () => {
   const [resultsData, setResultsData] = useState<Record<number, import('../lib/formEngine').ResultsDataEntry>>({});
   const [assessmentSummary, setAssessmentSummary] = useState<import('../lib/formEngine').AssessmentSummaryDataEntry | null>(null);
   const [role, setRole] = useState<FormRole>('student');
-  const [workflowStatus, setWorkflowStatus] = useState<'draft' | 'waiting_trainer' | 'waiting_office' | 'completed' | 'failed'>('draft');
+  const [workflowStatus, setWorkflowStatus] = useState<
+    'draft' | 'waiting_trainer' | 'waiting_office' | 'completed' | 'failed' | 'awaiting_submission'
+  >('draft');
+  const submissionRequestIdRef = useRef<string | null>(null);
   const [submissionCount, setSubmissionCount] = useState<number>(0);
   const [didNotAttempt, setDidNotAttempt] = useState(false);
   const [instanceLegacyStatus, setInstanceLegacyStatus] = useState<string>('draft');
@@ -771,7 +774,7 @@ export const InstanceFillPage: React.FC = () => {
               : legacyStatus === 'draft' && roleCtx === 'office'
                 ? 'waiting_office'
                 : 'draft'
-    ) as 'draft' | 'waiting_trainer' | 'waiting_office' | 'completed' | 'failed';
+    ) as 'draft' | 'waiting_trainer' | 'waiting_office' | 'completed' | 'failed' | 'awaiting_submission';
     // Student handed in while still with trainer/office — not when reopened for resubmission (student + draft).
     if (
       studentHasSubmitted &&
@@ -1973,6 +1976,7 @@ export const InstanceFillPage: React.FC = () => {
     if (workflowStatus === 'draft') return 'Draft';
     if (workflowStatus === 'waiting_trainer') return 'Waiting for trainer check';
     if (workflowStatus === 'waiting_office') return 'Waiting for office check';
+    if (workflowStatus === 'awaiting_submission') return 'Not submitted by due date';
     if (workflowStatus === 'failed') return 'Failed';
     return 'Completed';
   }, [workflowStatus]);
@@ -2497,11 +2501,17 @@ export const InstanceFillPage: React.FC = () => {
           setConfirmConfig(null);
           return;
         }
-        const handoff = await submitInstanceToTrainerViaRpc(id);
+        const requestId =
+          submissionRequestIdRef.current ??
+          globalThis.crypto?.randomUUID?.() ??
+          `${id}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        submissionRequestIdRef.current = requestId;
+        const handoff = await submitInstanceToTrainerViaRpc(id, requestId);
         if (!handoff.ok) {
           toast.error(handoff.error ?? 'Could not submit. Check your connection and try again.');
           return;
         }
+        submissionRequestIdRef.current = null;
         await revokeRoleAccessTokens(id, 'student');
         setWorkflowStatus('waiting_trainer');
         setInstanceRoleContext('trainer');
