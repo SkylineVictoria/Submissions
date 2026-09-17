@@ -3742,6 +3742,16 @@ export async function listDashboardInstances(
   }
 
   const parsedSearch = parseAssessmentSearch(search);
+  const rawSearchEscaped = parsedSearch.raw.replace(/[%,]/g, '');
+  const { data: rawMatchingBatches } = rawSearchEscaped
+    ? await supabase
+        .from('skyline_batches')
+        .select('id')
+        .ilike('name', `%${rawSearchEscaped}%`)
+    : { data: [] as Array<{ id: number }> };
+  const isBatchNameSearch =
+    !parsedSearch.studentId &&
+    ((rawMatchingBatches as Array<{ id: number }> | null) ?? []).length > 0;
 
   // Exact external Student ID within authorised students (AND with other filters).
   if (parsedSearch.studentId) {
@@ -3759,8 +3769,8 @@ export async function listDashboardInstances(
   }
 
   let unitFormIds: number[] | null = null;
-  if (parsedSearch.unitCode) {
-    const unitEscaped = parsedSearch.unitCode.replace(/[%_,]/g, '');
+  if (parsedSearch.unitCode && !isBatchNameSearch) {
+    const unitEscaped = parsedSearch.unitCode.replace(/[%,]/g, '');
     const { data: unitFormRows } = await supabase
       .from('skyline_forms')
       .select('id')
@@ -3802,9 +3812,9 @@ export async function listDashboardInstances(
     }
   }
 
-  const q = parsedSearch.generalQuery;
+  const q = isBatchNameSearch ? parsedSearch.raw : parsedSearch.generalQuery;
   if (q) {
-    const escaped = q.replace(/[%_,]/g, '');
+    const escaped = q.replace(/[%,]/g, '');
     const conditions: string[] = [`status.ilike.%${escaped}%`, `role_context.ilike.%${escaped}%`];
     const { data: formRows } = await supabase
       .from('skyline_forms')
@@ -3814,10 +3824,27 @@ export async function listDashboardInstances(
       );
     const formIds = ((formRows as Array<Record<string, unknown>>) || []).map((f) => Number(f.id)).filter((n) => Number.isFinite(n) && n > 0);
     if (formIds.length > 0) conditions.push(`form_id.in.(${formIds.join(',')})`);
+    const { data: matchingBatches } = await supabase
+      .from('skyline_batches')
+      .select('id')
+      .ilike('name', `%${escaped}%`);
+    const matchingBatchIds = ((matchingBatches as Array<{ id: number }>) || [])
+      .map((b) => Number(b.id))
+      .filter((id) => Number.isFinite(id) && id > 0);
+    const studentSearchConditions = [
+      `student_id.ilike.%${escaped}%`,
+      `name.ilike.%${escaped}%`,
+      `first_name.ilike.%${escaped}%`,
+      `last_name.ilike.%${escaped}%`,
+      `email.ilike.%${escaped}%`,
+    ];
+    if (matchingBatchIds.length > 0) {
+      studentSearchConditions.push(`batch_id.in.(${matchingBatchIds.join(',')})`);
+    }
     const { data: studentRows } = await supabase
       .from('skyline_students')
       .select('id')
-      .or(`student_id.ilike.%${escaped}%,name.ilike.%${escaped}%,first_name.ilike.%${escaped}%,last_name.ilike.%${escaped}%,email.ilike.%${escaped}%`);
+      .or(studentSearchConditions.join(','));
     const searchStudentIds = ((studentRows as Array<Record<string, unknown>>) || []).map((s) => Number(s.id)).filter((n) => Number.isFinite(n) && n > 0);
     if (searchStudentIds.length > 0) {
       const overlap = eligibleStudentIds.filter((id) => searchStudentIds.includes(id));
@@ -3955,14 +3982,16 @@ export const TRAINER_GRADE_ME_MAX_INSTANCES = 2000;
 
 /** All pending trainer assessments (up to {@link TRAINER_GRADE_ME_MAX_INSTANCES} rows) for grouped / per-unit UI. */
 export async function listTrainerPendingForGradeMePanel(
-  trainerUserId: number
+  trainerUserId: number,
+  search = '',
+  batchId: number | null = null,
 ): Promise<{ rows: SubmittedInstanceRow[]; total: number; truncated: boolean }> {
   const pageSize = 1000;
-  const first = await listDashboardInstances('trainer', trainerUserId, 1, pageSize, '', true);
+  const first = await listDashboardInstances('trainer', trainerUserId, 1, pageSize, search, true, batchId);
   let rows = first.data;
   const total = first.total;
   if (total > pageSize && rows.length === pageSize) {
-    const second = await listDashboardInstances('trainer', trainerUserId, 2, pageSize, '', true);
+    const second = await listDashboardInstances('trainer', trainerUserId, 2, pageSize, search, true, batchId);
     rows = [...rows, ...second.data];
   }
   const truncated = total > TRAINER_GRADE_ME_MAX_INSTANCES;
@@ -4011,13 +4040,29 @@ export async function listTrainerUnitInstancesPaged(
 
   const q = (search ?? '').trim();
   if (q) {
-    const escaped = q.replace(/[%_,]/g, '');
+    const escaped = q.replace(/[%,]/g, '');
+    const { data: matchingBatches } = await supabase
+      .from('skyline_batches')
+      .select('id')
+      .in('id', batchIds)
+      .ilike('name', `%${escaped}%`);
+    const matchingBatchIds = ((matchingBatches as Array<{ id: number }>) || [])
+      .map((b) => Number(b.id))
+      .filter((id) => Number.isFinite(id) && id > 0);
+    const studentSearchConditions = [
+      `student_id.ilike.%${escaped}%`,
+      `name.ilike.%${escaped}%`,
+      `first_name.ilike.%${escaped}%`,
+      `last_name.ilike.%${escaped}%`,
+      `email.ilike.%${escaped}%`,
+    ];
+    if (matchingBatchIds.length > 0) {
+      studentSearchConditions.push(`batch_id.in.(${matchingBatchIds.join(',')})`);
+    }
     const { data: studentRows } = await supabase
       .from('skyline_students')
       .select('id')
-      .or(
-        `student_id.ilike.%${escaped}%,name.ilike.%${escaped}%,first_name.ilike.%${escaped}%,last_name.ilike.%${escaped}%,email.ilike.%${escaped}%`
-      );
+      .or(studentSearchConditions.join(','));
     const searchStudentIds = ((studentRows as Array<Record<string, unknown>>) || [])
       .map((s) => Number(s.id))
       .filter((n) => Number.isFinite(n) && n > 0);
@@ -4060,17 +4105,23 @@ export async function listTrainerUnitInstancesPaged(
   const formUnitCode = form?.unit_code != null && String(form.unit_code).trim() ? String(form.unit_code).trim() : null;
   const formUnitName = form?.unit_name != null && String(form.unit_name).trim() ? String(form.unit_name).trim() : null;
 
-  const studentMap = new Map<number, { name: string; email: string }>();
+  const studentMap = new Map<number, { name: string; email: string; batch_id: number | null; batch_name: string | null }>();
   if (studentIds.length > 0) {
     const { data: studentsRows } = await supabase
       .from('skyline_students')
-      .select('id, name, first_name, last_name, email')
+      .select('id, name, first_name, last_name, email, batch_id, skyline_batches(name)')
       .in('id', studentIds);
     for (const s of (studentsRows as Array<Record<string, unknown>>) || []) {
       const first = String(s.first_name ?? '').trim();
       const last = String(s.last_name ?? '').trim();
       const name = [first, last].filter(Boolean).join(' ').trim() || String(s.name ?? '');
-      studentMap.set(Number(s.id), { name, email: String(s.email ?? '') });
+      const batch = s.skyline_batches as { name?: string | null } | null;
+      studentMap.set(Number(s.id), {
+        name,
+        email: String(s.email ?? ''),
+        batch_id: s.batch_id != null ? Number(s.batch_id) : null,
+        batch_name: batch?.name != null ? String(batch.name) : null,
+      });
     }
   }
 
@@ -4089,6 +4140,8 @@ export async function listTrainerUnitInstancesPaged(
       student_id: studentId,
       student_name: student?.name || 'Unknown student',
       student_email: student?.email || '',
+      batch_id: student?.batch_id ?? null,
+      batch_name: student?.batch_name ?? null,
       status: String(r.status ?? 'draft'),
       role_context: String(r.role_context ?? 'student'),
       created_at: String(r.created_at ?? ''),

@@ -27,6 +27,7 @@ import { cn } from '../components/utils/cn';
 import { DatePicker } from '../components/ui/DatePicker';
 import { toast } from '../utils/toast';
 import { resolveFormUnitDisplay } from '../utils/formUnitDisplay';
+import { getAssessmentBatchName } from '../utils/assessmentBatchDisplay';
 
 function getOutcomeLabel(
   row: SubmittedInstanceRow,
@@ -204,7 +205,7 @@ export const TrainerUnitSubmissionsPage: React.FC = () => {
                 label="Search"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Student name, email, student id…"
+                placeholder="Student name, email, student ID, batch…"
               />
             </div>
             <div className="flex md:justify-end">
@@ -228,6 +229,7 @@ export const TrainerUnitSubmissionsPage: React.FC = () => {
                 <thead>
                   <tr className="border-b border-gray-200 text-left text-xs uppercase tracking-wide text-gray-500">
                     <th className="py-3 px-3">Student</th>
+                    <th className="py-3 px-3 min-w-[180px]">Batch</th>
                     <th className="py-3 px-3 w-[130px] hidden lg:table-cell">Start</th>
                     <th className="py-3 px-3 w-[130px] hidden lg:table-cell">End</th>
                     <th className="py-3 px-3 min-w-[170px]">Workflow</th>
@@ -264,6 +266,9 @@ export const TrainerUnitSubmissionsPage: React.FC = () => {
                               minDate={row.start_date ?? undefined}
                             />
                           </div>
+                        </td>
+                        <td className="py-3 px-3 align-top text-gray-700 break-words">
+                          {getAssessmentBatchName(row)}
                         </td>
                         <td className="py-3 px-3 align-top hidden lg:table-cell">
                           <DatePicker

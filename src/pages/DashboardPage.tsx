@@ -1,16 +1,13 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { RefreshCw, ClipboardCheck, LayoutDashboard, Users, ChevronDown } from 'lucide-react';
+import { RefreshCw, ClipboardCheck, LayoutDashboard, ChevronDown } from 'lucide-react';
 import {
   listDashboardInstances,
-  getDashboardPendingCount,
-  getTrainerBatchCount,
   listTrainerBatches,
   listBatches,
-  listStudentsInBatch,
   issueInstanceAccessLink,
   fetchAssessmentSummaries,
 } from '../lib/formEngine';
-import type { SubmittedInstanceRow, Batch, Student } from '../lib/formEngine';
+import type { SubmittedInstanceRow, Batch } from '../lib/formEngine';
 import { useAuth } from '../contexts/AuthContext';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -41,6 +38,7 @@ import {
   useTrainerHighlightCourseId,
 } from '../utils/trainerCourseHighlight';
 import { TrainerGradeMePanel } from '../components/trainer/TrainerGradeMePanel';
+import { getAssessmentBatchName } from '../utils/assessmentBatchDisplay';
 
 function getOutcomeLabel(
   summary: {
@@ -72,13 +70,10 @@ export const DashboardPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
-  const [batchCount, setBatchCount] = useState<number | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [trainerBatches, setTrainerBatches] = useState<Batch[]>([]);
   const [allBatches, setAllBatches] = useState<Batch[]>([]);
   const [selectedBatchId, setSelectedBatchId] = useState<string>('');
-  const [batchStudents, setBatchStudents] = useState<Student[]>([]);
-  const [batchStudentsLoading, setBatchStudentsLoading] = useState(false);
   const [queueFilter, setQueueFilter] = useState<'pending' | 'all'>('pending');
 
   const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -98,15 +93,15 @@ export const DashboardPage: React.FC = () => {
       if (!user?.id) return;
       if (!opts?.silent) setLoading(true);
       const batchId = selectedBatchId ? Number(selectedBatchId) : null;
-      const [countRes, listRes, batchCountRes, trainerBatchesRes, batchesRes] = await Promise.all([
-        getDashboardPendingCount(role, user.id),
+      const [listRes, pendingListRes, trainerBatchesRes, batchesRes] = await Promise.all([
         listDashboardInstances(role, user.id, page, PAGE_SIZE, search, queueFilter === 'pending', batchId),
-        role === 'trainer' ? getTrainerBatchCount(user.id) : Promise.resolve(null),
+        queueFilter === 'pending'
+          ? Promise.resolve(null)
+          : listDashboardInstances(role, user.id, 1, 1, search, true, batchId),
         role === 'trainer' ? listTrainerBatches(user.id) : Promise.resolve([]),
         role === 'office' ? listBatches() : Promise.resolve([]),
       ]);
-      setPendingCount(countRes);
-      setBatchCount(batchCountRes);
+      setPendingCount(queueFilter === 'pending' ? listRes.total : (pendingListRes?.total ?? 0));
       setTrainerBatches(trainerBatchesRes ?? []);
       setAllBatches(batchesRes ?? []);
       setRows(listRes.data);
@@ -145,20 +140,6 @@ export const DashboardPage: React.FC = () => {
       cancelled = true;
     };
   }, [rows]);
-
-  useEffect(() => {
-    if (role !== 'trainer' || !selectedBatchId) {
-      setBatchStudents([]);
-      return;
-    }
-    const batchId = Number(selectedBatchId);
-    if (!Number.isFinite(batchId) || batchId <= 0) return;
-    setBatchStudentsLoading(true);
-    listStudentsInBatch(batchId).then((s) => {
-      setBatchStudents(s);
-      setBatchStudentsLoading(false);
-    });
-  }, [role, selectedBatchId]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -217,7 +198,7 @@ export const DashboardPage: React.FC = () => {
                   setSearchTerm(e.target.value);
                   setCurrentPage(1);
                 }}
-                placeholder="Search student, ID, unit, or ID + Unit Code"
+                placeholder="Search student, ID, batch, unit, or ID + Unit Code"
               />
             </div>
             <div className="sm:w-[170px]">
@@ -274,65 +255,16 @@ export const DashboardPage: React.FC = () => {
             <p className="text-gray-600 text-sm font-medium">Role</p>
             <p className="text-xl font-bold text-[var(--text)] mt-1 capitalize">{role}</p>
             <p className="text-gray-500 text-xs mt-1">{user?.full_name}</p>
-            {role === 'trainer' && batchCount !== null && (
-              <p className="text-gray-600 text-xs mt-2 pt-2 border-t border-gray-100">
-                Batches: <span className="font-semibold">{batchCount}</span>
-              </p>
-            )}
           </Card>
         </div>
 
-        {role === 'trainer' && user?.id ? <TrainerGradeMePanel trainerUserId={user.id} /> : null}
-
-        {role === 'trainer' && trainerBatches.length > 0 && (
-          <Card className="mb-6">
-            <h2 className="text-lg font-bold text-[var(--text)] flex items-center gap-2 mb-4">
-              <Users className="w-5 h-5 text-[var(--brand)]" />
-              My batches
-            </h2>
-            <div className="flex flex-col sm:flex-row sm:items-end gap-4 mb-4">
-              <div className="w-full sm:w-64">
-                <Select
-                  label="Select batch"
-                  value={selectedBatchId}
-                  onChange={setSelectedBatchId}
-                  options={[
-                    { value: '', label: 'Select a batch...' },
-                    ...trainerBatches.map((b) => ({ value: String(b.id), label: b.name })),
-                  ]}
-                />
-              </div>
-            </div>
-            {selectedBatchId && (
-              <div className="border border-[var(--border)] rounded-lg overflow-hidden">
-                {batchStudentsLoading ? (
-                  <Loader variant="dots" size="md" message="Loading students..." />
-                ) : batchStudents.length === 0 ? (
-                  <div className="py-8 text-center text-gray-500 text-sm">No students in this batch.</div>
-                ) : (
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="bg-gray-50 border-b border-gray-200 text-left text-xs uppercase tracking-wide text-gray-500">
-                        <th className="py-2.5 px-3">Student</th>
-                        <th className="py-2.5 px-3">Email</th>
-                        <th className="py-2.5 px-3">Student ID</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {batchStudents.map((s) => (
-                        <tr key={s.id} className="border-b border-gray-100 hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors">
-                          <td className="py-2.5 px-3 font-medium text-gray-900">{s.name}</td>
-                          <td className="py-2.5 px-3 text-gray-600">{s.email}</td>
-                          <td className="py-2.5 px-3 text-gray-600">{s.student_id ?? '-'}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-            )}
-          </Card>
-        )}
+        {role === 'trainer' && user?.id ? (
+          <TrainerGradeMePanel
+            trainerUserId={user.id}
+            batchId={selectedBatchId ? Number(selectedBatchId) : null}
+            search={searchTerm}
+          />
+        ) : null}
 
         <Card>
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
@@ -374,7 +306,8 @@ export const DashboardPage: React.FC = () => {
                 <thead className="bg-gray-50 text-gray-700">
                   <tr>
                     <th className="text-left px-3 py-2 font-semibold border-b border-[var(--border)] min-w-[12rem]">Student</th>
-                    <th className="text-left px-3 py-2 font-semibold border-b border-[var(--border)] min-w-[11rem]">Form</th>
+                    <th className="text-left px-3 py-2 font-semibold border-b border-[var(--border)] min-w-[12rem]">Batch</th>
+                    <th className="text-left px-3 py-2 font-semibold border-b border-[var(--border)] min-w-[11rem]">Assessment</th>
                     <th className="hidden md:table-cell text-left px-3 py-2 font-semibold border-b border-[var(--border)] w-[6.5rem] whitespace-nowrap">
                       Start
                     </th>
@@ -462,12 +395,6 @@ export const DashboardPage: React.FC = () => {
                             <div className="mt-1 text-[11px] text-gray-600">
                               <span className="text-gray-500">Trainer</span>{' '}
                               {row.trainer_name?.trim() ? row.trainer_name : '—'}
-                              {row.batch_name?.trim() ? (
-                                <>
-                                  <span className="mx-1.5 text-gray-300">•</span>
-                                  <span className="text-gray-500">Batch</span> {row.batch_name}
-                                </>
-                              ) : null}
                             </div>
                             <div className="md:hidden mt-1 text-xs text-gray-600 tabular-nums flex flex-wrap gap-x-3 gap-y-0.5">
                               <span>
@@ -477,6 +404,9 @@ export const DashboardPage: React.FC = () => {
                                 <span className="text-gray-500">End</span> {formatDDMMYYYY(row.end_date)}
                               </span>
                             </div>
+                          </td>
+                          <td className="px-3 py-2 border-b border-[var(--border)] align-top text-gray-700 break-words">
+                            {getAssessmentBatchName(row)}
                           </td>
                           <td className="px-3 py-2 border-b border-[var(--border)] align-top">
                             <div className="font-medium text-[var(--text)] break-words">{row.form_name}</div>
@@ -562,7 +492,7 @@ export const DashboardPage: React.FC = () => {
                         </tr>
                         {expandedId === row.id ? (
                           <tr className={cn(ui.rowClassName, trainerHighlightExtra)}>
-                            <td className="px-3 py-3 border-b border-[var(--border)]" colSpan={6} onClick={(e) => e.stopPropagation()}>
+                            <td className="px-3 py-3 border-b border-[var(--border)]" colSpan={7} onClick={(e) => e.stopPropagation()}>
                               <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                                 <FormDocumentsPanel
                                   formId={Number(row.form_id)}

@@ -27,6 +27,7 @@ import {
   useTrainerHighlightCourseId,
 } from '../../utils/trainerCourseHighlight';
 import { resolveFormUnitDisplay } from '../../utils/formUnitDisplay';
+import { groupAssessmentsByBatch } from '../../utils/assessmentBatchDisplay';
 
 async function fetchSummariesChunked(instanceIds: number[]): Promise<
   Record<number, { final_attempt_1_result: AttemptResult; final_attempt_2_result: AttemptResult; final_attempt_3_result: AttemptResult }>
@@ -44,9 +45,9 @@ async function fetchSummariesChunked(instanceIds: number[]): Promise<
   return out;
 }
 
-type Props = { trainerUserId: number };
+type Props = { trainerUserId: number; batchId?: number | null; search?: string };
 
-export const TrainerGradeMePanel: React.FC<Props> = ({ trainerUserId }) => {
+export const TrainerGradeMePanel: React.FC<Props> = ({ trainerUserId, batchId = null, search = '' }) => {
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<SubmittedInstanceRow[]>([]);
   const [totalPending, setTotalPending] = useState(0);
@@ -61,7 +62,7 @@ export const TrainerGradeMePanel: React.FC<Props> = ({ trainerUserId }) => {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await listTrainerPendingForGradeMePanel(trainerUserId);
+      const res = await listTrainerPendingForGradeMePanel(trainerUserId, search, batchId);
       setRows(res.rows);
       setTotalPending(res.total);
       setTruncated(res.truncated);
@@ -71,7 +72,7 @@ export const TrainerGradeMePanel: React.FC<Props> = ({ trainerUserId }) => {
     } finally {
       setLoading(false);
     }
-  }, [trainerUserId]);
+  }, [trainerUserId, search, batchId]);
 
   useEffect(() => {
     void load();
@@ -202,8 +203,21 @@ export const TrainerGradeMePanel: React.FC<Props> = ({ trainerUserId }) => {
                     <span className="text-sm text-gray-600">· {unitRows.length} pending</span>
                   </button>
                   {expanded ? (
-                    <div className="border-t border-[var(--border)] bg-white px-2 py-2 space-y-1">
-                      {unitRows.map((row) => {
+                    <div className="border-t border-[var(--border)] bg-white px-2 py-2 space-y-3">
+                      {groupAssessmentsByBatch(unitRows).map((batchGroup) => (
+                        <section
+                          key={batchGroup.batchId != null ? `batch-${batchGroup.batchId}` : `batch-${batchGroup.batchName}`}
+                          className="rounded-md border border-gray-200 overflow-hidden"
+                        >
+                          <div className="flex flex-wrap items-center gap-2 bg-gray-50 px-3 py-2 text-sm">
+                            <span className="font-medium text-gray-500">Batch:</span>
+                            <span className="font-semibold text-[var(--text)]">{batchGroup.batchName}</span>
+                            <span className="text-xs text-gray-500">
+                              · {batchGroup.rows.length} pending
+                            </span>
+                          </div>
+                          <div className="p-1 space-y-1">
+                            {batchGroup.rows.map((row) => {
                         const sum = attemptSummaryByInstanceId[row.id] ?? null;
                         const rawAttemptResults: AttemptResult[] = [
                           sum?.final_attempt_1_result ?? null,
@@ -273,7 +287,10 @@ export const TrainerGradeMePanel: React.FC<Props> = ({ trainerUserId }) => {
                             ) : null}
                           </button>
                         );
-                      })}
+                            })}
+                          </div>
+                        </section>
+                      ))}
                       <div className="pt-1">
                         <Link
                           to={`/admin/course-units/${formId}/submissions`}
