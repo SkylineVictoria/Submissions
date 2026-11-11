@@ -4,6 +4,7 @@ import type {
   FormTemplate,
 } from '../lib/formEngine';
 import { groupGridCellsByRow, mergeGridTableAnswers, type GridAnswersMap } from './gridTableAnswers';
+import { isAttachmentEnvelope } from '../lib/answerAttachment';
 
 export type AnswerSaveTarget = {
   questionId: number;
@@ -61,7 +62,21 @@ export function collectAnswerSaveTargetsForQuestion(
   answers: GridAnswersMap
 ): AnswerSaveTarget[] {
   if (q.type === 'instruction_block' || q.type === 'page_break') return [];
+  const targets = collectValueSaveTargetsForQuestion(q, answers);
+  // Per-row questions keep their answer attachment on the question-level row (row_id null).
+  if (q.rows?.length && !targets.some((t) => t.rowId === null)) {
+    const slot = answers[getAnswerKey(q.id, null)];
+    if (isAttachmentEnvelope(slot)) {
+      targets.push({ questionId: q.id, rowId: null, value: slot as Record<string, unknown> });
+    }
+  }
+  return targets;
+}
 
+function collectValueSaveTargetsForQuestion(
+  q: FormQuestionWithOptionsAndRows,
+  answers: GridAnswersMap
+): AnswerSaveTarget[] {
   if (q.type === 'grid_table' && q.rows?.length) {
     const merged = mergeGridTableAnswers(q, answers);
     const byRow = groupGridCellsByRow(merged);

@@ -12,6 +12,12 @@ import { cn } from '../utils/cn';
 import { Button } from '../ui/Button';
 import { Loader } from '../ui/Loader';
 import { deleteAnswerImageByPublicUrl, uploadAnswerImage } from '../../lib/storage';
+import {
+  isAttachmentEnvelope,
+  questionAllowsAttachment,
+  splitAnswerAttachment,
+  withAnswerAttachment,
+} from '../../lib/answerAttachment';
 
 const truncateToWordLimit = (text: string, maxWords: number): string => {
   if (!text.trim()) return text;
@@ -127,7 +133,21 @@ interface QuestionRendererProps {
   /** Passed to DatePicker for `evaluation.evaluationDate` etc. (ISO yyyy-MM-dd). */
   minDate?: string;
   maxDate?: string;
+  /**
+   * Where this question's answer attachment is stored when `value` is not the question-level
+   * answer (grid/likert/checklist questions save one answer per row; their attachment lives on the
+   * question-level row, `row_id` null). Omit for questions whose `value` is the question-level answer.
+   */
+  attachmentSlot?: {
+    value: string | number | boolean | Record<string, unknown> | string[] | null;
+    onChange: (value: string | number | boolean | Record<string, unknown> | string[]) => void;
+  };
 }
+
+type QuestionRendererBodyProps = QuestionRendererProps & {
+  /** Shared attachment control, already bound to storage — set when the question allows attachments. */
+  attachment?: React.ReactNode;
+};
 
 function ImageAnswerField({
   instanceId,
@@ -276,21 +296,6 @@ function ImageAnswerField({
   );
 }
 
-type TextWithAnswerImage = { text: string; answerImageUrl?: string };
-
-function normalizeTextWithAnswerImage(raw: QuestionRendererProps['value']): TextWithAnswerImage {
-  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-    const o = raw as Record<string, unknown>;
-    if (typeof o.text === 'string' && Object.keys(o).every((k) => k === 'text' || k === 'answerImageUrl')) {
-      return {
-        text: String(o.text ?? ''),
-        answerImageUrl: typeof o.answerImageUrl === 'string' && o.answerImageUrl.trim() ? o.answerImageUrl : undefined,
-      };
-    }
-  }
-  return { text: String(raw ?? '') };
-}
-
 async function pasteImageFromClipboard(): Promise<File | null> {
   try {
     const items = await navigator.clipboard.read();
@@ -309,7 +314,12 @@ async function pasteImageFromClipboard(): Promise<File | null> {
   return null;
 }
 
-function OptionalAnswerImageAttachBar({
+/**
+ * Shared per-question attachment control (upload / paste / remove an image with the answer).
+ * Used for every question type whose template enables `pdf_meta.allowAnswerImage`.
+ * `onImageUrl(null)` means the attachment was removed.
+ */
+export function QuestionAttachment({
   instanceId,
   questionId,
   answerImageUrl,
@@ -319,7 +329,7 @@ function OptionalAnswerImageAttachBar({
   instanceId?: number;
   questionId: number;
   answerImageUrl?: string;
-  onImageUrl: (url: string | undefined) => void;
+  onImageUrl: (url: string | null) => void;
   disabled?: boolean;
 }) {
   const [uploading, setUploading] = React.useState(false);
@@ -359,14 +369,14 @@ function OptionalAnswerImageAttachBar({
         setLocalErr(res.error || 'Could not remove file from storage');
         return;
       }
-      onImageUrl(undefined);
+      onImageUrl(null);
     } finally {
       setUploading(false);
     }
   };
 
   return (
-    <div className="mt-3 space-y-2 rounded-lg border border-gray-200 bg-gray-50/90 p-3">
+    <div className="mt-3 space-y-2 rounded-lg border border-gray-200 bg-gray-50/90 p-3" data-testid={`question-attachment-${questionId}`}>
       <span className="text-xs font-medium text-gray-700">Image with answer (optional)</span>
       <p className="text-xs text-gray-500">Photos from phones (incl. iPhone HEIC) are accepted and converted for display and PDF.</p>
       <div className="flex flex-wrap items-center gap-2">
@@ -431,7 +441,62 @@ function OptionalAnswerImageAttachBar({
   );
 }
 
-export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
+/** Renderers that place the shared attachment control inside their own layout (under the text box). */
+const INLINE_ATTACHMENT_LAYOUT_TYPES: ReadonlySet<string> = new Set(['short_text', 'long_text']);
+
+/**
+ * Renders a question and, when the template enables answer attachments for it (any type),
+ * the shared <QuestionAttachment> under the answer. The type-specific body only ever sees its
+ * own value; the attachment envelope is handled here.
+ */
+export const QuestionRenderer: React.FC<QuestionRendererProps> = (props) => {
+  const { question, value, onChange, instanceId, disabled, attachmentSlot } = props;
+  const perRowAnswers = (question.rows?.length ?? 0) > 0;
+  if (!questionAllowsAttachment(question) || (perRowAnswers && !attachmentSlot)) {
+    // Per-row questions without a question-level slot (e.g. read-only previews) cannot store an attachment.
+    if (!attachmentSlot && isAttachmentEnvelope(value)) {
+      // Attachments were switched off after one was uploaded: show the plain answer, keep the stored attachment.
+      const { inner, attachmentUrl: keptUrl } = splitAnswerAttachment(value);
+      return (
+        <QuestionRendererBody
+          {...props}
+          value={inner}
+          onChange={(v) => onChange(withAnswerAttachment(v, keptUrl))}
+        />
+      );
+    }
+    return <QuestionRendererBody {...props} />;
+  }
+
+  const slotValue = attachmentSlot ? attachmentSlot.value : value;
+  const slotOnChange = attachmentSlot ? attachmentSlot.onChange : onChange;
+  const { inner: slotInner, attachmentUrl } = splitAnswerAttachment(slotValue);
+
+  const attachment = (
+    <QuestionAttachment
+      instanceId={instanceId}
+      questionId={question.id}
+      answerImageUrl={attachmentUrl}
+      onImageUrl={(u) => slotOnChange(withAnswerAttachment(slotInner, u))}
+      disabled={disabled}
+    />
+  );
+  const bodyValue = attachmentSlot ? value : slotInner;
+  const bodyOnChange = attachmentSlot
+    ? onChange
+    : (v: string | number | boolean | Record<string, unknown> | string[]) => onChange(withAnswerAttachment(v, attachmentUrl));
+
+  const body = <QuestionRendererBody {...props} value={bodyValue} onChange={bodyOnChange} attachment={attachment} />;
+  if (INLINE_ATTACHMENT_LAYOUT_TYPES.has(question.type)) return body;
+  return (
+    <div>
+      {body}
+      {attachment}
+    </div>
+  );
+};
+
+const QuestionRendererBody: React.FC<QuestionRendererBodyProps> = ({
   question,
   value,
   onChange,
@@ -448,6 +513,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
   taskQuestionDisplayNumber,
   minDate,
   maxDate,
+  attachment,
 }) => {
   const pm = (question.pdf_meta as Record<string, unknown>) || {};
   const wordLimit = normalizeWordLimit(pm.wordLimit);
@@ -580,22 +646,16 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
       );
     }
     const imgUrl = pm.imageUrl as string | undefined;
-    const allowAnswerImage = !!pm.allowAnswerImage;
 
-    if (allowAnswerImage) {
-      const norm = normalizeTextWithAnswerImage(value);
-      const emit = (patch: Partial<TextWithAnswerImage>) =>
-        onChange({
-          text: patch.text ?? norm.text,
-          answerImageUrl: patch.answerImageUrl !== undefined ? patch.answerImageUrl : norm.answerImageUrl,
-        } as Record<string, unknown>);
+    if (attachment) {
+      const text = typeof value === 'string' ? value : String(value ?? '');
       const textEl = (
         <Textarea
           label={imgUrl ? undefined : taskLabel(question.label)}
-          value={norm.text}
+          value={text}
           onChange={(e) => {
             const next = e.target.value;
-            emit({ text: wordLimit ? truncateToWordLimit(next, wordLimit) : next });
+            onChange(wordLimit ? truncateToWordLimit(next, wordLimit) : next);
           }}
           disabled={disabled}
           error={error}
@@ -606,15 +666,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
           maxWords={wordLimit ?? undefined}
         />
       );
-      const attach = (
-        <OptionalAnswerImageAttachBar
-          instanceId={instanceId}
-          questionId={question.id}
-          answerImageUrl={norm.answerImageUrl}
-          onImageUrl={(u) => emit({ answerImageUrl: u })}
-          disabled={disabled}
-        />
-      );
+      const attach = attachment;
       if (imgUrl) {
         return (
           <div>
@@ -693,20 +745,14 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
 
   if (question.type === 'long_text') {
     const imgUrl = pm.imageUrl as string | undefined;
-    const allowAnswerImage = !!pm.allowAnswerImage;
 
-    if (allowAnswerImage) {
-      const norm = normalizeTextWithAnswerImage(value);
-      const emit = (patch: Partial<TextWithAnswerImage>) =>
-        onChange({
-          text: patch.text ?? norm.text,
-          answerImageUrl: patch.answerImageUrl !== undefined ? patch.answerImageUrl : norm.answerImageUrl,
-        } as Record<string, unknown>);
+    if (attachment) {
+      const text = typeof value === 'string' ? value : String(value ?? '');
       const textEl = (
         <Textarea
           label={imgUrl ? undefined : taskLabel(question.label)}
-          value={norm.text}
-          onChange={(e) => emit({ text: e.target.value })}
+          value={text}
+          onChange={(e) => onChange(e.target.value)}
           disabled={disabled}
           error={error}
           className={fillBgClass}
@@ -717,15 +763,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
           fixedHeightFromWordLimit={!!wordLimit}
         />
       );
-      const attach = (
-        <OptionalAnswerImageAttachBar
-          instanceId={instanceId}
-          questionId={question.id}
-          answerImageUrl={norm.answerImageUrl}
-          onImageUrl={(u) => emit({ answerImageUrl: u })}
-          disabled={disabled}
-        />
-      );
+      const attach = attachment;
       if (imgUrl) {
         return (
           <div>

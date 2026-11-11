@@ -57,6 +57,7 @@ import { getQuestionInstructionListLabel } from '../utils/questionInstructionLab
 import { getTaskQuestionDisplayNumbers } from '../lib/taskQuestionsNumbering';
 import { TableLayoutSelect } from '../components/form-fill/TableLayoutSelect';
 import { cn } from '../components/utils/cn';
+import { NON_ANSWER_QUESTION_TYPES } from '../lib/answerAttachment';
 
 const FLUSH_PENDING_EVENT = 'form-builder:flush-pending';
 
@@ -2254,16 +2255,18 @@ export const AdminFormBuilderPage: React.FC = () => {
                           }
                           placeholder="e.g. 50"
                         />
-                        <Checkbox
-                          label="Allow image upload with answer (optional for respondent; HEIC/iPhone photos are converted for PDF)"
-                          checked={!!pm.allowAnswerImage}
-                          onChange={(v) =>
-                            updateQuestion(q.id, {
-                              pdf_meta: { ...pm, allowAnswerImage: !!v },
-                            })
-                          }
-                        />
                       </>
+                    )}
+                    {!NON_ANSWER_QUESTION_TYPES.has(q.type) && (
+                      <Checkbox
+                        label="Allow image upload with answer (optional for respondent; HEIC/iPhone photos are converted for PDF)"
+                        checked={!!pm.allowAnswerImage}
+                        onChange={(v) =>
+                          updateQuestion(q.id, {
+                            pdf_meta: { ...pm, allowAnswerImage: !!v },
+                          })
+                        }
+                      />
                     )}
                     {(q.type !== 'page_break') && (
                       <div className="space-y-2">
@@ -2854,6 +2857,11 @@ export const AdminFormBuilderPage: React.FC = () => {
                                     return (
                                       <div className="space-y-2">
                                         <TableLayoutSelect value={(childPm.layout as string) || 'no_image'} onChange={(v) => updateQuestion(childQ.id, { pdf_meta: { ...childPm, layout: v } })} />
+                                        <Checkbox
+                                          label="Allow image upload with answer (optional; HEIC/iPhone converted for PDF)"
+                                          checked={!!childPm.allowAnswerImage}
+                                          onChange={(v) => updateQuestion(childQ.id, { pdf_meta: { ...childPm, allowAnswerImage: !!v } })}
+                                        />
                                         <div className="space-y-2">
                                           {childColumns.map((col, colIdx) => (
                                             <div key={colIdx} className="grid grid-cols-12 gap-2 items-end">

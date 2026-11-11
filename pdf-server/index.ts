@@ -23,6 +23,13 @@ import {
 // TypeScript will resolve these to the corresponding .ts files at build time.
 import { renderAppendixAMatrixHtml } from './appendixAMatrixData.js';
 import {
+  answerAttachmentImageHtml,
+  answerInnerValueFromDbRow,
+  answerKey,
+  createAttachmentTracker,
+  getAnswerAttachmentMap,
+} from './answerAttachment.js';
+import {
   getWrittenEvidenceChecklistQuestions,
   isWrittenEvidenceChecklistSection,
   renderWrittenEvidenceChecklistHtml,
@@ -399,7 +406,17 @@ function gridRowImgHtml(imageUrl: string | null | undefined): string {
   return `<img src="${escapeImgSrc(imageUrl, 'grid-row-image')}" class="signature-img" alt="" loading="eager" />`;
 }
 
-function formatShortLongAnswerCellHtml(val: string | number | Record<string, unknown> | undefined): string {
+/**
+ * Answer cell with its optional attachment image underneath. `attachmentUrl` comes from the
+ * attachment tracker (answers are stored unwrapped in the answer map); short/long markup is unchanged.
+ */
+function formatShortLongAnswerCellHtml(val: string | number | Record<string, unknown> | undefined, attachmentUrl?: string): string {
+  if (attachmentUrl) {
+    if (val != null && typeof val === 'object') {
+      return formatShortLongAnswerCellHtml(val) + answerAttachmentImageHtml(attachmentUrl);
+    }
+    val = { text: val == null ? '' : String(val), answerImageUrl: attachmentUrl };
+  }
   if (val != null && typeof val === 'object' && !Array.isArray(val)) {
     const o = val as Record<string, unknown>;
     if ('text' in o || 'answerImageUrl' in o) {
@@ -594,21 +611,12 @@ async function getTemplateForForm(formId: number) {
   return { form, steps: stepsWithSections };
 }
 
+/** Answer values by key, attachment removed (see getAnswerAttachmentMap for attachments). */
 function getAnswerMap(answers: FormAnswer[]): Map<string, string | number | Record<string, unknown>> {
   const m = new Map<string, string | number | Record<string, unknown>>();
   for (const a of answers) {
-    const key = a.row_id === null ? `q-${a.question_id}` : `q-${a.question_id}-${a.row_id}`;
-    const j =
-      a.value_json != null && typeof a.value_json === 'object' && !Array.isArray(a.value_json)
-        ? (a.value_json as Record<string, unknown>)
-        : null;
-    if (j && typeof j.answerImageUrl === 'string' && j.answerImageUrl.trim()) {
-      m.set(key, { text: String(a.value_text ?? j.text ?? ''), answerImageUrl: j.answerImageUrl });
-      continue;
-    }
-    if (a.value_text != null) m.set(key, a.value_text);
-    else if (a.value_number != null) m.set(key, a.value_number);
-    else if (a.value_json != null) m.set(key, a.value_json as Record<string, unknown>);
+    const inner = answerInnerValueFromDbRow(a);
+    if (inner !== undefined) m.set(answerKey(a.question_id, a.row_id), inner);
   }
   return m;
 }
@@ -684,6 +692,8 @@ function buildHtml(data: {
     }>;
   }>;
   answers: Map<string, string | number | Record<string, unknown>>;
+  /** Answer attachments (any question type) by answer key — from getAnswerAttachmentMap. */
+  answerAttachments?: Map<string, string>;
   taskRowsMap?: Map<number, FormQuestionRow>;
   trainerAssessments?: Map<number, string>;
   trainerRowAssessments?: Map<string, string>;
@@ -693,6 +703,7 @@ function buildHtml(data: {
   role?: 'student' | 'trainer' | 'office';
 }): { html: string; unitCode: string; version: string; headerHtml: string } {
   const { form, steps, answers, taskRowsMap = new Map(), trainerAssessments = new Map(), trainerRowAssessments = new Map(), resultsOffice = new Map(), resultsData = new Map(), assessmentSummaryData = {}, role = 'student' } = data;
+  const attachments = createAttachmentTracker(data.answerAttachments ?? new Map());
 
   // Header images: data URLs for Playwright header/footer templates; https for custom crest
   let crestImg = form.header_asset_url || '';
@@ -1372,7 +1383,7 @@ ${ASSESSMENT_QUESTION_BLOCK_CSS}
         const commentsQ = questions.find(q => q.question.type === 'long_text' && q.question.code?.includes('Comments'));
         if (commentsQ) {
           const commentsRaw = answers.get(`q-${commentsQ.question.id}`);
-          const commentsVal = formatShortLongAnswerCellHtml(commentsRaw as string | number | Record<string, unknown> | undefined);
+          const commentsVal = formatShortLongAnswerCellHtml(commentsRaw as string | number | Record<string, unknown> | undefined, attachments.take(commentsQ.question.id));
           html += `<div class="question" style="margin-top:8px;font-family:'Calibri','Calibri Light',Arial,sans-serif;font-size:11pt"><div class="question-label" style="font-weight:600;margin-bottom:4px">${commentsQ.question.label}</div>`;
           html += `<div class="answer-box answer-box-large" style="min-height:50px;font-size:11pt">${commentsVal}</div></div>`;
         }
@@ -1507,7 +1518,7 @@ ${ASSESSMENT_QUESTION_BLOCK_CSS}
         const multiChoice = questions.find((q) => q.question.type === 'multi_choice');
         const otherDescQ = questions.find((q) => q.question.type === 'short_text');
         const otherDescVal = otherDescQ
-          ? formatShortLongAnswerCellHtml(answers.get(`q-${otherDescQ.question.id}`) as string | number | Record<string, unknown> | undefined)
+          ? formatShortLongAnswerCellHtml(answers.get(`q-${otherDescQ.question.id}`) as string | number | Record<string, unknown> | undefined, attachments.take(otherDescQ.question.id))
           : '';
         const mcVal = multiChoice ? answers.get(`q-${multiChoice.question.id}`) : undefined;
         const selected = new Set(Array.isArray(mcVal) ? (mcVal as string[]) : []);
@@ -1828,6 +1839,7 @@ ${ASSESSMENT_QUESTION_BLOCK_CSS}
               html += '</tr>';
             }
             html += '</tbody></table>';
+            html += attachments.blockHtml(question.id);
           }
           if (!isGridTable) {
             const key = rows[0] ? `q-${question.id}-${rows[0].id}` : `q-${question.id}`;
@@ -1836,7 +1848,7 @@ ${ASSESSMENT_QUESTION_BLOCK_CSS}
             const qWordLimit = typeof qPm?.wordLimit === 'number' && qPm.wordLimit > 0 ? qPm.wordLimit : null;
             const blockClass = question.type === 'long_text' ? 'task-q-answer-block task-q-answer-large' : 'task-q-answer-block';
             const blockStyle = qWordLimit ? `min-height:${heightFromWordLimit(qWordLimit)}px;max-height:${heightFromWordLimit(qWordLimit)}px;height:${heightFromWordLimit(qWordLimit)}px;` : '';
-            html += `<div class="${blockClass}"${blockStyle ? ` style="${blockStyle}"` : ''}>${formatShortLongAnswerCellHtml(val as string | number | Record<string, unknown> | undefined)}</div>`;
+            html += `<div class="${blockClass}"${blockStyle ? ` style="${blockStyle}"` : ''}>${formatShortLongAnswerCellHtml(val as string | number | Record<string, unknown> | undefined, attachments.take(question.id))}</div>`;
           }
           const legacyAb = pmTop?.additionalBlock as Record<string, unknown> | undefined;
           const contentBlocks: Array<{ type: string; content?: string; questionId?: number; headerText?: string }> = Array.isArray(pmTop?.contentBlocks)
@@ -1883,7 +1895,7 @@ ${ASSESSMENT_QUESTION_BLOCK_CSS}
                   else if (cqLayout === 'below') labelHtml += `<div style="margin-top:8px">${cqImgTag}</div>`;
                   else labelHtml = `<div style="display:flex;gap:16px;align-items:flex-start"><div style="flex:1;min-width:0">${labelHtml}</div><div style="width:${cqPct}%;flex-shrink:0">${cqImgTag}</div></div>`;
                 }
-                html += `<div class="task-q-content-block mt-3">${blockHeaderHtml(block.headerText)}${labelHtml}<div class="${blockClass}"${blockStyle ? ` style="${blockStyle}"` : ''}>${formatShortLongAnswerCellHtml(val as string | number | Record<string, unknown> | undefined)}</div></div>`;
+                html += `<div class="task-q-content-block mt-3">${blockHeaderHtml(block.headerText)}${labelHtml}<div class="${blockClass}"${blockStyle ? ` style="${blockStyle}"` : ''}>${formatShortLongAnswerCellHtml(val as string | number | Record<string, unknown> | undefined, attachments.take(cq.id))}</div></div>`;
               }
               continue;
             }
@@ -1942,7 +1954,7 @@ ${ASSESSMENT_QUESTION_BLOCK_CSS}
                 }
                 html += '</tr>';
               }
-              html += '</tbody></table></div></div>';
+              html += '</tbody></table></div>' + attachments.blockHtml(cq.id) + '</div>';
             }
             }
           }
@@ -2214,6 +2226,7 @@ ${ASSESSMENT_QUESTION_BLOCK_CSS}
               const val = answers.get(key);
               const checked = String(val || '').toLowerCase() === 'yes' || String(val || '').toLowerCase() === 'true';
               html += `<div class="question declaration-checkbox"><span class="cb ${checked ? 'checked' : ''}">${checked ? '✓' : ''}</span><span class="question-label">${question.label}</span></div>`;
+              html += attachments.blockHtml(question.id);
             }
           }
           html += '</div>';
@@ -2254,6 +2267,7 @@ ${ASSESSMENT_QUESTION_BLOCK_CSS}
                 if (showDate) html += `<tr><td class="decl-label">Date</td><td class="decl-value">${dateVal || ''}</td></tr>`;
                 html += '</tbody></table>';
               }
+              html += attachments.blockHtml(question.id);
             }
           }
         } else if (sectionTitle.includes('office')) {
@@ -2265,7 +2279,7 @@ ${ASSESSMENT_QUESTION_BLOCK_CSS}
             const key = `q-${question.id}`;
             const val = answers.get(key);
             const label = question.label;
-            html += `<tr><td class="decl-label decl-office-label">${label}</td><td class="decl-value">${val ?? ''}</td></tr>`;
+            html += `<tr><td class="decl-label decl-office-label">${label}</td><td class="decl-value">${val ?? ''}${attachments.blockHtml(question.id)}</td></tr>`;
           }
           html += '</tbody></table>';
         } else {
@@ -2309,19 +2323,21 @@ ${ASSESSMENT_QUESTION_BLOCK_CSS}
                 if (showDate) html += `<tr><td class="decl-label">Date</td><td class="decl-value">${dateVal || ''}</td></tr>`;
                 html += '</tbody></table>';
               }
+              html += attachments.blockHtml(question.id);
             } else if (question.type === 'date') {
               const val = answers.get(`q-${question.id}`);
-              html += `<div class="question"><div class="question-label">${question.label}</div><div class="answer-box">${val ?? ''}</div></div>`;
+              html += `<div class="question"><div class="question-label">${question.label}</div><div class="answer-box">${val ?? ''}${attachments.blockHtml(question.id)}</div></div>`;
             } else if (question.type === 'yes_no' || question.type === 'single_choice') {
               const val = answers.get(`q-${question.id}`);
               const checked = String(val || '').toLowerCase() === 'yes' || String(val || '').toLowerCase() === 'true';
               html += `<div class="question declaration-checkbox"><span class="cb ${checked ? 'checked' : ''}">${checked ? '✓' : ''}</span><span class="question-label">${question.label}</span></div>`;
+              html += attachments.blockHtml(question.id);
             } else if (question.type === 'short_text' || question.type === 'long_text') {
               const val = answers.get(`q-${question.id}`);
-              html += `<div class="question"><div class="question-label">${question.label}</div><div class="answer-box">${formatShortLongAnswerCellHtml(val as string | number | Record<string, unknown> | undefined)}</div></div>`;
+              html += `<div class="question"><div class="question-label">${question.label}</div><div class="answer-box">${formatShortLongAnswerCellHtml(val as string | number | Record<string, unknown> | undefined, attachments.take(question.id))}</div></div>`;
             } else {
               const val = answers.get(`q-${question.id}`);
-              html += `<div class="question"><div class="question-label">${question.label}</div><div class="answer-box">${val ?? ''}</div></div>`;
+              html += `<div class="question"><div class="question-label">${question.label}</div><div class="answer-box">${val ?? ''}${attachments.blockHtml(question.id)}</div></div>`;
             }
           }
           html += '</div>';
@@ -2362,14 +2378,16 @@ ${ASSESSMENT_QUESTION_BLOCK_CSS}
               const rowClass = rowIdx++ % 2 === 0 ? 'row-normal' : 'row-alt';
               const cellHtml =
                 question.type === 'short_text' || question.type === 'long_text'
-                  ? formatShortLongAnswerCellHtml(val as string | number | Record<string, unknown> | undefined)
-                  : (val ?? '');
+                  ? formatShortLongAnswerCellHtml(val as string | number | Record<string, unknown> | undefined, attachments.take(question.id))
+                  : `${val ?? ''}${attachments.blockHtml(question.id)}`;
               html += `<tr class="${rowClass}"><td class="label-cell">${question.label}</td><td class="value-cell">${cellHtml}</td></tr>`;
             }
           }
           html += '</table>';
         }
       }
+      // Any answer attachment this section's layout did not place under its answer (e.g. likert matrices).
+      html += attachments.flushSection(questions, labelToHtml);
       if (isLearnerEvaluation && learnerEvalIntroShown) {
         html += '</div>';
       }
@@ -2596,6 +2614,7 @@ app.get('/pdf/:instanceId', async (req, res) => {
       form,
       steps: template.steps,
       answers: answerMap,
+      answerAttachments: getAnswerAttachmentMap((answers as FormAnswer[]) || []),
       taskRowsMap,
       trainerAssessments: trainerAssessmentsMap,
       trainerRowAssessments: trainerRowAssessmentsMap,

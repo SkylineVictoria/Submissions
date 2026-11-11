@@ -76,7 +76,7 @@ import { Button } from '../components/ui/Button';
 import { Stepper } from '../components/ui/Stepper';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import { StoredPdfPanel } from '../components/pdf/StoredPdfPanel';
-import { QuestionRenderer } from '../components/form-fill/QuestionRenderer';
+import { QuestionAttachment, QuestionRenderer } from '../components/form-fill/QuestionRenderer';
 import { TaskInstructionsBlocksDisplay } from '../components/form-fill/TaskInstructionsBlocksDisplay';
 import { getQuestionInstructionsData } from '../utils/questionInstructionLabel';
 import { SectionLikertTable } from '../components/form-fill/SectionLikertTable';
@@ -84,6 +84,14 @@ import { SignatureField } from '../components/form-fill/SignatureField';
 import { AppendixAMatrixForm } from '../components/form-fill/AppendixAMatrixForm';
 import { DatePicker } from '../components/ui/DatePicker';
 import { toast } from '../utils/toast';
+import {
+  answerFromDbRow,
+  answerToSavePayload,
+  isAttachmentEnvelope,
+  questionAllowsAttachment,
+  splitAnswerAttachment,
+  withAnswerAttachment,
+} from '../lib/answerAttachment';
 import {
   buildTaskResultSections,
   formatAttemptSatLabel,
@@ -502,17 +510,7 @@ function getTrainerSatisfactoryForQuestion(
 }
 
 function parseAnswerValue(a: FormAnswer): string | number | boolean | Record<string, unknown> | string[] | null {
-  const j =
-    a.value_json != null && typeof a.value_json === 'object' && !Array.isArray(a.value_json)
-      ? (a.value_json as Record<string, unknown>)
-      : null;
-  if (j && typeof j.answerImageUrl === 'string' && j.answerImageUrl.trim()) {
-    return { text: String(a.value_text ?? j.text ?? ''), answerImageUrl: j.answerImageUrl };
-  }
-  if (a.value_text != null) return a.value_text;
-  if (a.value_number != null) return a.value_number;
-  if (a.value_json != null) return a.value_json as Record<string, unknown> | string[];
-  return null;
+  return answerFromDbRow(a);
 }
 
 export const InstanceFillPage: React.FC = () => {
@@ -605,7 +603,7 @@ export const InstanceFillPage: React.FC = () => {
       .flatMap((s) => s.questions)
       .find((q) => q.code === 'student.declarationSignature');
     if (!studentDeclQ) return undefined;
-    const studentDeclVal = answers[getAnswerKey(studentDeclQ.id, null)];
+    const studentDeclVal = splitAnswerAttachment(answers[getAnswerKey(studentDeclQ.id, null)]).inner;
     const studentDeclSigObj =
       studentDeclVal && typeof studentDeclVal === 'object' && !Array.isArray(studentDeclVal)
         ? (studentDeclVal as Record<string, unknown>)
@@ -1357,7 +1355,7 @@ export const InstanceFillPage: React.FC = () => {
     const raTrainerDate = raSigObj ? String(raSigObj.date ?? raSigObj.signedAtDate ?? '') : '';
     const trainerRefDate = raTrainerDate || firstTaskRd?.trainer_date || '';
     const studentDeclQ = template.steps?.flatMap((st) => st.sections).flatMap((s) => s.questions).find((q) => q.code === 'student.declarationSignature');
-    const studentDeclVal = studentDeclQ ? answers[getAnswerKey(studentDeclQ.id, null)] : undefined;
+    const studentDeclVal = studentDeclQ ? splitAnswerAttachment(answers[getAnswerKey(studentDeclQ.id, null)]).inner : undefined;
     const studentDeclSigObj = studentDeclVal && typeof studentDeclVal === 'object' && !Array.isArray(studentDeclVal) ? (studentDeclVal as Record<string, unknown>) : null;
     const studentDeclDate = studentDeclSigObj ? String(studentDeclSigObj.date ?? studentDeclSigObj.signedAtDate ?? '') : '';
     const sum = assessmentSummary;
@@ -1460,7 +1458,7 @@ export const InstanceFillPage: React.FC = () => {
       const raTrainerDate = raSigObj ? String(raSigObj.date ?? raSigObj.signedAtDate ?? '') : '';
 
       const studentDeclQ = template.steps?.flatMap((st) => st.sections).flatMap((s) => s.questions).find((q) => q.code === 'student.declarationSignature');
-      const studentDeclVal = studentDeclQ ? answers[getAnswerKey(studentDeclQ.id, null)] : undefined;
+      const studentDeclVal = studentDeclQ ? splitAnswerAttachment(answers[getAnswerKey(studentDeclQ.id, null)]).inner : undefined;
       const studentDeclSigObj = studentDeclVal && typeof studentDeclVal === 'object' && !Array.isArray(studentDeclVal) ? (studentDeclVal as Record<string, unknown>) : null;
       const studentDeclSig = studentDeclSigObj ? (String(studentDeclSigObj.signature ?? studentDeclSigObj.imageDataUrl ?? '') || null) : (typeof studentDeclVal === 'string' ? studentDeclVal : null);
       const studentDeclDate = studentDeclSigObj ? String(studentDeclSigObj.date ?? studentDeclSigObj.signedAtDate ?? '') : '';
@@ -1488,24 +1486,8 @@ export const InstanceFillPage: React.FC = () => {
     setPdfRefresh((r) => r + 1);
   }, [template, id, role, resultsData, assessmentSummary, answers, submissionCount, getTrainerAttemptOutcome]);
 
-  const valueToSavePayload = (value: string | number | boolean | Record<string, unknown> | string[]) => {
-    let text: string | undefined;
-    let num: number | undefined;
-    let json: unknown;
-    if (typeof value === 'string') text = value;
-    else if (typeof value === 'number') num = value;
-    else if (typeof value === 'boolean') text = value ? 'true' : 'false';
-    else if (Array.isArray(value)) json = value;
-    else if (value && typeof value === 'object') {
-      const o = value as Record<string, unknown>;
-      if (typeof o.text === 'string' && Object.keys(o).every((k) => k === 'text' || k === 'answerImageUrl')) {
-        const url = typeof o.answerImageUrl === 'string' && o.answerImageUrl.trim() ? o.answerImageUrl : null;
-        return { text: o.text, json: url ? { answerImageUrl: url } : null };
-      }
-      json = value;
-    }
-    return { text, number: num, json };
-  };
+  const valueToSavePayload = (value: string | number | boolean | Record<string, unknown> | string[]) =>
+    answerToSavePayload(value);
 
   const clearPendingSave = useCallback((key: string) => {
     const t = saveTimeoutsRef.current.get(key);
@@ -1853,6 +1835,38 @@ export const InstanceFillPage: React.FC = () => {
   );
 
   /** Staff may correct dates on result/summary sheets even when attempt columns are workflow-locked. */
+  /** Question-level answer row (row_id null) — holds the attachment for per-row (grid/likert) questions. */
+  const questionAttachmentSlot = (questionId: number) => ({
+    value: (answers[getAnswerKey(questionId, null)] as string | number | boolean | Record<string, unknown> | string[] | undefined) ?? null,
+    onChange: (v: string | number | boolean | Record<string, unknown> | string[]) => handleAnswerChange(questionId, null, v),
+  });
+
+  /** For custom-rendered answers (e.g. declaration signatures): save the answer, keeping its attachment. */
+  const changeAnswerKeepingAttachment = (
+    questionId: number,
+    value: string | number | boolean | Record<string, unknown> | string[],
+    immediate = false
+  ) => {
+    const keptUrl = splitAnswerAttachment(answers[getAnswerKey(questionId, null)]).attachmentUrl;
+    handleAnswerChange(questionId, null, keptUrl ? withAnswerAttachment(value, keptUrl) : value, immediate);
+  };
+
+  /** Shared attachment control for custom-rendered answers (QuestionRenderer adds it itself). */
+  const renderCustomAnswerAttachment = (q: FormQuestionWithOptionsAndRows, editable: boolean) => {
+    if (!questionAllowsAttachment(q)) return null;
+    const slot = questionAttachmentSlot(q.id);
+    const { inner, attachmentUrl } = splitAnswerAttachment(slot.value);
+    return (
+      <QuestionAttachment
+        instanceId={id}
+        questionId={q.id}
+        answerImageUrl={attachmentUrl}
+        onImageUrl={(u) => slot.onChange(withAnswerAttachment(inner, u))}
+        disabled={!editable}
+      />
+    );
+  };
+
   const staffCanCorrectSheetDates = useMemo(
     () => staffBypassDateConstraints && (canRoleEditCurrentWorkflow || canOfficeAdminEdit),
     [staffBypassDateConstraints, canRoleEditCurrentWorkflow, canOfficeAdminEdit]
@@ -2357,8 +2371,10 @@ export const InstanceFillPage: React.FC = () => {
           // For signatures, `val` is usually an object; `String(val)` becomes "[object Object]"
           // which incorrectly passes the "required" check. Use content-based validation instead.
           if (q.type === 'signature') {
-            const obj = val && typeof val === 'object' && !Array.isArray(val) ? (val as Record<string, unknown>) : null;
-            const sig = obj ? (obj.signature ?? obj.imageDataUrl ?? null) : (typeof val === 'string' ? val : null);
+            // An attachment never stands in for the signature itself.
+            const sigInner = splitAnswerAttachment(val).inner;
+            const obj = sigInner && typeof sigInner === 'object' && !Array.isArray(sigInner) ? (sigInner as Record<string, unknown>) : null;
+            const sig = obj ? (obj.signature ?? obj.imageDataUrl ?? null) : (typeof sigInner === 'string' ? sigInner : null);
             const dateVal = obj ? String(obj.date ?? obj.signedAtDate ?? '') : '';
             const needsDate = ((q.pdf_meta as { showDateField?: boolean } | undefined)?.showDateField ?? false) === true;
             if (!trainerHasChecked && (!String(sig ?? '').trim() || (needsDate && !String(dateVal ?? '').trim()))) {
@@ -3188,7 +3204,7 @@ export const InstanceFillPage: React.FC = () => {
                                     );
                                   }
                                   if (q.type === 'signature') {
-                                    const sigVal = val;
+                                    const sigVal = splitAnswerAttachment(val).inner;
                                     const sigObj = sigVal && typeof sigVal === 'object' && !Array.isArray(sigVal) ? (sigVal as Record<string, unknown>) : null;
                                     const dateVal = sigObj ? String(sigObj.date ?? sigObj.signedAtDate ?? '') : '';
                                     const imgVal = sigObj?.signature ?? sigObj?.imageDataUrl ?? (typeof sigVal === 'string' ? sigVal : null);
@@ -3196,12 +3212,13 @@ export const InstanceFillPage: React.FC = () => {
                                       <div key={q.id} className="flex items-center gap-4 flex-wrap pt-2">
                                         <div className="flex-1 min-w-[200px]">
                                           <div className="text-sm font-semibold text-gray-700 mb-1">{q.label}</div>
-                                          <SignatureField value={(imgVal as string | null) ?? null} onChange={(v) => { const img = typeof v === 'string' ? v : null; const base = (sigObj && typeof sigObj === 'object' ? { ...sigObj } : {}) as Record<string, unknown>; handleAnswerChange(q.id, null, (img != null ? { ...base, signature: img } : { ...base, signature: null }) as string | number | boolean | Record<string, unknown> | string[]); }} disabled={!appendixFirstCycleEditable} highlight={(role === 'student' || role === 'trainer') && appendixFirstCycleEditable} suggestionFrom={raSigSuggestion} onSuggestionClick={raSigSuggestion && appendixFirstCycleEditable ? () => { const base = (sigObj && typeof sigObj === 'object' ? { ...sigObj } : {}) as Record<string, unknown>; handleAnswerChange(q.id, null, { ...base, signature: raSigSuggestion, date: raDateSuggestion } as string | number | boolean | Record<string, unknown> | string[], true); } : undefined} />
+                                          <SignatureField value={(imgVal as string | null) ?? null} onChange={(v) => { const img = typeof v === 'string' ? v : null; const base = (sigObj && typeof sigObj === 'object' ? { ...sigObj } : {}) as Record<string, unknown>; changeAnswerKeepingAttachment(q.id, (img != null ? { ...base, signature: img } : { ...base, signature: null }) as string | number | boolean | Record<string, unknown> | string[]); }} disabled={!appendixFirstCycleEditable} highlight={(role === 'student' || role === 'trainer') && appendixFirstCycleEditable} suggestionFrom={raSigSuggestion} onSuggestionClick={raSigSuggestion && appendixFirstCycleEditable ? () => { const base = (sigObj && typeof sigObj === 'object' ? { ...sigObj } : {}) as Record<string, unknown>; changeAnswerKeepingAttachment(q.id, { ...base, signature: raSigSuggestion, date: raDateSuggestion } as string | number | boolean | Record<string, unknown> | string[], true); } : undefined} />
                                         </div>
                                         <div className="flex items-center gap-2 min-w-[140px]">
                                           <span className="text-sm font-semibold text-gray-700 shrink-0">Date:</span>
-                                          <DatePicker value={dateVal} onChange={(newDate) => { const base = sigObj || (typeof sigVal === 'string' ? { signature: sigVal } : {}); handleAnswerChange(q.id, null, { ...base, date: newDate } as string | number | boolean | Record<string, unknown> | string[]); }} disabled={!appendixFirstCycleEditable} highlight={(role === 'student' || role === 'trainer') && appendixFirstCycleEditable} compact placement="above" className="flex-1 min-w-0" />
+                                          <DatePicker value={dateVal} onChange={(newDate) => { const base = sigObj || (typeof sigVal === 'string' ? { signature: sigVal } : {}); changeAnswerKeepingAttachment(q.id, { ...base, date: newDate } as string | number | boolean | Record<string, unknown> | string[]); }} disabled={!appendixFirstCycleEditable} highlight={(role === 'student' || role === 'trainer') && appendixFirstCycleEditable} compact placement="above" className="flex-1 min-w-0" />
                                         </div>
+                                        {questionAllowsAttachment(q) && <div className="w-full">{renderCustomAnswerAttachment(q, appendixFirstCycleEditable)}</div>}
                                       </div>
                                     );
                                   }
@@ -3228,7 +3245,7 @@ export const InstanceFillPage: React.FC = () => {
                                   );
                                 }
                                 if (q.type === 'signature') {
-                                  const sigVal = val;
+                                  const sigVal = splitAnswerAttachment(val).inner;
                                   const sigObj = sigVal && typeof sigVal === 'object' && !Array.isArray(sigVal) ? (sigVal as Record<string, unknown>) : null;
                                   const dateVal = sigObj ? String(sigObj.date ?? sigObj.signedAtDate ?? '') : '';
                                   const imgVal = sigObj?.signature ?? sigObj?.imageDataUrl ?? (typeof sigVal === 'string' ? sigVal : null);
@@ -3242,14 +3259,14 @@ export const InstanceFillPage: React.FC = () => {
                                             const img = typeof v === 'string' ? v : null;
                                             const base = (sigObj && typeof sigObj === 'object' ? { ...sigObj } : {}) as Record<string, unknown>;
                                             const merged = img != null ? { ...base, signature: img } : { ...base, signature: null };
-                                            handleAnswerChange(q.id, null, merged as string | number | boolean | Record<string, unknown> | string[]);
+                                            changeAnswerKeepingAttachment(q.id, merged as string | number | boolean | Record<string, unknown> | string[]);
                                           }}
                                           disabled={!editable}
                                           highlight={(role === 'student' || role === 'trainer') && editable}
                                           suggestionFrom={raSigSuggestion}
                                           onSuggestionClick={raSigSuggestion && editable ? () => {
                                             const base = (sigObj && typeof sigObj === 'object' ? { ...sigObj } : {}) as Record<string, unknown>;
-                                            handleAnswerChange(q.id, null, { ...base, signature: raSigSuggestion, date: raDateSuggestion } as string | number | boolean | Record<string, unknown> | string[], true);
+                                            changeAnswerKeepingAttachment(q.id, { ...base, signature: raSigSuggestion, date: raDateSuggestion } as string | number | boolean | Record<string, unknown> | string[], true);
                                           } : undefined}
                                         />
                                       </div>
@@ -3259,7 +3276,7 @@ export const InstanceFillPage: React.FC = () => {
                                           value={dateVal}
                                           onChange={(newDate) => {
                                             const base = sigObj || (typeof sigVal === 'string' ? { signature: sigVal } : {});
-                                            handleAnswerChange(q.id, null, { ...base, date: newDate } as string | number | boolean | Record<string, unknown> | string[]);
+                                            changeAnswerKeepingAttachment(q.id, { ...base, date: newDate } as string | number | boolean | Record<string, unknown> | string[]);
                                           }}
                                           disabled={!editable}
                                           highlight={(role === 'student' || role === 'trainer') && editable}
@@ -3268,6 +3285,7 @@ export const InstanceFillPage: React.FC = () => {
                                           className="flex-1 min-w-0"
                                         />
                                       </div>
+                                      {questionAllowsAttachment(q) && <div className="w-full">{renderCustomAnswerAttachment(q, editable)}</div>}
                                     </div>
                                   );
                                 }
@@ -4004,9 +4022,11 @@ export const InstanceFillPage: React.FC = () => {
                                                 </button>
                                               </div>
                                               <QuestionRenderer
+                                                instanceId={id}
                                                 question={childQ}
                                                 value={Object.keys(merged).length ? merged : null}
                                                 onChange={onGridChange}
+                                                attachmentSlot={questionAttachmentSlot(childQ.id)}
                                                 disabled={!editable}
                                                 error={errors[`q-${childQ.id}`]}
                                                 highlightAsFill={editable}
@@ -4157,9 +4177,11 @@ export const InstanceFillPage: React.FC = () => {
                                                       </button>
                                                     </div>
                                                     <QuestionRenderer
+                                                      instanceId={id}
                                                       question={q}
                                                       value={Object.keys(merged).length ? merged : null}
                                                       onChange={onGridChange}
+                                                      attachmentSlot={questionAttachmentSlot(q.id)}
                                                       disabled={!editable}
                                                       error={errors[`q-${q.id}`]}
                                                       highlightAsFill={editable}
@@ -4380,7 +4402,7 @@ export const InstanceFillPage: React.FC = () => {
                                                   <div className="flex gap-2 items-start">
                                                     <AnswerSaveStatusIcon status={questionSaveStatus[childQ.id]} />
                                                     <div className="flex-1 min-w-0">
-                                                      <QuestionRenderer instanceId={id} question={childQ} value={Object.keys(merged).length ? merged : null} onChange={onGridChange} disabled={!editable} error={errors[`q-${childQ.id}`]} studentResubmissionReadOnlyForSatisfactoryRows={isResubmissionAfterTrainer} taskQuestionDisplayNumber={taskQNumbers.get(childQ.id)} highlightAsFill={editable} />
+                                                      <QuestionRenderer instanceId={id} question={childQ} value={Object.keys(merged).length ? merged : null} onChange={onGridChange} attachmentSlot={questionAttachmentSlot(childQ.id)} disabled={!editable} error={errors[`q-${childQ.id}`]} studentResubmissionReadOnlyForSatisfactoryRows={isResubmissionAfterTrainer} taskQuestionDisplayNumber={taskQNumbers.get(childQ.id)} highlightAsFill={editable} />
                                                     </div>
                                                   </div>
                                                 ));
@@ -4431,7 +4453,7 @@ export const InstanceFillPage: React.FC = () => {
                                                       }
                                                     };
                                                     return (
-                                                      <QuestionRenderer instanceId={id} question={q} value={Object.keys(merged).length ? merged : null} onChange={onGridChange} disabled={!editable} error={errors[`q-${q.id}`]} studentResubmissionReadOnlyForSatisfactoryRows={isResubmissionAfterTrainer} taskQuestionDisplayNumber={taskQNumbers.get(q.id)} highlightAsFill={editable} />
+                                                      <QuestionRenderer instanceId={id} question={q} value={Object.keys(merged).length ? merged : null} onChange={onGridChange} attachmentSlot={questionAttachmentSlot(q.id)} disabled={!editable} error={errors[`q-${q.id}`]} studentResubmissionReadOnlyForSatisfactoryRows={isResubmissionAfterTrainer} taskQuestionDisplayNumber={taskQNumbers.get(q.id)} highlightAsFill={editable} />
                                                     );
                                                   })()
                                                 ) : (
@@ -4497,7 +4519,7 @@ export const InstanceFillPage: React.FC = () => {
                           const todayForResults = new Date().toISOString().split('T')[0];
                           const trainerSuggestionDate = raTrainerDateForResults || (firstTaskData?.trainer_date ?? todayForResults);
                           const studentDeclQ = template?.steps?.flatMap((st) => st.sections).flatMap((s) => s.questions).find((q) => q.code === 'student.declarationSignature');
-                          const studentDeclVal = studentDeclQ ? answers[getAnswerKey(studentDeclQ.id, null)] : undefined;
+                          const studentDeclVal = studentDeclQ ? splitAnswerAttachment(answers[getAnswerKey(studentDeclQ.id, null)]).inner : undefined;
                           const studentDeclSigObj = studentDeclVal && typeof studentDeclVal === 'object' && !Array.isArray(studentDeclVal) ? (studentDeclVal as Record<string, unknown>) : null;
                           const studentDeclSig = studentDeclSigObj ? (String(studentDeclSigObj.signature ?? studentDeclSigObj.imageDataUrl ?? '') || null) : (typeof studentDeclVal === 'string' ? studentDeclVal : null);
                           const minFirstAttempt = getResultsMinFirstAttemptDate(assessmentSummary, studentDeclarationDateMinIso);
@@ -4931,7 +4953,7 @@ export const InstanceFillPage: React.FC = () => {
                           const trainerRefSig = raTrainerSig ?? firstTaskRd?.trainer_signature ?? undefined;
                           const trainerRefDate = raTrainerSig ? (raTrainerDate || firstTaskRd?.trainer_date || todayIso) : (firstTaskRd?.trainer_date || todayIso);
                           const studentDeclQForSum = template?.steps?.flatMap((st) => st.sections).flatMap((s) => s.questions).find((q) => q.code === 'student.declarationSignature');
-                          const studentDeclValForSum = studentDeclQForSum ? answers[getAnswerKey(studentDeclQForSum.id, null)] : undefined;
+                          const studentDeclValForSum = studentDeclQForSum ? splitAnswerAttachment(answers[getAnswerKey(studentDeclQForSum.id, null)]).inner : undefined;
                           const studentDeclSigObjForSum = studentDeclValForSum && typeof studentDeclValForSum === 'object' && !Array.isArray(studentDeclValForSum) ? (studentDeclValForSum as Record<string, unknown>) : null;
                           const studentDeclSigForSum = studentDeclSigObjForSum ? (String(studentDeclSigObjForSum.signature ?? studentDeclSigObjForSum.imageDataUrl ?? '') || null) : (typeof studentDeclValForSum === 'string' ? studentDeclValForSum : null);
                           const studentDeclDateForSum = studentDeclSigObjForSum ? String(studentDeclSigObjForSum.date ?? studentDeclSigObjForSum.signedAtDate ?? '') : '';
@@ -5262,10 +5284,15 @@ export const InstanceFillPage: React.FC = () => {
                           <SectionLikertTable
                             section={section}
                             getAnswer={(qId, rId) => {
-                              const v = answers[getAnswerKey(qId, rId)];
+                              const v = splitAnswerAttachment(answers[getAnswerKey(qId, rId)]).inner;
                               return v != null ? String(v) : null;
                             }}
-                            onChange={(qId, rId, val) => handleAnswerChange(qId, rId, val)}
+                            onChange={(qId, rId, val) => {
+                              const existing = answers[getAnswerKey(qId, rId)];
+                              // Keep a question-level attachment when the rating itself is stored on that row.
+                              const keptUrl = isAttachmentEnvelope(existing) ? splitAnswerAttachment(existing).attachmentUrl : undefined;
+                              handleAnswerChange(qId, rId, keptUrl ? withAnswerAttachment(val, keptUrl) : val);
+                            }}
                             disabled={
                               !canRoleEditCurrentWorkflow ||
                               !section.questions.some((q) =>
@@ -5273,6 +5300,32 @@ export const InstanceFillPage: React.FC = () => {
                               )
                             }
                           />
+                          {section.questions
+                            .filter(
+                              (q) =>
+                                q.type === 'likert_5' &&
+                                questionAllowsAttachment(q) &&
+                                isQuestionVisibleForRole((q.role_visibility as Record<string, boolean>) || {})
+                            )
+                            .map((q) => {
+                              const slot = questionAttachmentSlot(q.id);
+                              const { inner, attachmentUrl } = splitAnswerAttachment(slot.value);
+                              const editable =
+                                isQuestionEditableForRole((q.role_editability as Record<string, boolean>) || {}) &&
+                                canRoleEditCurrentWorkflow;
+                              return (
+                                <div key={`likert-attachment-${q.id}`} className="mt-3">
+                                  <div className="text-sm font-medium text-gray-700 whitespace-pre-line">{q.label}</div>
+                                  <QuestionAttachment
+                                    instanceId={id}
+                                    questionId={q.id}
+                                    answerImageUrl={attachmentUrl}
+                                    onImageUrl={(u) => slot.onChange(withAnswerAttachment(inner, u))}
+                                    disabled={!editable}
+                                  />
+                                </div>
+                              );
+                            })}
                           {section.questions
                             .filter(
                               (q) =>
@@ -5290,7 +5343,7 @@ export const InstanceFillPage: React.FC = () => {
                                 const firstTaskSectionId = taskResultSectionIds[0];
                                 const firstTaskRdForDecl = firstTaskSectionId ? resultsData[firstTaskSectionId] : null;
                                 const studentSigSuggestion = firstTaskRdForDecl?.student_signature ?? null;
-                                const sigVal = val;
+                                const sigVal = splitAnswerAttachment(val).inner;
                                 const sigObj = sigVal && typeof sigVal === 'object' && !Array.isArray(sigVal) ? (sigVal as Record<string, unknown>) : null;
                                 const imgVal = sigObj?.signature ?? sigObj?.imageDataUrl ?? (typeof sigVal === 'string' ? sigVal : null);
                                 const dateVal = sigObj ? String(sigObj.date ?? sigObj.signedAtDate ?? '') : '';
@@ -5316,7 +5369,7 @@ export const InstanceFillPage: React.FC = () => {
                                             const img = typeof v === 'string' ? v : null;
                                             const base = (sigObj && typeof sigObj === 'object' ? { ...sigObj } : {}) as Record<string, unknown>;
                                             const merged = img != null ? { ...base, signature: img } : { ...base, signature: null };
-                                            handleAnswerChange(q.id, null, merged as string | number | boolean | Record<string, unknown> | string[]);
+                                            changeAnswerKeepingAttachment(q.id, merged as string | number | boolean | Record<string, unknown> | string[]);
                                           }}
                                           disabled={!effectiveEditable}
                                           highlight={(role === 'student' || role === 'trainer') && editable}
@@ -5328,7 +5381,7 @@ export const InstanceFillPage: React.FC = () => {
                                               : minDeclDate && isCalendarBefore(todayIsoDecl, minDeclDate)
                                                 ? minDeclDate
                                                 : todayIsoDecl;
-                                            handleAnswerChange(q.id, null, { ...base, signature: studentSigSuggestion, date: nextDate } as string | number | boolean | Record<string, unknown> | string[], true);
+                                            changeAnswerKeepingAttachment(q.id, { ...base, signature: studentSigSuggestion, date: nextDate } as string | number | boolean | Record<string, unknown> | string[], true);
                                           } : undefined}
                                         />
                                       </div>
@@ -5344,7 +5397,7 @@ export const InstanceFillPage: React.FC = () => {
                                                 : minDeclDate && newDate && isCalendarBefore(newDate, minDeclDate)
                                                   ? minDeclDate
                                                   : newDate;
-                                              handleAnswerChange(q.id, null, { ...base, date: nextDate } as string | number | boolean | Record<string, unknown> | string[]);
+                                              changeAnswerKeepingAttachment(q.id, { ...base, date: nextDate } as string | number | boolean | Record<string, unknown> | string[]);
                                             }}
                                             disabled={!effectiveEditable}
                                             highlight={(role === 'student' || role === 'trainer') && editable}
@@ -5356,6 +5409,7 @@ export const InstanceFillPage: React.FC = () => {
                                         </div>
                                       )}
                                     </div>
+                                    {renderCustomAnswerAttachment(q, effectiveEditable)}
                                     {errors[`q-${q.id}`] && <p className="text-sm text-red-600">{errors[`q-${q.id}`]}</p>}
                                   </div>
                                 );
@@ -5444,6 +5498,7 @@ export const InstanceFillPage: React.FC = () => {
                                 question={q}
                                 value={val}
                                 onChange={onLikertChange}
+                                attachmentSlot={questionAttachmentSlot(q.id)}
                                 disabled={!editable}
                                 error={errors[`q-${q.id}`]}
                                 highlightAsFill={editable}
@@ -5475,6 +5530,7 @@ export const InstanceFillPage: React.FC = () => {
                                 question={q}
                                 value={Object.keys(merged).length ? merged : null}
                                 onChange={onGridChange}
+                                attachmentSlot={questionAttachmentSlot(q.id)}
                                 disabled={!editable}
                                 error={errors[`q-${q.id}`]}
                                 highlightAsFill={editable}
@@ -5488,7 +5544,7 @@ export const InstanceFillPage: React.FC = () => {
                             const firstTaskSectionId = taskResultSectionIds[0];
                             const firstTaskRdForDecl = firstTaskSectionId ? resultsData[firstTaskSectionId] : null;
                             const studentSigSuggestion = firstTaskRdForDecl?.student_signature ?? null;
-                            const sigVal = val;
+                            const sigVal = splitAnswerAttachment(val).inner;
                             const sigObj = sigVal && typeof sigVal === 'object' && !Array.isArray(sigVal) ? (sigVal as Record<string, unknown>) : null;
                             const imgVal = sigObj?.signature ?? sigObj?.imageDataUrl ?? (typeof sigVal === 'string' ? sigVal : null);
                             const dateVal = sigObj ? String(sigObj.date ?? sigObj.signedAtDate ?? '') : '';
@@ -5514,7 +5570,7 @@ export const InstanceFillPage: React.FC = () => {
                                         const img = typeof v === 'string' ? v : null;
                                         const base = (sigObj && typeof sigObj === 'object' ? { ...sigObj } : {}) as Record<string, unknown>;
                                         const merged = img != null ? { ...base, signature: img } : { ...base, signature: null };
-                                        handleAnswerChange(q.id, null, merged as string | number | boolean | Record<string, unknown> | string[]);
+                                        changeAnswerKeepingAttachment(q.id, merged as string | number | boolean | Record<string, unknown> | string[]);
                                       }}
                                       disabled={!effectiveEditable}
                                       suggestionFrom={studentSigSuggestion}
@@ -5525,7 +5581,7 @@ export const InstanceFillPage: React.FC = () => {
                                           : minDeclDate && isCalendarBefore(todayIsoDecl, minDeclDate)
                                             ? minDeclDate
                                             : todayIsoDecl;
-                                        handleAnswerChange(q.id, null, { ...base, signature: studentSigSuggestion, date: nextDate } as string | number | boolean | Record<string, unknown> | string[], true);
+                                        changeAnswerKeepingAttachment(q.id, { ...base, signature: studentSigSuggestion, date: nextDate } as string | number | boolean | Record<string, unknown> | string[], true);
                                       } : undefined}
                                     />
                                   </div>
@@ -5541,7 +5597,7 @@ export const InstanceFillPage: React.FC = () => {
                                             : minDeclDate && newDate && isCalendarBefore(newDate, minDeclDate)
                                               ? minDeclDate
                                               : newDate;
-                                          handleAnswerChange(q.id, null, { ...base, date: nextDate } as string | number | boolean | Record<string, unknown> | string[]);
+                                          changeAnswerKeepingAttachment(q.id, { ...base, date: nextDate } as string | number | boolean | Record<string, unknown> | string[]);
                                         }}
                                         disabled={!effectiveEditable}
                                         compact
@@ -5552,6 +5608,7 @@ export const InstanceFillPage: React.FC = () => {
                                     </div>
                                   )}
                                 </div>
+                                {renderCustomAnswerAttachment(q, effectiveEditable)}
                                 {errors[`q-${q.id}`] && <p className="text-sm text-red-600">{errors[`q-${q.id}`]}</p>}
                               </div>
                             );

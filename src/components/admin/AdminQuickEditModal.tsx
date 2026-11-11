@@ -13,6 +13,7 @@ import { formatDDMMYYYY, getInstanceWorkflowLabel } from '../../utils/assessment
 import type { SubmittedInstanceRow } from '../../lib/formEngine';
 import { fetchInstance, syncStudentTokenExpiryToDeadline, updateFormInstanceDates } from '../../lib/formEngine';
 import { validateExtensionDate } from '../../utils/assessmentDeadline';
+import { splitAnswerAttachment, withAnswerAttachment } from '../../lib/answerAttachment';
 import type { AssessmentSummaryDataEntry, ResultsDataEntry, ResultsOfficeEntry } from '../../lib/formEngine';
 import {
   cloneQuickEditData,
@@ -759,11 +760,23 @@ export const AdminQuickEditModal: React.FC<Props> = ({ isOpen, onClose, row, onS
                             <p className="text-[10px] text-gray-400">{field.code}</p>
                           ) : null}
                           <div className={isDeclarationSignature ? 'mt-1' : 'mt-2'}>
-                            <IntroFieldEditor
-                              field={field}
-                              value={draft.answers[key] ?? null}
-                              onChange={(v) => updateAnswer(field.questionId, field.rowId, v)}
-                            />
+                            {(() => {
+                              // Edit the answer itself; keep any answer attachment the student uploaded.
+                              const { inner, attachmentUrl } = splitAnswerAttachment(draft.answers[key] ?? null);
+                              return (
+                                <IntroFieldEditor
+                                  field={field}
+                                  value={inner}
+                                  onChange={(v) =>
+                                    updateAnswer(
+                                      field.questionId,
+                                      field.rowId,
+                                      v != null && attachmentUrl ? withAnswerAttachment(v, attachmentUrl) : v
+                                    )
+                                  }
+                                />
+                              );
+                            })()}
                           </div>
                         </div>
                       );

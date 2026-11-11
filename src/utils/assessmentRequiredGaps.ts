@@ -5,6 +5,7 @@
 
 import type { FormQuestionWithOptionsAndRows } from '../lib/formEngine';
 import { getGridAnswerColumnIndexes } from './gridTableAnswers';
+import { splitAnswerAttachment } from '../lib/answerAttachment';
 
 type AnswersMap = Record<
   string,
@@ -128,7 +129,7 @@ export function describeSignatureRequiredGap(
   q: FormQuestionWithOptionsAndRows,
   answers: AnswersMap
 ): RequiredGapDetail {
-  const val = answers[getAnswerKey(q.id, null)];
+  const val = splitAnswerAttachment(answers[getAnswerKey(q.id, null)]).inner;
   const obj = val && typeof val === 'object' && !Array.isArray(val) ? (val as Record<string, unknown>) : null;
   const sig = obj ? (obj.signature ?? obj.imageDataUrl ?? null) : typeof val === 'string' ? val : null;
   const dateVal = obj ? String(obj.date ?? obj.signedAtDate ?? '') : '';
