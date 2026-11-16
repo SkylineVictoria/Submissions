@@ -1,8 +1,16 @@
 import { formatIsoDateOnly, formatMelbourneDateTime, isTimestampIso, MELBOURNE_TZ } from './melbourneTime';
 
 import { getEffectiveEndDate } from './assessmentDeadline';
+import {
+  normalizeAttemptResults,
+  resolveAssessmentWorkflowState,
+  type AssessmentWorkflowState,
+  type AttemptResult,
+  type WorkflowStageState,
+} from './assessmentWorkflowState';
 
-export type AttemptResult = 'competent' | 'not_yet_competent' | null;
+export type { AttemptResult, WorkflowStageState } from './assessmentWorkflowState';
+export { resolveAssessmentWorkflowState } from './assessmentWorkflowState';
 
 export type AttemptDotTone = 'green' | 'red' | 'yellow' | 'gray';
 
@@ -93,6 +101,7 @@ export type InstanceWorkflowRow = {
 export type AssessmentFinalStatus =
   | 'completed'
   | 'trainer_completed'
+  | 'resubmission_required'
   | 'pending_review'
   | 'not_submitted'
   | 'did_not_attempt'
@@ -107,87 +116,86 @@ export type AssessmentProgressResolution = {
   officeProgress: WorkflowStageState;
   terminalDidNotAttempt: boolean;
   suppressExpiry: boolean;
+  /** Outcome of the current attempt, falling back to the last recorded outcome. */
   trainerResult: Exclude<AttemptResult, null> | null;
+  /** Full per-attempt resolution (single source of truth for icons, dots, labels and queues). */
+  workflow: AssessmentWorkflowState;
 };
 
-/** Final administrative state always outranks historical submission and rollover data. */
+/**
+ * Final administrative state always outranks historical submission and rollover data.
+ * Stage icons come straight from `resolveAssessmentWorkflowState`:
+ *  - Trainer is "done" once an outcome is recorded for the current attempt (or the trainer handed off).
+ *  - Admin is "pending" only after the trainer's final submit moved the row to office with that outcome.
+ */
 export function calculateAssessmentFinalStatus(input: InstanceWorkflowRow): AssessmentProgressResolution {
-  const results = (input.attempt_results ?? []).filter(
-    (result): result is Exclude<AttemptResult, null> =>
-      result === 'competent' || result === 'not_yet_competent',
-  );
-  const trainerResult = results.length > 0 ? results[results.length - 1] : null;
-  const trainerCompleted = trainerResult !== null;
+  const workflow = resolveAssessmentWorkflowState(input);
+  const trainerResult = workflow.trainerOutcome ?? workflow.lastRecordedOutcome;
   const legacyStatus = String(input.status ?? '').trim();
-  const role = String(input.role_context ?? '').trim();
-  const workflow = String(input.workflow_status ?? '').trim();
-  const officeCompleted =
-    workflow === 'completed' ||
-    String(input.office_status ?? '').trim() === 'completed' ||
-    Boolean(input.office_assessment_completed) ||
-    (legacyStatus === 'locked' && role === 'office' && trainerResult === 'competent');
-  const submitted =
-    getSubmittedAttemptCount({
-      submissionCount: input.submission_count,
-      submittedAt: input.submitted_at,
-    }) > 0;
   const hasSavedAnswers =
     Math.max(0, Number(input.answer_count ?? 0) || 0) > 0 || legacyStatus === 'incomplete';
   const end = getEffectiveEndDate(input);
   const expired =
     Boolean(input.expired) ||
     (end ? melDateString() > end : legacyStatus === 'incomplete');
+  const base = {
+    studentProgress: workflow.studentStage,
+    trainerProgress: workflow.trainerStage,
+    officeProgress: workflow.adminStage,
+    terminalDidNotAttempt: false,
+    trainerResult,
+    workflow,
+  };
 
-  if (officeCompleted) {
+  if (workflow.officeCompleted) {
     return {
+      ...base,
       status: 'completed',
       comment: 'Completed',
       rowTone: 'green',
       studentProgress: 'done',
       trainerProgress: 'done',
       officeProgress: 'done',
-      terminalDidNotAttempt: false,
       suppressExpiry: true,
-      trainerResult,
     };
   }
-  if (trainerCompleted) {
+  if (workflow.trainerReviewComplete) {
+    const competent = workflow.trainerOutcome === 'competent';
     return {
+      ...base,
       status: 'trainer_completed',
-      comment: trainerResult === 'competent' ? 'Competent' : 'Not competent',
-      rowTone: trainerResult === 'competent' ? 'amber' : 'red',
-      studentProgress: 'done',
-      trainerProgress: 'done',
-      officeProgress: 'pending',
-      terminalDidNotAttempt: false,
+      comment: competent ? 'Competent' : 'Not competent',
+      rowTone: competent ? 'amber' : 'red',
       suppressExpiry: true,
-      trainerResult,
     };
   }
-  if (submitted) {
+  if (workflow.resubmissionRequired) {
     return {
+      ...base,
+      status: 'resubmission_required',
+      comment: 'Not competent',
+      rowTone: 'red',
+      suppressExpiry: true,
+    };
+  }
+  if (workflow.studentSubmittedCurrent) {
+    return {
+      ...base,
       status: 'pending_review',
       comment: 'Submitted',
       rowTone: 'amber',
       studentProgress: 'done',
-      trainerProgress: 'pending',
-      officeProgress: 'idle',
-      terminalDidNotAttempt: false,
+      trainerProgress: workflow.trainerHandedOff ? 'done' : 'pending',
       suppressExpiry: true,
-      trainerResult,
     };
   }
   if (hasSavedAnswers) {
     return {
+      ...base,
       status: expired ? 'not_submitted' : 'in_progress',
       comment: expired ? 'Not submitted by due date' : 'In progress',
       rowTone: expired ? 'orange' : 'amber',
-      studentProgress: 'idle',
-      trainerProgress: 'idle',
-      officeProgress: 'idle',
-      terminalDidNotAttempt: false,
       suppressExpiry: false,
-      trainerResult,
     };
   }
   const terminalDidNotAttempt = isDidNotAttemptAnyFailure({
@@ -198,6 +206,7 @@ export function calculateAssessmentFinalStatus(input: InstanceWorkflowRow): Asse
   });
   if (terminalDidNotAttempt) {
     return {
+      ...base,
       status: 'did_not_attempt',
       comment: "Didn't attempt any",
       rowTone: 'red',
@@ -206,19 +215,14 @@ export function calculateAssessmentFinalStatus(input: InstanceWorkflowRow): Asse
       officeProgress: 'idle',
       terminalDidNotAttempt: true,
       suppressExpiry: false,
-      trainerResult,
     };
   }
   return {
+    ...base,
     status: expired ? 'not_submitted' : 'in_progress',
     comment: expired ? 'Not submitted by due date' : 'In progress',
     rowTone: expired ? 'orange' : 'amber',
-    studentProgress: 'idle',
-    trainerProgress: 'idle',
-    officeProgress: 'idle',
-    terminalDidNotAttempt: false,
     suppressExpiry: false,
-    trainerResult,
   };
 }
 
@@ -260,9 +264,9 @@ export function calculateAssessmentDisplayStatus(input: InstanceWorkflowRow): Ca
   if (final.status === 'completed') {
     return { status: 'competent', label: 'Completed', trainerResult, trainerAssessmentExists, submitted, hasSavedAnswers, terminalDidNotAttempt: false };
   }
-  if (final.status === 'trainer_completed') {
+  if (final.status === 'trainer_completed' || final.status === 'resubmission_required') {
     return {
-      status: trainerResult === 'competent' ? 'competent' : 'not_competent',
+      status: final.status === 'trainer_completed' && trainerResult === 'competent' ? 'competent' : 'not_competent',
       label: final.comment,
       trainerResult,
       trainerAssessmentExists,
@@ -421,11 +425,7 @@ export function computeRowUi(input: {
   const today = (input.today ?? melDateString()).trim();
   const start = String(input.row.start_date ?? '').trim();
   const end = getEffectiveEndDate(input.row);
-  const r = (input.attemptResults ?? []).slice(0, 3);
-  const anyCompetent = r.some((x) => x === 'competent');
-  const anyNYC = r.some((x) => x === 'not_yet_competent');
-  const rc = String(input.row.role_context ?? '').trim();
-  const st = String(input.row.status ?? '').trim();
+  const r = normalizeAttemptResults(input.attemptResults);
   const submitted = getSubmittedAttemptCount({
     submissionCount: input.submissionCount,
     submittedAt: input.submittedAt,
@@ -438,8 +438,16 @@ export function computeRowUi(input: {
     answer_count: input.row.answer_count,
     trainer_assessment_exists: input.row.trainer_assessment_exists,
   });
+  const workflow = finalStatus.workflow;
+  // Current-attempt outcome drives the row; a competent recorded on an earlier attempt that was
+  // later reopened (admin resubmission) must not paint the row green.
+  const anyCompetent = workflow.officeCompleted || workflow.trainerOutcome === 'competent';
+  const anyNYC =
+    workflow.trainerOutcome === 'not_yet_competent' || finalStatus.status === 'resubmission_required';
   const missedAllWindows = finalStatus.terminalDidNotAttempt;
-  const trainerReviewing = rc === 'trainer' && st !== 'locked' && submitted > 0;
+  // Prior NYC exists and the resubmission is with the trainer (no outcome yet for the current attempt).
+  const trainerReviewing =
+    workflow.handoffStage === 'trainer' && workflow.studentSubmittedCurrent && workflow.trainerOutcome === null;
 
   if (finalStatus.status === 'completed') {
     return {
@@ -472,7 +480,7 @@ export function computeRowUi(input: {
     };
   }
 
-  if (st === 'incomplete' && submitted === 0) {
+  if (String(input.row.status ?? '').trim() === 'incomplete' && submitted === 0) {
     return {
       kind: 'not_submitted',
       disabled: true,
@@ -512,16 +520,17 @@ export function computeRowUi(input: {
     };
   }
 
+  // Prior NYC exists but trainer is still marking a resubmission — stay in progress, not terminal red.
+  if (trainerReviewing && r.some((x) => x === 'not_yet_competent')) {
+    return {
+      kind: 'in_progress',
+      disabled: false,
+      rowClassName:
+        'bg-amber-50/70 hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors',
+    };
+  }
+
   if (anyNYC) {
-    // Prior NYC exists but trainer is still marking a resubmission — stay in progress, not terminal red.
-    if (trainerReviewing) {
-      return {
-        kind: 'in_progress',
-        disabled: false,
-        rowClassName:
-          'bg-amber-50/70 hover:bg-[var(--brand)]/10 focus-within:bg-[var(--brand)]/10 transition-colors',
-      };
-    }
     if (end && today > end && !input.ignoreEndDateForAccess) {
       return {
         kind: 'past_not_competent',
@@ -579,21 +588,29 @@ export function getAttemptDoneText(attemptResults?: AttemptResult[] | null): str
   return null;
 }
 
-export type WorkflowStageState = 'done' | 'pending' | 'idle';
-
 export function computeWorkflowStageChecks(input: {
   status?: string | null;
   role_context?: string | null;
+  workflow_status?: string | null;
+  submission_count?: number | null;
+  submitted_at?: string | null;
+  did_not_attempt?: boolean | null;
   attemptResults: AttemptResult[];
 }): { studentDone: boolean; trainerDone: boolean; adminState: WorkflowStageState } {
-  const hasCompetent = hasCompetentAttempt(input.attemptResults);
+  const state = resolveAssessmentWorkflowState({
+    status: input.status,
+    role_context: input.role_context,
+    workflow_status: input.workflow_status,
+    submission_count: input.submission_count,
+    submitted_at: input.submitted_at,
+    did_not_attempt: input.did_not_attempt,
+    attempt_results: input.attemptResults,
+  });
   const isLocked = String(input.status ?? '').trim() === 'locked';
-  const rc = String(input.role_context ?? '').trim();
-  const awaitingOffice = !isLocked && (rc === 'office' || hasCompetent);
   return {
-    studentDone: hasCompetent,
-    trainerDone: isLocked || rc === 'office' || hasCompetent,
-    adminState: isLocked ? 'done' : awaitingOffice ? 'pending' : 'idle',
+    studentDone: state.studentStage === 'done',
+    trainerDone: state.trainerStage === 'done',
+    adminState: state.officeCompleted || isLocked ? 'done' : state.adminStage,
   };
 }
 
@@ -605,17 +622,17 @@ export function getAssessmentOutcomeDisplay(input: {
   submissionCount?: number | null;
   submittedAt?: string | null;
 }): { label: string; className: string; subtext: string | null; subtextClassName: string } {
-  const r = (input.attemptResults ?? []).slice(0, 3);
-  const isLocked = String(input.status ?? '').trim() === 'locked';
-  const anyCompetent = r.some((x) => x === 'competent');
-  const anyNYC = r.some((x) => x === 'not_yet_competent');
-  const rc = String(input.role_context ?? '').trim();
-  const st = String(input.status ?? '').trim();
-  const submitted = getSubmittedAttemptCount({
-    submissionCount: input.submissionCount,
-    submittedAt: input.submittedAt,
+  const state = resolveAssessmentWorkflowState({
+    status: input.status,
+    role_context: input.role_context,
+    submission_count: input.submissionCount,
+    submitted_at: input.submittedAt,
+    attempt_results: input.attemptResults,
   });
-  const trainerReviewing = rc === 'trainer' && st !== 'locked' && submitted > 0;
+  const isLocked = String(input.status ?? '').trim() === 'locked';
+  const st = String(input.status ?? '').trim();
+  const submitted = state.rawSubmittedAttempts;
+  const stageSubtext = 'text-[11px] font-medium text-amber-700';
 
   if (st === 'incomplete' && submitted === 0) {
     return {
@@ -626,7 +643,7 @@ export function getAssessmentOutcomeDisplay(input: {
     };
   }
 
-  if (anyCompetent) {
+  if (state.trainerOutcome === 'competent') {
     if (isLocked) {
       return {
         label: 'Completed',
@@ -635,27 +652,29 @@ export function getAssessmentOutcomeDisplay(input: {
         subtextClassName: '',
       };
     }
+    // Trainer checked: with office once the trainer's final submit handed it off, otherwise still on the trainer.
     return {
       label: 'Competent',
       className: 'text-emerald-700',
-      subtext: 'Office',
-      subtextClassName: 'text-[11px] font-medium text-amber-700',
+      subtext: state.handoffStage === 'office' ? 'Office' : 'Trainer',
+      subtextClassName: stageSubtext,
     };
   }
-  if (anyNYC) {
-    if (trainerReviewing) {
-      return {
-        label: 'In progress',
-        className: 'text-amber-800',
-        subtext: 'Trainer',
-        subtextClassName: 'text-[11px] font-medium text-amber-700',
-      };
-    }
+  if (state.trainerOutcome === 'not_yet_competent' || state.resubmissionRequired) {
     return {
       label: 'Not competent',
       className: 'text-red-700',
       subtext: null,
       subtextClassName: '',
+    };
+  }
+  if (state.handoffStage === 'trainer' && state.studentSubmittedCurrent && state.currentAttempt > 1) {
+    // Resubmission after a prior NYC is with the trainer and not yet marked.
+    return {
+      label: 'In progress',
+      className: 'text-amber-800',
+      subtext: 'Trainer',
+      subtextClassName: stageSubtext,
     };
   }
   const rcLegacy = String(input.role_context ?? '').trim();
@@ -707,25 +726,25 @@ function formatAwaitingTrainerText(attemptNum: number): string {
   return 'Submitted 1st attempt — awaiting trainer';
 }
 
-/** Highest submitted attempt still with the trainer (unmarked or marked NYC, not yet sent back). */
+/** Attempt currently with the trainer: the latest hand-in the NYC chain has opened. */
 export function getAwaitingTrainerAttemptNumber(input: {
   submissionCount?: number | null;
   submittedAt?: string | null;
   attemptResults?: AttemptResult[] | null;
   no_attempt_rollovers?: number | null;
   did_not_attempt?: boolean | null;
+  role_context?: string | null;
+  status?: string | null;
 }): number | null {
-  const submitted = getSubmittedAttemptCount(input);
-  if (submitted <= 0) return null;
-  const r = (input.attemptResults ?? []).slice(0, 3);
-  const missed = getMissedAttemptIndexes(input);
-  const submittedSlots = getSubmittedAttemptSlots(missed, submitted);
-  for (let i = submittedSlots.length - 1; i >= 0; i--) {
-    const slot = submittedSlots[i];
-    if (r[slot] === null || r[slot] === 'not_yet_competent') return slot + 1;
-  }
-  const lastSlot = submittedSlots[submittedSlots.length - 1];
-  return lastSlot != null ? lastSlot + 1 : null;
+  const state = resolveAssessmentWorkflowState({
+    status: input.status,
+    role_context: input.role_context ?? 'trainer',
+    submission_count: input.submissionCount,
+    submitted_at: input.submittedAt,
+    attempt_results: input.attemptResults,
+  });
+  if (state.rawSubmittedAttempts <= 0) return null;
+  return state.currentAttempt;
 }
 
 export function getStudentAttemptDoneText(input: {
@@ -812,26 +831,6 @@ export function hasCompetentAttempt(results: (AttemptResult | null | undefined)[
   return r.some((x) => x === 'competent');
 }
 
-/**
- * While the instance is still with the trainer (`role_context === 'trainer'`), the summary may already
- * contain `competent` from auto-sync before the trainer submits to office. Dashboard UI should not show
- * green "Completed" / competent styling until the trainer finishes their review (handoff to office or terminal lock).
- * NYC remains visible so resubmission messaging stays accurate.
- */
-export function maskCompetentWhileAwaitingTrainer(
-  row: Pick<{ role_context?: string; status?: string }, 'role_context' | 'status'>,
-  results: (AttemptResult | null | undefined)[] | null | undefined,
-): AttemptResult[] {
-  const triple = [...(results ?? []), null, null, null].slice(0, 3).map((x) =>
-    x === 'competent' || x === 'not_yet_competent' ? x : null,
-  ) as AttemptResult[];
-  const rc = String(row.role_context ?? '').trim();
-  const st = String(row.status ?? '').trim();
-  const awaitingTrainer = rc === 'trainer' && st !== 'locked';
-  if (!awaitingTrainer) return triple;
-  return triple.map((x) => (x === 'competent' ? null : x));
-}
-
 /** 0-based attempt slots missed by window rollover / terminal failure. */
 export function getMissedAttemptIndexes(input: {
   no_attempt_rollovers?: number | null;
@@ -848,69 +847,26 @@ export function getMissedAttemptIndexes(input: {
   return missed;
 }
 
-function getAvailableAttemptSlots(missed: Set<number>): number[] {
-  return [0, 1, 2].filter((i) => !missed.has(i));
-}
-
-/** Map 1-based submission ordinal to 0-based slot (skipping missed windows). */
-function submissionOrdinalToSlot(ordinal: number, missed: Set<number>): number | null {
-  const slots = getAvailableAttemptSlots(missed);
-  return slots[ordinal - 1] ?? null;
-}
-
-function getSubmittedAttemptSlots(missed: Set<number>, submitted: number): number[] {
-  const slots: number[] = [];
-  for (let o = 1; o <= submitted; o++) {
-    const slot = submissionOrdinalToSlot(o, missed);
-    if (slot != null) slots.push(slot);
-  }
-  return slots;
-}
-
 /**
- * Which student attempt slot should show as "next" (yellow): only when the student may submit that attempt,
- * not while an earlier attempt is still awaiting trainer marking (avoids yellow on attempt 2 while attempt 1 is pending).
+ * Missed deadline windows only occupy attempt slots while nothing has been handed in. Once the
+ * student submits, attempt n is the n-th hand-in (summary column n) regardless of rollovers.
  */
-function computeStudentNextYellowIndex(
-  r: AttemptResult[],
-  submitted: number,
-  missed: Set<number>,
-  rollovers: number,
-): number | null {
-  if (r.some((x) => x === 'competent')) return null;
-
-  const submittedSlots = getSubmittedAttemptSlots(missed, submitted);
-  for (const slot of submittedSlots) {
-    if (r[slot] === null) return null;
-  }
-
-  for (let i = 0; i < 3; i++) {
-    if (missed.has(i)) continue;
-    if (r[i] === 'competent') return null;
-    if (r[i] === 'not_yet_competent') {
-      for (let j = i + 1; j < 3; j++) {
-        if (!missed.has(j) && r[j] === null) return j;
-      }
-      continue;
-    }
-    if (r[i] === null) {
-      for (const slot of submittedSlots) {
-        if (slot < i && r[slot] === null) return null;
-      }
-      return i;
-    }
-  }
-
-  if (submitted === 0 && rollovers > 0) {
-    return getAvailableAttemptSlots(missed)[0] ?? null;
-  }
-
-  return null;
+function getMissedSlotsForDisplay(input: {
+  no_attempt_rollovers?: number | null;
+  did_not_attempt?: boolean | null;
+  submittedAttempts: number;
+}): Set<number> {
+  if (input.submittedAttempts > 0) return new Set<number>();
+  return getMissedAttemptIndexes(input);
 }
 
 export function getAdminOfficeDotTone(input: {
   status?: string | null;
   role_context?: string | null;
+  workflow_status?: string | null;
+  submission_count?: number | null;
+  submitted_at?: string | null;
+  did_not_attempt?: boolean | null;
   attemptResults: AttemptResult[];
   terminalDidNotAttempt?: boolean;
 }): AttemptDotTone {
@@ -978,54 +934,29 @@ export function shouldPromptResetAttemptsOnEndDateChange(input: {
   return false;
 }
 
-function getTrainerActiveReviewAttempt(input: {
-  role_context?: string | null;
-  status?: string | null;
-  submissionCount: number;
-  results: AttemptResult[];
-  no_attempt_rollovers?: number | null;
-  did_not_attempt?: boolean | null;
-}): number | null {
-  const rc = String(input.role_context ?? '').trim();
-  const st = String(input.status ?? '').trim();
-  if (rc !== 'trainer' || st === 'locked') return null;
-  return getAwaitingTrainerAttemptNumber({
-    submissionCount: input.submissionCount,
-    submittedAt: null,
-    attemptResults: input.results,
-    no_attempt_rollovers: input.no_attempt_rollovers,
-    did_not_attempt: input.did_not_attempt,
-  });
-}
-
+/**
+ * Per-attempt dot. Attempt n = n-th hand-in = summary column n.
+ *  - green: outcome competent recorded for that attempt
+ *  - red: outcome NYC recorded, or a missed window before any hand-in
+ *  - yellow (student): handed in and awaiting the trainer, or the next attempt the student must submit
+ *  - yellow (trainer): handed in, with the trainer (or stuck before handoff), no outcome yet
+ */
 function toneForAttemptSlot(
   slotIndex: number,
-  r: AttemptResult[],
+  state: AssessmentWorkflowState,
   missed: Set<number>,
-  trainerActiveReview: number | null,
   studentNextYellow: number | null,
-  submittedSlots: number[],
   column: 'student' | 'trainer',
-  handoffIncomplete: boolean,
 ): AttemptDotTone {
   if (missed.has(slotIndex)) return 'red';
-
   const attemptNum = slotIndex + 1;
-  if (column === 'trainer' && trainerActiveReview === attemptNum) {
-    if (r[slotIndex] === 'competent') return 'green';
-    return 'yellow';
-  }
-
-  if (r[slotIndex] === 'competent') return 'green';
-  if (r[slotIndex] === 'not_yet_competent') return 'red';
-  /*
-   * A submitted attempt with no trainer result yet is always "awaiting" (yellow) for the student, and also for the
-   * trainer column when the submission has not been handed to the trainer yet (handoffIncomplete). These dots must
-   * match the "Submitted / Not sent to trainer" comment — they used to go grey in that state, as if nothing happened.
-   */
-  if (submittedSlots.includes(slotIndex) && r[slotIndex] === null) {
+  const outcome = state.results[slotIndex];
+  if (outcome === 'competent') return 'green';
+  if (outcome === 'not_yet_competent') return 'red';
+  const submittedNoOutcome = attemptNum <= state.submittedAttempts;
+  if (submittedNoOutcome) {
     if (column === 'student') return 'yellow';
-    if (handoffIncomplete) return 'yellow';
+    if (state.handoffStage === 'trainer' || state.handoffIncomplete) return 'yellow';
   }
   if (column === 'student' && studentNextYellow === slotIndex) return 'yellow';
   return 'gray';
@@ -1038,6 +969,7 @@ export function computeAttemptTones(input: {
   terminalDidNotAttempt?: boolean;
   role_context?: string | null;
   status?: string | null;
+  workflow_status?: string | null;
   did_not_attempt?: boolean | null;
   no_attempt_rollovers?: number | null;
   currentAttemptNumber?: number | null;
@@ -1046,44 +978,41 @@ export function computeAttemptTones(input: {
     return { student: [...ALL_ATTEMPTS_FAILED_TONES], trainer: [...ALL_ATTEMPTS_FAILED_TONES] };
   }
 
-  const submitted = Math.min(3, Math.max(0, Number(input.submissionCount) || 0));
-  const r = [...input.results, null, null, null].slice(0, 3) as AttemptResult[];
-  const rc = String(input.role_context ?? '').trim();
-  const rollovers = Math.max(0, Number(input.no_attempt_rollovers ?? 0) || 0);
-  const missed = getMissedAttemptIndexes({
-    no_attempt_rollovers: input.no_attempt_rollovers,
-    did_not_attempt: input.did_not_attempt,
-  });
-  const submittedSlots = getSubmittedAttemptSlots(missed, submitted);
-  const handoffIncomplete = hasStudentSubmissionNotSentToTrainer({
+  const state = resolveAssessmentWorkflowState({
     status: input.status,
     role_context: input.role_context,
-    submission_count: submitted,
-  });
-
-  const trainerActiveReview = getTrainerActiveReviewAttempt({
-    role_context: input.role_context,
-    status: input.status,
-    submissionCount: submitted,
-    results: r,
-    no_attempt_rollovers: input.no_attempt_rollovers,
+    workflow_status: input.workflow_status,
+    submission_count: input.submissionCount,
+    attempt_results: input.results,
     did_not_attempt: input.did_not_attempt,
   });
+  const missed = getMissedSlotsForDisplay({
+    no_attempt_rollovers: input.no_attempt_rollovers,
+    did_not_attempt: input.did_not_attempt,
+    submittedAttempts: state.submittedAttempts,
+  });
 
-  let studentNextYellow =
-    rc === 'trainer' ? null : computeStudentNextYellowIndex(r, submitted, missed, rollovers);
-
-  if (studentNextYellow == null && input.currentAttemptNumber != null) {
+  // Next attempt the student has to hand in: a fresh start (attempt 1) or the attempt opened by an NYC.
+  let studentNextYellow: number | null = null;
+  if (state.handoffStage === 'student' && !state.studentSubmittedCurrent && !state.officeCompleted) {
+    const candidate = state.currentAttempt - 1;
+    for (let i = candidate; i < 3; i++) {
+      if (!missed.has(i)) {
+        studentNextYellow = i;
+        break;
+      }
+    }
+  }
+  if (studentNextYellow == null && input.currentAttemptNumber != null && state.submittedAttempts === 0) {
     const idx = input.currentAttemptNumber - 1;
     if (idx >= 0 && idx < 3 && !missed.has(idx)) studentNextYellow = idx;
   }
 
   const student: AttemptDotTone[] = [0, 1, 2].map((i) =>
-    toneForAttemptSlot(i, r, missed, trainerActiveReview, studentNextYellow, submittedSlots, 'student', handoffIncomplete),
+    toneForAttemptSlot(i, state, missed, studentNextYellow, 'student'),
   );
-
   const trainer: AttemptDotTone[] = [0, 1, 2].map((i) =>
-    toneForAttemptSlot(i, r, missed, trainerActiveReview, null, submittedSlots, 'trainer', handoffIncomplete),
+    toneForAttemptSlot(i, state, missed, null, 'trainer'),
   );
 
   return { student, trainer };

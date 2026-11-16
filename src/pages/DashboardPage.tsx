@@ -24,7 +24,6 @@ import {
   getStudentAttemptDoneText,
   getTrainerAttemptFailedText,
   getMissedAttemptWindowText,
-  maskCompetentWhileAwaitingTrainer,
   withinInstanceAccessWindow,
   getAssessmentOutcomeDisplay,
   calculateAssessmentFinalStatus,
@@ -333,7 +332,7 @@ export const DashboardPage: React.FC = () => {
                       attempt_results: rawAttemptResults,
                       office_assessment_completed: officeAssessmentCompleted,
                     });
-                    const attemptResults = maskCompetentWhileAwaitingTrainer(row, rawAttemptResults);
+                    const attemptResults = rawAttemptResults;
                     const displaySum = sum
                       ? {
                           ...sum,

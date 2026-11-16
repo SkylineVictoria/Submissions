@@ -364,8 +364,8 @@ describe('computeAttemptTones', () => {
     // 3rd attempt submitted, not sent
     expect(studentTones({ ...base, submissionCount: 3, results: ['not_yet_competent', 'not_yet_competent', null] })).toEqual(['red', 'red', 'yellow']);
     expect(trainerTones({ ...base, submissionCount: 3, results: ['not_yet_competent', 'not_yet_competent', null] })).toEqual(['red', 'red', 'yellow']);
-    // first window missed: the submission counts as attempt 2
-    expect(studentTones({ ...base, submissionCount: 1, results: [null, null, null], no_attempt_rollovers: 1 })).toEqual(['red', 'yellow', 'gray']);
+    // first window missed, then handed in: the hand-in is attempt 1 (summary column 1), the rollover only extended the deadline
+    expect(studentTones({ ...base, submissionCount: 1, results: [null, null, null], no_attempt_rollovers: 1 })).toEqual(['yellow', 'gray', 'gray']);
   });
 
   it('nothing submitted: not-sent logic does not light any dot (trainer stays gray)', () => {
@@ -450,7 +450,7 @@ describe('computeAttemptTones', () => {
     ).toEqual(['red', 'yellow', 'gray']);
   });
 
-  it('Case C: attempt 1 missed, attempt 2 submitted awaiting trainer', () => {
+  it('Case C: window missed, then attempt 1 submitted awaiting trainer (hand-in is column 1)', () => {
     expect(
       tones({
         submissionCount: 1,
@@ -460,20 +460,20 @@ describe('computeAttemptTones', () => {
         role_context: 'trainer',
         status: 'submitted',
       }),
-    ).toEqual(['red', 'yellow', 'gray']);
+    ).toEqual(['yellow', 'gray', 'gray']);
   });
 
-  it('Case D: attempt 1 missed, attempt 2 NYC, attempt 3 available', () => {
+  it('Case D: window missed, attempt 1 NYC, attempt 2 open for the student', () => {
     expect(
       tones({
         submissionCount: 1,
-        results: [null, 'not_yet_competent', null],
+        results: ['not_yet_competent', null, null],
         no_attempt_rollovers: 1,
         did_not_attempt: false,
         role_context: 'student',
         status: 'draft',
       }),
-    ).toEqual(['red', 'red', 'yellow']);
+    ).toEqual(['red', 'yellow', 'gray']);
   });
 
   it('Case E: attempt 1 submitted awaiting trainer', () => {
@@ -514,7 +514,7 @@ describe('computeAttemptTones', () => {
 });
 
 describe('getStudentAttemptDoneText with rollovers', () => {
-  it('maps awaiting trainer to actual attempt slot after missed window', () => {
+  it('a missed window does not consume an attempt: the first hand-in is attempt 1', () => {
     const text = getStudentAttemptDoneText({
       submissionCount: 1,
       attemptResults: [null, null, null],
@@ -523,6 +523,18 @@ describe('getStudentAttemptDoneText with rollovers', () => {
       no_attempt_rollovers: 1,
       did_not_attempt: false,
     });
-    expect(text).toBe('Submitted 2nd attempt — awaiting trainer');
+    expect(text).toBe('Submitted 1st attempt — awaiting trainer');
+  });
+
+  it('an inflated submission_count never moves the awaiting attempt past the NYC chain', () => {
+    const text = getStudentAttemptDoneText({
+      submissionCount: 3,
+      attemptResults: [null, null, null],
+      role_context: 'trainer',
+      status: 'submitted',
+      no_attempt_rollovers: 1,
+      did_not_attempt: false,
+    });
+    expect(text).toBe('Submitted 1st attempt — awaiting trainer');
   });
 });

@@ -17,7 +17,6 @@ import {
   computeRowUi,
   getStudentAttemptDoneText,
   getMissedAttemptWindowText,
-  maskCompetentWhileAwaitingTrainer,
   withinInstanceAccessWindow,
   type AttemptResult,
 } from '../../utils/assessmentRowUi';
@@ -224,7 +223,7 @@ export const TrainerGradeMePanel: React.FC<Props> = ({ trainerUserId, batchId = 
                           sum?.final_attempt_2_result ?? null,
                           sum?.final_attempt_3_result ?? null,
                         ];
-                        const attemptResults = maskCompetentWhileAwaitingTrainer(row, rawAttemptResults);
+                        const attemptResults = rawAttemptResults;
                         const ui = computeRowUi({
                           row: {
                             ...row,

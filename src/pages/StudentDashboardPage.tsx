@@ -17,7 +17,6 @@ import {
   computeAttemptTones,
   getAdminOfficeDotTone,
   getAssessmentOutcomeDisplay,
-  maskCompetentWhileAwaitingTrainer,
   melDateString,
   type WorkflowStageState,
   withinInstanceAccessWindow,
@@ -77,13 +76,22 @@ function WorkflowProgressColumns({
     attempt_results: attemptResults,
   });
   const terminalFailed = finalStatus.terminalDidNotAttempt;
-  const stageInput = { status: row.status, role_context: row.role_context, attemptResults };
+  const stageInput = {
+    status: row.status,
+    role_context: row.role_context,
+    workflow_status: row.workflow_status,
+    submission_count: submissionCount,
+    submitted_at: row.submitted_at,
+    did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
+    attemptResults,
+  };
   const calculatedTones = computeAttemptTones({
     submissionCount,
     results: attemptResults,
     terminalDidNotAttempt: terminalFailed,
     role_context: row.role_context,
     status: row.status,
+    workflow_status: row.workflow_status,
     did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
     no_attempt_rollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
   });
@@ -444,7 +452,7 @@ export const StudentDashboardPage: React.FC = () => {
                     ...row,
                     attempt_results: rawAttemptResults,
                   });
-                  const attemptResults = maskCompetentWhileAwaitingTrainer(row, rawAttemptResults);
+                  const attemptResults = rawAttemptResults;
                   const displaySum = sum
                     ? {
                         ...sum,

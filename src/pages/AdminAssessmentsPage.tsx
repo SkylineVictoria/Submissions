@@ -40,7 +40,6 @@ import {
   getTrainerAttemptFailedText,
   calculateAssessmentFinalStatus,
   TERMINAL_DID_NOT_ATTEMPT_ROW_CLASS,
-  maskCompetentWhileAwaitingTrainer,
   withinInstanceAccessWindow,
   getAssessmentOutcomeDisplay,
   type AttemptResult,
@@ -144,7 +143,7 @@ const getExportStatusText = (row: SubmittedInstanceRow, rawAttemptResults: Attem
     return `Missed ${kept.join(', ')}`;
   };
 
-  const masked = maskCompetentWhileAwaitingTrainer(row, rawAttemptResults);
+  const masked = rawAttemptResults;
   const outcomeLabel = getAttemptOutcomeLabel(masked, row);
 
   const attemptDoneText = getStudentAttemptDoneText({

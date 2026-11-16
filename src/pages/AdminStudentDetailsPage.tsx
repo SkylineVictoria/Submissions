@@ -24,7 +24,6 @@ import {
   getAssessmentOutcomeDisplay,
   calculateAssessmentDisplayStatus,
   calculateAssessmentFinalStatus,
-  maskCompetentWhileAwaitingTrainer,
   type WorkflowStageState,
   withinInstanceAccessWindow,
   type AttemptResult,
@@ -108,13 +107,22 @@ function WorkflowProgressColumns({
     office_assessment_completed: officeAssessmentCompleted,
   });
   const terminalFailed = finalStatus.terminalDidNotAttempt;
-  const stageInput = { status: row.status, role_context: row.role_context, attemptResults };
+  const stageInput = {
+    status: row.status,
+    role_context: row.role_context,
+    workflow_status: row.workflow_status,
+    submission_count: submissionCount,
+    submitted_at: row.submitted_at,
+    did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
+    attemptResults,
+  };
   const calculatedTones = computeAttemptTones({
     submissionCount,
     results: attemptResults,
     terminalDidNotAttempt: terminalFailed,
     role_context: row.role_context,
     status: row.status,
+    workflow_status: row.workflow_status,
     did_not_attempt: (row as unknown as { did_not_attempt?: boolean | null }).did_not_attempt ?? null,
     no_attempt_rollovers: (row as unknown as { no_attempt_rollovers?: number | null }).no_attempt_rollovers ?? null,
   });
@@ -122,6 +130,7 @@ function WorkflowProgressColumns({
     finalStatus.status === 'completed'
       ? { student: ['green', 'green', 'green'] as AttemptDotTone[], trainer: ['green', 'green', 'green'] as AttemptDotTone[] }
       : calculatedTones;
+  // Admin dot and Admin icon come from the same resolution: pending only after the trainer's final submit.
   const adminDot =
     finalStatus.status === 'completed'
       ? 'green'
@@ -1022,7 +1031,7 @@ export const AdminStudentDetailsPage: React.FC = () => {
                             attempt_results: rawAttemptResults,
                             office_assessment_completed: officeAssessmentCompleted,
                           });
-                          const results = maskCompetentWhileAwaitingTrainer(row, rawAttemptResults);
+                          const results = rawAttemptResults;
                           const displaySum = sum
                             ? {
                                 ...sum,
@@ -1259,7 +1268,11 @@ export const AdminStudentDetailsPage: React.FC = () => {
                                         label: ui.outcomeLabel ?? '',
                                         className: ui.outcomeClassName ?? '',
                                         subtext:
-                                          ui.kind === 'past_competent' && row.status !== 'locked' ? 'Office' : null,
+                                          ui.kind === 'past_competent' && finalStatus.status !== 'completed'
+                                            ? finalStatus.officeProgress === 'pending'
+                                              ? 'Office'
+                                              : 'Trainer'
+                                            : null,
                                         subtextClassName: 'text-[11px] font-medium text-amber-700',
                                       }
                                     : getOutcomeLabel(displaySum, row);

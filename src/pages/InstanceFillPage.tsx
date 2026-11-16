@@ -113,6 +113,7 @@ import {
   toggleOutcomeSelection,
   validateAssessmentBeforeProgress,
 } from '../utils/assessmentResultValidation';
+import { resolveEffectiveSubmissionCount } from '../utils/assessmentWorkflowState';
 import {
   getAssessmentSummaryDateChainMins,
   getResultsMinFirstAttemptDate,
@@ -794,7 +795,19 @@ export const InstanceFillPage: React.FC = () => {
       normalizedWorkflow = 'failed';
     }
     setWorkflowStatus(normalizedWorkflow);
-    setSubmissionCount(instSubmissionCount || (instSubmittedAt ? 1 : 0));
+    // Marking column = attempt the workflow is on. `submission_count` is capped by the NYC chain so a stray
+    // extra hand-in cannot push the trainer to a column they never marked (shared rule, see assessmentWorkflowState).
+    setSubmissionCount(
+      resolveEffectiveSubmissionCount({
+        submission_count: instSubmissionCount,
+        submitted_at: instSubmittedAt ?? null,
+        status: legacyStatus,
+        role_context: roleCtx,
+        attempt_results: summaryData
+          ? [summaryData.final_attempt_1_result, summaryData.final_attempt_2_result, summaryData.final_attempt_3_result]
+          : [],
+      }),
+    );
     const ansMap: Record<string, string | number | boolean | Record<string, unknown> | string[]> = {};
     for (const a of ans) {
       const key = getAnswerKey(a.question_id, a.row_id);

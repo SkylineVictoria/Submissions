@@ -20,7 +20,6 @@ import {
   getAssessmentOutcomeDisplay,
   getInstanceWorkflowBadgeClass,
   getInstanceWorkflowLabel,
-  maskCompetentWhileAwaitingTrainer,
   type AttemptResult,
 } from '../utils/assessmentRowUi';
 import { cn } from '../components/utils/cn';
@@ -40,7 +39,7 @@ function getOutcomeLabel(
   const raw = summary
     ? [summary.final_attempt_1_result, summary.final_attempt_2_result, summary.final_attempt_3_result]
     : [];
-  const masked = maskCompetentWhileAwaitingTrainer(row, raw);
+  const masked = raw;
   const display = getAssessmentOutcomeDisplay({
     status: row.status,
     role_context: row.role_context,
